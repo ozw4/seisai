@@ -1,0 +1,22 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seisds"
+version = "0.1.0"
+description = "SEG-Y gather dataset & augmentation toolkit"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy",
+  "scipy",
+  "torch",
+  "segyio",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["seisds*"]
+d
