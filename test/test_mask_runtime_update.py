@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from proc.util.datasets.masked_segy_gather import MaskedSegyGather
+from seisds import SegyGatherPipelineDataset
 
 SEGY = os.getenv('FBP_TEST_SEGY')  # 例: /path/to/data.sgy
 FBNP = os.getenv('FBP_TEST_FB')  # 例: /path/to/data_fb.npy
@@ -15,8 +15,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _build_ds(mask_ratio: float) -> MaskedSegyGather:
-	return MaskedSegyGather(
+def _build_ds(mask_ratio: float) -> SegyGatherPipelineDataset:
+	return SegyGatherPipelineDataset(
 		segy_files=[SEGY],
 		fb_files=[FBNP],
 		# ランダム性・再抽選を抑える（仕様テスト向け）

@@ -1,6 +1,6 @@
 import numpy as np
 
-from proc.util.datasets.augment_time import TimeAugConfig, TimeAugmenter
+from seisds import TimeAugConfig, TimeAugmenter
 
 
 def test_time_aug_noop_when_prob_zero():

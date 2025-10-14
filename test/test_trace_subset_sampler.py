@@ -1,6 +1,6 @@
 import numpy as np
 
-from proc.util.datasets.trace_subset_sampler import (
+from seisds import (
 	TraceSubsetSampler,
 	TraceSubsetSamplerConfig,
 )

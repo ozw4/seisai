@@ -1,6 +1,6 @@
 import numpy as np
 
-from proc.util.datasets.augment_space import SpaceAugConfig, SpaceAugmenter
+from seisds import SpaceAugConfig, SpaceAugmenter
 
 
 def test_space_aug_noop_when_prob_zero():
