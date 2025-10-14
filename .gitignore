@@ -1,0 +1,41 @@
+# Python 関連
+__pycache__/
+*.py[cod]
+*.ipynb_checkpoints
+
+# Jupyter ノートブックのチェックポイント
+.ipynb_checkpoints/
+
+# VSCode 設定ファイル
+.vscode/
+
+# OS ファイル
+.DS_Store
+Thumbs.db
+.devcontainer/
+Dockerfile
+ruff.toml
+
+# 環境設定
+.env
+*.env
+
+# 実行ログや中間ファイル
+*.log
+*.out
+*.bak
+*.npy
+*.tdms
+*.sgy
+*.segy
+*.png
+*.pth
+*.csv
+data/
+result/
+tmp_code/
+debug_*/
+# compiled コード
+*.so
+*.o
+*.a
