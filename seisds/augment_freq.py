@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from proc.util.augment import _apply_freq_augment
+from .augment import _apply_freq_augment
 
 
 @dataclass(frozen=True)

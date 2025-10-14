@@ -9,18 +9,15 @@ import segyio
 import torch
 from torch.utils.data import Dataset
 
-from proc.util.datasets.config import LoaderConfig, TraceSubsetSamplerConfig
-from proc.util.datasets.trace_subset_preproc import TraceSubsetLoader
-from proc.util.datasets.trace_subset_sampler import TraceSubsetSampler
-
 from .augment_freq import FreqAugConfig, FreqAugmenter
 from .augment_space import SpaceAugConfig, SpaceAugmenter
 from .augment_time import TimeAugConfig, TimeAugmenter
+from .config import LoaderConfig, TraceSubsetSamplerConfig
 from .gate_fblc import FirstBreakGate, FirstBreakGateConfig
 from .target_fb import FBTargetBuilder, FBTargetConfig
 from .trace_masker import TraceMasker, TraceMaskerConfig
-
-__all__ = ['MaskedSegyGather']
+from .trace_subset_preproc import TraceSubsetLoader
+from .trace_subset_sampler import TraceSubsetSampler
 
 
 def _load_headers_with_cache(

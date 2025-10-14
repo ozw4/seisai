@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from proc.util.augment import _spatial_stretch_sameH
+from .augment import _spatial_stretch_sameH
 
 
 @dataclass(frozen=True)
