@@ -5,7 +5,7 @@ from .kernels import (
     _apply_freq_augment, _time_stretch_poly, _spatial_stretch_sameH
 )
 from .config import FreqAugConfig, TimeAugConfig, SpaceAugConfig
-from .ops import standardize_per_trace
+from .signal_ops import standardize_per_trace
 
 class RandomFreqFilter:
     def __init__(self, cfg: FreqAugConfig = FreqAugConfig()):
@@ -30,25 +30,26 @@ class RandomTimeStretch:
     def __init__(self, cfg: TimeAugConfig = TimeAugConfig()):
         self.cfg = cfg
 
-    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarray:
+    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None, return_meta: bool=False):
         r = rng or np.random.default_rng()
         if self.cfg.prob > 0.0 and r.random() >= self.cfg.prob:
-            return x_hw
+            return (x_hw, {"factor": 1.0}) if return_meta else x_hw
         f = float(r.uniform(*self.cfg.factor_range))
         L = self.cfg.target_len or x_hw.shape[1]
-        return _time_stretch_poly(x_hw, f, L)
-
+        y = _time_stretch_poly(x_hw, f, L)
+        return (y, {"factor": f}) if return_meta else y
 
 class RandomSpatialStretchSameH:
     def __init__(self, cfg: SpaceAugConfig = SpaceAugConfig()):
         self.cfg = cfg
 
-    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarray:
+    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None, return_meta: bool=False):
         r = rng or np.random.default_rng()
         if self.cfg.prob > 0.0 and r.random() >= self.cfg.prob:
-            return x_hw
+            return (x_hw, {"did_space": False, "factor_h": 1.0}) if return_meta else x_hw
         f = float(r.uniform(*self.cfg.factor_range))
-        return _spatial_stretch_sameH(x_hw, f)
+        y = _spatial_stretch_sameH(x_hw, f)
+        return (y, {"did_space": True, "factor_h": f}) if return_meta else y
 
 class RandomHFlip:
     def __init__(self, prob: float = 0.5):
@@ -87,13 +88,23 @@ class PerTraceStandardize:
     def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarray:
         return standardize_per_trace(x_hw, eps=self.eps)
 
-class Compose:
+class ViewCompose:
     def __init__(self, ops):
         self.ops = list(ops)
-
-    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarray:
+    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None, return_meta: bool=False):
         r = rng or np.random.default_rng()
+        meta = {}
         for op in self.ops:
-            x_hw = op(x_hw, r)
-        return x_hw
+            # 各 op が return_meta をサポートしていれば meta を収集
+            try:
+                y = op(x_hw, r, return_meta=True)
+            except TypeError:
+                y = op(x_hw, r)
+            if isinstance(y, tuple):
+                x_hw, mu = y
+                if isinstance(mu, dict) and mu:
+                    meta.update(mu)
+            else:
+                x_hw = y
+        return (x_hw, meta) if return_meta else x_hw
 
