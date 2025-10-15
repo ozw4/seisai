@@ -1,7 +1,6 @@
 import numpy as np
 
-from seisds import FBTargetBuilder, FBTargetConfig
-
+from seisai_dataset import FirstBreakGate, FirstBreakGateConfig
 
 def _peak_width_at_half_maximum(row):
 	return int((row > 0.5).sum())

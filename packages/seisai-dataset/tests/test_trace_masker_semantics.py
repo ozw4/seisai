@@ -1,6 +1,6 @@
 import numpy as np
 
-from seisds import TraceMasker, TraceMaskerConfig
+from seisai_dataset import TraceMasker, TraceMaskerConfig
 
 
 def test_trace_masker_semantics_replace():

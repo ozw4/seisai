@@ -1,4 +1,4 @@
-# packages/seis-dataset/pyproject.toml
+# packages/seisai-dataset/pyproject.toml
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -19,8 +19,8 @@ dependencies = [
 
 # augment 機能はオプション依存にして transforms へ片方向依存（循環回避）
 [project.optional-dependencies]
-augment = ["seis-transforms>=0.1.0"]
+augment = ["seisai-transforms>=0.1.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]         
-include = ["seisds*"]
+include = ["seisai_dataset*"]

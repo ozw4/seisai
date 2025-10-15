@@ -1,7 +1,6 @@
 import numpy as np
 
-from seisds import FBTargetBuilder, FBTargetConfig
-
+from seisai_dataset import FirstBreakGate, FirstBreakGateConfig
 
 def test_target_fb_semantics_basic():
 	H, W = 8, 64

@@ -19,7 +19,6 @@ from .trace_masker import TraceMasker, TraceMaskerConfig
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
 
-
 def _load_headers_with_cache(
 	segy_path: str,
 	ffid_byte,

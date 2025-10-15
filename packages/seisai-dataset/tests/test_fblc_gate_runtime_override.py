@@ -1,7 +1,6 @@
 import numpy as np
 
-from seisds import FirstBreakGate, FirstBreakGateConfig
-
+from seisai_dataset import SegyGatherPipelineDataset
 
 def test_runtime_override_thresh_ms_changes_decision():
 	fb = np.array([0, 20, 0, 20, 0, 20, 0, 20], dtype=np.int64)

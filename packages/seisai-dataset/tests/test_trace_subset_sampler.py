@@ -1,6 +1,6 @@
 import numpy as np
 
-from seisds import (
+from seisai_dataset import (
 	TraceSubsetSampler,
 	TraceSubsetSamplerConfig,
 )

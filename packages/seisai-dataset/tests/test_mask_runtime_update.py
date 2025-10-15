@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from seisds import SegyGatherPipelineDataset
+from seisai_dataset import SegyGatherPipelineDataset
 
 SEGY = os.getenv('FBP_TEST_SEGY')  # 例: /path/to/data.sgy
 FBNP = os.getenv('FBP_TEST_FB')  # 例: /path/to/data_fb.npy

@@ -1,7 +1,6 @@
 import numpy as np
 
-from seisds import FirstBreakGate, FirstBreakGateConfig
-
+from seisai_dataset import FirstBreakGate, FirstBreakGateConfig
 
 def test_fblc_accept_any():
 	fb = np.array([10, 11, 10, 11, 10, 11, 10, 11, 10, 11], dtype=np.int64)
