@@ -1,4 +1,4 @@
-# seisds
+# seisai
 
 Modular, PyTorch‑friendly **SEG‑Y gather dataset toolkit**.
 
@@ -6,16 +6,16 @@ Modular, PyTorch‑friendly **SEG‑Y gather dataset toolkit**.
 
 ```bash
 # Pin by commit for reproducibility
-pip install "seisds @ git+https://github.com/<you>/seisds.git@<commit-sha>"
+pip install "seisai @ git+https://github.com/<you>/seisai.git@<commit-sha>"
 # or local dev
-pip install -e ./seisds
+pip install -e ./seisai
 ```
 
 ## Quickstart
 
 ```python
 from torch.utils.data import DataLoader
-from seisds import SegyGatherPipelineDataset
+from seisai import SegyGatherPipelineDataset
 
 ds = SegyGatherPipelineDataset(
     segy_files=["/path/input.sgy"],
