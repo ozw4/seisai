@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from .config import LoaderConfig
-from .signal_util import standardize_per_trace
+from seisai_transforms.ops import standardize_per_trace
 
 
 class TraceSubsetLoader:
@@ -58,8 +58,7 @@ class TraceSubsetLoader:
 		return x, (start or 0)
 
 	# ---- convenience (keeps old call-sites simple) ----
-	def load_and_normalize(self, mmap, indices: np.ndarray) -> np.ndarray:
+	def load(self, mmap, indices: np.ndarray) -> np.ndarray:
 		x = self.load_traces(mmap, indices)
 		x = self.pad_traces_to_H(x)
-		x = standardize_per_trace(x)
 		return x
