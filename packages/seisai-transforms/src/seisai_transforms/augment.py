@@ -5,7 +5,7 @@ from .kernels import (
     _apply_freq_augment, _time_stretch_poly, _spatial_stretch_sameH
 )
 from .config import FreqAugConfig, TimeAugConfig, SpaceAugConfig
-
+from .ops import standardize_per_trace
 
 class RandomFreqFilter:
     def __init__(self, cfg: FreqAugConfig = FreqAugConfig()):
@@ -25,7 +25,6 @@ class RandomFreqFilter:
             self.cfg.roll,
             self.cfg.restandardize,
         )
-
 
 class RandomTimeStretch:
     def __init__(self, cfg: TimeAugConfig = TimeAugConfig()):
@@ -51,22 +50,42 @@ class RandomSpatialStretchSameH:
         f = float(r.uniform(*self.cfg.factor_range))
         return _spatial_stretch_sameH(x_hw, f)
 
+class RandomHFlip:
+    def __init__(self, prob: float = 0.5):
+        self.prob = float(prob)
+    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None, return_meta=False):
+        r = rng or np.random.default_rng()
+        if r.random() < self.prob:
+            y = x_hw[::-1, :].copy()
+            meta = {"hflip": True}
+            return (y, meta) if return_meta else y
+        meta = {"hflip": False}
+        return (x_hw, meta) if return_meta else x_hw
 
 class RandomCropOrPad:
     def __init__(self, target_len: int):
         self.L = int(target_len)
-
-    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarray:
+    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None, return_meta=False):
+        r = rng or np.random.default_rng()
         H, W = x_hw.shape
         if self.L == W:
-            return x_hw
+            meta = {"start": 0}
+            return (x_hw, meta) if return_meta else x_hw
         if self.L < W:
-            r = rng or np.random.default_rng()
             start = int(r.integers(0, W - self.L + 1))
-            return x_hw[:, start:start + self.L]
+            y = x_hw[:, start:start+self.L]
+            meta = {"start": start}
+            return (y, meta) if return_meta else y
         pad = self.L - W
-        return np.pad(x_hw, ((0, 0), (0, pad)), mode='constant')
+        y = np.pad(x_hw, ((0,0),(0,pad)), mode='constant')
+        meta = {"start": 0}
+        return (y, meta) if return_meta else y
 
+class PerTraceStandardize:
+    def __init__(self, eps: float = 1e-10):
+        self.eps = float(eps)
+    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarray:
+        return standardize_per_trace(x_hw, eps=self.eps)
 
 class Compose:
     def __init__(self, ops):

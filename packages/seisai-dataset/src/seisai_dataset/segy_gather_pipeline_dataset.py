@@ -9,9 +9,7 @@ import segyio
 import torch
 from torch.utils.data import Dataset
 
-from .augment_freq import FreqAugConfig, FreqAugmenter
-from .augment_space import SpaceAugConfig, SpaceAugmenter
-from .augment_time import TimeAugConfig, TimeAugmenter
+from seisai_transforms.augment import Compose
 from .config import LoaderConfig, TraceSubsetSamplerConfig
 from .gate_fblc import FirstBreakGate, FirstBreakGateConfig
 from .target_fb import FBTargetBuilder, FBTargetConfig
@@ -132,6 +130,7 @@ class SegyGatherPipelineDataset(Dataset):
 		self,
 		segy_files: list[str],
 		fb_files: list[str],
+		transform,
 		ffid_byte=segyio.TraceField.FieldRecord,
 		chno_byte=segyio.TraceField.TraceNumber,
 		cmp_byte=segyio.TraceField.CDP,
@@ -147,18 +146,6 @@ class SegyGatherPipelineDataset(Dataset):
 		mask_mode: Literal['replace', 'add'] = 'replace',
 		mask_noise_std: float = 1.0,
 		pick_ratio: float = 0.3,
-		target_len: int = 6016,
-		flip: bool = False,
-		augment_time_prob: float = 0.0,
-		augment_time_range: tuple[float, float] = (0.95, 1.05),
-		augment_space_prob: float = 0.0,
-		augment_space_range: tuple[float, float] = (0.90, 1.10),
-		augment_freq_prob: float = 0.0,
-		augment_freq_kinds: tuple[str, ...] = ('bandpass', 'lowpass', 'highpass'),
-		augment_freq_band: tuple[float, float] = (0.05, 0.45),
-		augment_freq_width: tuple[float, float] = (0.10, 0.35),
-		augment_freq_roll: float = 0.02,
-		augment_freq_restandardize: bool = True,
 		target_mode: Literal['recon', 'fb_seg'] = 'recon',
 		label_sigma: float = 1.0,
 		reject_fblc: bool = False,
@@ -169,15 +156,10 @@ class SegyGatherPipelineDataset(Dataset):
 		valid: bool = False,
 		verbose: bool = False,
 	) -> None:
-		"""Initialize dataset.
 
-		Args:
-			mask_mode: replace to overwrite, add to perturb traces.
-			mask_noise_std: standard deviation of masking noise.
-
-		"""
 		self.segy_files = segy_files
 		self.fb_files = fb_files
+		self.transform = transform
 		self.ffid_byte = ffid_byte
 		self.chno_byte = chno_byte
 		self.cmp_byte = cmp_byte
@@ -201,41 +183,8 @@ class SegyGatherPipelineDataset(Dataset):
 				noise_std=self.mask_noise_std,
 			)
 		)
-		self.flip = flip
 		self.pick_ratio = pick_ratio
-		self.target_len = target_len
-		self.augment_time_prob = augment_time_prob
-		self.augment_time_range = augment_time_range
-		self.augment_space_prob = augment_space_prob
-		self.augment_space_range = augment_space_range
-		self.augment_freq_prob = augment_freq_prob
-		self.augment_freq_kinds = augment_freq_kinds
-		self.augment_freq_band = augment_freq_band
-		self.augment_freq_width = augment_freq_width
-		self.augment_freq_roll = augment_freq_roll
-		self.augment_freq_restandardize = augment_freq_restandardize
-		self.time_aug = TimeAugmenter(
-			TimeAugConfig(
-				prob=self.augment_time_prob,
-				range=self.augment_time_range,
-			)
-		)
-		self.space_aug = SpaceAugmenter(
-			SpaceAugConfig(
-				prob=self.augment_space_prob,
-				range=self.augment_space_range,
-			)
-		)
-		self.freq_aug = FreqAugmenter(
-			FreqAugConfig(
-				prob=self.augment_freq_prob,
-				kinds=self.augment_freq_kinds,
-				band=self.augment_freq_band,
-				width=self.augment_freq_width,
-				roll=self.augment_freq_roll,
-				restandardize=self.augment_freq_restandardize,
-			)
-		)
+        self._rng = np.random.default_rng()
 		self.target_mode = target_mode
 		self.label_sigma = label_sigma
 		self.fb_target = FBTargetBuilder(
@@ -258,7 +207,7 @@ class SegyGatherPipelineDataset(Dataset):
 			)
 		)
 		self.subsetloader = TraceSubsetLoader(
-			LoaderConfig(target_len=self.target_len, pad_traces_to=128)
+			LoaderConfig(target_len=None, pad_traces_to=128)
 		)
 		self.file_infos = []
 		self.sampler = TraceSubsetSampler(
@@ -321,7 +270,7 @@ class SegyGatherPipelineDataset(Dataset):
 				f_tmp.close()
 			# ▲▲ ここまでヘッダ取得 ▲▲
 
-			# 以降は従来どおり：mmap用に開いて保持
+			# mmap用に開いて保持
 			f = segyio.open(segy_path, 'r', ignore_geometry=True)
 			mmap = f.trace.raw[:]
 
@@ -441,19 +390,6 @@ class SegyGatherPipelineDataset(Dataset):
 	def __del__(self) -> None:
 		self.close()
 
-	def _fit_time_len(
-		self, x: np.ndarray, start: int | None = None
-	) -> tuple[np.ndarray, int]:
-		T, target = x.shape[1], self.target_len
-		if start is None:
-			start = np.random.randint(0, max(1, T - target + 1)) if target < T else 0
-		if target < T:
-			return x[:, start : start + target], start
-		if target > T:
-			pad = target - T
-			return np.pad(x, ((0, 0), (0, pad)), mode='constant'), start
-		return x, start
-
 	def _build_index_map(self, key_array: np.ndarray) -> dict[int, np.ndarray]:
 		uniq, inv, counts = np.unique(
 			key_array, return_inverse=True, return_counts=True
@@ -468,7 +404,8 @@ class SegyGatherPipelineDataset(Dataset):
 
 	def __getitem__(self, _=None):
 		while True:
-			info = random.choice(self.file_infos)
+			idx = int(self._rng.integers(0, len(self.file_infos)))
+			info = self.file_infos[idx]
 			mmap = info['mmap']
 
 			s = self.sampler.draw(info, py_random=random)
@@ -484,7 +421,7 @@ class SegyGatherPipelineDataset(Dataset):
 			# ---- take up to 128 traces (contiguous slice) ----
 			n_total = len(indices)
 			if n_total >= 128:
-				start_idx = random.randint(0, n_total - 128)
+				start_idx = int(self._rng.integers(0, n_total - 128 + 1))
 				selected_indices = indices[start_idx : start_idx + 128]
 				pad_len = 0
 			else:
@@ -516,52 +453,28 @@ class SegyGatherPipelineDataset(Dataset):
 			if pick_ratio < self.pick_ratio:
 				continue  # retry whole sample
 
-			# ---- load traces, normalize, augment ----
-			x = self.subsetloader.load_and_normalize(mmap, selected_indices)
+			# ---- load traces ----
+			x = self.subsetloader.load(mmap, selected_indices)
 
-			# optional flip
-			if self.flip and random.random() < 0.5:
-				x = np.flip(x, axis=0).copy()
-				fb_subset = fb_subset[::-1].copy()
-				off_subset = off_subset[::-1].copy()
+			# パイプライン適用（H×Wに対して）
+			out = self.transform(x, rng=self._rng, return_meta=True)
+			x, meta = out if isinstance(out, tuple) else (out, {})
 
-			# time augment
-			factor = 1.0
-			x, factor = self.time_aug.apply(
-				x,
-				rng_py=random,
-				prob=self.augment_time_prob,
-				range=self.augment_time_range,
-			)
+			# meta 取り出し
+			hflip   = bool(meta.get("hflip", False))
+			factor  = float(meta.get("factor", 1.0))     # TimeStretch
+			start   = int(meta.get("start", 0))          # CropOrPad
+			did_space  = bool(meta.get("did_space", False))
+			f_h     = float(meta.get("factor_h", 1.0))
 
-			# fit/crop/pad time length
-			x, start = self._fit_time_len(x)
-
-			# space augment (and keep offsets in sync)
-			did_space, f_h = False, 1.0
-			x, off_subset, did_space, f_h = self.space_aug.apply(
-				x,
-				off_subset,
-				rng_py=random,
-				prob=self.augment_space_prob,
-				range=self.augment_space_range,
-			)
-
-			# freq augment
-			x = self.freq_aug.apply(
-				x,
-				rng_py=random,
-				prob=self.augment_freq_prob,
-				kinds=self.augment_freq_kinds,
-				band=self.augment_freq_band,
-				width=self.augment_freq_width,
-				roll=self.augment_freq_roll,
-				restandardize=self.augment_freq_restandardize,
-			)
+			if hflip:
+				fb_subset   = fb_subset[::-1].copy()
+				off_subset  = off_subset[::-1].copy()
 
 			# first-break indices in window
 			fb_idx_win = np.floor(fb_subset * factor).astype(np.int64) - start
-			invalid = (fb_idx_win <= 0) | (fb_idx_win >= self.target_len)
+            W = x.shape[1]
+            invalid = (fb_idx_win <= 0) | (fb_idx_win >= W)
 			fb_idx_win[invalid] = -1
 
 			# FBLC gate (before masking/target/tensorization)
@@ -601,10 +514,9 @@ class SegyGatherPipelineDataset(Dataset):
 			# target (optional)
 			target_t = None
 			if self.target_mode == 'fb_seg':
-				W_t = x.shape[1]
 				target_np = self.fb_target.build(
 					fb_idx_win,
-					W_t,
+					W,
 					did_space=did_space,
 					f_h=f_h,
 					sigma=self.label_sigma,
@@ -638,7 +550,3 @@ class SegyGatherPipelineDataset(Dataset):
 				sample['target'] = target_t
 
 			return sample
-
-
-class MaskedSegyGather(SegyGatherPipelineDataset):
-	"""DEPRECATED: use SegyGatherPipelineDataset"""

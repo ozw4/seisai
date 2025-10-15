@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .augment import _spatial_stretch_sameH
+from seisai_transforms.augment import _spatial_stretch_sameH
 
 
 @dataclass(frozen=True)
