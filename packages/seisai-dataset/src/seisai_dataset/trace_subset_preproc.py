@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 
 from .config import LoaderConfig
-from seisai_transforms.ops import standardize_per_trace
 
 
 class TraceSubsetLoader:

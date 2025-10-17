@@ -1,4 +1,3 @@
-import random
 from fractions import Fraction
 
 import numpy as np
@@ -14,6 +13,7 @@ __all__ = [
 	'_time_stretch_poly',
 ]
 
+
 def _time_stretch_poly(x_hw: np.ndarray, factor: float, target_len: int) -> np.ndarray:
 	"""Stretch (H,W) array in time and fit to target length."""
 	if abs(factor - 1.0) < 1e-4:
@@ -21,10 +21,11 @@ def _time_stretch_poly(x_hw: np.ndarray, factor: float, target_len: int) -> np.n
 	H, W = x_hw.shape
 	frac = Fraction(factor).limit_denominator(128)
 	up, down = frac.numerator, frac.denominator
-	y = np.stack([
-		resample_poly(x_hw[h], up, down, padtype='line') for h in range(H)
-	], axis=0)
+	y = np.stack(
+		[resample_poly(x_hw[h], up, down, padtype='line') for h in range(H)], axis=0
+	)
 	return _fit_time_len_np(y, target_len)
+
 
 def _fit_time_len_np(x_hw: np.ndarray, target_len: int) -> np.ndarray:
 	"""Trim or pad (H,W') to target_len along time axis."""
@@ -36,6 +37,7 @@ def _fit_time_len_np(x_hw: np.ndarray, target_len: int) -> np.ndarray:
 		return x_hw[:, start : start + target_len]
 	pad = target_len - W
 	return np.pad(x_hw, ((0, 0), (0, pad)), mode='constant')
+
 
 def _spatial_stretch_sameH(x_hw: np.ndarray, factor: float) -> np.ndarray:
 	"""Stretch traces spatially while keeping original count."""
@@ -51,6 +53,7 @@ def _spatial_stretch_sameH(x_hw: np.ndarray, factor: float) -> np.ndarray:
 		y = y[:H, :]
 	return y
 
+
 def _cosine_ramp(x: np.ndarray, a: float, b: float, invert: bool = False) -> np.ndarray:
 	"""Cosine ramp from 0 to 1 (or inverted) over [a, b]."""
 	if b <= a:
@@ -58,6 +61,7 @@ def _cosine_ramp(x: np.ndarray, a: float, b: float, invert: bool = False) -> np.
 	t = np.clip((x - a) / (b - a), 0.0, 1.0)
 	ramp = 0.5 - 0.5 * np.cos(np.pi * t)
 	return (1.0 - ramp) if invert else ramp
+
 
 def _make_freq_mask(
 	n_rfft: int,
@@ -90,6 +94,7 @@ def _make_freq_mask(
 		raise ValueError(f'unknown freq-augment kind: {kind}')
 	return m.astype(np.float32)
 
+
 def _apply_freq_augment(
 	x_hw: np.ndarray,
 	augment_freq_kinds: tuple[str, ...],
@@ -97,22 +102,26 @@ def _apply_freq_augment(
 	augment_freq_width: tuple[float, float],
 	augment_freq_roll: float,
 	augment_freq_restandardize: bool,
+	rng: np.random.Generator | None = None,  # ← 追加
 ) -> np.ndarray:
-	"""Apply same frequency mask to all traces."""
+	"""Apply same frequency mask to all traces (deterministic if rng given)."""
+	r = rng or np.random.default_rng()
 	H, W = x_hw.shape
-	kind = random.choice(augment_freq_kinds)
+	kind = r.choice(augment_freq_kinds)
 	lo_min, hi_max = augment_freq_band
+
 	if kind == 'bandpass':
 		min_w, max_w = augment_freq_width
-		bw = random.uniform(min_w, max_w)
-		f_lo = random.uniform(lo_min, max(1e-3, hi_max - bw))
+		bw = float(r.uniform(min_w, max_w))
+		f_lo = float(r.uniform(lo_min, max(1e-3, hi_max - bw)))
 		f_hi = min(hi_max, f_lo + bw)
 	elif kind == 'lowpass':
-		f_lo, f_hi = None, random.uniform(lo_min + 0.02, hi_max)
+		f_lo, f_hi = None, float(r.uniform(lo_min + 0.02, hi_max))
 	elif kind == 'highpass':
-		f_lo, f_hi = random.uniform(lo_min, hi_max - 0.02), None
+		f_lo, f_hi = float(r.uniform(lo_min, hi_max - 0.02)), None
 	else:
 		raise ValueError(f'unknown freq-augment kind: {kind}')
+
 	n_rfft = W // 2 + 1
 	mask = _make_freq_mask(n_rfft, kind, f_lo, f_hi, augment_freq_roll)
 	X = np.fft.rfft(x_hw, axis=1)

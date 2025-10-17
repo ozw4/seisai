@@ -1,7 +1,9 @@
 # Python 関連
-__pycache__/
 *.py[cod]
 *.ipynb_checkpoints
+**/*.egg-info/
+**/__pycache__/
+**/*.pyc
 
 # Jupyter ノートブックのチェックポイント
 .ipynb_checkpoints/
@@ -39,3 +41,4 @@ debug_*/
 *.so
 *.o
 *.a
+

@@ -9,13 +9,13 @@ import segyio
 import torch
 from torch.utils.data import Dataset
 
-from seisai_transforms.augment import Compose
 from .config import LoaderConfig, TraceSubsetSamplerConfig
 from .gate_fblc import FirstBreakGate, FirstBreakGateConfig
 from .target_fb import FBTargetBuilder, FBTargetConfig
 from .trace_masker import TraceMasker, TraceMaskerConfig
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
+
 
 def _load_headers_with_cache(
 	segy_path: str,
@@ -156,7 +156,6 @@ class SegyGatherPipelineDataset(Dataset):
 		valid: bool = False,
 		verbose: bool = False,
 	) -> None:
-
 		self.segy_files = segy_files
 		self.fb_files = fb_files
 		self.transform = transform
@@ -184,7 +183,7 @@ class SegyGatherPipelineDataset(Dataset):
 			)
 		)
 		self.pick_ratio = pick_ratio
-        self._rng = np.random.default_rng()
+		self._rng = np.random.default_rng()
 		self.target_mode = target_mode
 		self.label_sigma = label_sigma
 		self.fb_target = FBTargetBuilder(
@@ -461,20 +460,20 @@ class SegyGatherPipelineDataset(Dataset):
 			x, meta = out if isinstance(out, tuple) else (out, {})
 
 			# meta 取り出し
-			hflip   = bool(meta.get("hflip", False))
-			factor  = float(meta.get("factor", 1.0))     # TimeStretch
-			start   = int(meta.get("start", 0))          # CropOrPad
-			did_space  = bool(meta.get("did_space", False))
-			f_h     = float(meta.get("factor_h", 1.0))
+			hflip = bool(meta.get('hflip', False))
+			factor = float(meta.get('factor', 1.0))  # TimeStretch
+			start = int(meta.get('start', 0))  # CropOrPad
+			did_space = bool(meta.get('did_space', False))
+			f_h = float(meta.get('factor_h', 1.0))
 
 			if hflip:
-				fb_subset   = fb_subset[::-1].copy()
-				off_subset  = off_subset[::-1].copy()
+				fb_subset = fb_subset[::-1].copy()
+				off_subset = off_subset[::-1].copy()
 
 			# first-break indices in window
 			fb_idx_win = np.floor(fb_subset * factor).astype(np.int64) - start
-            W = x.shape[1]
-            invalid = (fb_idx_win <= 0) | (fb_idx_win >= W)
+			W = x.shape[1]
+			invalid = (fb_idx_win <= 0) | (fb_idx_win >= W)
 			fb_idx_win[invalid] = -1
 
 			# FBLC gate (before masking/target/tensorization)
