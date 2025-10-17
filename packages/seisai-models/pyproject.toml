@@ -12,7 +12,7 @@ license = {text = "MIT"}
 dependencies = [
   "numpy",
   "torch",
-  "seisai-data>=0.2.0",
+  "seisai-dataset>=0.1.0",
   "seisai-transforms>=0.1.0",
 ]
 
