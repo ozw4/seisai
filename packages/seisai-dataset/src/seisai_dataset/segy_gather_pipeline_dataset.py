@@ -205,9 +205,7 @@ class SegyGatherPipelineDataset(Dataset):
 				verbose=self.verbose,
 			)
 		)
-		self.subsetloader = TraceSubsetLoader(
-			LoaderConfig(target_len=None, pad_traces_to=128)
-		)
+		self.subsetloader = TraceSubsetLoader(LoaderConfig(pad_traces_to=128))
 		self.file_infos = []
 		self.sampler = TraceSubsetSampler(
 			TraceSubsetSamplerConfig(
