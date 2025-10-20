@@ -143,6 +143,36 @@ class RandomCropOrPad:
 		return (y, meta) if return_meta else y
 
 
+class DeterministicCropOrPad:
+	"""常に決定論"""
+
+	def __init__(self, target_len: int):
+		if target_len <= 0:
+			raise ValueError('target_len must be positive')
+		self.L = int(target_len)
+
+	def __call__(
+		self,
+		x_hw: np.ndarray,
+		rng: np.random.Generator | None = None,
+		return_meta=False,
+	):
+		H, W = x_hw.shape
+		if self.L == W:
+			meta = {'start': 0}
+			return (x_hw, meta) if return_meta else x_hw
+		if self.L < W:
+			start = (W - self.L) // 2
+			y = x_hw[:, start : start + self.L]
+			meta = {'start': int(start)}
+			return (y, meta) if return_meta else y
+		# W < L -> symmetric pad
+		total = self.L - W
+		y = np.pad(x_hw, ((0, 0), (0, total)), mode='constant')
+		meta = {'start': 0}
+		return (y, meta) if return_meta else y
+
+
 class PerTraceStandardize:
 	def __init__(self, eps: float = 1e-10):
 		self.eps = float(eps)

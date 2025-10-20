@@ -20,6 +20,7 @@ __all__ = [
 	'RandomSpatialStretchSameH',
 	'RandomHFlip',
 	'RandomCropOrPad',
+	'DeterministicCropOrPad',
 	'PerTraceStandardize',
 	'ViewCompose',
 	# config
