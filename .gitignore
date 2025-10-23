@@ -11,6 +11,9 @@
 # VSCode 設定ファイル
 .vscode/
 
+# test data
+example_data/
+
 # OS ファイル
 .DS_Store
 Thumbs.db
