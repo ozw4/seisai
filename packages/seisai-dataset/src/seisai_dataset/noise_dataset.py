@@ -19,10 +19,10 @@ from torch.utils.data import Dataset
 
 # seisai-dataset
 from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
+from seisai_dataset.file_info import build_file_info
 
 # 共通の判定ロジック（ここに一本化）
 from seisai_dataset.noise_decider import EventDetectConfig, decide_noise
-from seisai_dataset.segy_header_cache import load_headers_with_cache
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from seisai_dataset.trace_subset_sampler import TraceSubsetSampler
 
@@ -78,7 +78,15 @@ class NoiseTraceSubsetDataset(Dataset):
 
 		# file infos（supergatherは使わない）
 		self.file_infos: list[dict] = [
-			self._build_file_info(p) for p in self.segy_files
+			build_file_info(
+				p,
+				ffid_byte=self.ffid_byte,
+				chno_byte=self.chno_byte,
+				cmp_byte=self.cmp_byte,
+				header_cache_dir=self.header_cache_dir,
+				include_centroids=False,
+			)
+			for p in self.segy_files
 		]
 
 	def __len__(self) -> int:
@@ -140,72 +148,6 @@ class NoiseTraceSubsetDataset(Dataset):
 
 		# ここまで到達＝ max_retries 回すべて「イベント含み」で棄却された
 		raise RuntimeError('Failed to sample noise-only TraceSubset within max_retries')
-
-	# ---- file info（最小構成） ----
-	def _build_file_info(self, segy_path: str) -> dict:
-		# いつでも「キャッシュがあれば使用、無ければ再構築して保存」
-		meta = load_headers_with_cache(
-			segy_path,
-			self.ffid_byte,
-			self.chno_byte,
-			self.cmp_byte,
-			cache_dir=self.header_cache_dir,  # None のときは隣接 .npz を用いる実装
-			rebuild=False,
-		)
-		ffid_values = meta['ffid_values']
-		chno_values = meta['chno_values']
-		cmp_values = meta['cmp_values']
-		dt_us = int(meta['dt_us'])
-		n_traces = int(meta['n_traces'])
-		n_samples = int(meta['n_samples'])
-		dt_sec = dt_us * 1e-6
-
-		f = segyio.open(segy_path, 'r', ignore_geometry=True)  # mmap保持用
-		mmap = f.trace.raw[:]
-
-		def build_index_map(arr: np.ndarray | None) -> dict[int, np.ndarray] | None:
-			if arr is None:
-				return None
-			a = np.asarray(arr)
-			uniq, inv, counts = np.unique(a, return_inverse=True, return_counts=True)
-			order = np.argsort(inv, kind='mergesort')
-			splits = np.cumsum(counts)[:-1]
-			groups = np.split(order, splits)
-			return {
-				int(k): g.astype(np.int32) for k, g in zip(uniq, groups, strict=False)
-			}
-
-		ffid_key_to_indices = build_index_map(ffid_values)
-		chno_key_to_indices = build_index_map(chno_values)
-		cmp_key_to_indices = (
-			build_index_map(cmp_values) if (cmp_values is not None) else None
-		)
-
-		return {
-			'path': segy_path,
-			'mmap': mmap,
-			'segy_obj': f,
-			'dt_sec': dt_sec,
-			'n_traces': n_traces,
-			'n_samples': n_samples,
-			'ffid_values': ffid_values,
-			'chno_values': chno_values,
-			'cmp_values': cmp_values
-			if isinstance(cmp_values, np.ndarray) and cmp_values.size > 0
-			else None,
-			'ffid_key_to_indices': ffid_key_to_indices,
-			'chno_key_to_indices': chno_key_to_indices,
-			'cmp_key_to_indices': cmp_key_to_indices,
-			'ffid_unique_keys': list(ffid_key_to_indices.keys())
-			if ffid_key_to_indices is not None
-			else None,
-			'chno_unique_keys': list(chno_key_to_indices.keys())
-			if chno_key_to_indices is not None
-			else None,
-			'cmp_unique_keys': list(cmp_key_to_indices.keys())
-			if cmp_key_to_indices is not None
-			else None,
-		}
 
 	def close(self) -> None:
 		for info in self.file_infos:

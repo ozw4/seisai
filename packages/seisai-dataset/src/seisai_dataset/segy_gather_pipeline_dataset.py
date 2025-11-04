@@ -1,212 +1,88 @@
 # %%
-import random
-import warnings
-from pathlib import Path
-from typing import Literal
+import contextlib
 
 import numpy as np
 import segyio
 import torch
+from seisai_builders.builder import (
+	BuildPlan,
+)
 from torch.utils.data import Dataset
 
 from .config import LoaderConfig, TraceSubsetSamplerConfig
-from .gate_fblc import FirstBreakGate, FirstBreakGateConfig
-from .target_fb import FBTargetBuilder, FBTargetConfig
-from .trace_masker import TraceMasker, TraceMaskerConfig
+from .file_info import build_file_info
+from .gate_fblc import FirstBreakGate
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
 
 
-def _load_headers_with_cache(
-	segy_path: str,
-	ffid_byte,
-	chno_byte,
-	cmp_byte=None,
-	cache_dir: str | None = None,
-	rebuild: bool = False,
-):
-	segy_p = Path(segy_path)
-	cache_p = (
-		Path(cache_dir) / (segy_p.name + '.headers.npz')
-		if cache_dir
-		else segy_p.with_suffix(segy_p.suffix + '.headers.npz')
-	)
-
-	# 既存かつ新しければキャッシュを使う
-
-	try:
-		if (
-			(not rebuild)
-			and cache_p.exists()
-			and cache_p.stat().st_mtime >= segy_p.stat().st_mtime
-		):
-			z = np.load(cache_p, allow_pickle=False)
-			meta = {
-				'ffid_values': z['ffid_values'],
-				'chno_values': z['chno_values'],
-				'cmp_values': (z['cmp_values'] if 'cmp_values' in z.files else None),
-				'offsets': z['offsets'],
-				'dt_us': int(z['dt_us']),
-				'n_traces': int(z['n_traces']),
-				'n_samples': int(z['n_samples']),
-			}
-			print(f'Loaded header cache from {cache_p}')
-			return meta
-	except Exception:
-		# 壊れている等は作り直す
-		pass
-
-	# キャッシュ無 or 不正 → segyio で読み直し
-	with segyio.open(segy_path, 'r', ignore_geometry=True) as f:
-		ffid_values = np.asarray(f.attributes(ffid_byte)[:], dtype=np.int32)
-		chno_values = np.asarray(f.attributes(chno_byte)[:], dtype=np.int32)
-		cmp_values = None
-		if cmp_byte is not None:
-			try:
-				cmp_values = np.asarray(f.attributes(cmp_byte)[:], dtype=np.int32)
-			except Exception:
-				cmp_values = None
-
-		try:
-			offsets = np.asarray(
-				f.attributes(segyio.TraceField.offset)[:], dtype=np.float32
-			)
-			if len(offsets) != f.tracecount:
-				warnings.warn(f'offset length mismatch in {segy_path}')
-				offsets = np.zeros(f.tracecount, dtype=np.float32)
-		except Exception:
-			warnings.warn(f'failed to read offsets from {segy_path}')
-			offsets = np.zeros(f.tracecount, dtype=np.float32)
-
-		dt_us = int(f.bin[segyio.BinField.Interval])
-		meta = dict(
-			ffid_values=ffid_values,
-			chno_values=chno_values,
-			cmp_values=(
-				cmp_values if cmp_values is not None else np.array([], dtype=np.int32)
-			),
-			offsets=offsets,
-			dt_us=dt_us,
-			n_traces=f.tracecount,
-			n_samples=f.samples.size,
-		)
-
-	# 保存（一時ファイル→置換で安全に）
-	try:
-		tmp = cache_p.with_name(cache_p.stem + '.tmp' + cache_p.suffix)
-		np.savez_compressed(tmp, **meta)
-		print(f'Saved header cache to {cache_p}')
-		tmp.replace(cache_p)
-	except Exception:
-		pass
-
-	# 返却整形
-	meta['cmp_values'] = (
-		None
-		if (isinstance(meta['cmp_values'], np.ndarray) and meta['cmp_values'].size == 0)
-		else meta['cmp_values']
-	)
-	return meta
-
-
-def _build_centroids(key_to_indices, X, Y):
-	if key_to_indices is None or X is None or Y is None:
-		return None
-	out = {}
-	for k, idxs in key_to_indices.items():
-		if idxs is None or len(idxs) == 0:
-			continue
-		# robust representative (median)
-		mx = float(np.median(X[idxs]))
-		my = float(np.median(Y[idxs]))
-		out[int(k)] = (mx, my)
-	return out
-
-
 class SegyGatherPipelineDataset(Dataset):
-	"""Dataset reading SEG-Y gathers with optional augmentation."""
+	"""SEG-Y ギャザー読み込み → サンプリング → 変換 → FBLC ゲート → （任意）BuildPlanで入出力生成。
+
+	期待する transform:  x(H,W) -> x_view  もしくは  (x_view, meta)
+	- meta は少なくとも { 'hflip':bool, 'factor':float, 'start':int, 'did_space':bool, 'factor_h':float } の任意サブセット
+	期待する fbgate: FirstBreakGate（min_pick_accept と fblc_accept を持つ）
+	期待する plan:  BuildPlan（任意）。与えれば sample に 'input' / 'target' などを組み立てる
+	"""
 
 	def __init__(
 		self,
 		segy_files: list[str],
 		fb_files: list[str],
 		transform,
+		fbgate: FirstBreakGate,
+		*,
+		plan: BuildPlan | None = None,
 		ffid_byte=segyio.TraceField.FieldRecord,
 		chno_byte=segyio.TraceField.TraceNumber,
 		cmp_byte=segyio.TraceField.CDP,
-		primary_keys: tuple[str, ...]
-		| None = None,  # 例: ('ffid','chno','cmp') / ('ffid',)
+		primary_keys: tuple[str, ...] | None = None,
 		primary_key_weights: tuple[float, ...] | None = None,
 		use_superwindow: bool = False,
 		sw_halfspan: int = 0,
 		sw_prob: float = 0.3,
-		use_header_cache: bool = False,
+		use_header_cache: bool = True,
 		header_cache_dir: str | None = None,
-		mask_ratio: float = 0.5,
-		mask_mode: Literal['replace', 'add'] = 'replace',
-		mask_noise_std: float = 1.0,
-		pick_ratio: float = 0.3,
-		target_mode: Literal['recon', 'fb_seg'] = 'recon',
-		label_sigma: float = 1.0,
-		reject_fblc: bool = False,
-		fblc_percentile: float = 95.0,
-		fblc_thresh_ms: float = 8.0,
-		fblc_min_pairs: int = 16,
-		fblc_apply_on: Literal['any', 'super_only'] = 'any',
+		subset_traces: int = 128,
 		valid: bool = False,
 		verbose: bool = False,
 	) -> None:
-		self.segy_files = segy_files
-		self.fb_files = fb_files
+		if len(segy_files) == 0 or len(fb_files) == 0:
+			raise ValueError('segy_files / fb_files は空であってはならない')
+		if len(segy_files) != len(fb_files):
+			raise ValueError('segy_files と fb_files の長さが一致していません')
+
+		self.segy_files = list(segy_files)
+		self.fb_files = list(fb_files)
 		self.transform = transform
+		self.fbgate = fbgate
+		self.plan = plan
+
 		self.ffid_byte = ffid_byte
 		self.chno_byte = chno_byte
 		self.cmp_byte = cmp_byte
+
 		self.primary_keys = tuple(primary_keys) if primary_keys else None
 		self.primary_key_weights = (
 			tuple(primary_key_weights) if primary_key_weights else None
 		)
-		self.use_superwindow = use_superwindow
+
+		self.use_superwindow = bool(use_superwindow)
 		self.sw_halfspan = int(sw_halfspan)
-		self.sw_prob = sw_prob
-		self.use_header_cache = use_header_cache
+		self.sw_prob = float(sw_prob)
+
+		self.use_header_cache = bool(use_header_cache)
 		self.header_cache_dir = header_cache_dir
 
-		self.mask_ratio = mask_ratio
-		self.mask_mode = mask_mode
-		self.mask_noise_std = mask_noise_std
-		self.masker = TraceMasker(
-			TraceMaskerConfig(
-				mask_ratio=self.mask_ratio,
-				mode=self.mask_mode,
-				noise_std=self.mask_noise_std,
-			)
-		)
-		self.pick_ratio = pick_ratio
+		self.valid = bool(valid)
+		self.verbose = bool(verbose)
+
 		self._rng = np.random.default_rng()
-		self.target_mode = target_mode
-		self.label_sigma = label_sigma
-		self.fb_target = FBTargetBuilder(
-			FBTargetConfig(sigma=max(float(self.label_sigma), 1e-6))
+
+		# components
+		self.subsetloader = TraceSubsetLoader(
+			LoaderConfig(pad_traces_to=int(subset_traces))
 		)
-		self.reject_fblc = bool(reject_fblc)
-		self.fblc_percentile = float(fblc_percentile)
-		self.fblc_thresh_ms = float(fblc_thresh_ms)
-		self.fblc_min_pairs = int(fblc_min_pairs)
-		self.fblc_apply_on = fblc_apply_on
-		self.valid = valid
-		self.verbose = verbose
-		self.fblc_gate = FirstBreakGate(
-			FirstBreakGateConfig(
-				percentile=self.fblc_percentile,
-				thresh_ms=self.fblc_thresh_ms,
-				min_pairs=self.fblc_min_pairs,
-				apply_on=self.fblc_apply_on,
-				verbose=self.verbose,
-			)
-		)
-		self.subsetloader = TraceSubsetLoader(LoaderConfig(pad_traces_to=128))
-		self.file_infos = []
 		self.sampler = TraceSubsetSampler(
 			TraceSubsetSamplerConfig(
 				primary_keys=self.primary_keys,
@@ -215,335 +91,147 @@ class SegyGatherPipelineDataset(Dataset):
 				sw_halfspan=self.sw_halfspan,
 				sw_prob=self.sw_prob,
 				valid=self.valid,
-				subset_traces=128,
+				subset_traces=int(subset_traces),
 			)
 		)
-		for segy_path, fb_path in zip(self.segy_files, self.fb_files, strict=False):
-			print(f'Loading {segy_path} and {fb_path}')
-			if self.use_header_cache:
-				meta = _load_headers_with_cache(
-					segy_path,
-					self.ffid_byte,
-					self.chno_byte,
-					self.cmp_byte,
-					cache_dir=self.header_cache_dir,
-					rebuild=False,  # 必要なら True に
-				)
-				ffid_values = meta['ffid_values']
-				chno_values = meta['chno_values']
-				cmp_values = meta['cmp_values']
-				offsets = meta['offsets']
-				dt_us = meta['dt_us']
-				n_traces = meta['n_traces']
-				n_samples = meta['n_samples']
-				dt = dt_us / 1e3
-				dt_sec = dt_us * 1e-6
-			else:
-				# 従来の読み方（そのまま）
-				f_tmp = segyio.open(segy_path, 'r', ignore_geometry=True)
-				ffid_values = f_tmp.attributes(self.ffid_byte)[:]
-				chno_values = f_tmp.attributes(self.chno_byte)[:]
-				cmp_values = None
-				if self.cmp_byte is not None:
-					try:
-						cmp_values = f_tmp.attributes(self.cmp_byte)[:]
-					except Exception as e:
-						warnings.warn(f'CMP header not available for {segy_path}: {e}')
-						cmp_values = None
-				dt_us = int(f_tmp.bin[segyio.BinField.Interval])
-				dt = dt_us / 1e3
-				dt_sec = dt_us * 1e-6
-				try:
-					offsets = f_tmp.attributes(segyio.TraceField.offset)[:]
-					offsets = np.asarray(offsets, dtype=np.float32)
-					if len(offsets) != f_tmp.tracecount:
-						warnings.warn(f'offset length mismatch in {segy_path}')
-						offsets = np.zeros(f_tmp.tracecount, dtype=np.float32)
-				except Exception as e:
-					warnings.warn(f'failed to read offsets from {segy_path}: {e}')
-					offsets = np.zeros(f_tmp.tracecount, dtype=np.float32)
-				n_traces = f_tmp.tracecount
-				n_samples = f_tmp.samples.size
-				f_tmp.close()
-			# ▲▲ ここまでヘッダ取得 ▲▲
 
-			# mmap用に開いて保持
-			f = segyio.open(segy_path, 'r', ignore_geometry=True)
-			mmap = f.trace.raw[:]
-
-			ffid_key_to_indices = self._build_index_map(ffid_values)
-			ffid_unique_keys = list(ffid_key_to_indices.keys())
-			chno_key_to_indices = self._build_index_map(chno_values)
-			chno_unique_keys = list(chno_key_to_indices.keys())
-			cmp_key_to_indices = (
-				self._build_index_map(cmp_values) if (cmp_values is not None) else None
+		# ファイルごとのインデックス辞書等を構築
+		self.file_infos: list[dict] = []
+		for segy_path, fb_path in zip(self.segy_files, self.fb_files, strict=True):
+			info = build_file_info(
+				segy_path,
+				ffid_byte=self.ffid_byte,
+				chno_byte=self.chno_byte,
+				cmp_byte=self.cmp_byte,
+				header_cache_dir=self.header_cache_dir,
+				use_header_cache=self.use_header_cache,
+				include_centroids=True,  # or False
 			)
-			cmp_unique_keys = (
-				list(cmp_key_to_indices.keys())
-				if (cmp_key_to_indices is not None)
-				else None
-			)
-
-			# ---- distance centroids (FFID by source, CHNO by receiver) ----
-			srcx = srcy = None
-			grx = gry = None
-			try:
-				srcx = np.asarray(
-					f.attributes(segyio.TraceField.SourceX)[:], dtype=np.float64
-				)
-				srcy = np.asarray(
-					f.attributes(segyio.TraceField.SourceY)[:], dtype=np.float64
-				)
-			except Exception as e:
-				warnings.warn(
-					f'failed to read source coordinates from {segy_path}: {e}'
-				)
-				srcx = srcy = None
-			try:
-				grx = np.asarray(
-					f.attributes(segyio.TraceField.GroupX)[:], dtype=np.float64
-				)
-				gry = np.asarray(
-					f.attributes(segyio.TraceField.GroupY)[:], dtype=np.float64
-				)
-			except Exception as e:
-				warnings.warn(
-					f'failed to read receiver coordinates from {segy_path}: {e}'
-				)
-				grx = gry = None
-
-			if (
-				srcx is not None
-				and srcy is not None
-				and grx is not None
-				and gry is not None
-			):
-				try:
-					scal = np.asarray(
-						f.attributes(segyio.TraceField.SourceGroupScalar)[:],
-						dtype=np.float64,
-					)
-					scal_eff = np.where(
-						scal == 0.0,
-						1.0,
-						np.where(scal > 0.0, scal, 1.0 / np.abs(scal)),
-					)
-					if scal_eff.size == 1 or scal_eff.size == srcx.size:
-						srcx *= scal_eff
-						srcy *= scal_eff
-						grx *= scal_eff
-						gry *= scal_eff
-					else:
-						warnings.warn(f'SourceGroupScalar size mismatch in {segy_path}')
-						srcx = srcy = grx = gry = None
-				except Exception as e:
-					warnings.warn(
-						f'failed to read SourceGroupScalar from {segy_path}: {e}'
-					)
-					srcx = srcy = grx = gry = None
-
-			ffid_centroids = _build_centroids(ffid_key_to_indices, srcx, srcy)
-			chno_centroids = _build_centroids(chno_key_to_indices, grx, gry)
-			# ---------------------------------------------------------------
-
 			fb = np.load(fb_path)
-
-			self.file_infos.append(
-				dict(
-					path=segy_path,
-					mmap=mmap,
-					ffid_values=ffid_values,
-					ffid_key_to_indices=ffid_key_to_indices,
-					ffid_unique_keys=ffid_unique_keys,
-					chno_values=chno_values,
-					chno_key_to_indices=chno_key_to_indices,
-					chno_unique_keys=chno_unique_keys,
-					cmp_values=cmp_values,
-					cmp_key_to_indices=cmp_key_to_indices,
-					cmp_unique_keys=cmp_unique_keys,
-					n_samples=n_samples,
-					n_traces=n_traces,
-					dt=dt,
-					dt_sec=dt_sec,
-					segy_obj=f,
-					fb=fb,
-					offsets=offsets,
-					ffid_centroids=ffid_centroids,
-					chno_centroids=chno_centroids,
-				)
-			)
+			info['fb'] = fb
+			self.file_infos.append(info)
 
 	def close(self) -> None:
-		"""Close all opened SEG-Y file objects."""
 		for info in self.file_infos:
 			segy_obj = info.get('segy_obj')
 			if segy_obj is not None:
-				try:
+				with contextlib.suppress(Exception):
 					segy_obj.close()
-				except Exception:
-					pass
 		self.file_infos.clear()
 
 	def __del__(self) -> None:
 		self.close()
 
-	def _build_index_map(self, key_array: np.ndarray) -> dict[int, np.ndarray]:
-		uniq, inv, counts = np.unique(
-			key_array, return_inverse=True, return_counts=True
-		)
-		sort_idx = np.argsort(inv, kind='mergesort')
-		split_points = np.cumsum(counts)[:-1]
-		groups = np.split(sort_idx, split_points)
-		return {int(k): g.astype(np.int32) for k, g in zip(uniq, groups, strict=False)}
-
 	def __len__(self) -> int:
 		return 10**6
 
-	def __getitem__(self, _=None):
+	def __getitem__(self, _=None) -> dict:
 		while True:
-			idx = int(self._rng.integers(0, len(self.file_infos)))
-			info = self.file_infos[idx]
+			fidx = int(self._rng.integers(0, len(self.file_infos)))
+			info = self.file_infos[fidx]
 			mmap = info['mmap']
 
-			s = self.sampler.draw(info, py_random=random)
-			indices = s['indices']
-			pad_len = s['pad_len']
+			s = self.sampler.draw(
+				info,
+				py_random=np.random.RandomState(int(self._rng.integers(0, 2**31 - 1))),
+			)
+			indices = np.asarray(s['indices'], dtype=np.int64)
 			key_name = s['key_name']
 			secondary_key = s['secondary_key']
-			did_super = s['did_super']
+			did_super = bool(s['did_super'])
 			primary_unique_str = s['primary_unique']
 
-			fb = info['fb']
+			fb_all = info['fb']
+			fb_subset = fb_all[indices]
 
-			# ---- take up to 128 traces (contiguous slice) ----
-			n_total = len(indices)
-			if n_total >= 128:
-				start_idx = int(self._rng.integers(0, n_total - 128 + 1))
-				selected_indices = indices[start_idx : start_idx + 128]
-				pad_len = 0
-			else:
-				selected_indices = indices
-				pad_len = 128 - n_total
-			selected_indices = np.asarray(selected_indices, dtype=np.int64)
+			# ピック数の最低限チェック（読み出し前に棄却したい時はこの位置）
+			ok_pick, _, _ = self.fbgate.min_pick_accept(fb_subset)
+			if not ok_pick:
+				continue
 
-			# primary unique set (for logging)
-			prim_vals_sel = info[f'{key_name}_values'][selected_indices].astype(
-				np.int64
-			)
-			primary_label_values = np.unique(prim_vals_sel)
-			primary_unique_str = ','.join(map(str, primary_label_values.tolist()))
+			# 波形読み出し
+			x = self.subsetloader.load(mmap, indices)  # (H,W0) float32 を想定
+			offsets = info['offsets'][indices].astype(np.float32)
 
-			# picks / offsets
-			fb_subset = fb[selected_indices]
-			if pad_len > 0:
-				fb_subset = np.concatenate(
-					[fb_subset, np.zeros(pad_len, dtype=fb_subset.dtype)]
-				)
-			off_subset = info['offsets'][selected_indices].astype(np.float32)
-			if pad_len > 0:
-				off_subset = np.concatenate(
-					[off_subset, np.zeros(pad_len, dtype=np.float32)]
-				)
-
-			# require enough picks
-			pick_ratio = np.count_nonzero(fb_subset > 0) / len(fb_subset)
-			if pick_ratio < self.pick_ratio:
-				continue  # retry whole sample
-
-			# ---- load traces ----
-			x = self.subsetloader.load(mmap, selected_indices)
-
-			# パイプライン適用（H×Wに対して）
+			# 変換（Crop/Pad / TimeStretch 等）
 			out = self.transform(x, rng=self._rng, return_meta=True)
-			x, meta = out if isinstance(out, tuple) else (out, {})
+			x_view, meta = out if isinstance(out, tuple) else (out, {})
+			if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
+				raise ValueError(
+					'transform は 2D numpy または (2D, meta) を返す必要があります'
+				)
 
-			# meta 取り出し
+			# FB をビュー空間へ反映
 			hflip = bool(meta.get('hflip', False))
-			factor = float(meta.get('factor', 1.0))  # TimeStretch
-			start = int(meta.get('start', 0))  # CropOrPad
-			did_space = bool(meta.get('did_space', False))
-			f_h = float(meta.get('factor_h', 1.0))
-
+			factor = float(meta.get('factor', 1.0))
+			start = int(meta.get('start', 0))
 			if hflip:
 				fb_subset = fb_subset[::-1].copy()
-				off_subset = off_subset[::-1].copy()
+				offsets = offsets[::-1].copy()
 
-			# first-break indices in window
 			fb_idx_win = np.floor(fb_subset * factor).astype(np.int64) - start
-			W = x.shape[1]
+			W = x_view.shape[1]
 			invalid = (fb_idx_win <= 0) | (fb_idx_win >= W)
 			fb_idx_win[invalid] = -1
 
-			# FBLC gate (before masking/target/tensorization)
+			# FBLC gate（After transform）
 			dt_eff_sec = info['dt_sec'] / max(factor, 1e-9)
-			if self.reject_fblc:
-				ok, p_ms, valid_pairs = self.fblc_gate.accept(
-					fb_idx_win,
-					dt_eff_sec,
-					did_super=did_super,
-					percentile=self.fblc_percentile,
-					thresh_ms=self.fblc_thresh_ms,
-					min_pairs=self.fblc_min_pairs,
-					apply_on=self.fblc_apply_on,
-				)
-				if not ok:
-					if self.verbose and p_ms is not None:
-						print(
-							f'Rejecting gather {info["path"]} key={key_name}:{key} '
-							f'for FBLC {p_ms:.1f}ms > {self.fblc_thresh_ms}ms'
-						)
-					continue
-				if self.verbose and p_ms is not None:
-					print(
-						f'Accepted gather {info["path"]} key={key_name}:{key} '
-						f'for FBLC {p_ms:.1f}ms <= {self.fblc_thresh_ms}ms'
-					)
-
-			# masking (after acceptance)
-			x_masked, mask_idx = self.masker.apply(
-				x,
-				mask_ratio=self.mask_ratio,
-				mode=self.mask_mode,
-				noise_std=self.mask_noise_std,
-				py_random=random,
+			ok_fblc, p_ms, valid_pairs = self.fbgate.fblc_accept(
+				fb_idx_win, dt_eff_sec=dt_eff_sec
 			)
+			if not ok_fblc:
+				if self.verbose:
+					print(
+						f'Rejecting gather {info["path"]} key={key_name}:{primary_unique_str} '
+						f'(FBLC gate; pairs={valid_pairs}, p_ms={p_ms})'
+					)
+				continue
 
-			# target (optional)
-			target_t = None
-			if self.target_mode == 'fb_seg':
-				target_np = self.fb_target.build(
-					fb_idx_win,
-					W,
-					did_space=did_space,
-					f_h=f_h,
-					sigma=self.label_sigma,
-				)
-				target_t = torch.from_numpy(target_np)
-
-			# tensors + sample dict
-			x_t = torch.from_numpy(x)[None, ...]
-			xm = torch.from_numpy(x_masked)[None, ...]
-			fb_idx_t = torch.from_numpy(fb_idx_win)
-			off_t = torch.from_numpy(off_subset)
-
+			# sample dict 準備（BuildPlan を使う場合ここから）
 			sample = {
-				'masked': xm,
-				'original': x_t,
-				'fb_idx': fb_idx_t,
-				'offsets': off_t,
-				'dt_sec': torch.tensor(dt_eff_sec, dtype=torch.float32),
-				'mask_indices': mask_idx,
+				'x_view': x_view,  # (H,W)
+				'dt_sec': float(dt_eff_sec),
+				'offsets': offsets,  # (H,)
+				'meta': meta,
+				'fb_idx': fb_idx_win,  # (H,)
+				'file_path': info['path'],
+				'indices': indices,
 				'key_name': key_name,
 				'secondary_key': secondary_key,
-				'indices': selected_indices,
-				'file_path': info['path'],
 				'primary_unique': primary_unique_str,
 			}
-			if self.verbose:
-				sample['did_superwindow'] = did_super
-				print(f'primary_key: {key_name}={primary_unique_str}')
-				print(f'secondary_key: {secondary_key}')
-			if target_t is not None:
-				sample['target'] = target_t
 
-			return sample
+			if self.plan is not None:
+				# 入力/ターゲット構築（例: MaskedSignal, MakeTimeChannel, …）
+				self.plan.run(sample, rng=self._rng)
+
+				# モデル学習にすぐ使える形へ（Tensorは SelectStack 内で作成済み）
+				# 返却は 'input' / 'target' / 追加メタ
+				return {
+					'input': sample['input'],  # torch.Tensor (C,H,W)
+					'target': sample['target'],  # torch.Tensor (C2,H,W) など
+					'mask_bool': sample.get('mask_bool'),  # (H,T) bool（ある場合）
+					'dt_sec': torch.tensor(dt_eff_sec, dtype=torch.float32),
+					'fb_idx': torch.from_numpy(fb_idx_win),
+					'offsets': torch.from_numpy(offsets),
+					'file_path': info['path'],
+					'indices': indices,
+					'key_name': key_name,
+					'secondary_key': secondary_key,
+					'primary_unique': primary_unique_str,
+					'did_superwindow': did_super if self.verbose else None,
+				}
+
+			# BuildPlan を使わない場合の最低限の返却（元波形のみ）
+			return {
+				'x': torch.from_numpy(x_view[None, ...]),  # (1,H,W)
+				'dt_sec': torch.tensor(dt_eff_sec, dtype=torch.float32),
+				'fb_idx': torch.from_numpy(fb_idx_win),
+				'offsets': torch.from_numpy(offsets),
+				'file_path': info['path'],
+				'indices': indices,
+				'key_name': key_name,
+				'secondary_key': secondary_key,
+				'primary_unique': primary_unique_str,
+				'did_superwindow': did_super if self.verbose else None,
+			}

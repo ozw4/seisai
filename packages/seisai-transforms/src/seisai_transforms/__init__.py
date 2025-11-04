@@ -11,7 +11,8 @@ from .augment import (
 	ViewCompose,
 )
 from .config import FreqAugConfig, SpaceAugConfig, TimeAugConfig
-from .masking import TraceMasker
+from .mask_inference import cover_all_traces_predict_striped
+from .masking import MaskGenerator
 from .signal_ops import standardize_per_trace
 
 __all__ = [
@@ -30,5 +31,7 @@ __all__ = [
 	'SpaceAugConfig',
 	# ops
 	'standardize_per_trace',
-	'TraceMasker',
+	# mask
+	'cover_all_traces_predict_striped',
+	'MaskGenerator',
 ]

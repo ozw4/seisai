@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -19,14 +19,43 @@ class IdentitySignal:
 
 
 class MaskedSignal:
-	def __init__(self, masker, src: str = 'x_view', dst: str = 'x_masked'):
-		self.masker, self.src, self.dst = masker, src, dst
+	"""MaskGenerator を使って x_view にピクセル単位マスクを適用し、
+	破壊後テンソルと boolean マスクを sample に格納する。
+	- src: 入力キー (H,T) or (C,H,T)
+	- dst: 出力キー（破壊後）
+	- mask_key: 生成された bool マスク (H,T) の保存先キー
+	- mode: 'replace' または 'add'
+	"""
 
-	def __call__(self, sample: dict[str, Any], rng=None):
+	def __init__(
+		self,
+		generator,  # MaskGenerator インスタンス
+		*,
+		src: str = 'x_view',
+		dst: str = 'x_masked',
+		mask_key: str = 'mask_bool',
+		mode: Literal['replace', 'add'] = 'replace',
+	):
+		if mode not in ('replace', 'add'):
+			raise ValueError('invalid mode')
+		self.gen = generator
+		self.src = src
+		self.dst = dst
+		self.mask_key = mask_key
+		self.mode = mode
+
+	def __call__(self, sample: dict[str, Any], rng=None) -> None:
+		r = rng or np.random.default_rng()
 		x = sample[self.src]
-		xm, idx = self.masker.apply(x, py_random=None)
+		xm, m = self.gen.apply(
+			x,
+			rng=r,
+			mode=self.mode,
+			mask=None,
+			return_mask=True,
+		)
 		sample[self.dst] = xm
-		sample['mask_indices'] = idx
+		sample[self.mask_key] = m
 
 
 class MakeTimeChannel:

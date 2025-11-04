@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -21,3 +22,14 @@ class TraceSubsetSamplerConfig:
 	valid: bool = False
 	# 連続サブセット本数（不足時は後段でパディング）
 	subset_traces: int = 128
+
+
+@dataclass(frozen=True)
+class FirstBreakGateConfig:
+	fblc_on: bool = False
+	percentile: float = 95.0
+	thresh_ms: float = 8.0
+	min_pairs: int = 16
+	apply_on: Literal['any', 'super_only'] = 'any'
+	min_pick_ratio: float | None = None
+	verbose: bool = False

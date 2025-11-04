@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "seisai-dataset"
 version = "0.1.0"
-description = "SEG-Y gather dataset & augmentation toolkit"
+description = "SEG-Y gather dataset toolkit for pytorch"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -15,6 +15,7 @@ dependencies = [
   "scipy",
   "torch",
   "segyio",
+  "seisai-pick>=0.1.0"
 ]
 
 # augment 機能はオプション依存にして transforms へ片方向依存（循環回避）
@@ -22,5 +23,5 @@ dependencies = [
 augment = ["seisai-transforms>=0.1.0"]
 
 [tool.setuptools.packages.find]
-where = ["src"]         
+where = ["src"]
 include = ["seisai_dataset*"]

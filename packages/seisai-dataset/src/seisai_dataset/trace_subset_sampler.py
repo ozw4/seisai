@@ -10,16 +10,16 @@ class TraceSubsetSampler:
 	trace indices を抽出するコンポーネント。
 
 	入力: file_infos の 1 要素(dict) を想定（MaskedSegyGather が作る構造）
-	  必須キー: '{ffid|chno|cmp}_unique_keys', '{ffid|chno|cmp}_key_to_indices',
-	            '{ffid|chno|cmp}_values', 'offsets',
-	            'ffid_centroids','chno_centroids' (あれば距離KNNに使用)
+	必須キー: '{ffid|chno|cmp}_unique_keys', '{ffid|chno|cmp}_key_to_indices',
+				'{ffid|chno|cmp}_values', 'offsets',
+				'ffid_centroids','chno_centroids' (あれば距離KNNに使用)
 	出力: dict
-	  - indices: np.ndarray[int64]    連続サブセットのインデックス
-	  - pad_len: int                  subset_traces に満たない場合の不足本数
-	  - key_name: str                 選んだ primary key 名('ffid'|'chno'|'cmp')
-	  - secondary_key: str            二次整列に用いたキー('ffid'|'chno'|'offset')
-	  - did_super: bool               このサンプルでsuperwindowを実際に適用したか
-	  - primary_unique: str           サブセット内 primary 値のユニークを昇順に','連結
+	- indices: np.ndarray[int64]    連続サブセットのインデックス
+	- pad_len: int                  subset_traces に満たない場合の不足本数
+	- key_name: str                 選んだ primary key 名('ffid'|'chno'|'cmp')
+	- secondary_key: str            二次整列に用いたキー('ffid'|'chno'|'offset')
+	- did_super: bool               このサンプルでsuperwindowを実際に適用したか
+	- primary_unique: str           サブセット内 primary 値のユニークを昇順に','連結
 	"""
 
 	def __init__(self, cfg: TraceSubsetSamplerConfig):
@@ -94,14 +94,14 @@ class TraceSubsetSampler:
 		primary_label_values = np.unique(prim_vals_sel)
 		primary_unique_str = ','.join(map(str, primary_label_values.tolist()))
 
-		return dict(
-			indices=subset_indices,
-			pad_len=pad_len,
-			key_name=key_name,
-			secondary_key=secondary_key,
-			did_super=did_super,
-			primary_unique=primary_unique_str,
-		)
+		return {
+			'indices': subset_indices,
+			'pad_len': pad_len,
+			'key_name': key_name,
+			'secondary_key': secondary_key,
+			'did_super': did_super,
+			'primary_unique': primary_unique_str,
+		}
 
 	# ---- helpers ----
 	def _build_primary_candidates(self, cmp_available: bool):
