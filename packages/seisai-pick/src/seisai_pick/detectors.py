@@ -1,7 +1,7 @@
 import numpy as np
 from numba import njit
 
-from .stalta import STALTA
+from .stalta import stalta_1d
 
 
 def _ms_to_samples(dt_sec: float, ms: float) -> int:
@@ -69,7 +69,7 @@ def _stalta_pick_hist(
 	H, T = x_ht.shape
 	hist = np.zeros(T, dtype=np.int32)
 	for h in range(H):
-		R = STALTA(x_ht[h], ns, nl, eps)
+		R = stalta_1d(x_ht[h], ns, nl, eps)
 		_picks_hist_from_R(R, thr_on, thr_off, min_on_len, refr_len, hist)
 	return hist
 
@@ -156,7 +156,7 @@ def _stalta_majority_counts(
 	H, T = x_ht.shape
 	counts = np.zeros(T, dtype=np.int32)
 	for h in range(H):
-		R = STALTA(x_ht[h], ns, nl, eps)
+		R = stalta_1d(x_ht[h], ns, nl, eps)
 		for t in range(T):
 			if R[t] >= thr:
 				counts[t] += 1

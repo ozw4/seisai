@@ -2,32 +2,6 @@ import numpy as np
 from numba import njit, prange
 
 
-@njit(cache=True, fastmath=True)
-def STALTA(trc, ns=10, nl=100, eps=1e-12):
-	tmax = trc.size
-	R = np.zeros(tmax, dtype=np.float64)
-	s_sta = 0.0
-	s_lta = 0.0
-	for i in range(tmax):
-		x2 = float(trc[i]) * float(trc[i])
-		s_sta += x2
-		s_lta += x2
-		if i >= ns:
-			y = float(trc[i - ns])
-			s_sta -= y * y
-			sta = s_sta / ns
-		else:
-			sta = s_sta / (i + 1)
-		if i >= nl:
-			y = float(trc[i - nl])
-			s_lta -= y * y
-			lta = s_lta / nl
-		else:
-			lta = s_lta / (i + 1)
-		R[i] = sta / lta if lta > eps else 0.0
-	return R
-
-
 # === 1D: ユーザーの逐次和アルゴリズム（そのまま採用） =====================
 @njit(cache=True, fastmath=True)
 def stalta_1d(trc, ns=10, nl=100, eps=1e-12):
