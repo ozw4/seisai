@@ -14,7 +14,6 @@ from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
 
 # 判定ロジックを共通化
 from seisai_dataset.noise_decider import EventDetectConfig, decide_noise
-from seisai_dataset.segy_header_cache import load_headers_with_cache
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from seisai_dataset.trace_subset_sampler import TraceSubsetSampler
 

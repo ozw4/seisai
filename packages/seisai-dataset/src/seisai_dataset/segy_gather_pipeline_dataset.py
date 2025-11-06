@@ -1,14 +1,20 @@
 # %%
 import contextlib
+import random
 
 import numpy as np
 import segyio
 import torch
-from seisai_builders.builder import (
-	BuildPlan,
+from seisai_transforms.view_projection import (
+	project_fb_idx_view,
+	project_offsets_view,
+	project_time_view,
 )
 from torch.utils.data import Dataset
 
+from .builder.builder import (
+	BuildPlan,
+)
 from .config import LoaderConfig, TraceSubsetSamplerConfig
 from .file_info import build_file_info
 from .gate_fblc import FirstBreakGate
@@ -31,8 +37,8 @@ class SegyGatherPipelineDataset(Dataset):
 		fb_files: list[str],
 		transform,
 		fbgate: FirstBreakGate,
+		plan: BuildPlan,
 		*,
-		plan: BuildPlan | None = None,
 		ffid_byte=segyio.TraceField.FieldRecord,
 		chno_byte=segyio.TraceField.TraceNumber,
 		cmp_byte=segyio.TraceField.CDP,
@@ -46,6 +52,7 @@ class SegyGatherPipelineDataset(Dataset):
 		subset_traces: int = 128,
 		valid: bool = False,
 		verbose: bool = False,
+		max_trials: int = 2048,
 	) -> None:
 		if len(segy_files) == 0 or len(fb_files) == 0:
 			raise ValueError('segy_files / fb_files は空であってはならない')
@@ -56,6 +63,8 @@ class SegyGatherPipelineDataset(Dataset):
 		self.fb_files = list(fb_files)
 		self.transform = transform
 		self.fbgate = fbgate
+		if not isinstance(plan, BuildPlan):
+			raise TypeError('plan must be BuildPlan')
 		self.plan = plan
 
 		self.ffid_byte = ffid_byte
@@ -78,6 +87,7 @@ class SegyGatherPipelineDataset(Dataset):
 		self.verbose = bool(verbose)
 
 		self._rng = np.random.default_rng()
+		self.max_trials = int(max_trials)
 
 		# components
 		self.subsetloader = TraceSubsetLoader(
@@ -123,18 +133,18 @@ class SegyGatherPipelineDataset(Dataset):
 		self.close()
 
 	def __len__(self) -> int:
-		return 10**6
+		return 1024
 
 	def __getitem__(self, _=None) -> dict:
-		while True:
+		rej_pick = 0
+		rej_fblc = 0
+		for _attempt in range(self.max_trials):
 			fidx = int(self._rng.integers(0, len(self.file_infos)))
 			info = self.file_infos[fidx]
 			mmap = info['mmap']
+			seed = int(self._rng.integers(0, 2**31 - 1))
 
-			s = self.sampler.draw(
-				info,
-				py_random=np.random.RandomState(int(self._rng.integers(0, 2**31 - 1))),
-			)
+			s = self.sampler.draw(info, py_random=random.Random(seed))
 			indices = np.asarray(s['indices'], dtype=np.int64)
 			key_name = s['key_name']
 			secondary_key = s['secondary_key']
@@ -147,6 +157,7 @@ class SegyGatherPipelineDataset(Dataset):
 			# ピック数の最低限チェック（読み出し前に棄却したい時はこの位置）
 			ok_pick, _, _ = self.fbgate.min_pick_accept(fb_subset)
 			if not ok_pick:
+				rej_pick += 1
 				continue
 
 			# 波形読み出し
@@ -160,24 +171,19 @@ class SegyGatherPipelineDataset(Dataset):
 				raise ValueError(
 					'transform は 2D numpy または (2D, meta) を返す必要があります'
 				)
+			H, W = x_view.shape
+			W0 = x.shape[1]
+			t_raw = np.arange(W0, dtype=np.float32) * float(info['dt_sec'])
 
-			# FB をビュー空間へ反映
-			hflip = bool(meta.get('hflip', False))
-			factor = float(meta.get('factor', 1.0))
-			start = int(meta.get('start', 0))
-			if hflip:
-				fb_subset = fb_subset[::-1].copy()
-				offsets = offsets[::-1].copy()
-
-			fb_idx_win = np.floor(fb_subset * factor).astype(np.int64) - start
-			W = x_view.shape[1]
-			invalid = (fb_idx_win <= 0) | (fb_idx_win >= W)
-			fb_idx_win[invalid] = -1
+			meta['fb_idx_view'] = project_fb_idx_view(fb_subset, H, W, meta)
+			meta['offsets_view'] = project_offsets_view(offsets, H, meta)
+			meta['time_view'] = project_time_view(t_raw, H, W, meta)
 
 			# FBLC gate（After transform）
+			factor = float(meta.get('factor', 1.0))
 			dt_eff_sec = info['dt_sec'] / max(factor, 1e-9)
 			ok_fblc, p_ms, valid_pairs = self.fbgate.fblc_accept(
-				fb_idx_win, dt_eff_sec=dt_eff_sec
+				meta['fb_idx_view'], dt_eff_sec=dt_eff_sec, did_super=did_super
 			)
 			if not ok_fblc:
 				if self.verbose:
@@ -185,6 +191,7 @@ class SegyGatherPipelineDataset(Dataset):
 						f'Rejecting gather {info["path"]} key={key_name}:{primary_unique_str} '
 						f'(FBLC gate; pairs={valid_pairs}, p_ms={p_ms})'
 					)
+				rej_fblc += 1
 				continue
 
 			# sample dict 準備（BuildPlan を使う場合ここから）
@@ -192,8 +199,8 @@ class SegyGatherPipelineDataset(Dataset):
 				'x_view': x_view,  # (H,W)
 				'dt_sec': float(dt_eff_sec),
 				'offsets': offsets,  # (H,)
+				'fb_idx': fb_subset,  # (H,)
 				'meta': meta,
-				'fb_idx': fb_idx_win,  # (H,)
 				'file_path': info['path'],
 				'indices': indices,
 				'key_name': key_name,
@@ -201,32 +208,17 @@ class SegyGatherPipelineDataset(Dataset):
 				'primary_unique': primary_unique_str,
 			}
 
-			if self.plan is not None:
-				# 入力/ターゲット構築（例: MaskedSignal, MakeTimeChannel, …）
-				self.plan.run(sample, rng=self._rng)
+			self.plan.run(sample, rng=self._rng)
+			if 'input' not in sample or 'target' not in sample:
+				raise KeyError("plan must populate 'input' and 'target'")
 
-				# モデル学習にすぐ使える形へ（Tensorは SelectStack 内で作成済み）
-				# 返却は 'input' / 'target' / 追加メタ
-				return {
-					'input': sample['input'],  # torch.Tensor (C,H,W)
-					'target': sample['target'],  # torch.Tensor (C2,H,W) など
-					'mask_bool': sample.get('mask_bool'),  # (H,T) bool（ある場合）
-					'dt_sec': torch.tensor(dt_eff_sec, dtype=torch.float32),
-					'fb_idx': torch.from_numpy(fb_idx_win),
-					'offsets': torch.from_numpy(offsets),
-					'file_path': info['path'],
-					'indices': indices,
-					'key_name': key_name,
-					'secondary_key': secondary_key,
-					'primary_unique': primary_unique_str,
-					'did_superwindow': did_super if self.verbose else None,
-				}
-
-			# BuildPlan を使わない場合の最低限の返却（元波形のみ）
 			return {
-				'x': torch.from_numpy(x_view[None, ...]),  # (1,H,W)
+				'input': sample['input'],  # torch.Tensor (C,H,W)
+				'target': sample['target'],  # torch.Tensor (C2,H,W) など
+				'mask_bool': sample.get('mask_bool'),  # (H,T) bool（ある場合）
+				'meta': meta,  # ビュー情報
 				'dt_sec': torch.tensor(dt_eff_sec, dtype=torch.float32),
-				'fb_idx': torch.from_numpy(fb_idx_win),
+				'fb_idx': torch.from_numpy(fb_subset),
 				'offsets': torch.from_numpy(offsets),
 				'file_path': info['path'],
 				'indices': indices,
@@ -235,3 +227,9 @@ class SegyGatherPipelineDataset(Dataset):
 				'primary_unique': primary_unique_str,
 				'did_superwindow': did_super if self.verbose else None,
 			}
+
+		raise RuntimeError(
+			f'failed to draw a valid sample within max_trials={self.max_trials}; '
+			f'rejections: min_pick={rej_pick}, fblc={rej_fblc}, '
+			f'files={len(self.file_infos)}'
+		)

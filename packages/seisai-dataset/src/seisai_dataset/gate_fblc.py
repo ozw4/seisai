@@ -1,21 +1,9 @@
 # gate_fblc.py （抜粋）---------------------------------------------
-from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 
 from .config import FirstBreakGateConfig
-
-
-@dataclass(frozen=True)
-class FirstBreakGateConfig:
-	percentile: float = 95.0
-	thresh_ms: float = 8.0
-	min_pairs: int = 16
-	# ここを拡張:
-	apply_on: Literal['any', 'super_only', 'off'] = 'any'
-	min_pick_ratio: float | None = 0.0  # 0.0 or None で無効
-	verbose: bool = False
 
 
 class FirstBreakGate:
@@ -53,7 +41,7 @@ class FirstBreakGate:
 		H = int(v.size)
 		if H == 0:
 			return False, 0, 0.0
-		valid = v >= 0  # 0 を無効にしない場合は >0 に変える
+		valid = v > 0
 		n_valid = int(valid.sum())
 		ratio = n_valid / H
 		return (ratio >= float(r), n_valid, ratio)

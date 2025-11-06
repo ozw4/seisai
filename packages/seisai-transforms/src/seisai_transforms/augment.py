@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from .config import FreqAugConfig, SpaceAugConfig, TimeAugConfig
-from .kernels import _apply_freq_augment, _spatial_stretch_sameH, _time_stretch_poly
+from .kernels import _apply_freq_augment, _spatial_stretch, _time_stretch_poly
 from .signal_ops import standardize_per_trace
 
 
@@ -60,8 +60,7 @@ class RandomTimeStretch:
 			return (x_hw, meta) if return_meta else x_hw
 
 		f = float(r.uniform(*self.cfg.factor_range))
-		L = self.cfg.target_len or x_hw.shape[1]
-		y = _time_stretch_poly(x_hw, f, L)
+		y = _time_stretch_poly(x_hw, f)
 		meta = {'factor': f}
 		return (y, meta) if return_meta else y
 
@@ -77,25 +76,14 @@ class RandomSpatialStretchSameH:
 		return_meta: bool = False,
 	):
 		p = float(self.cfg.prob or 0.0)
-		if p <= 0.0:
-			# No-Op
-			return (
-				(x_hw, {'did_space': False, 'factor_h': 1.0}) if return_meta else x_hw
-			)
-
 		r = rng or np.random.default_rng()
-		u = r.random()
-		if u >= p:
-			# No-Op
-			return (
-				(x_hw, {'did_space': False, 'factor_h': 1.0}) if return_meta else x_hw
-			)
+		if p <= 0.0 or r.random() >= p:
+			return (x_hw, {'factor_h': 1.0}) if return_meta else x_hw
 
-		# ←ここまで来たら適用！
+		# 適用
 		f = float(r.uniform(*self.cfg.factor_range))
-		y = _spatial_stretch_sameH(x_hw, f)
-		meta = {'did_space': True, 'factor_h': f}
-		return (y, meta) if return_meta else y
+		y = _spatial_stretch(x_hw, f)
+		return (y, {'factor_h': f}) if return_meta else y
 
 
 class RandomHFlip:

@@ -182,7 +182,7 @@ class MaskGenerator:
 	# ---- A) マスク生成 ----
 	def generate(self, H: int, T: int, rng: np.random.Generator) -> np.ndarray:
 		m = self._fn(H, T, rng)
-		if m.dtype is not np.bool_ or m.shape != (H, T):
+		if not np.issubdtype(m.dtype, np.bool_) or m.shape != (H, T):
 			raise ValueError('generator must return bool array of shape (H,T)')
 		return m
 
@@ -208,7 +208,7 @@ class MaskGenerator:
 			raise ValueError(f'x must be (H,T) or (C,H,T), got {x.shape}')
 
 		m = mask if mask is not None else self.generate(H, T, rng)
-		if m.dtype is not np.bool_ or m.shape != (H, T):
+		if not np.issubdtype(m.dtype, np.bool_) or m.shape != (H, T):
 			raise ValueError('mask must be bool of shape (H,T)')
 
 		M = m[None, :, :]  # (1,H,T) → (C,H,T) にブロードキャスト

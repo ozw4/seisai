@@ -1,7 +1,6 @@
 from fractions import Fraction
 
 import numpy as np
-from scipy.ndimage import zoom as nd_zoom
 from scipy.signal import resample_poly
 
 __all__ = [
@@ -9,49 +8,73 @@ __all__ = [
 	'_cosine_ramp',
 	'_fit_time_len_np',
 	'_make_freq_mask',
-	'_spatial_stretch_sameH',
+	'_spatial_stretch',
 	'_time_stretch_poly',
 ]
 
 
-def _time_stretch_poly(x_hw: np.ndarray, factor: float, target_len: int) -> np.ndarray:
-	"""Stretch (H,W) array in time and fit to target length."""
+def _time_stretch_poly(x_hw: np.ndarray, factor: float) -> np.ndarray:
+	"""時間軸のみを factor 倍にリサンプルする（中心固定ではなく t=0 起点）。
+	- 入力: x_hw (H,W)
+	- 出力: (H,W') で W' は factor に応じて変化
+	- 補間: resample_poly（IIR前提の polyphase）、端のパディングは 'line'
+	- 例外: factor <= 0.0 は即時失敗
+	"""
+	if x_hw.ndim != 2:
+		raise ValueError('x_hw must be (H,W)')
+	if factor <= 0.0:
+		raise ValueError('factor must be positive')
 	if abs(factor - 1.0) < 1e-4:
-		return _fit_time_len_np(x_hw, target_len)
-	H, W = x_hw.shape
-	frac = Fraction(factor).limit_denominator(128)
+		return x_hw
+
+	H, _ = x_hw.shape
+	frac = Fraction(float(factor)).limit_denominator(128)
 	up, down = frac.numerator, frac.denominator
 	y = np.stack(
-		[resample_poly(x_hw[h], up, down, padtype='line') for h in range(H)], axis=0
+		[resample_poly(x_hw[h], up, down, padtype='line') for h in range(H)],
+		axis=0,
 	)
-	return _fit_time_len_np(y, target_len)
+	return y.astype(np.float32, copy=False)
 
 
-def _fit_time_len_np(x_hw: np.ndarray, target_len: int) -> np.ndarray:
-	"""Trim or pad (H,W') to target_len along time axis."""
-	W = x_hw.shape[1]
-	if target_len == W:
-		return x_hw
-	if target_len < W:
-		start = np.random.randint(0, W - target_len + 1)
-		return x_hw[:, start : start + target_len]
-	pad = target_len - W
-	return np.pad(x_hw, ((0, 0), (0, pad)), mode='constant')
+def _spatial_stretch(x_hw: np.ndarray, factor: float) -> np.ndarray:
+	"""幾何ストレッチ: H方向(トレース方向)のみ中心固定で座標写像し、出力は (H,W) を保つ。
+	- 伸縮は1回の座標変換で実施（ぼかし用の拡大→縮小の2段ズームは廃止）
+	- T軸は不変（zoom=(?, 1.0) 相当）
+	- 補間: H方向の線形補間（境界はedge-clamp）
 
-
-def _spatial_stretch_sameH(x_hw: np.ndarray, factor: float) -> np.ndarray:
-	"""Stretch traces spatially while keeping original count."""
-	if abs(factor - 1.0) < 1e-4:
-		return x_hw
+	契約:
+	x_hw: (H, W) float/np.ndarray
+	factor: >0。1.0で恒等。中心 c=(H-1)/2 を固定して y[h,:] = x[src(h),:]
+	例外:
+	- factor <= 0.0 は ValueError
+	- H==0 or W==0 は ValueError
+	"""
+	if factor <= 0.0:
+		raise ValueError('factor must be positive')
+	if x_hw.ndim != 2:
+		raise ValueError('x_hw must be 2D (H,W)')
 	H, W = x_hw.shape
-	H2 = max(1, int(round(H * factor)))
-	y = nd_zoom(x_hw, zoom=(H2 / H, 1.0), order=1, mode='reflect', prefilter=False)
-	y = nd_zoom(y, zoom=(H / H2, 1.0), order=1, mode='reflect', prefilter=False)
-	if y.shape[0] < H:
-		y = np.pad(y, ((0, H - y.shape[0]), (0, 0)), mode='edge')
-	elif y.shape[0] > H:
-		y = y[:H, :]
-	return y
+	if H == 0 or W == 0:
+		raise ValueError('empty input')
+
+	if abs(factor - 1.0) <= 1e-6:
+		return x_hw  # 恒等
+
+	# 中心固定の写像: dst h -> src = c + (h - c)/factor
+	c = (H - 1) * 0.5
+	dst = np.arange(H, dtype=np.float32)
+	src = c + (dst - c) / float(factor)
+
+	# 境界はエッジ複製（reflectではなくclip）
+	src = np.clip(src, 0.0, H - 1.0)
+	h0 = np.floor(src).astype(np.int64)
+	h1 = np.clip(h0 + 1, 0, H - 1)
+	w = (src - h0).astype(np.float32)  # (H,)
+
+	# H方向1次補間（ブロードキャストで (H,W) を一括計算）
+	y = (1.0 - w)[:, None] * x_hw[h0, :] + w[:, None] * x_hw[h1, :]
+	return y.astype(x_hw.dtype, copy=False)
 
 
 def _cosine_ramp(x: np.ndarray, a: float, b: float, invert: bool = False) -> np.ndarray:

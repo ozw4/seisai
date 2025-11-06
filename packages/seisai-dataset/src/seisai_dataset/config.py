@@ -26,10 +26,10 @@ class TraceSubsetSamplerConfig:
 
 @dataclass(frozen=True)
 class FirstBreakGateConfig:
-	fblc_on: bool = False
 	percentile: float = 95.0
 	thresh_ms: float = 8.0
 	min_pairs: int = 16
-	apply_on: Literal['any', 'super_only'] = 'any'
-	min_pick_ratio: float | None = None
+	# ここを拡張:
+	apply_on: Literal['any', 'super_only', 'off'] = 'any'
+	min_pick_ratio: float | None = 0.0  # 0.0 or None で無効
 	verbose: bool = False

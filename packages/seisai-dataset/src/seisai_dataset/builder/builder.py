@@ -13,9 +13,20 @@ class IdentitySignal:
 	def __init__(self, src: str = 'x_view', dst: str = 'x_id', copy: bool = False):
 		self.src, self.dst, self.copy = src, dst, copy
 
-	def __call__(self, sample: dict[str, Any], rng=None):
+	def __call__(self, sample: dict[str, Any], rng=None) -> None:
+		if self.src not in sample:
+			raise KeyError(f'missing sample key: {self.src}')
 		x = sample[self.src]
-		sample[self.dst] = x.copy() if (self.copy and isinstance(x, np.ndarray)) else x
+		if not self.copy:
+			sample[self.dst] = x
+			return
+		if isinstance(x, np.ndarray):
+			sample[self.dst] = x.copy()
+			return
+		if isinstance(x, torch.Tensor):
+			sample[self.dst] = x.clone()
+			return
+		raise TypeError(f'unsupported type for copy: {type(x).__name__}')
 
 
 class MaskedSignal:
@@ -34,10 +45,8 @@ class MaskedSignal:
 		src: str = 'x_view',
 		dst: str = 'x_masked',
 		mask_key: str = 'mask_bool',
-		mode: Literal['replace', 'add'] = 'replace',
+		mode: Literal['replace', 'add'] | None = None,  # ← 任意化（整合チェック用）
 	):
-		if mode not in ('replace', 'add'):
-			raise ValueError('invalid mode')
 		self.gen = generator
 		self.src = src
 		self.dst = dst
@@ -47,13 +56,8 @@ class MaskedSignal:
 	def __call__(self, sample: dict[str, Any], rng=None) -> None:
 		r = rng or np.random.default_rng()
 		x = sample[self.src]
-		xm, m = self.gen.apply(
-			x,
-			rng=r,
-			mode=self.mode,
-			mask=None,
-			return_mask=True,
-		)
+		# MaskGenerator.apply は mode 引数を受けないため渡さない（生成器に保持されている）
+		xm, m = self.gen.apply(x, rng=r, mask=None, return_mask=True)
 		sample[self.dst] = xm
 		sample[self.mask_key] = m
 
@@ -65,9 +69,8 @@ class MakeTimeChannel:
 		self.dst = dst
 
 	def __call__(self, sample: dict[str, Any], rng=None) -> None:
-		H, W = sample['x_view'].shape
-		dt = float(sample['dt_sec'])
-		t = np.arange(W, dtype=np.float32) * dt
+		H, _ = sample['x_view'].shape
+		t = sample['meta']['time_view'].astype(np.float32)
 		sample[self.dst] = np.repeat(t[None, :], H, axis=0)
 
 
@@ -78,7 +81,7 @@ class MakeOffsetChannel:
 		self.dst, self.normalize = dst, normalize
 
 	def __call__(self, sample: dict[str, Any], rng=None) -> None:
-		off = sample['offsets'].astype(np.float32)
+		off = sample['meta']['offsets_view'].astype(np.float32)
 		if self.normalize:
 			s = off.std() + 1e-6
 			off = (off - off.mean()) / s
@@ -87,42 +90,48 @@ class MakeOffsetChannel:
 
 
 # ---------- Label producers（ラベルから作る派生物） ----------
-class FBGaussMap:
-	"""fb_idx からガウスマップを作る（面積正規化）。View meta（hflip/factor/start）を反映。"""
 
-	def __init__(self, dst: str = 'fb_map', sigma: float = 1.5):
-		self.dst, self.sigma = dst, float(sigma)
+
+class FBGaussMap:
+	"""fb_idx_view → ガウスマップ（各有効行の面積=1, CE前提）。"""
+
+	def __init__(
+		self, dst: str = 'fb_map', sigma: float = 1.5, src: str = 'fb_idx_view'
+	):
+		if float(sigma) <= 0.0:
+			raise ValueError('sigma must be positive')
+		self.dst = dst
+		self.src = src
+		self.sigma = float(sigma)
 
 	def __call__(self, sample: dict[str, Any], rng=None) -> None:
-		meta = sample.get('meta', {})
-		fb = np.asarray(sample['fb_idx'], dtype=np.int64).copy()
-		if meta.get('hflip', False):
-			fb = fb[::-1]
+		if 'x_view' not in sample:
+			raise KeyError("missing 'x_view'")
+		if self.src not in sample['meta']:
+			raise KeyError(
+				f"missing '{self.src}' (use ProjectToView before FBGaussMap)"
+			)
+		x_view = sample['x_view']
+		if isinstance(x_view, torch.Tensor):
+			x_view = x_view.detach().cpu().numpy()
+		H, W = x_view.shape
+		fb = np.asarray(sample['meta'][self.src], dtype=np.int64)
+		if fb.shape[0] != H:
+			raise ValueError(f'{self.src} length {fb.shape[0]} != H {H}')
 
-		factor = float(meta.get('factor', 1.0))
-		start = int(meta.get('start', 0))
-		H, W = sample['x_view'].shape
-		assert fb.shape[0] == H, f'fb_idx length {fb.shape[0]} != H {H}'
-
-		# ビュー変換後の fb をウィンドウ内インデックスへ
-		fb = np.floor(fb * factor).astype(np.int64) - start
-		fb[(fb <= 0) | (fb >= W)] = -1
-
-		# 面積正規化（各行の合計=1）
+		valid = fb > 0
 		y = np.zeros((H, W), dtype=np.float32)
-		if np.any(fb >= 0):
-			xs = np.arange(W, dtype=np.float32)
-			s2 = self.sigma**2
-			for h in range(H):
-				idx = int(fb[h])
-				if idx >= 0:
-					g = np.exp(-0.5 * ((xs - idx) ** 2) / s2)
-					s = float(g.sum())
-					if s > 0.0:
-						g = g / s
-					y[h] = g
-
-		sample[self.dst] = y  # numpy のまま（SelectStackでTensor化）
+		if np.any(valid):
+			xs = np.arange(W, dtype=np.float32)[None, :]
+			idxv = fb[valid].astype(np.float32)[:, None]
+			s = max(self.sigma, 1e-6)
+			g = np.exp(-0.5 * ((xs - idxv) / s) ** 2).astype(np.float32)
+			denom = g.sum(axis=1, keepdims=True)
+			if np.any(denom <= 0.0):
+				raise ValueError('invalid gaussian row (zero area)')
+			g = g / denom
+			y[valid] = g
+		sample[self.dst] = y
 
 
 # ---------- 共通セレクタ（入力にもターゲットにも使う） ----------

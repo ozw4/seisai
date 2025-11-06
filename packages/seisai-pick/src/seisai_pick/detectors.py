@@ -209,7 +209,6 @@ def detect_event_stalta_majority(
 	if min_traces < 1:
 		raise ValueError('min_traces must be >= 1')
 
-	dt_ms = dt_sec * 1e3
 	ns = _ms_to_samples(dt_sec, sta_ms)
 	nl = max(ns + 1, _ms_to_samples(dt_sec, lta_ms))
 	min_len = _ms_to_samples(dt_sec, min_duration_ms)
