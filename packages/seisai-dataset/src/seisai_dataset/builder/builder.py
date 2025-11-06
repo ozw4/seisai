@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 import numpy as np
 import torch
+from seisai_pick.gaussian_prob import gaussian_probs1d_np
 
 
 # ---------- Wave producers（波形から作る派生物） ----------
@@ -93,7 +94,7 @@ class MakeOffsetChannel:
 
 
 class FBGaussMap:
-	"""fb_idx_view → ガウスマップ（各有効行の面積=1, CE前提）。"""
+	"""fb_idx_view → ガウスマップ（各有効行の面積=1, CE前提, ガウスはビンindex基準）"""
 
 	def __init__(
 		self, dst: str = 'fb_map', sigma: float = 1.5, src: str = 'fb_idx_view'
@@ -111,10 +112,12 @@ class FBGaussMap:
 			raise KeyError(
 				f"missing '{self.src}' (use ProjectToView before FBGaussMap)"
 			)
+
 		x_view = sample['x_view']
 		if isinstance(x_view, torch.Tensor):
 			x_view = x_view.detach().cpu().numpy()
 		H, W = x_view.shape
+
 		fb = np.asarray(sample['meta'][self.src], dtype=np.int64)
 		if fb.shape[0] != H:
 			raise ValueError(f'{self.src} length {fb.shape[0]} != H {H}')
@@ -122,14 +125,8 @@ class FBGaussMap:
 		valid = fb > 0
 		y = np.zeros((H, W), dtype=np.float32)
 		if np.any(valid):
-			xs = np.arange(W, dtype=np.float32)[None, :]
-			idxv = fb[valid].astype(np.float32)[:, None]
-			s = max(self.sigma, 1e-6)
-			g = np.exp(-0.5 * ((xs - idxv) / s) ** 2).astype(np.float32)
-			denom = g.sum(axis=1, keepdims=True)
-			if np.any(denom <= 0.0):
-				raise ValueError('invalid gaussian row (zero area)')
-			g = g / denom
+			mu = fb[valid].astype(np.float32)  # ビンindex中心
+			g = gaussian_probs1d_np(mu, self.sigma, W)  # (Nv, W)
 			y[valid] = g
 		sample[self.dst] = y
 

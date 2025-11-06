@@ -90,61 +90,97 @@ def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.nd
 	return fb
 
 
+_EPS = 1e-6
+
+
+_EPS = 1e-6
+
+
 def project_offsets_view(offsets: np.ndarray, H: int, meta: dict) -> np.ndarray:
-	"""生のオフセット列 `offsets`（(H,) float）を、
-	meta の H方向変換（hflip/factor_h）に合わせて View 空間へ投影する。
+	"""生のオフセット列 (H,) を meta の H 方向変換（hflip / factor_h）に合わせて
+	View 空間へ投影して返す。
 
-	注意:
-	- offsets は時間軸と独立のトレース属性のため、T方向（factor/start）の補正は行わない。
+	Parameters
+	----------
+	offsets : np.ndarray
+		形状 (H,) の 1D 配列（float 可）。各トレースの受信点オフセット [m]。
+	H : int
+		ビューのトレース数（offsets 長と一致している必要がある）。
+	meta : dict
+		{'hflip': bool, 'factor_h': float} を想定。存在しない場合は既定値 False / 1.0。
 
-	引数:
-	- offsets: (H,), float
-	- H: x_view のトレース数
-	- meta: {'hflip':bool, 'factor_h':float}
-	戻り値:
-	- offsets_view: (H,), float32
-	例外:
-	- H と offsets 長さ不一致は ValueError。
+	Returns
+	-------
+	np.ndarray
+		形状 (H,) の float32 配列。ビュー空間のオフセット列。
+
+	Raises
+	------
+	ValueError
+		offsets が 1D でない、長さが H と一致しない、または factor_h <= 0 の場合。
+
 	"""
-	off = np.asarray(offsets, dtype=np.float32).copy()
+	off = np.asarray(offsets, dtype=np.float32)
+	if off.ndim != 1:
+		raise ValueError('offsets must be 1D')
 	if off.shape[0] != H:
 		raise ValueError(f'offsets length {off.shape[0]} != H {H}')
-	if meta.get('hflip', False):
-		off = off[::-1]
-	f_h = float(meta.get('factor_h', 1.0))
-	if abs(f_h - 1.0) > 1e-6:
-		off = _resample_float_linear(off, f_h)
-	return off
+
+	if bool(meta.get('hflip', False)):
+		off = off[::-1].copy()
+
+	factor_h = float(meta.get('factor_h', 1.0))
+	if factor_h <= 0.0:
+		raise ValueError("meta['factor_h'] must be > 0")
+
+	if abs(factor_h - 1.0) <= _EPS:
+		return off
+
+	out = _resample_float_linear(off, factor_h)
+	return np.asarray(out, dtype=np.float32)
 
 
 def project_time_view(time_1d: np.ndarray, H: int, W: int, meta: dict) -> np.ndarray:
-	"""生の時間軸（1D, 秒）を meta の時間ストレッチ/クロップに追従させ、
-	(H,W) の time_view（秒）を生成する。
+	"""生の時間軸（1D, 秒）を meta の時間ストレッチ / クロップに追従させ、
+	全トレース共通の 1D 時間グリッド (W,) を返す。
+	注: H はインターフェイス整合のための引数で計算には使用しない。
 
-	前提:
-	- time_1d は長さ >=2 の等間隔時刻列（例: np.arange(W0)*dt0 + t0）
-	- meta は少なくとも {'factor':>0, 'start':>=0} を含む
-	- hflip/factor_h は時間軸に無関係のため無視
+	Parameters
+	----------
+	time_1d : np.ndarray
+		形状 (W0,) の等間隔時刻列（例: np.arange(W0) * dt0 + t0）。
+	H : int
+		ビューのトレース数（未使用）。
+	W : int
+		出力時間グリッドのサンプル数。
+	meta : dict
+		{'factor': float (>0), 'start': int (>=0)} を想定。
 
-	変換:
-	- dt0 = mean(diff(time_1d))
-	- t_view[w] = t0 + (start + w) * (dt0 / factor)
+	Returns
+	-------
+	np.ndarray
+		形状 (W,) の float32 配列。ビュー空間の時間グリッド [s]。
 
-	引数:
-	- time_1d: (W0,), float
-	- H, W: x_view の形状に一致するトレース数・サンプル数
-	- meta: {'factor':float, 'start':int}
-	戻り値:
-	- time_view: (H,W), float32（各行同一の時間格子）
-	例外:
-	- 非1次元、長さ不足、factor<=0 は ValueError。
+	Raises
+	------
+	ValueError
+		time_1d が 1D でない、長さ < 2、factor <= 0、または start < 0 の場合。
+
 	"""
 	t_raw = np.asarray(time_1d, dtype=np.float64)
 	if t_raw.ndim != 1 or t_raw.size < 2:
-		raise ValueError('time must be 1D with length >= 2')
+		raise ValueError('time_1d must be 1D with length >= 2')
+
 	dt0 = float(np.mean(np.diff(t_raw)))
 	t0 = float(t_raw[0])
+
 	factor = float(meta.get('factor', 1.0))
+	if factor <= 0.0:
+		raise ValueError("meta['factor'] must be > 0")
+
 	start = int(meta.get('start', 0))
-	tv = t0 + (np.arange(W, dtype=np.float64) + start) * (dt0 / factor)  # (W,)
-	return np.repeat(tv[None, :].astype(np.float32), H, axis=0)  # (H,W)
+	if start < 0:
+		raise ValueError("meta['start'] must be >= 0")
+
+	tv = t0 + (np.arange(W, dtype=np.float64) + start) * (dt0 / factor)
+	return tv.astype(np.float32)
