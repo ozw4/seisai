@@ -39,7 +39,8 @@ class EncDec2D(nn.Module):
 		intermediate_conv: bool = True,
 	):
 		super().__init__()
-
+		self.in_chans = in_chans
+		self.out_chans = out_chans
 		# 前段のダウンサンプル
 		self.pre_down = nn.ModuleList()
 		self.pre_out_channels = []  # ★追加：各pre段の出力chリスト
