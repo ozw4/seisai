@@ -1,4 +1,3 @@
-# seis_engine/train_loop.py
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -28,7 +27,6 @@ def train_one_epoch(
 	ema: Any | None = None,  # expects .update(model)
 	step_offset: int = 0,
 	print_freq: int = 50,
-	log_header: str = 'Train',
 	on_step: Callable[[int, dict[str, float]], None] | None = None,
 ) -> dict[str, float]:
 	if not isinstance(device, torch.device):
@@ -42,9 +40,9 @@ def train_one_epoch(
 	total_samples = 0
 	step = step_offset
 
-	device_type = device.type
-	do_amp = bool(use_amp and device_type == 'cuda')
-	autocast_ctx = torch.cuda.amp.autocast if do_amp else nullcontext
+	do_amp = bool(use_amp and device.type == 'cuda')
+	# 新API（将来の非推奨回避）: torch.amp.autocast('cuda', enabled=True/False)
+	autocast_ctx = (lambda: torch.amp.autocast('cuda')) if do_amp else nullcontext
 	local_scaler = (
 		scaler
 		if (do_amp and scaler is not None)
@@ -54,9 +52,7 @@ def train_one_epoch(
 	optimizer.zero_grad(set_to_none=True)
 
 	saw_any_batch = False
-	for i, batch in enumerate(
-		meter.log_every(dataloader, print_freq, header=log_header)
-	):
+	for i, batch in enumerate(meter.log_every(dataloader, print_freq, header='Train')):
 		if not isinstance(batch, dict) or (
 			'input' not in batch or 'target' not in batch
 		):
@@ -96,7 +92,6 @@ def train_one_epoch(
 				lr_scheduler.step()
 
 			step += 1
-
 			lr0 = float(optimizer.param_groups[0].get('lr', 0.0))
 			meter.update(loss=float(loss.detach().item()), lr=lr0)
 

@@ -14,6 +14,7 @@ from seisai_pick.trend.trend_fit_strategy import (
 	TrendFitStrategy,
 )
 from torch import Tensor
+from torch.amp import autocast
 
 
 @dataclass(frozen=True)
@@ -155,7 +156,7 @@ class TrendPriorOp:
 			log_prior = torch.log(prior.clamp_min(cfg.prior_log_eps)).to(torch.float32)
 
 			device_type = 'cuda' if logit.is_cuda else 'cpu'
-			with torch.autocast(device_type=device_type, enabled=False):
+			with autocast(device_type, enabled=False):
 				fused32 = logit.to(torch.float32) + float(alpha_eff) * log_prior
 				if not torch.isfinite(fused32).all():
 					aux[f'{cfg.aux_key}_disabled_reason_ch{c}'] = 'non_finite_after_add'

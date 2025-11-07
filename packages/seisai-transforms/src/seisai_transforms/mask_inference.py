@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 import torch
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 
 
 @torch.no_grad()
@@ -102,7 +102,7 @@ def cover_all_traces_predict_striped(
 					xmb.append(xm)
 
 				xmb = torch.cat(xmb, dim=0)  # (len(batch_bi)*B, 1, H, W)
-				with autocast(enabled=use_amp):
+				with autocast('cuda', enabled=use_amp):
 					yb = model(xmb)  # (len(batch_bi)*B, C, H, W)
 				# 元の B に戻して対応行だけ加算
 				yb = yb.view(len(batch_bi), B, -1, H, W)  # (Nb,B,C,H,W)
