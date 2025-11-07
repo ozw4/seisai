@@ -1,3 +1,4 @@
+# fbsegKLLoss.py
 import warnings
 from collections.abc import Mapping
 from typing import Any, Literal
@@ -5,17 +6,29 @@ from typing import Any, Literal
 import torch
 import torch.nn.functional as F
 
+Reduction = Literal['mean', 'sum', 'none']
+
 
 class FbSegKLLossView:
-	"""First-break セグメンテーション用 KL 損失（meta['fb_idx_view']>0 のトレースに限定）。
-	IF: loss = FbSegKLLossView(tau=1.0, eps=0.0)(pred, batch, reduction='mean')
-	  - pred/logits, batch['target']: (B,1,H,W)
-	  - batch['meta']['fb_idx_view']: (B,H)；True(>0) のトレースのみで集約
+	"""First-break セグメンテーション用 KL 損失。
+	- 任意チャネル C に対応（各チャネルで W 方向に正規化して KL を計算し、C 次元で平均）
+	- meta['fb_idx_view']>0 の (B,H) トレースのみで集約
+
+	IF:
+	  loss = FbSegKLLossView(tau=1.0, eps=0.0)(pred, batch, reduction='mean')
+
+	Args:
+	  pred / batch['target']: (B,C,H,W) の同形状テンソル
+	  batch['meta']['fb_idx_view']: (B,H)；True(>0) のトレースを採用
+
+	Notes:
+	  - target は各 (b,c,h, :) で非負、W 方向に正規化されていなくてもよい（内部で正規化）
+	  - C>1 の場合は、各チャネルの KL を平均して (B,H) に集約する
+
 	"""
 
 	def __init__(self, tau: float = 1.0, eps: float = 0.0):
-		assert tau > 0
-		assert eps >= 0.0
+		assert tau > 0.0 and eps >= 0.0
 		self.tau = float(tau)
 		self.eps = float(eps)
 
@@ -24,62 +37,50 @@ class FbSegKLLossView:
 		pred: torch.Tensor,
 		batch: Mapping[str, Any],
 		*,
-		reduction: Literal['mean', 'sum', 'none'] = 'mean',
+		reduction: Reduction = 'mean',
 	) -> torch.Tensor:
-		assert isinstance(pred, torch.Tensor) and pred.ndim == 4, (
-			'pred: (B,1,H,W) tensor expected'
-		)
-		B, C, H, W = pred.shape
-		assert C == 1, 'pred channel must be 1 for fb segmentation'
-
-		# target
+		assert isinstance(pred, torch.Tensor) and pred.ndim == 4, 'pred: (B,C,H,W)'
+		assert isinstance(batch, Mapping)
 		assert 'target' in batch, "batch['target'] is required"
 		target = batch['target']
-		assert isinstance(target, torch.Tensor) and target.shape == pred.shape, (
-			'target must have same shape as pred'
-		)
-		if target.dtype != pred.dtype:
-			target = target.to(dtype=pred.dtype)
-		if target.device != pred.device:
-			target = target.to(device=pred.device, non_blocking=True)
+		assert isinstance(target, torch.Tensor), 'target must be Tensor'
+		assert target.shape == pred.shape, 'target must have same shape as pred'
 
-		# 対象トレース（ビュー）の選択
-		meta = batch.get('meta', None)
-		assert isinstance(meta, Mapping) and 'fb_idx_view' in meta, (
+		B, C, H, W = pred.shape
+
+		# view mask の取得（>0 を True とみなす）。bool 以外なら >0 で変換。
+		assert 'meta' in batch and isinstance(batch['meta'], Mapping), (
+			"batch['meta'] is required"
+		)
+		assert 'fb_idx_view' in batch['meta'], (
 			"batch['meta']['fb_idx_view'] is required"
 		)
-		view_mask = meta['fb_idx_view']
-		assert isinstance(view_mask, torch.Tensor) and view_mask.dtype in (
-			torch.bool,
-			torch.int32,
-			torch.int64,
-		), 'fb_idx_view must be bool or int tensor'
-		if view_mask.dtype != torch.bool:
+		view_mask = batch['meta']['fb_idx_view']
+		if not isinstance(view_mask, torch.Tensor):
+			raise TypeError("meta['fb_idx_view'] must be a torch.Tensor")
+		if view_mask.dtype is not torch.bool:
 			view_mask = view_mask > 0
-		assert view_mask.ndim == 2 and view_mask.shape == (B, H), (
-			'fb_idx_view: (B,H) expected'
-		)
-		view_mask = view_mask.to(device=pred.device, non_blocking=True)
+		assert view_mask.shape == (B, H), "meta['fb_idx_view'] must be (B,H)"
+		view_mask = view_mask.to(device=pred.device)
 
-		# KL(q || p) を W 次元で集約 → (B,H)
-		# p: pred の softmax（温度 tau）
-		log_p = F.log_softmax(pred / self.tau, dim=-1)  # (B,1,H,W)
-		# q: target を確率分布に正規化（epsで下駄）
-		q_raw = (target + self.eps).clamp_min(0)
-		q_sum = q_raw.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(q_raw.dtype).eps)
-		q = q_raw / q_sum  # (B,1,H,W)
-		# log q
-		log_q = (q.clamp_min(torch.finfo(q.dtype).eps)).log()
-		# KL per trace
-		kl_map = (q * (log_q - log_p)).sum(dim=-1)  # (B,1,H)
-		per_trace = kl_map.squeeze(1)  # (B,H)
+		# q, p の計算（W 次元で確率分布化）、KL(q||p) を W で和
+		log_p = F.log_softmax(pred / self.tau, dim=-1)  # (B,C,H,W)
 
-		# 選択を適用
-		sel_vals = per_trace[view_mask]  # (N,)
+		q_raw = (target + self.eps).clamp_min(0)  # (B,C,H,W)
+		eps_t = torch.finfo(q_raw.dtype).eps
+		q_sum = q_raw.sum(dim=-1, keepdim=True).clamp_min(eps_t)  # (B,C,H,1)
+		q = q_raw / q_sum
+		log_q = (q.clamp_min(eps_t)).log()
+
+		kl_bchw = q * (log_q - log_p)  # (B,C,H,W)
+		kl_bch = kl_bchw.sum(dim=-1)  # (B,C,H)
+		per_trace = kl_bch.mean(dim=1)  # (B,H)  ※C 次元を平均で集約
+
+		# (B,H) → view で選択 → 1D
+		sel_vals = per_trace[view_mask]
 		if reduction == 'none':
-			return sel_vals  # 1D
+			return sel_vals
 		if sel_vals.numel() == 0:
-			# 既存仕様に寄せて 0 を返す（学習を止めない）
 			warnings.warn(
 				"FbSegKLLossView: no traces selected by meta['fb_idx_view']; returning 0 fallback.",
 				category=UserWarning,

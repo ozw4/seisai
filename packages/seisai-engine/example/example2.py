@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+from seisai_pick.trend._time_pick import _argmax_time_parabolic
 from seisai_pick.trend.confidence_from_prob import trace_confidence_from_prob
 from seisai_pick.trend.gaussian_prior_from_trend import gaussian_prior_from_trend
 from seisai_pick.trend.trend_fit import (
@@ -40,9 +41,7 @@ def demo() -> None:
 	w_conf = trace_confidence_from_prob(prob=prob, floor=0.2, power=0.5)  # (B,H)
 
 	# ---- Step3: t_sec（単純argmax） → トレンド（IRLS/RANSAC） ------
-	idx = prob.argmax(dim=-1)  # (B,H)
-	dt_b1 = dt_sec.view(B, 1).to(prob)  # (B,1)
-	t_sec = idx.to(prob.dtype) * dt_b1  # (B,H) [s]
+	t_sec = _argmax_time_parabolic(prob, dt_sec)  # (B,H) [s]
 	valid = (fb_idx >= 0).to(prob)
 
 	trend_t_i, trend_s_i, v_i, _, covered_i = robust_linear_trend(

@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from typing import Any
 
 import torch
+from seisai_utils.logging import MetricLogger
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -26,37 +27,48 @@ def train_one_epoch(
 	scaler: torch.cuda.amp.GradScaler | None = None,
 	ema: Any | None = None,  # expects .update(model)
 	step_offset: int = 0,
+	print_freq: int = 50,
+	log_header: str = 'Train',
+	on_step: Callable[[int, dict[str, float]], None] | None = None,
 ) -> dict[str, float]:
+	if not isinstance(device, torch.device):
+		raise TypeError('device must be a torch.device')
 	if gradient_accumulation_steps <= 0:
 		raise ValueError('gradient_accumulation_steps must be > 0')
 
 	model.train()
+	meter = MetricLogger(delimiter='\t')
+
 	total_samples = 0
 	step = step_offset
 
-	device_type = getattr(device, 'type', None)
-	if device_type is None:
-		raise TypeError('device must be a torch.device')
-
-	do_amp = use_amp and device_type == 'cuda'
+	device_type = device.type
+	do_amp = bool(use_amp and device_type == 'cuda')
 	autocast_ctx = torch.cuda.amp.autocast if do_amp else nullcontext
-
-	local_scaler = None
-	if do_amp:
-		local_scaler = scaler if scaler is not None else torch.cuda.amp.GradScaler()
+	local_scaler = (
+		scaler
+		if (do_amp and scaler is not None)
+		else (torch.cuda.amp.GradScaler() if do_amp else None)
+	)
 
 	optimizer.zero_grad(set_to_none=True)
 
-	for i, batch in enumerate(dataloader):
-		x = batch['input']
-		y = batch['target']
+	saw_any_batch = False
+	for i, batch in enumerate(
+		meter.log_every(dataloader, print_freq, header=log_header)
+	):
+		if not isinstance(batch, dict) or (
+			'input' not in batch or 'target' not in batch
+		):
+			raise KeyError("batch must be a dict containing 'input' and 'target'")
 
-		x = x.to(device, non_blocking=True)
-		y = y.to(device, non_blocking=True)
+		saw_any_batch = True
+
+		x = batch['input'].to(device, non_blocking=True)
+		y = batch['target'].to(device, non_blocking=True)
 
 		with autocast_ctx():
 			pred = model(x)
-			# pred = postprocess(x)
 			loss = criterion(pred, y, batch)
 
 		if local_scaler is not None:
@@ -64,8 +76,7 @@ def train_one_epoch(
 		else:
 			loss.backward()
 
-		batch_size = int(x.shape[0])
-		total_samples += batch_size
+		total_samples += int(x.shape[0])
 
 		if (i + 1) % gradient_accumulation_steps == 0:
 			if local_scaler is not None:
@@ -79,20 +90,31 @@ def train_one_epoch(
 			else:
 				optimizer.step()
 
-			if ema is not None:
-				ema.update(model)
-
 			optimizer.zero_grad(set_to_none=True)
 
 			if lr_scheduler is not None:
 				lr_scheduler.step()
 
 			step += 1
+
+			lr0 = float(optimizer.param_groups[0].get('lr', 0.0))
+			meter.update(loss=float(loss.detach().item()), lr=lr0)
+
+			if ema is not None:
+				ema.update(model)
+
 			if on_step is not None:
-				on_step(step, {'loss': meter_loss.avg})
+				on_step(
+					step, {'loss': float(meter.meters['loss'].global_avg), 'lr': lr0}
+				)
+
+	meter.synchronize_between_processes()
+
+	if not saw_any_batch:
+		raise ValueError('dataloader yielded no batches')
 
 	return {
-		'loss': meter_loss.avg,
+		'loss': float(meter.meters['loss'].global_avg),
 		'steps': float(step - step_offset),
 		'samples': float(total_samples),
 	}

@@ -1,9 +1,4 @@
-# TrendPriorOp: (B,C,H,W) 専用 + Configあり + 対象チャンネルだけ(B,H,W)に落として処理→戻す
-# ============================================================
-# File: packages/seisai-engine/src/seisai_engine/postprocess/trend_prior_op.py
-# 目的: prior_mode='logit' 専用の logits 変換器（学習用の損失計算は別モジュールへ）
-# 依存: torch, seisai_pick.trend.*
-# ============================================================
+# %%
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -11,12 +6,14 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+from seisai_pick.trend._time_pick import _argmax_time_parabolic
 from seisai_pick.trend.confidence_from_prob import trace_confidence_from_prob
 from seisai_pick.trend.gaussian_prior_from_trend import gaussian_prior_from_trend
-from seisai_pick.trend.trend_fit import robust_linear_trend
+from seisai_pick.trend.trend_fit_strategy import (
+	IRLSStrategy,
+	TrendFitStrategy,
+)
 from torch import Tensor
-
-# -------------------- Config --------------------
 
 
 @dataclass(frozen=True)
@@ -25,29 +22,29 @@ class TrendPriorConfig:
 	offsets_key: str = 'offsets'  # (B,H) [m]
 	fb_idx_key: str = 'fb_idx'  # (B,H) int (valid: >=0)
 	dt_key: str = 'dt_sec'  # (B,) or (B,1) or (B,1,1) [s]
+
 	# confidence (entropy-based)
 	conf_floor: float = 0.2
 	conf_power: float = 0.5
-	# IRLS (robust linear trend)
-	section_len: int = 128
-	stride: int = 64
-	huber_c: float = 1.345
-	iters: int = 3
-	vmin: float = 300.0
-	vmax: float = 8000.0
-	sort_offsets: bool = True
-	use_taper: bool = True
+
+	# trend fit strategy (DI)
+	fit: TrendFitStrategy = IRLSStrategy()
+
 	# prior (Gaussian around trend)
 	prior_sigma_ms: float = 20.0
 	prior_alpha: float = 1.0
 	prior_conf_gate: float = 0.5
 	prior_log_eps: float = 1e-4
+
 	# numerics
 	logit_clip: float = 30.0
+
 	# channels to apply (0 / [0,2] / range(C))
 	channels: int | Iterable[int] = 0
+
 	# aux prefix
 	aux_key: str = 'trend_prior'
+
 	# debug
 	debug: bool = False
 
@@ -58,17 +55,13 @@ def _resolve_channels(ch_spec: int | Iterable[int], C: int) -> Sequence[int]:
 	return [int(c) for c in ch_spec]
 
 
-# -------------------- Op (logit 合成のみ) --------------------
-
-
 class TrendPriorOp:
-	"""(B,C,H,W) logits を受け取り、選択チャネルに Gaussian prior（trend中心）を
+	"""(B,C,H,W) logits を受け取り、選択チャネルに trend 中心の Gaussian prior を
 	log 空間で合成して返す。prior_mode='logit' のみを提供（損失計算は別モジュール）。
+	トレンド推定は Strategy インスタンス（IRLS/RANSAC等）で差し替え。
 	"""
 
 	def __init__(self, cfg: TrendPriorConfig) -> None:
-		assert cfg.vmin > 0.0 and cfg.vmax > cfg.vmin
-		assert cfg.section_len >= 4 and cfg.stride >= 1 and cfg.iters >= 1
 		assert cfg.prior_sigma_ms > 0.0 and cfg.prior_alpha >= 0.0
 		self.cfg = cfg
 
@@ -95,25 +88,14 @@ class TrendPriorOp:
 		assert isinstance(offsets, torch.Tensor) and offsets.shape == (B, H)
 		assert isinstance(fb_idx, torch.Tensor) and fb_idx.shape == (B, H)
 
-		# 時間グリッド
-		if dt_sec.ndim == 1 or dt_sec.ndim == 2:
-			dt = dt_sec.view(B, 1, 1).to(logits)
-		else:
-			assert dt_sec.shape in [(B, 1, 1)], 'dt_sec must be (B,), (B,1), or (B,1,1)'
-			dt = dt_sec.to(logits)
-		t_idx = torch.arange(W, device=logits.device, dtype=logits.dtype).view(
-			1, 1, W
-		)  # (1,1,W)
-		t_grid = t_idx * dt  # (B,1,W) [s]
-
 		valid = fb_idx >= 0
 		chs = _resolve_channels(cfg.channels, C)
 
-		# 出力バッファ（コピーして上書き）
 		out = logits.clone()
 		aux: dict[str, Any] = {
 			'prior_mode': 'logit',
 			'prior_alpha': float(cfg.prior_alpha),
+			'fit': getattr(cfg.fit, 'name', 'custom'),
 		}
 
 		for c in chs:
@@ -140,28 +122,19 @@ class TrendPriorOp:
 			aux[f'{cfg.aux_key}_alpha_eff_ch{c}'] = float(alpha_eff)
 
 			if alpha_eff == 0.0:
-				# 合成をスキップ（安全のため再サニタイズのみ）
 				out[:, c] = logit.to(logits.dtype)
 				aux[f'{cfg.aux_key}_skipped_ch{c}'] = True
 				continue
 
-			# --- t_mu（確率重心） ---
-			t_mu = (prob * t_grid).sum(dim=-1)  # (B,H) [s]
+			# --- 到達候補: 確率重心 t_mu ---
+			t_sec = _argmax_time_parabolic(prob, dt_sec)  # (B,H) [s]
 
-			# --- robust trend fit ---
-			trend_t, trend_s, v_trend, w_used, covered = robust_linear_trend(
+			# --- トレンド推定（Strategy 呼び出し） ---
+			trend_t, trend_s, v_trend, w_used, covered = cfg.fit(
 				offsets=offsets.to(logit),
-				t_sec=t_mu.to(logit),
-				valid=valid.to(logit.dtype),
+				t_sec=t_sec.to(logit),
+				valid=valid,
 				w_conf=w_conf,
-				section_len=cfg.section_len,
-				stride=cfg.stride,
-				huber_c=cfg.huber_c,
-				iters=cfg.iters,
-				vmin=cfg.vmin,
-				vmax=cfg.vmax,
-				sort_offsets=cfg.sort_offsets,
-				use_taper=cfg.use_taper,
 			)
 
 			# --- Gaussian prior（trend中心） ---
@@ -171,8 +144,8 @@ class TrendPriorOp:
 					dt_sec=dt_sec,
 					W=W,
 					sigma_ms=cfg.prior_sigma_ms,
-					ref_tensor=logit,  # dtype/device 整合
-					covered_mask=covered,  # 未カバーは一様
+					ref_tensor=logit,
+					covered_mask=covered,
 				)
 				.nan_to_num(0.0)
 				.clamp_(min=0.0)
