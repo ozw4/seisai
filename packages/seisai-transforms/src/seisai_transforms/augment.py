@@ -5,7 +5,7 @@ import numpy as np
 
 from .config import FreqAugConfig, SpaceAugConfig, TimeAugConfig
 from .kernels import _apply_freq_augment, _spatial_stretch, _time_stretch_poly
-from .signal_ops import standardize_per_trace
+from .signal_ops.scaling.standardize import standardize_per_trace_np
 
 
 class RandomFreqFilter:
@@ -168,7 +168,7 @@ class PerTraceStandardize:
 	def __call__(
 		self, x_hw: np.ndarray, rng: np.random.Generator | None = None
 	) -> np.ndarray:
-		return standardize_per_trace(x_hw, eps=self.eps)
+		return standardize_per_trace_np(x_hw, eps=self.eps)
 
 
 class ViewCompose:

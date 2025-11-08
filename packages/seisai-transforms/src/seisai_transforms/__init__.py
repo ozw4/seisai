@@ -13,7 +13,7 @@ from .augment import (
 from .config import FreqAugConfig, SpaceAugConfig, TimeAugConfig
 from .mask_inference import cover_all_traces_predict_striped
 from .masking import MaskGenerator
-from .signal_ops import standardize_per_trace
+from .signal_ops.scaling.standardize import standardize_per_trace_np
 from .view_projection import (
 	project_fb_idx_view,
 	project_offsets_view,
@@ -35,7 +35,7 @@ __all__ = [
 	'TimeAugConfig',
 	'SpaceAugConfig',
 	# ops
-	'standardize_per_trace',
+	'standardize_per_trace_np',
 	# mask
 	'cover_all_traces_predict_striped',
 	'MaskGenerator',

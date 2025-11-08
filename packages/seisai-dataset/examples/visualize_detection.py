@@ -23,7 +23,7 @@ from seisai_transforms.augment import (
 	PerTraceStandardize,
 	ViewCompose,
 )
-from seisai_transforms.signal_ops import standardize_per_trace
+from seisai_transforms.signal_ops.scaling.standardize import standardize_per_trace_np
 
 
 # ---------------------------- 可視化ヘルパ ----------------------------
@@ -46,7 +46,7 @@ def _plot_gather_with_series(
 		raise ValueError('dt_sec must be > 0')
 
 	# 1) トレース毎 z-score（seisai-transforms 実装を利用）
-	xz = standardize_per_trace(x.astype(np.float32, copy=False), eps=eps)
+	xz = standardize_per_trace_np(x.astype(np.float32, copy=False), eps=eps)
 
 	# 2) 時間軸 [ms]
 	scale = 1_000.0
