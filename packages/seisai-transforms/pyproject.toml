@@ -8,6 +8,12 @@ version = "0.1.0"
 requires-python = ">=3.9"
 description = "Signal & seismic transforms for SeisAI"
 license = {text = "MIT"}
+dependencies = [
+  "numpy",
+  "torch",
+  "scipy",
+  "seisai-utils>=0.1.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

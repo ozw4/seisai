@@ -16,6 +16,7 @@ dependencies = [
   "seisai-dataset>=0.1.0",
   "seisai-transforms>=0.1.0",
   "seisai-models>=0.1.0",
+  "seisai-utils>=0.1.0",
 ]
 
 # Hydra/OMEGACONFを使うなら有効化
