@@ -81,15 +81,27 @@ def _run_tiled(
 		(max_slots, c, tile_h, tile_w), device=x.device, dtype=x.dtype
 	)
 
-	start_idx = 0
-	while start_idx < total_tiles:
+	# tqdm の準備（use_tqdm=True のときのみ import、無ければ ImportError で即失敗）
+	if use_tqdm:
+		from tqdm.auto import tqdm
+
+		num_batches = (total_tiles + tiles_per_batch - 1) // tiles_per_batch
+		batch_iter = tqdm(
+			range(0, total_tiles, tiles_per_batch),
+			total=num_batches,
+			desc='tiled inference',
+		)
+	else:
+		batch_iter = range(0, total_tiles, tiles_per_batch)
+
+	for start_idx in batch_iter:
 		batch_rects = rects[start_idx : start_idx + tiles_per_batch]
 		slots = len(batch_rects) * b
 		stage_x.zero_()
 
 		for t, (h0, w0, ph, pw) in enumerate(batch_rects):
 			patch = x[:, :, h0 : h0 + ph, w0 : w0 + pw]  # (B,C,ph,pw)
-			stage_x[t * b : (t + 1) * b, :, :ph, :pw].copy_(patch)  # 右下ゼロパディング
+			stage_x[t * b : (t + 1) * b, :, :ph, :pw].copy_(patch)
 
 		with torch.amp.autocast('cuda', enabled=use_amp):
 			yb = model(stage_x[:slots])  # (slots, c_out, tile_h, tile_w)
@@ -99,8 +111,6 @@ def _run_tiled(
 			yp = yb[sl, :, :ph, :pw].to(torch.float32)
 			out[:, :, h0 : h0 + ph, w0 : w0 + pw] += yp
 			weight[:, :, h0 : h0 + ph, w0 : w0 + pw] += 1.0
-
-		start_idx += tiles_per_batch
 
 	assert torch.all(weight > 0), (
 		'未カバー領域があります。tile/overlap を見直してください。'
@@ -125,7 +135,7 @@ def infer_tiled_chw(
 	# 1) 入力検証
 	validate_array(x_chw, allowed_ndims=(2, 3), name='x', backend='numpy')
 	if x_chw.ndim == 2:
-		x_chw = x_chw[None, ...]  # (1,H,W)
+		x_chw = x_chw[None, ...]
 
 	c, h, w = x_chw.shape
 	x_np = np.ascontiguousarray(x_chw, dtype=np.float32)
@@ -133,10 +143,7 @@ def infer_tiled_chw(
 	# 2) 分割前に ViewCompose を 1 回だけ（乱数は全面禁止）
 	if view_compose is not None:
 		_rng = _NoRandRNG()
-		out_views: list[np.ndarray] = []
-		y0 = (
-			view_compose(x_np[0], rng=_rng, return_meta=False) if c == 1 else None
-		)  # 形確認用
+		y0 = view_compose(x_np[0], rng=_rng, return_meta=False) if c == 1 else None
 		if c == 1:
 			assert isinstance(y0, np.ndarray) and y0.shape == (h, w)
 			x_np = y0[None, ...]
