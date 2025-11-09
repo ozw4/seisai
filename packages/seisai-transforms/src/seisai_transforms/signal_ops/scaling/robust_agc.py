@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
+from numba import njit, prange
 from seisai_utils.validator import validate_array
 
 # ===== helpers =====
@@ -70,19 +71,40 @@ def _build_anchors(
 	return anchors, _bounds
 
 
+@njit(parallel=True)
 def _interp_rows(
-	anchors: np.ndarray, values_nk: np.ndarray, tgrid: np.ndarray, out_nw: np.ndarray
+	anchors: np.ndarray,  # (K,)
+	values_nk: np.ndarray,  # (N, K)
+	tgrid: np.ndarray,  # (T,)
+	out_nw: np.ndarray,  # (N, T)
 ) -> None:
-	"""values_nk: (N, K)
-	out_nw:    (N, T)
-	各行ごとに 1D 線形補間して out_nw に書き込む
-	"""
-	assert anchors.ndim == 1
-	assert values_nk.ndim == 2 and out_nw.ndim == 2
-	assert values_nk.shape[0] == out_nw.shape[0]
 	N = values_nk.shape[0]
-	for i in range(N):
-		out_nw[i] = np.interp(tgrid, anchors, values_nk[i])
+	K = values_nk.shape[1]
+	T = tgrid.size
+
+	for i in prange(N):
+		k = 0
+		for ti in range(T):
+			t = tgrid[ti]
+
+			# どの区間 [anchors[k], anchors[k+1]] に入るか前に進める
+			while (k + 1) < K and anchors[k + 1] <= t:
+				k += 1
+
+			if (k + 1) >= K:
+				# 最後のアンカーを超えた場合は末尾値をそのまま使う
+				out_nw[i, ti] = values_nk[i, K - 1]
+			else:
+				x0 = anchors[k]
+				x1 = anchors[k + 1]
+				y0 = values_nk[i, k]
+				y1 = values_nk[i, k + 1]
+
+				if x1 == x0:
+					out_nw[i, ti] = y0
+				else:
+					alpha = (t - x0) / (x1 - x0)
+					out_nw[i, ti] = y0 + (y1 - y0) * alpha
 
 
 # ===== main =====
