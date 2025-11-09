@@ -1,6 +1,9 @@
 # packages/seisai-transforms/src/seisai_transforms/augment.py
 from __future__ import annotations
 
+from collections.abc import Iterable
+from typing import Protocol, TypeAlias
+
 import numpy as np
 from seisai_utils.validator import validate_array
 from torch import Tensor
@@ -207,20 +210,28 @@ class PerTraceStandardize:
 		return y
 
 
+ArrayLike: TypeAlias = np.ndarray | Tensor
+
+
+class RNGLike(Protocol):
+	def random(self, *args, **kwargs): ...
+	def uniform(self, *args, **kwargs): ...
+	def integers(self, *args, **kwargs): ...
+
+
 class ViewCompose:
-	def __init__(self, ops):
+	def __init__(self, ops: Iterable):
 		self.ops = list(ops)
 
 	def __call__(
 		self,
-		x_hw: np.ndarray,
-		rng: np.random.Generator | None = None,
+		x_hw: ArrayLike,
+		rng: RNGLike | None = None,
 		return_meta: bool = False,
-	):
+	) -> ArrayLike | tuple[ArrayLike, dict]:
 		r = rng or np.random.default_rng()
-		meta = {}
+		meta: dict = {}
 		for op in self.ops:
-			# 各 op が return_meta をサポートしていれば meta を収集
 			try:
 				y = op(x_hw, r, return_meta=True)
 			except TypeError:

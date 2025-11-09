@@ -5,7 +5,9 @@ from collections.abc import Callable
 
 import numpy as np
 import torch
+from seisai_transforms.augment import ViewCompose
 from seisai_utils.validator import validate_array
+from tqdm.auto import tqdm
 
 # (H,W) -> (H,W) を想定（ViewCompose 相当）
 PreView = Callable[[np.ndarray], np.ndarray]
@@ -37,7 +39,7 @@ def _run_tiled(
 	amp: bool = True,
 	use_tqdm: bool = False,
 	tiles_per_batch: int = 8,
-	tile_transform: TileTransform | None = None,  # タイルごとの処理（決定論のみ想定）
+	tile_transform: ViewCompose | None = None,  # タイルごとの処理（決定論のみ想定）
 ) -> torch.Tensor:
 	assert x.ndim == 4 and hasattr(model, 'out_chans')
 	c_out = int(model.out_chans)
@@ -87,8 +89,6 @@ def _run_tiled(
 	)
 
 	if use_tqdm:
-		from tqdm.auto import tqdm
-
 		num_batches = (total_tiles + tiles_per_batch - 1) // tiles_per_batch
 		batch_iter = tqdm(
 			range(0, total_tiles, tiles_per_batch),
@@ -107,7 +107,7 @@ def _run_tiled(
 			patch = x[:, :, h0 : h0 + ph, w0 : w0 + pw]  # (B,C,ph,pw)
 
 			if tile_transform is not None:
-				patch = tile_transform(patch)
+				patch = tile_transform(patch, return_meta=False)
 				assert patch.shape == (b, c, ph, pw), (
 					f'tile_transform must preserve shape '
 					f'(got {tuple(patch.shape)} expected {(b, c, ph, pw)})'
@@ -141,8 +141,8 @@ def infer_tiled_chw(
 	overlap: tuple[int, int] = (32, 32),
 	amp: bool = True,
 	use_tqdm: bool = False,
-	tiles_per_batch: int = 8,
-	tile_transform: TileTransform | None = None,  # タイルごとの処理（決定論のみ）
+	tiles_per_batch: int = 4,
+	tile_transform: ViewCompose | None = None,
 ) -> torch.Tensor:
 	# 1) 入力検証
 	validate_array(x_chw, allowed_ndims=(2, 3), name='x', backend='numpy')
