@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import numpy as np
+from seisai_utils.validator import validate_array
+from torch import Tensor
 
 from .config import FreqAugConfig, SpaceAugConfig, TimeAugConfig
 from .kernels import _apply_freq_augment, _spatial_stretch, _time_stretch_poly
-from .signal_ops.scaling.standardize import standardize_per_trace_np
+from .signal_ops.scaling.standardize import (
+	standardize_per_trace_np,
+	standardize_per_trace_torch,
+)
 
 
 class RandomFreqFilter:
@@ -162,13 +167,44 @@ class DeterministicCropOrPad:
 
 
 class PerTraceStandardize:
+	"""トレース方向（最後の軸=W）で平均0・分散1に標準化する。
+	- NumPy:  (W,), (H,W), (C,H,W), (B,C,H,W)
+	- Torch:  (W,), (H,W), (C,H,W), (B,C,H,W)（CPU/GPU両対応）
+	"""
+
 	def __init__(self, eps: float = 1e-10):
 		self.eps = float(eps)
 
 	def __call__(
-		self, x_hw: np.ndarray, rng: np.random.Generator | None = None
-	) -> np.ndarray:
-		return standardize_per_trace_np(x_hw, eps=self.eps)
+		self,
+		x,
+		rng: np.random.Generator | None = None,
+		return_meta: bool = False,
+	):
+		"""x: np.ndarray または torch.Tensor（CPU/GPU）
+		rng はインターフェース維持のためのダミー（未使用）。
+		return_meta=True の場合は (y, {}) を返す。
+		"""
+		# backend='auto' で NumPy / Torch 両方を検証
+		validate_array(
+			x,
+			allowed_ndims=(1, 2, 3, 4),
+			name='x',
+			backend='auto',
+		)
+
+		if isinstance(x, np.ndarray):
+			y = standardize_per_trace_np(x, eps=self.eps)
+		elif isinstance(x, Tensor):
+			y = standardize_per_trace_torch(x, eps=self.eps)
+		else:
+			raise TypeError(f'x must be numpy.ndarray or torch.Tensor, got {type(x)}')
+
+		if return_meta:
+			# ViewCompose 互換のため空 dict を返す
+			return y, {}
+
+		return y
 
 
 class ViewCompose:

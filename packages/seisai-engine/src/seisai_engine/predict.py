@@ -1,4 +1,6 @@
-# predict.py — 入力を ndarray(CHW) で受け取り、分割“前”に ViewCompose を1回だけ適用
+# predict.py — 入力を ndarray(CHW) で受け取り、
+# 分割“前”と分割“後（タイル単位）”で transform を分けて適用する
+
 from collections.abc import Callable
 
 import numpy as np
@@ -6,11 +8,13 @@ import torch
 from seisai_utils.validator import validate_array
 
 # (H,W) -> (H,W) を想定（ViewCompose 相当）
-TileView = Callable[[np.ndarray], np.ndarray]
+PreView = Callable[[np.ndarray], np.ndarray]
+# (B,C,ph,pw) -> (B,C,ph,pw) を想定（タイル単位の正規化など）
+TileTransform = Callable[[torch.Tensor], torch.Tensor]
 
 
-# 乱数使用を禁止するダミー RNG（ViewCompose 内で rng.* が呼ばれたら即失敗）
 class _NoRandRNG:
+	# 乱数使用を禁止するダミー RNG（PreView 内で rng を使ったら即失敗）
 	def random(self, *a, **k):
 		raise RuntimeError('random() forbidden in deterministic inference')
 
@@ -33,6 +37,7 @@ def _run_tiled(
 	amp: bool = True,
 	use_tqdm: bool = False,
 	tiles_per_batch: int = 8,
+	tile_transform: TileTransform | None = None,  # タイルごとの処理（決定論のみ想定）
 ) -> torch.Tensor:
 	assert x.ndim == 4 and hasattr(model, 'out_chans')
 	c_out = int(model.out_chans)
@@ -45,13 +50,13 @@ def _run_tiled(
 	stride_w = tile_w - ov_w
 	assert tiles_per_batch > 0 and stride_h > 0 and stride_w > 0
 
-	def _tile_starts(full: int, tile: int, overlap: int) -> list[int]:
-		stride = tile - overlap
+	def _tile_starts(full: int, tile_size: int, overlap_size: int) -> list[int]:
+		stride = tile_size - overlap_size
 		starts = [0]
-		while starts[-1] + tile < full:
+		while starts[-1] + tile_size < full:
 			nxt = starts[-1] + stride
-			if nxt + tile >= full:
-				starts.append(max(full - tile, 0))
+			if nxt + tile_size >= full:
+				starts.append(max(full - tile_size, 0))
 				break
 			starts.append(nxt)
 		return sorted(set(starts))
@@ -81,7 +86,6 @@ def _run_tiled(
 		(max_slots, c, tile_h, tile_w), device=x.device, dtype=x.dtype
 	)
 
-	# tqdm の準備（use_tqdm=True のときのみ import、無ければ ImportError で即失敗）
 	if use_tqdm:
 		from tqdm.auto import tqdm
 
@@ -101,6 +105,15 @@ def _run_tiled(
 
 		for t, (h0, w0, ph, pw) in enumerate(batch_rects):
 			patch = x[:, :, h0 : h0 + ph, w0 : w0 + pw]  # (B,C,ph,pw)
+
+			if tile_transform is not None:
+				patch = tile_transform(patch)
+				assert patch.shape == (b, c, ph, pw), (
+					f'tile_transform must preserve shape '
+					f'(got {tuple(patch.shape)} expected {(b, c, ph, pw)})'
+				)
+				assert patch.device == x.device
+
 			stage_x[t * b : (t + 1) * b, :, :ph, :pw].copy_(patch)
 
 		with torch.amp.autocast('cuda', enabled=use_amp):
@@ -122,44 +135,25 @@ def _run_tiled(
 @torch.no_grad()
 def infer_tiled_chw(
 	model: torch.nn.Module,
-	x_chw: np.ndarray,  # ← ndarray(CHW) 受け取りに変更
+	x_chw: np.ndarray,  # ndarray(CHW) 受け取り
 	*,
 	tile: tuple[int, int] = (128, 128),
 	overlap: tuple[int, int] = (32, 32),
 	amp: bool = True,
 	use_tqdm: bool = False,
 	tiles_per_batch: int = 8,
-	view_compose: Callable[..., np.ndarray]
-	| None = None,  # 分割“前”に1回だけ適用（決定論のみ）
+	tile_transform: TileTransform | None = None,  # タイルごとの処理（決定論のみ）
 ) -> torch.Tensor:
 	# 1) 入力検証
 	validate_array(x_chw, allowed_ndims=(2, 3), name='x', backend='numpy')
 	if x_chw.ndim == 2:
-		x_chw = x_chw[None, ...]
+		x_chw = x_chw[None, :]
 
-	c, h, w = x_chw.shape
 	x_np = np.ascontiguousarray(x_chw, dtype=np.float32)
-
-	# 2) 分割前に ViewCompose を 1 回だけ（乱数は全面禁止）
-	if view_compose is not None:
-		_rng = _NoRandRNG()
-		y0 = view_compose(x_np[0], rng=_rng, return_meta=False) if c == 1 else None
-		if c == 1:
-			assert isinstance(y0, np.ndarray) and y0.shape == (h, w)
-			x_np = y0[None, ...]
-		else:
-			ys = []
-			for ci in range(c):
-				y_ci = view_compose(x_np[ci], rng=_rng, return_meta=False)
-				assert isinstance(y_ci, np.ndarray) and y_ci.shape == (h, w)
-				ys.append(y_ci)
-			x_np = np.stack(ys, axis=0).astype(np.float32, copy=False)
 
 	# 3) Torch へ 1 回だけ変換（以降はTorchでタイル推論）
 	device = next(model.parameters()).device
-	x_t = (
-		torch.from_numpy(x_np).unsqueeze(0).to(device=device, dtype=torch.float32)
-	)  # (1,C,H,W)
+	x_t = torch.from_numpy(x_np).unsqueeze(0).to(device=device, dtype=torch.float32)
 
 	y = _run_tiled(
 		model,
@@ -169,5 +163,6 @@ def infer_tiled_chw(
 		amp=amp,
 		use_tqdm=use_tqdm,
 		tiles_per_batch=tiles_per_batch,
+		tile_transform=tile_transform,
 	)
-	return y.squeeze(0)  # (C_out,H,W) torch.Tensor
+	return y.squeeze(0)
