@@ -1,27 +1,31 @@
-# predict.py 内：tqdm だけで途中経過を表示する ＋ タイルの“バッチ化”対応版
-import importlib.util
-from contextlib import nullcontext
+# predict.py — 入力を ndarray(CHW) で受け取り、分割“前”に ViewCompose を1回だけ適用
+from collections.abc import Callable
 
+import numpy as np
 import torch
 
+# (H,W) -> (H,W) を想定（ViewCompose 相当）
+TileView = Callable[[np.ndarray], np.ndarray]
 
-def _tile_starts(full: int, tile: int, overlap: int) -> list[int]:
-	assert tile > 0 and 0 <= overlap < tile
-	stride = tile - overlap
-	starts = [0]
-	while starts[-1] + tile < full:
-		nxt = starts[-1] + stride
-		if nxt + tile >= full:
-			starts.append(max(full - tile, 0))
-			break
-		starts.append(nxt)
-	return sorted(set(starts))
+
+# 乱数使用を禁止するダミー RNG（ViewCompose 内で rng.* が呼ばれたら即失敗）
+class _NoRandRNG:
+	def random(self, *a, **k):
+		raise RuntimeError('random() forbidden in deterministic inference')
+
+	def uniform(self, *a, **k):
+		raise RuntimeError('uniform() forbidden in deterministic inference')
+
+	def integers(self, *a, **k):
+		raise RuntimeError('integers() forbidden in deterministic inference')
+
+	bit_generator = object()
 
 
 @torch.no_grad()
 def _run_tiled(
 	model: torch.nn.Module,
-	x: torch.Tensor,
+	x: torch.Tensor,  # (B,C,H,W) torch.Tensor（すでにTorch）
 	*,
 	tile: tuple[int, int] = (128, 128),
 	overlap: tuple[int, int] = (32, 32),
@@ -29,31 +33,31 @@ def _run_tiled(
 	use_tqdm: bool = False,
 	tiles_per_batch: int = 8,
 ) -> torch.Tensor:
-	"""Sliding-window 推論（多出力チャネル）。overlap を軸別指定し、tqdm で進捗表示。
-	タイルをまとめて1回の forward に投入（バッチ化）して起動オーバーヘッドを削減する。
-	前提: model に int 属性 out_chans が存在し、forward は (N,C,h,w)->(N,out_chans,h,w)。
-	Returns: (B, out_chans, H, W) float32
-	"""
-	assert x.ndim == 4, 'x must be (B,C,H,W)'
-	assert hasattr(model, 'out_chans'), 'model.out_chans is required'
+	assert x.ndim == 4 and hasattr(model, 'out_chans')
 	c_out = int(model.out_chans)
-	assert c_out > 0
-	assert tiles_per_batch > 0
-
 	b, c, h, w = x.shape
 	tile_h, tile_w = tile
 	ov_h, ov_w = overlap
-	assert tile_h > 0 and tile_w > 0
+	assert 0 < tile_h <= h and 0 < tile_w <= w
 	assert 0 <= ov_h < tile_h and 0 <= ov_w < tile_w
-
 	stride_h = tile_h - ov_h
 	stride_w = tile_w - ov_w
-	assert stride_h > 0 and stride_w > 0
+	assert tiles_per_batch > 0 and stride_h > 0 and stride_w > 0
+
+	def _tile_starts(full: int, tile: int, overlap: int) -> list[int]:
+		stride = tile - overlap
+		starts = [0]
+		while starts[-1] + tile < full:
+			nxt = starts[-1] + stride
+			if nxt + tile >= full:
+				starts.append(max(full - tile, 0))
+				break
+			starts.append(nxt)
+		return sorted(set(starts))
 
 	ys = _tile_starts(h, tile_h, ov_h)
 	xs = _tile_starts(w, tile_w, ov_w)
 
-	# すべてのタイル矩形を列挙（h0,w0 と実サイズ ph,pw）
 	rects: list[tuple[int, int, int, int]] = []
 	for top in ys:
 		bottom = min(top + tile_h, h)
@@ -66,61 +70,40 @@ def _run_tiled(
 			rects.append((h0, w0, ph, pw))
 
 	total_tiles = len(rects)
-
-	pbar = None
-	if use_tqdm:
-		assert importlib.util.find_spec('tqdm') is not None, (
-			'tqdm is required when use_tqdm=True'
-		)
-		from tqdm import tqdm
-
-		pbar = tqdm(total=total_tiles, desc='infer_tiled', unit='tile', leave=False)
-
 	out = torch.zeros((b, c_out, h, w), device=x.device, dtype=torch.float32)
 	weight = torch.zeros((b, 1, h, w), device=x.device, dtype=torch.float32)
-
 	use_amp = bool(amp and (x.device.type == 'cuda'))
 	model.eval()
 
-	# ステージング・バッファ（タイル束×バッチ）を1度だけ確保して使い回す
 	max_slots = tiles_per_batch * b
 	stage_x = torch.empty(
 		(max_slots, c, tile_h, tile_w), device=x.device, dtype=x.dtype
 	)
 
-	with torch.cuda.device(x.device) if x.device.type == 'cuda' else nullcontext():
-		for start in range(0, total_tiles, tiles_per_batch):
-			batch_rects = rects[start : start + tiles_per_batch]
-			slots = len(batch_rects) * b
+	start_idx = 0
+	while start_idx < total_tiles:
+		batch_rects = rects[start_idx : start_idx + tiles_per_batch]
+		slots = len(batch_rects) * b
+		stage_x.zero_()
 
-			# ゼロ埋めしてからスライスコピー（右下パディング）
-			stage_x.zero_()
-			for t, (h0, w0, ph, pw) in enumerate(batch_rects):
-				patch = x[:, :, h0 : h0 + ph, w0 : w0 + pw]  # (B,C,ph,pw)
-				stage_x[t * b : (t + 1) * b, :, :ph, :pw].copy_(patch)
+		for t, (h0, w0, ph, pw) in enumerate(batch_rects):
+			patch = x[:, :, h0 : h0 + ph, w0 : w0 + pw]  # (B,C,ph,pw)
+			stage_x[t * b : (t + 1) * b, :, :ph, :pw].copy_(patch)  # 右下ゼロパディング
 
-			with torch.amp.autocast('cuda', enabled=use_amp):
-				yb = model(stage_x[:slots])  # (slots, c_out, tile_h, tile_w)
-			assert yb.ndim == 4 and yb.shape[1] == c_out
+		with torch.amp.autocast('cuda', enabled=use_amp):
+			yb = model(stage_x[:slots])  # (slots, c_out, tile_h, tile_w)
 
-			# 元のテンソルへ合成
-			for t, (h0, w0, ph, pw) in enumerate(batch_rects):
-				sl = slice(t * b, (t + 1) * b)
-				yp = yb[sl, :, :ph, :pw].to(torch.float32)  # (B,c_out,ph,pw)
-				out[:, :, h0 : h0 + ph, w0 : w0 + pw] += yp
-				weight[:, :, h0 : h0 + ph, w0 : w0 + pw] += 1.0
+		for t, (h0, w0, ph, pw) in enumerate(batch_rects):
+			sl = slice(t * b, (t + 1) * b)
+			yp = yb[sl, :, :ph, :pw].to(torch.float32)
+			out[:, :, h0 : h0 + ph, w0 : w0 + pw] += yp
+			weight[:, :, h0 : h0 + ph, w0 : w0 + pw] += 1.0
 
-			if pbar is not None:
-				pbar.update(len(batch_rects))
+		start_idx += tiles_per_batch
 
-	if pbar is not None:
-		pbar.close()
-
-	# 未カバーがあれば即時失敗
 	assert torch.all(weight > 0), (
-		'uncovered pixels detected; check tile/overlap settings'
+		'未カバー領域があります。tile/overlap を見直してください。'
 	)
-
 	out /= weight
 	return out
 
@@ -128,24 +111,54 @@ def _run_tiled(
 @torch.no_grad()
 def infer_tiled_chw(
 	model: torch.nn.Module,
-	x_chw: torch.Tensor,
+	x_chw: np.ndarray,  # ← ndarray(CHW) 受け取りに変更
 	*,
 	tile: tuple[int, int] = (128, 128),
 	overlap: tuple[int, int] = (32, 32),
 	amp: bool = True,
 	use_tqdm: bool = False,
 	tiles_per_batch: int = 8,
+	view_compose: Callable[..., np.ndarray]
+	| None = None,  # 分割“前”に1回だけ適用（決定論のみ）
 ) -> torch.Tensor:
-	"""(C,H,W) 入力のタイル推論ラッパ。"""
-	assert x_chw.ndim == 3, 'x_chw must be (C,H,W)'
-	x = x_chw.unsqueeze(0)  # (1,C,H,W)
+	# 1) 入力検証
+	assert isinstance(x_chw, np.ndarray) and x_chw.ndim == 3, (
+		'x_chw must be np.ndarray of shape (C,H,W)'
+	)
+	c, h, w = x_chw.shape
+	x_np = np.ascontiguousarray(x_chw, dtype=np.float32)
+
+	# 2) 分割前に ViewCompose を 1 回だけ（乱数は全面禁止）
+	if view_compose is not None:
+		_rng = _NoRandRNG()
+		out_views: list[np.ndarray] = []
+		y0 = (
+			view_compose(x_np[0], rng=_rng, return_meta=False) if c == 1 else None
+		)  # 形確認用
+		if c == 1:
+			assert isinstance(y0, np.ndarray) and y0.shape == (h, w)
+			x_np = y0[None, ...]
+		else:
+			ys = []
+			for ci in range(c):
+				y_ci = view_compose(x_np[ci], rng=_rng, return_meta=False)
+				assert isinstance(y_ci, np.ndarray) and y_ci.shape == (h, w)
+				ys.append(y_ci)
+			x_np = np.stack(ys, axis=0).astype(np.float32, copy=False)
+
+	# 3) Torch へ 1 回だけ変換（以降はTorchでタイル推論）
+	device = next(model.parameters()).device
+	x_t = (
+		torch.from_numpy(x_np).unsqueeze(0).to(device=device, dtype=torch.float32)
+	)  # (1,C,H,W)
+
 	y = _run_tiled(
 		model,
-		x,
+		x_t,
 		tile=tile,
 		overlap=overlap,
 		amp=amp,
 		use_tqdm=use_tqdm,
 		tiles_per_batch=tiles_per_batch,
-	)  # (1,out_chans,H,W)
-	return y.squeeze(0)
+	)
+	return y.squeeze(0)  # (C_out,H,W) torch.Tensor

@@ -9,7 +9,7 @@ from seisai_pick.detectors import (
 	detect_event_pick_cluster,
 	detect_event_stalta_majority,
 )
-from seisai_transforms.signal_ops import compute_envelope
+from seisai_transforms._signal_ops import compute_envelope
 
 
 # ---- 設定 ----
