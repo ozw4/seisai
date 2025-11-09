@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
-from numba import njit, prange
 from seisai_utils.validator import validate_array
+from tqdm import tqdm as _tqdm
 
 # ===== helpers =====
 
@@ -71,40 +71,32 @@ def _build_anchors(
 	return anchors, _bounds
 
 
-@njit(parallel=True)
 def _interp_rows(
 	anchors: np.ndarray,  # (K,)
 	values_nk: np.ndarray,  # (N, K)
 	tgrid: np.ndarray,  # (T,)
-	out_nw: np.ndarray,  # (N, T)
-) -> None:
-	N = values_nk.shape[0]
-	K = values_nk.shape[1]
-	T = tgrid.size
+) -> np.ndarray:  # (N, T)
+	assert anchors.ndim == 1
+	assert values_nk.ndim == 2
+	assert values_nk.shape[1] == anchors.size
+	assert tgrid.ndim == 1
 
-	for i in prange(N):
-		k = 0
-		for ti in range(T):
-			t = tgrid[ti]
+	idx = np.searchsorted(anchors, tgrid, side='right') - 1
+	idx = np.clip(idx, 0, anchors.size - 2)
 
-			# どの区間 [anchors[k], anchors[k+1]] に入るか前に進める
-			while (k + 1) < K and anchors[k + 1] <= t:
-				k += 1
+	x0 = anchors[idx]
+	x1 = anchors[idx + 1]
+	dx = x1 - x0
+	dx[dx == 0] = 1.0
 
-			if (k + 1) >= K:
-				# 最後のアンカーを超えた場合は末尾値をそのまま使う
-				out_nw[i, ti] = values_nk[i, K - 1]
-			else:
-				x0 = anchors[k]
-				x1 = anchors[k + 1]
-				y0 = values_nk[i, k]
-				y1 = values_nk[i, k + 1]
+	t = tgrid.astype(np.float64, copy=False)
+	alpha = (t - x0) / dx
 
-				if x1 == x0:
-					out_nw[i, ti] = y0
-				else:
-					alpha = (t - x0) / (x1 - x0)
-					out_nw[i, ti] = y0 + (y1 - y0) * alpha
+	v0 = values_nk[:, idx]
+	v1 = values_nk[:, idx + 1]
+	alpha2d = alpha[None, :]
+
+	return v0 + (v1 - v0) * alpha2d
 
 
 # ===== main =====
@@ -113,18 +105,15 @@ def robust_agc_np(
 	*,
 	win: int = 6000,
 	hop: int | None = None,
-	method: str = 'mad',  # "mad" or "iqr"
-	gamma: float = 0.75,  # 0.5〜1.0
+	method: str = 'mad',
+	gamma: float = 0.75,
 	eps: float = 1e-8,
 	clamp_pct: tuple[float, float] = (5.0, 95.0),
 	causal: bool = False,
-	chunk: int = 1_000_000,  # 補間・適用の時間方向チャンク長（メモリ対策）
+	chunk: int = 1_000_000,
 	return_meta: bool = False,
+	use_tqdm: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, dict]:
-	"""入力形状: (W,) / (H,W) / (C,H,W) / (B,C,H,W)
-	  すべて W は最後の軸（time）であること。
-	出力は入力と同形状・同dtype。
-	"""
 	validate_array(x, allowed_ndims=(1, 2, 3, 4), name='x')
 
 	Hdims = x.shape[:-1]
@@ -147,64 +136,72 @@ def robust_agc_np(
 	if chunk <= 0:
 		raise ValueError('chunk must be positive')
 
-	# ---- reshape to (N, W) view ----
 	N = int(np.prod(Hdims, dtype=np.int64)) if Hdims else 1
 	x_nw = x.reshape(N, W)
 
 	anchors, bounds = _build_anchors(W, win, hop, causal)
 	K = int(anchors.size)
 
-	# 統計は倍精度で計算
 	x_nw64 = x_nw.astype(np.float64, copy=False)
-
 	mu_k = np.empty((N, K), dtype=np.float64)
 	sg_k = np.empty((N, K), dtype=np.float64)
 
-	# ---- robust stats over sliding anchors ----
-	for j, t in enumerate(anchors):
-		s, e = bounds(int(t))
+	if use_tqdm:
+		it_stats = tqdm(
+			range(K),
+			desc='robust_agc_np: stats',
+			total=K,
+		)
+	else:
+		it_stats = range(K)
+
+	for j in it_stats:
+		t_anchor = int(anchors[j])
+		s, e = bounds(t_anchor)
 		if e <= s:
-			# アンカー窓が空にならないように保証
 			e = min(W, s + 1)
-		seg = x_nw64[:, s:e]  # (N, Wseg)
+		seg = x_nw64[:, s:e]
 		mu, sigma = _robust_loc_scale(seg, method)
 		mu_k[:, j] = mu
 		sg_k[:, j] = sigma
 
-	# ---- clamp σ per row (over K) and floor by eps ----
 	p5 = _percentile(sg_k, p_lo, axis=1, keepdims=True)
 	p95 = _percentile(sg_k, p_hi, axis=1, keepdims=True)
 	sg_k = np.clip(sg_k, p5, p95)
 	sg_k = np.maximum(sg_k, float(eps))
 
-	# ---- interpolate & apply in T-chunks ----
 	y_nw = np.empty_like(x_nw, dtype=x.dtype)
-	t = 0
-	while t < W:
-		t0 = t
+
+	n_chunks = (W + chunk - 1) // chunk
+	if _tqdm is not None:
+		it_chunks = _tqdm(
+			range(n_chunks),
+			desc='robust_agc_np: apply',
+			total=n_chunks,
+		)
+	else:
+		it_chunks = range(n_chunks)
+
+	for ci in it_chunks:
+		t0 = ci * chunk
 		t1 = min(W, t0 + chunk)
-		tgrid = np.arange(t0, t1, dtype=np.float64)  # (Tchunk,)
+		tgrid = np.arange(t0, t1, dtype=np.float64)
 
-		mu_seg = np.empty((N, t1 - t0), dtype=np.float64)
-		sg_seg = np.empty((N, t1 - t0), dtype=np.float64)
-		_interp_rows(anchors, mu_k, tgrid, mu_seg)
-		_interp_rows(anchors, sg_k, tgrid, sg_seg)
+		mu_seg = _interp_rows(anchors, mu_k, tgrid)
+		sg_seg = _interp_rows(anchors, sg_k, tgrid)
 
-		# castは最後に一括、入力dtypeを維持
 		y_chunk = (
 			(x_nw64[:, t0:t1] - mu_seg) / (sg_seg + float(eps)) ** float(gamma)
 		).astype(x.dtype, copy=False)
 		y_nw[:, t0:t1] = y_chunk
-		t = t1
 
-	# ---- reshape back ----
 	y = y_nw.reshape(*Hdims, W)
 
 	if return_meta:
 		meta = {
-			'anchors': anchors,  # (K,)
-			'mu_k': mu_k.reshape(*Hdims, K),  # (*Hdims, K)
-			'sigma_k': sg_k.reshape(*Hdims, K),  # (*Hdims, K)
+			'anchors': anchors,
+			'mu_k': mu_k.reshape(*Hdims, K),
+			'sigma_k': sg_k.reshape(*Hdims, K),
 			'gamma': float(gamma),
 			'method': method,
 			'win': int(win),
@@ -213,6 +210,8 @@ def robust_agc_np(
 			'causal': bool(causal),
 			'eps': float(eps),
 			'chunk': int(chunk),
+			'use_tqdm': bool(use_tqdm),
 		}
 		return y, meta
+
 	return y
