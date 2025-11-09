@@ -3,6 +3,7 @@ from collections.abc import Callable
 
 import numpy as np
 import torch
+from seisai_utils.validator import validate_array
 
 # (H,W) -> (H,W) を想定（ViewCompose 相当）
 TileView = Callable[[np.ndarray], np.ndarray]
@@ -122,9 +123,10 @@ def infer_tiled_chw(
 	| None = None,  # 分割“前”に1回だけ適用（決定論のみ）
 ) -> torch.Tensor:
 	# 1) 入力検証
-	assert isinstance(x_chw, np.ndarray) and x_chw.ndim == 3, (
-		'x_chw must be np.ndarray of shape (C,H,W)'
-	)
+	validate_array(x_chw, allowed_ndims=(2, 3), name='x', backend='numpy')
+	if x_chw.ndim == 2:
+		x_chw = x_chw[None, ...]  # (1,H,W)
+
 	c, h, w = x_chw.shape
 	x_np = np.ascontiguousarray(x_chw, dtype=np.float32)
 

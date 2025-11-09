@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 import numpy as np
 from seisai_utils.validator import validate_array
-from tqdm import tqdm as _tqdm
+from tqdm import tqdm
 
 # ===== helpers =====
 
@@ -114,7 +114,7 @@ def robust_agc_np(
 	return_meta: bool = False,
 	use_tqdm: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, dict]:
-	validate_array(x, allowed_ndims=(1, 2, 3, 4), name='x')
+	validate_array(x, allowed_ndims=(1, 2, 3, 4), name='x', backend='numpy')
 
 	Hdims = x.shape[:-1]
 	W = int(x.shape[-1])
@@ -173,8 +173,8 @@ def robust_agc_np(
 	y_nw = np.empty_like(x_nw, dtype=x.dtype)
 
 	n_chunks = (W + chunk - 1) // chunk
-	if _tqdm is not None:
-		it_chunks = _tqdm(
+	if use_tqdm:
+		it_chunks = tqdm(
 			range(n_chunks),
 			desc='robust_agc_np: apply',
 			total=n_chunks,
