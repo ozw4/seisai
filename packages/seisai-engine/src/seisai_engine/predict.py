@@ -32,14 +32,14 @@ class _NoRandRNG:
 @torch.no_grad()
 def _run_tiled(
 	model: torch.nn.Module,
-	x: torch.Tensor,  # (B,C,H,W) torch.Tensor（すでにTorch）
+	x: torch.Tensor,  # (B,C,H,W)
 	*,
 	tile: tuple[int, int] = (128, 128),
 	overlap: tuple[int, int] = (32, 32),
 	amp: bool = True,
 	use_tqdm: bool = False,
 	tiles_per_batch: int = 8,
-	tile_transform: ViewCompose | None = None,  # タイルごとの処理（決定論のみ想定）
+	tile_transform: ViewCompose | None = None,
 ) -> torch.Tensor:
 	assert x.ndim == 4 and hasattr(model, 'out_chans')
 	c_out = int(model.out_chans)
@@ -62,6 +62,26 @@ def _run_tiled(
 				break
 			starts.append(nxt)
 		return sorted(set(starts))
+
+	# Hann 窓ベースの 2D 重み（中心が大きく、端が小さい）
+	def _make_tile_weight(
+		tile_h: int, tile_w: int, device: torch.device
+	) -> torch.Tensor:
+		wy = torch.hann_window(
+			tile_h, periodic=False, device=device, dtype=torch.float32
+		)
+		wx = torch.hann_window(
+			tile_w, periodic=False, device=device, dtype=torch.float32
+		)
+		w2d = wy.view(tile_h, 1) * wx.view(1, tile_w)  # outer product
+
+		# 端を完全な 0 にすると画像端ピクセルの weight が 0 になりうるので、
+		# ごく小さい値で下限を切り上げておく
+		eps = 1e-3
+		w2d = torch.clamp(w2d, min=eps)
+
+		# shape: (1,1,H,W) にしておく（B,C に broadcast させる）
+		return w2d.view(1, 1, tile_h, tile_w)
 
 	ys = _tile_starts(h, tile_h, ov_h)
 	xs = _tile_starts(w, tile_w, ov_w)
@@ -88,6 +108,9 @@ def _run_tiled(
 		(max_slots, c, tile_h, tile_w), device=x.device, dtype=x.dtype
 	)
 
+	# 全タイル共通の Hann 窓重み
+	tile_weight_full = _make_tile_weight(tile_h, tile_w, x.device)
+
 	if use_tqdm:
 		num_batches = (total_tiles + tiles_per_batch - 1) // tiles_per_batch
 		batch_iter = tqdm(
@@ -104,26 +127,27 @@ def _run_tiled(
 		stage_x.zero_()
 
 		for t, (h0, w0, ph, pw) in enumerate(batch_rects):
-			patch = x[:, :, h0 : h0 + ph, w0 : w0 + pw]  # (B,C,ph,pw)
+			patch = x[:, :, h0 : h0 + ph, w0 : w0 + pw]
 
 			if tile_transform is not None:
 				patch = tile_transform(patch, return_meta=False)
-				assert patch.shape == (b, c, ph, pw), (
-					f'tile_transform must preserve shape '
-					f'(got {tuple(patch.shape)} expected {(b, c, ph, pw)})'
-				)
+				assert patch.shape == (b, c, ph, pw)
 				assert patch.device == x.device
 
 			stage_x[t * b : (t + 1) * b, :, :ph, :pw].copy_(patch)
 
 		with torch.amp.autocast('cuda', enabled=use_amp):
-			yb = model(stage_x[:slots])  # (slots, c_out, tile_h, tile_w)
+			yb = model(stage_x[:slots])
 
 		for t, (h0, w0, ph, pw) in enumerate(batch_rects):
 			sl = slice(t * b, (t + 1) * b)
 			yp = yb[sl, :, :ph, :pw].to(torch.float32)
-			out[:, :, h0 : h0 + ph, w0 : w0 + pw] += yp
-			weight[:, :, h0 : h0 + ph, w0 : w0 + pw] += 1.0
+
+			# タイル内の有効部分だけ切り出し
+			w_patch = tile_weight_full[:, :, :ph, :pw]  # (1,1,ph,pw)
+
+			out[:, :, h0 : h0 + ph, w0 : w0 + pw] += yp * w_patch
+			weight[:, :, h0 : h0 + ph, w0 : w0 + pw] += w_patch
 
 	assert torch.all(weight > 0), (
 		'未カバー領域があります。tile/overlap を見直してください。'
