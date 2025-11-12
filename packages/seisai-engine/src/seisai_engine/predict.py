@@ -1,6 +1,3 @@
-# predict.py — 入力を ndarray(CHW) で受け取り、
-# 分割“前”と分割“後（タイル単位）”で transform を分けて適用する
-
 from collections.abc import Callable
 
 import numpy as np
@@ -13,6 +10,8 @@ from tqdm.auto import tqdm
 PreView = Callable[[np.ndarray], np.ndarray]
 # (B,C,ph,pw) -> (B,C,ph,pw) を想定（タイル単位の正規化など）
 TileTransform = Callable[[torch.Tensor], torch.Tensor]
+# (B,C,ph,pw) -> (B,C,ph,pw) を想定（タイル単位の予測後処理など）
+PostTileTransform = Callable[[torch.Tensor], torch.Tensor]
 
 
 class _NoRandRNG:
@@ -40,6 +39,7 @@ def _run_tiled(
 	use_tqdm: bool = False,
 	tiles_per_batch: int = 8,
 	tile_transform: ViewCompose | None = None,
+	post_tile_transform: ViewCompose | None = None,
 ) -> torch.Tensor:
 	assert x.ndim == 4 and hasattr(model, 'out_chans')
 	c_out = int(model.out_chans)
@@ -143,6 +143,12 @@ def _run_tiled(
 			sl = slice(t * b, (t + 1) * b)
 			yp = yb[sl, :, :ph, :pw].to(torch.float32)
 
+			if post_tile_transform is not None:
+				yp = post_tile_transform(yp, return_meta=False)
+				assert yp.shape == (b, c_out, ph, pw)
+				assert yp.device == x.device
+				yp = yp.to(torch.float32)
+
 			# タイル内の有効部分だけ切り出し
 			w_patch = tile_weight_full[:, :, :ph, :pw]  # (1,1,ph,pw)
 
@@ -167,6 +173,7 @@ def infer_tiled_chw(
 	use_tqdm: bool = False,
 	tiles_per_batch: int = 4,
 	tile_transform: ViewCompose | None = None,
+	post_tile_transform: ViewCompose | None = None,
 ) -> torch.Tensor:
 	# 1) 入力検証
 	validate_array(x_chw, allowed_ndims=(2, 3), name='x', backend='numpy')
@@ -188,5 +195,6 @@ def infer_tiled_chw(
 		use_tqdm=use_tqdm,
 		tiles_per_batch=tiles_per_batch,
 		tile_transform=tile_transform,
+		post_tile_transform=post_tile_transform,
 	)
 	return y.squeeze(0)
