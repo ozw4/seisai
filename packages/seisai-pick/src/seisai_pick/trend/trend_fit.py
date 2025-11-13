@@ -115,7 +115,7 @@ def robust_linear_trend(
 	t_tsec = to_torch(t_sec)
 	t_offsets = to_torch(offsets, like=t_tsec)
 	t_wconf = to_torch(w_conf, like=t_tsec)
-	t_valid = None if valid is None else to_torch(valid, like=t_tsec)
+	t_valid = None if valid is None else to_torch(valid)
 
 	# (H,) → (1,H)
 	if t_offsets.ndim == 1:
@@ -275,8 +275,7 @@ def robust_linear_trend_sections_ransac(
 	t_tsec = to_torch(t_sec)
 	t_offsets = to_torch(offsets, like=t_tsec)
 	t_wconf = to_torch(w_conf, like=t_tsec)
-	t_valid = None if valid is None else to_torch(valid, like=t_tsec)
-
+	t_valid = None if valid is None else to_torch(valid)
 	# (H,) を (1,H) に昇格
 	if t_offsets.ndim == 1:
 		t_offsets = t_offsets.unsqueeze(0)

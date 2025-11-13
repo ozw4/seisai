@@ -42,7 +42,7 @@ def demo() -> None:
 
 	# ---- Step3: t_sec（単純argmax） → トレンド（IRLS/RANSAC） ------
 	t_sec = _argmax_time_parabolic(prob, dt_sec)  # (B,H) [s]
-	valid = (fb_idx >= 0).to(prob)
+	valid = (fb_idx >= 0).to(torch.bool)  # (B,H)
 
 	trend_t_i, trend_s_i, v_i, _, covered_i = robust_linear_trend(
 		offsets=offsets.to(prob),
