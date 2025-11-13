@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+from seisai_utils.convert import to_numpy, to_torch
 
 # 追加：validators から必要なものだけ import
 from seisai_utils.validator import (
 	require_all_finite,
+	require_all_numpy,
 	require_boolint_array,
 	require_float_array,
 	require_non_negative,
@@ -16,22 +18,7 @@ from seisai_utils.validator import (
 from torch import Tensor
 
 
-def _apply_speed_bounds_on_slowness_np(
-	b_slope: np.ndarray,  # shape (B,1) or (Ba,)
-	vmin: float | None,
-	vmax: float | None,
-	symmetric: bool,
-) -> np.ndarray:
-	# slowness bounds: s = 1/v
-	min_s = 0.0 if vmax is None else 1.0 / float(vmax)
-	max_s = float('inf') if vmin is None else 1.0 / float(vmin)
-	if symmetric:
-		sm = np.clip(np.abs(b_slope), a_min=min_s, a_max=max_s)
-		return np.sign(b_slope) * sm
-	return np.clip(b_slope, a_min=min_s, a_max=max_s)
-
-
-def _apply_speed_bounds_on_slowness_torch(
+def _apply_speed_bounds_on_slowness(
 	b_slope: Tensor,  # slope (= slowness) [s/m], shape (B,1) or (Ba,)
 	vmin: float | None,
 	vmax: float | None,
@@ -46,9 +33,7 @@ def _apply_speed_bounds_on_slowness_torch(
 	return b_slope.clamp(min=min_s, max=max_s)
 
 
-def _validation_torch(
-	offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, iters
-):
+def _validation(offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, iters):
 	validate_array(
 		offsets, allowed_ndims=(2,), name='offsets', backend='torch', shape_hint='(B,H)'
 	)
@@ -93,91 +78,68 @@ def _validation_torch(
 		assert vmax > vmin
 
 
-def _validation_np(
-	offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, iters
-):
-	# 形状・型
-	validate_array(
-		offsets, allowed_ndims=(2,), name='offsets', backend='numpy', shape_hint='(B,H)'
-	)
-	require_float_array(t_sec, name='t_sec', backend='numpy')
-	require_all_finite(offsets, name='offsets', backend='numpy')
-	require_all_finite(t_sec, name='t_sec', backend='numpy')
-	require_all_finite(w_conf, name='w_conf', backend='numpy')
-	require_non_negative(w_conf, name='w_conf', backend='numpy')
-
-	require_same_shape_and_backend(
-		offsets,
-		t_sec,
-		w_conf,
-		name_a='offsets',
-		name_b='t_sec',
-		other_names=['w_conf'],
-		backend='numpy',
-		shape_hint='(B,H)',
-	)
-
-	if valid is not None:
-		validate_array(
-			valid, allowed_ndims=(2,), name='valid', backend='numpy', shape_hint='(B,H)'
-		)
-		require_boolint_array(valid, name='valid', backend='numpy')
-		require_same_shape_and_backend(
-			offsets,
-			valid,
-			name_a='offsets',
-			name_b='valid',
-			backend='numpy',
-			shape_hint='(B,H)',
-		)
-
-	# スカラー検証
-	assert section_len >= 4 and stride >= 1 and iters >= 1, 'invalid IRLS/window params'
-	if vmin is not None:
-		assert vmin > 0
-	if vmax is not None:
-		assert vmax > 0
-	if (vmin is not None) and (vmax is not None):
-		assert vmax > vmin
-
-
 @torch.no_grad()
 def robust_linear_trend(
-	offsets: Tensor,  # (B,H) [m]
-	t_sec: Tensor,  # (B,H) predicted pos_sec [s]
-	valid: Tensor | None = None,  # None → 全点有効
+	offsets: Tensor | np.ndarray,  # (B,H) or (H,)
+	t_sec: Tensor | np.ndarray,  # (B,H) or (H,)
+	valid: Tensor | np.ndarray | None = None,  # None → 全点有効
 	*,
-	w_conf: Tensor,  # (B,H) per-trace confidence weights (>=0, typically <=1)
+	w_conf: Tensor | np.ndarray,  # (B,H) or (H,)
 	section_len: int = 128,
 	stride: int = 64,
 	huber_c: float = 1.345,
 	iters: int = 3,
-	vmin: float | None = 300.0,  # None で片側無制限
-	vmax: float | None = 8000.0,  # None で片側無制限
+	vmin: float | None = 300.0,  # None → 片側無制限
+	vmax: float | None = 8000.0,  # None → 片側無制限
 	sort_offsets: bool = True,
 	use_taper: bool = True,
-	abs_velocity: bool = False,  # True のとき v∈[-vmax,-vmin]∪[vmin,vmax] を許容（出力は符号付き）
-) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-	"""Windowed IRLS で t(x) ≈ a + s·x を推定。validators を用いて (B,H) 形状を検証。"""
-	if offsets.ndim == 1:
-		offsets = offsets.unsqueeze(0)
-	if t_sec.ndim == 1:
-		t_sec = t_sec.unsqueeze(0)
-	if w_conf.ndim == 1:
-		w_conf = w_conf.unsqueeze(0)
-	if valid is not None and valid.ndim == 1:
-		valid = valid.unsqueeze(0)
-	# ---- 入力検証 ----
-	_validation_torch(
-		offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, iters
-	)
-	offsets = offsets.to(t_sec)
+	abs_velocity: bool = False,  # True: v∈[-vmax,-vmin]∪[vmin,vmax] を許容（出力は符号付き）
+) -> tuple[
+	Tensor | np.ndarray,
+	Tensor | np.ndarray,
+	Tensor | np.ndarray,
+	Tensor | np.ndarray,
+	Tensor | np.ndarray,
+]:
+	"""Windowed IRLS で t(x) ≈ a + s·x を推定。
+	- 入力がすべてNumPyなら NumPy を返す。そうでなければ Torch を返す。
+	- 内部計算は Torch（CPU）で行う。dtype は t_sec に合わせて統一。
+	"""
+	# 返却形態の決定（全入力が NumPy なら True）
+	if valid is None:
+		all_numpy = require_all_numpy(offsets, t_sec, w_conf)
+	else:
+		all_numpy = require_all_numpy(offsets, t_sec, w_conf, valid)
 
-	# ---- 本体処理 ----
-	B, H = offsets.shape
-	x0, y0 = offsets, t_sec
-	v0 = torch.ones_like(t_sec) if valid is None else (valid > 0).to(t_sec)
-	pw0 = w_conf.to(t_sec)
+	# Torchへ正規化（CPU/ dtype は t_sec に合わせる）
+	t_tsec = to_torch(t_sec)
+	t_offsets = to_torch(offsets, like=t_tsec)
+	t_wconf = to_torch(w_conf, like=t_tsec)
+	t_valid = None if valid is None else to_torch(valid, like=t_tsec)
+
+	# (H,) → (1,H)
+	if t_offsets.ndim == 1:
+		t_offsets = t_offsets.unsqueeze(0)
+	if t_tsec.ndim == 1:
+		t_tsec = t_tsec.unsqueeze(0)
+	if t_wconf.ndim == 1:
+		t_wconf = t_wconf.unsqueeze(0)
+	if (t_valid is not None) and (t_valid.ndim == 1):
+		t_valid = t_valid.unsqueeze(0)
+
+	# 入力検証（Torchバックエンド）
+	_validation(
+		t_offsets, t_tsec, t_valid, t_wconf, vmax, vmin, section_len, stride, iters
+	)
+
+	# dtype/device を完全一致
+	t_offsets = t_offsets.to(t_tsec)
+
+	# ---- 本体（従来Torch実装そのまま）----
+	B, H = t_offsets.shape
+	x0, y0 = t_offsets, t_tsec
+	v0 = torch.ones_like(t_tsec) if t_valid is None else (t_valid > 0).to(t_tsec)
+	pw0 = t_wconf.to(t_tsec)
 
 	if sort_offsets:
 		idx = torch.argsort(x0, dim=1)
@@ -235,7 +197,7 @@ def robust_linear_trend(
 			)
 			w = w_huber * pws
 
-		s_sec = _apply_speed_bounds_on_slowness_torch(
+		s_sec = _apply_speed_bounds_on_slowness(
 			b.squeeze(1), vmin, vmax, symmetric=abs_velocity
 		)
 
@@ -265,16 +227,19 @@ def robust_linear_trend(
 	w_used = torch.gather(pw, 1, inv)
 	covered = torch.gather(covered, 1, inv)
 
+	# すべて NumPy 入力のときだけ NumPy で返却
+	if all_numpy:
+		return to_numpy(trend_t, trend_s, v_trend, w_used, covered)
 	return trend_t, trend_s, v_trend, w_used, covered
 
 
 @torch.no_grad()
 def robust_linear_trend_sections_ransac(
-	offsets: Tensor,  # (B,H) [m]
-	t_sec: Tensor,  # (B,H) predicted pos_sec [s]
-	valid: Tensor | None = None,  # None → 全点有効
+	offsets: Tensor | np.ndarray,  # (B,H) or (H,)
+	t_sec: Tensor | np.ndarray,  # (B,H) or (H,)
+	valid: Tensor | np.ndarray | None = None,  # None → 全点有効
 	*,
-	w_conf: Tensor,  # (B,H) per-trace confidence weights (>=0, typically <=1)
+	w_conf: Tensor | np.ndarray,  # (B,H) or (H,)
 	section_len: int = 128,
 	stride: int = 64,
 	vmin: float | None = 300.0,
@@ -289,28 +254,61 @@ def robust_linear_trend_sections_ransac(
 	use_inlier_blend: bool = True,
 	sort_offsets: bool = True,
 	abs_velocity: bool = False,  # True で v を対称許容（出力は符号付き）
-) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-	"""RANSAC ベースの線形トレンド推定。validators を用いて (B,H) 形状を検証。"""
-	if offsets.ndim == 1:
-		offsets = offsets.unsqueeze(0)
-	if t_sec.ndim == 1:
-		t_sec = t_sec.unsqueeze(0)
-	if w_conf.ndim == 1:
-		w_conf = w_conf.unsqueeze(0)
-	if valid is not None and valid.ndim == 1:
-		valid = valid.unsqueeze(0)
-	# ---- 入力検証 ----
-	_validation_torch(
-		offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, ransac_trials
+) -> tuple[
+	Tensor | np.ndarray,
+	Tensor | np.ndarray,
+	Tensor | np.ndarray,
+	Tensor | np.ndarray,
+	Tensor | np.ndarray,
+]:
+	"""RANSAC ベースの線形トレンド推定（NumPy/Torch両対応）。
+	- 入力がすべて NumPy なら NumPy を返す。そうでなければ Torch を返す。
+	- 内部計算は Torch（CPU）で行い、dtype は t_sec に合わせる。
+	"""
+	# 返却形態の決定
+	if valid is None:
+		all_numpy = require_all_numpy(offsets, t_sec, w_conf)
+	else:
+		all_numpy = require_all_numpy(offsets, t_sec, w_conf, valid)
+
+	# Torchへ正規化（CPU, dtype を t_sec に合わせる）
+	t_tsec = to_torch(t_sec)
+	t_offsets = to_torch(offsets, like=t_tsec)
+	t_wconf = to_torch(w_conf, like=t_tsec)
+	t_valid = None if valid is None else to_torch(valid, like=t_tsec)
+
+	# (H,) を (1,H) に昇格
+	if t_offsets.ndim == 1:
+		t_offsets = t_offsets.unsqueeze(0)
+	if t_tsec.ndim == 1:
+		t_tsec = t_tsec.unsqueeze(0)
+	if t_wconf.ndim == 1:
+		t_wconf = t_wconf.unsqueeze(0)
+	if (t_valid is not None) and (t_valid.ndim == 1):
+		t_valid = t_valid.unsqueeze(0)
+
+	# 入力検証（Torchバックエンド）
+	_validation(
+		t_offsets,
+		t_tsec,
+		t_valid,
+		t_wconf,
+		vmax,
+		vmin,
+		section_len,
+		stride,
+		ransac_trials,
 	)
 	assert ransac_pack >= 1 and refine_irls_iters >= 0
-	offsets = offsets.to(t_sec)
 
-	# ---- 本体処理 ----
-	B, H = offsets.shape
-	x0, y0 = offsets, t_sec
-	v0 = torch.ones_like(t_sec) if valid is None else (valid > 0).to(t_sec)
-	pw0 = w_conf.to(t_sec)
+	# dtype/device 完全一致
+	t_offsets = t_offsets.to(t_tsec)
+
+	# ---- 本体処理（従来Torch実装）----
+	B, H = t_offsets.shape
+	x0, y0 = t_offsets, t_tsec
+	v0 = torch.ones_like(t_tsec) if t_valid is None else (t_valid > 0).to(t_tsec)
+	pw0 = t_wconf.to(t_tsec)
 
 	if sort_offsets:
 		idx = torch.argsort(x0, dim=1)
@@ -425,7 +423,7 @@ def robust_linear_trend_sections_ransac(
 
 			best_a, best_b = a_ref, b_ref
 
-		s_sec = _apply_speed_bounds_on_slowness_torch(
+		s_sec = _apply_speed_bounds_on_slowness(
 			best_b, vmin, vmax, symmetric=abs_velocity
 		)
 
@@ -455,343 +453,7 @@ def robust_linear_trend_sections_ransac(
 	w_used = torch.gather(pw, 1, inv)
 	covered = torch.gather(covered, 1, inv)
 
-	return trend_t, trend_s, v_trend, w_used, covered
-
-
-def robust_linear_trend_np(
-	offsets: np.ndarray,  # (B,H) [m]  整数可（内部で t_sec.dtype に統一）
-	t_sec: np.ndarray,  # (B,H) [s]  float必須
-	valid: np.ndarray | None = None,  # (B,H) bool/int（Noneなら全点有効）
-	*,
-	w_conf: np.ndarray,  # (B,H) >=0（0/1マスクも可）→ floatに演算される
-	section_len: int = 128,
-	stride: int = 64,
-	huber_c: float = 1.345,
-	iters: int = 3,
-	vmin: float | None = 300.0,
-	vmax: float | None = 8000.0,
-	sort_offsets: bool = True,
-	use_taper: bool = True,
-	abs_velocity: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-	if offsets.ndim == 1:
-		offsets = offsets[np.newaxis, :]
-	if t_sec.ndim == 1:
-		t_sec = t_sec[np.newaxis, :]
-	if w_conf.ndim == 1:
-		w_conf = w_conf[np.newaxis, :]
-	if valid is not None and valid.ndim == 1:
-		valid = valid[np.newaxis, :]
-
-	"""Windowed IRLS で t(x) ≈ a + s·x を推定（NumPy版）"""
-	_validation_np(
-		offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, iters
-	)
-
-	# dtype統一（offsetsはint許容 → t_sec.dtypeへ明示キャスト）
-	offsets = offsets.astype(t_sec.dtype, copy=False)
-	w_conf = w_conf.astype(t_sec.dtype, copy=False)
-
-	B, H = offsets.shape
-	x0, y0 = offsets, t_sec
-	v0 = (
-		np.ones_like(t_sec, dtype=t_sec.dtype)
-		if valid is None
-		else (valid > 0).astype(t_sec.dtype)
-	)
-	pw0 = w_conf
-
-	if sort_offsets:
-		idx = np.argsort(x0, axis=1)
-		arangeH = np.arange(H, dtype=idx.dtype)
-		inv = np.empty_like(idx)
-		inv[np.arange(B)[:, None], idx] = arangeH[None, :]
-
-		x = np.take_along_axis(x0, idx, axis=1)
-		y = np.take_along_axis(y0, idx, axis=1)
-		v = np.take_along_axis(v0, idx, axis=1)
-		pw = np.take_along_axis(pw0, idx, axis=1)
-	else:
-		x, y, v, pw = x0, y0, v0, pw0
-		inv = np.broadcast_to(np.arange(H)[None, :], (B, H))
-
-	trend_t = np.zeros_like(y)
-	trend_s = np.zeros_like(y)
-	counts = np.zeros_like(y)
-
-	eps = 1e-12
-	for start in range(0, H, stride):
-		end = min(H, start + section_len)
-		L = end - start
-		if L < 4:
-			continue
-
-		xs = x[:, start:end]
-		ys = y[:, start:end]
-		vs = v[:, start:end]
-		pws = pw[:, start:end]
-
-		w = (vs * pws).copy()
-		a = np.zeros((B, 1), dtype=y.dtype)
-		b = np.zeros((B, 1), dtype=y.dtype)  # slope (= slowness)
-
-		for _ in range(iters):
-			Sw = np.clip(np.sum(w, axis=1, keepdims=True), eps, None)
-			Sx = np.sum(w * xs, axis=1, keepdims=True)
-			Sy = np.sum(w * ys, axis=1, keepdims=True)
-			Sxx = np.sum(w * xs * xs, axis=1, keepdims=True)
-			Sxy = np.sum(w * xs * ys, axis=1, keepdims=True)
-			D = np.clip(Sw * Sxx - Sx * Sx, eps, None)
-			b = (Sw * Sxy - Sx * Sy) / D
-			a = (Sy - b * Sx) / Sw
-
-			yhat = a + b * xs
-			res = (ys - yhat) * vs
-
-			scale = np.clip(
-				1.4826 * np.median(np.abs(res), axis=1, keepdims=True), 1e-6, None
-			)
-			r = res / (huber_c * scale)
-
-			w_huber = np.where(
-				np.abs(r) <= 1.0, vs, vs * np.minimum(1.0 / np.abs(r), 10.0)
-			)
-			w = w_huber * pws
-
-		s_sec = _apply_speed_bounds_on_slowness_np(
-			b.squeeze(1), vmin, vmax, symmetric=abs_velocity
-		)
-
-		if use_taper:
-			wwin = np.hanning(L).astype(y.dtype)[None, :]
-		else:
-			wwin = np.ones((1, L), dtype=y.dtype)
-		wtap = wwin * vs * pws
-
-		yhat = a + b * xs
-		trend_t[:, start:end] += yhat * wtap
-		trend_s[:, start:end] += s_sec[:, None] * wtap
-		counts[:, start:end] += wtap
-
-	trend_t = trend_t / np.clip(counts, 1e-6, None)
-	trend_s = trend_s / np.clip(counts, 1e-6, None)
-
-	# 出力速度は常に符号付き
-	v_trend = np.sign(trend_s) / np.clip(np.abs(trend_s), 1e-6, None)
-	covered = (counts > 0).astype(bool)
-
-	trend_t = np.take_along_axis(trend_t, inv, axis=1)
-	trend_s = np.take_along_axis(trend_s, inv, axis=1)
-	v_trend = np.take_along_axis(v_trend, inv, axis=1)
-	w_used = np.take_along_axis(pw, inv, axis=1)
-	covered = np.take_along_axis(covered, inv, axis=1)
-
-	return trend_t, trend_s, v_trend, w_used, covered
-
-
-def robust_linear_trend_sections_ransac_np(
-	offsets: np.ndarray,  # (B,H) [m]
-	t_sec: np.ndarray,  # (B,H) [s]
-	valid: np.ndarray | None = None,
-	*,
-	w_conf: np.ndarray,  # (B,H)
-	section_len: int = 128,
-	stride: int = 64,
-	vmin: float | None = 300.0,
-	vmax: float | None = 6000.0,
-	ransac_trials: int = 32,
-	ransac_tau: float = 2.0,
-	ransac_abs_ms: float = 15.0,
-	ransac_pack: int = 16,  # NumPy版では内部的には逐次試行。引数は互換のため残置。
-	sample_weighted: bool = True,
-	dx_min: float = 1e-6,
-	refine_irls_iters: int = 1,
-	use_inlier_blend: bool = True,
-	sort_offsets: bool = True,
-	abs_velocity: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-	if offsets.ndim == 1:
-		offsets = offsets[np.newaxis, :]
-	if t_sec.ndim == 1:
-		t_sec = t_sec[np.newaxis, :]
-	if w_conf.ndim == 1:
-		w_conf = w_conf[np.newaxis, :]
-	if valid is not None and valid.ndim == 1:
-		valid = valid[np.newaxis, :]
-
-	"""RANSACベースの線形トレンド推定（NumPy版）"""
-	_validation_np(
-		offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, ransac_trials
-	)
-	assert ransac_pack >= 1 and refine_irls_iters >= 0
-
-	# dtype統一
-	offsets = offsets.astype(t_sec.dtype, copy=False)
-	w_conf = w_conf.astype(t_sec.dtype, copy=False)
-
-	B, H = offsets.shape
-	x0, y0 = offsets, t_sec
-	v0 = (
-		np.ones_like(t_sec, dtype=t_sec.dtype)
-		if valid is None
-		else (valid > 0).astype(t_sec.dtype)
-	)
-	pw0 = w_conf
-
-	if sort_offsets:
-		idx = np.argsort(x0, axis=1)
-		arangeH = np.arange(H, dtype=idx.dtype)
-		inv = np.empty_like(idx)
-		inv[np.arange(B)[:, None], idx] = arangeH[None, :]
-
-		x = np.take_along_axis(x0, idx, axis=1)
-		y = np.take_along_axis(y0, idx, axis=1)
-		v = np.take_along_axis(v0, idx, axis=1)
-		pw = np.take_along_axis(pw0, idx, axis=1)
-	else:
-		x, y, v, pw = x0, y0, v0, pw0
-		inv = np.broadcast_to(np.arange(H)[None, :], (B, H))
-
-	trend_t = np.zeros_like(y)
-	trend_s = np.zeros_like(y)
-	counts = np.zeros_like(y)
-
-	eps = 1e-12
-	abs_thr_sec = float(ransac_abs_ms) * 1e-3
-
-	rng = np.random.default_rng()
-	for start in range(0, H, stride):
-		end = min(H, start + section_len)
-		L = end - start
-		if L < 4:
-			continue
-
-		xs = x[:, start:end]
-		ys = y[:, start:end]
-		vs = v[:, start:end]
-		pws = pw[:, start:end]
-
-		base_w = np.clip(vs * pws, 0, None)
-		active_mask = np.sum(base_w, axis=1) > 0
-		if not np.any(active_mask):
-			continue
-
-		xs_a = xs[active_mask]
-		ys_a = ys[active_mask]
-		vs_a = vs[active_mask]
-		pws_a = pws[active_mask]
-		Ba = xs_a.shape[0]
-
-		med_y = np.median(ys_a, axis=1, keepdims=True)
-		scale0 = np.clip(
-			1.4826 * np.median(np.abs(ys_a - med_y), axis=1, keepdims=True), 1e-6, None
-		)
-		thr = np.maximum(ransac_tau * scale0, abs_thr_sec)
-
-		ps = np.clip(vs_a * pws_a, 0, None)
-		row_sum = np.sum(ps, axis=1, keepdims=True)
-		ps = ps / row_sum
-		if not sample_weighted:
-			ps[:] = 1.0 / L
-
-		best_score = np.full((Ba,), -1e9, dtype=ys.dtype)
-		best_a = np.zeros((Ba,), dtype=ys.dtype)
-		best_b = np.zeros((Ba,), dtype=ys.dtype)
-
-		for _ in range(ransac_trials):
-			# 各バッチ独立に1本サンプル（2点）
-			i1 = np.empty((Ba,), dtype=int)
-			i2 = np.empty((Ba,), dtype=int)
-			for b in range(Ba):
-				i1[b] = rng.choice(L, p=ps[b])
-				i2[b] = rng.choice(L, p=ps[b])
-				if i2[b] == i1[b]:
-					i2[b] = (i2[b] + 1) % L
-
-			x1 = xs_a[np.arange(Ba), i1]
-			y1 = ys_a[np.arange(Ba), i1]
-			x2 = xs_a[np.arange(Ba), i2]
-			y2 = ys_a[np.arange(Ba), i2]
-
-			dx = x2 - x1
-			good = np.abs(dx) >= dx_min
-
-			# 直線パラメータ
-			b = np.empty_like(x1)
-			a = np.empty_like(x1)
-			b[good] = (y2[good] - y1[good]) / dx[good]
-			a[good] = y1[good] - b[good] * x1[good]
-
-			# 不正はスコア極小でスキップ
-			if not np.all(good):
-				bad = ~good
-				b[bad] = np.nan
-				a[bad] = np.nan
-
-			# スコア（Huberでなく単純なinlier数の重み付き）
-			# yhat: (Ba, L)
-			yhat = a[:, None] + b[:, None] * xs_a
-			r = (ys_a - yhat) * vs_a
-			inlier = (np.abs(r) <= thr) & good[:, None]
-			score = np.sum(pws_a * inlier.astype(ys_a.dtype), axis=1)
-
-			take = score > best_score
-			if np.any(take):
-				best_a[take] = a[take]
-				best_b[take] = b[take]
-				best_score[take] = score[take]
-
-		# RANSAC失敗チェック
-		if not np.all(np.isfinite(best_a)) or not np.all(np.isfinite(best_b)):
-			raise RuntimeError('RANSAC failed to find a valid model')
-
-		# IRLSでの軽いリファイン
-		if refine_irls_iters > 0:
-			a_ref = best_a.copy()
-			b_ref = best_b.copy()
-			for _ in range(refine_irls_iters):
-				yhat = a_ref[:, None] + b_ref[:, None] * xs_a
-				res = (ys_a - yhat) * vs_a
-				inl = (np.abs(res) <= thr).astype(ys_a.dtype)
-				w = np.clip(vs_a * pws_a * inl, 0, None)
-
-				Sw = np.clip(np.sum(w, axis=1, keepdims=True), eps, None)
-				Sx = np.sum(w * xs_a, axis=1, keepdims=True)
-				Sy = np.sum(w * ys_a, axis=1, keepdims=True)
-				Sxx = np.sum(w * xs_a * xs_a, axis=1, keepdims=True)
-				Sxy = np.sum(w * xs_a * ys_a, axis=1, keepdims=True)
-				D = np.clip(Sw * Sxx - Sx * Sx, eps, None)
-				b_ref = ((Sw * Sxy - Sx * Sy) / D).squeeze(1)
-				a_ref = ((Sy - b_ref[:, None] * Sx) / Sw).squeeze(1)
-
-			best_a, best_b = a_ref, b_ref
-
-		s_sec = _apply_speed_bounds_on_slowness_np(
-			best_b, vmin, vmax, symmetric=abs_velocity
-		)
-
-		wwin = np.hanning(L).astype(ys.dtype)[None, :]
-		yhat_best = best_a[:, None] + best_b[:, None] * xs_a
-		if use_inlier_blend:
-			res = (ys_a - yhat_best) * vs_a
-			inl = (np.abs(res) <= thr).astype(ys_a.dtype)
-			wtap = wwin * vs_a * pws_a * inl
-		else:
-			wtap = wwin * vs_a * pws_a
-
-		trend_t[active_mask, start:end] += yhat_best * wtap
-		trend_s[active_mask, start:end] += s_sec[:, None] * wtap
-		counts[active_mask, start:end] += wtap
-
-	trend_t = trend_t / np.clip(counts, 1e-6, None)
-	trend_s = trend_s / np.clip(counts, 1e-6, None)
-	v_trend = np.sign(trend_s) / np.clip(np.abs(trend_s), 1e-6, None)
-
-	covered = (counts > 0).astype(bool)
-	trend_t = np.take_along_axis(trend_t, inv, axis=1)
-	trend_s = np.take_along_axis(trend_s, inv, axis=1)
-	v_trend = np.take_along_axis(v_trend, inv, axis=1)
-	w_used = np.take_along_axis(pw, inv, axis=1)
-	covered = np.take_along_axis(covered, inv, axis=1)
-
+	# すべて NumPy 入力のときだけ NumPy で返却
+	if all_numpy:
+		return to_numpy(trend_t, trend_s, v_trend, w_used, covered)
 	return trend_t, trend_s, v_trend, w_used, covered

@@ -188,6 +188,15 @@ def require_all_finite(x, *, name='x', backend: Backend = 'auto') -> None:
 	raise TypeError(f'{name} must be numpy.ndarray or torch.Tensor')
 
 
+def require_all_numpy(*xs) -> bool:
+	for x in xs:
+		if x is None:
+			continue
+		if not isinstance(x, np.ndarray):
+			return False
+	return True
+
+
 def require_same_shape_and_backend(
 	a,
 	b,
