@@ -74,7 +74,7 @@ if __name__ == '__main__':
 	)
 
 	# ---- Step1 の窓（Δ）を秒 → サンプルに変換 ----
-	half_window_sec = 0.05
+	half_window_sec = 1.5
 	half_window = int(round(half_window_sec / dt_sec))
 
 	# ---- Step2 のパラメータ（秒 → サンプル） ----

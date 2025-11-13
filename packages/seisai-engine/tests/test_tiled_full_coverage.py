@@ -95,7 +95,7 @@ def test_tiled_full_coverage_ones(
 		overlap=overlap_hw,
 		amp=amp,
 		tiles_per_batch=8,
-		view_compose=None,
+		tile_transform=None,
 	)
 
 	assert isinstance(y, torch.Tensor)

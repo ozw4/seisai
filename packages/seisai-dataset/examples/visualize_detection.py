@@ -11,6 +11,7 @@ import segyio
 
 # seisai-dataset（I/Oとサンプリング）
 from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
+from seisai_dataset.file_info import load_headers_with_cache
 
 # 判定ロジックを共通化
 from seisai_dataset.noise_decider import EventDetectConfig, decide_noise
