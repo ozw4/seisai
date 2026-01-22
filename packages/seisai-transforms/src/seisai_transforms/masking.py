@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 # transforms/masking.py
 from dataclasses import dataclass
 from typing import Literal
@@ -139,15 +141,6 @@ def mask_checkerboard_jitter_bool(
 				mask[h0:h1, t0:t1] = True
 
 	return mask
-
-	# =========================================================
-	# MaskGenerator: 形状を選んで (H,T) bool を出す薄いラッパ
-	# =========================================================
-
-	"""ピクセル単位の bool マスクを適用して破壊した x を返す。x:(H,T)[,C] 非対応は即時失敗。
-	- mode=="replace": N(0,noise_std) で置換
-	- mode=="add":     N(0,noise_std) を加算
-	"""
 
 
 class MaskGenerator:
