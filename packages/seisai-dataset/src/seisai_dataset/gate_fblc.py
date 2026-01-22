@@ -87,7 +87,7 @@ class FirstBreakGate:
 		)
 
 		v = fb_idx_win.astype(np.float64, copy=False)
-		valid = v >= 0
+		valid = v > 0
 		m = valid[1:] & valid[:-1]
 		valid_pairs = int(m.sum())
 		if valid_pairs < mp:
