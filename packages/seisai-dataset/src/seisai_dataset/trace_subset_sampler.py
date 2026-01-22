@@ -131,8 +131,23 @@ class TraceSubsetSampler:
 		self, info: dict, key_name: str, key: int, indices: np.ndarray
 	) -> np.ndarray:
 		K = 1 + 2 * int(self.cfg.sw_halfspan)
+		sel_keys, k2map = self._select_keys_by_centroid_or_index_window(
+			key_name, key, info, K
+		)
 
-		def _index_window():
+		chunks = []
+		for k2 in sel_keys:
+			idxs = k2map.get(int(k2))
+			if idxs is not None and len(idxs) > 0:
+				chunks.append(idxs)
+		if chunks:
+			return np.concatenate(chunks).astype(np.int64)
+		return np.asarray(indices, dtype=np.int64)
+
+	def _select_keys_by_centroid_or_index_window(
+		self, key_name: str, key: int, info: dict, K: int
+	) -> tuple[np.ndarray, dict]:
+		def _index_window() -> np.ndarray:
 			uniq = info.get(f'{key_name}_unique_keys', None)
 			uniq_arr = (
 				np.asarray(uniq, dtype=np.int64)
@@ -145,47 +160,22 @@ class TraceSubsetSampler:
 				pos = np.searchsorted(uniq_sorted, center)
 				lo = max(0, pos - self.cfg.sw_halfspan)
 				hi = min(len(uniq_sorted), pos + self.cfg.sw_halfspan + 1)
-				return [int(k) for k in uniq_sorted[lo:hi]]
-			return [int(key)]
+				return uniq_sorted[lo:hi]
+			return np.asarray([int(key)], dtype=np.int64)
 
-		if key_name == 'ffid':
-			cent = info.get('ffid_centroids')
-			if isinstance(cent, dict) and int(key) in cent:
-				keys = np.fromiter(cent.keys(), dtype=np.int64)
-				coords = np.array([cent[int(k)] for k in keys], dtype=np.float64)
-				cx, cy = cent[int(key)]
-				d = np.hypot(coords[:, 0] - cx, coords[:, 1] - cy)
-				order = np.argsort(d)
-				sel_keys = keys[order][:K]
-				k2map = info['ffid_key_to_indices']
-			else:
-				sel_keys = np.asarray(_index_window(), dtype=np.int64)
-				k2map = info[f'{key_name}_key_to_indices']
-		elif key_name == 'chno':
-			cent = info.get('chno_centroids')
-			if isinstance(cent, dict) and int(key) in cent:
-				keys = np.fromiter(cent.keys(), dtype=np.int64)
-				coords = np.array([cent[int(k)] for k in keys], dtype=np.float64)
-				cx, cy = cent[int(key)]
-				d = np.hypot(coords[:, 0] - cx, coords[:, 1] - cy)
-				order = np.argsort(d)
-				sel_keys = keys[order][:K]
-				k2map = info['chno_key_to_indices']
-			else:
-				sel_keys = np.asarray(_index_window(), dtype=np.int64)
-				k2map = info[f'{key_name}_key_to_indices']
+		cent = info.get(f'{key_name}_centroids')
+		if isinstance(cent, dict) and int(key) in cent:
+			keys = np.fromiter(cent.keys(), dtype=np.int64)
+			coords = np.array([cent[int(k)] for k in keys], dtype=np.float64)
+			cx, cy = cent[int(key)]
+			d = np.hypot(coords[:, 0] - cx, coords[:, 1] - cy)
+			order = np.argsort(d)
+			sel_keys = keys[order][:K]
 		else:
-			sel_keys = np.asarray(_index_window(), dtype=np.int64)
-			k2map = info[f'{key_name}_key_to_indices']
+			sel_keys = _index_window()
 
-		chunks = []
-		for k2 in sel_keys:
-			idxs = k2map.get(int(k2))
-			if idxs is not None and len(idxs) > 0:
-				chunks.append(idxs)
-		if chunks:
-			return np.concatenate(chunks).astype(np.int64)
-		return np.asarray(indices, dtype=np.int64)
+		k2map = info[f'{key_name}_key_to_indices']
+		return np.asarray(sel_keys, dtype=np.int64), k2map
 
 	def _choose_secondary_key(
 		self, key_name: str, apply_super: bool, valid: bool, r: random.Random
