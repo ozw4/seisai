@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 import pytest
 from seisai_dataset import (
@@ -16,8 +14,10 @@ from seisai_transforms.augment import (
 )
 from seisai_transforms.masking import MaskGenerator
 
-SEGY = os.getenv('FBP_TEST_SEGY')
-FBNP = os.getenv('FBP_TEST_FB')
+SEGY = (
+	'/home/dcuser/data/ActiveSeisField/aso19-2/input_TRCTAB_ml_fbpick_Aso19-2_wolmo.sgy'
+)
+FBNP = '/home/dcuser/data/ActiveSeisField/aso19-2/fb_Aso19-2.npy'
 
 pytestmark = pytest.mark.skipif(
 	not (SEGY and FBNP),
