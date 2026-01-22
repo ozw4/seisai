@@ -8,15 +8,30 @@ from .config import FirstBreakGateConfig
 
 class FirstBreakGate:
 	def __init__(self, cfg: FirstBreakGateConfig):
-		if not (0.0 < float(cfg.percentile) < 100.0):
-			raise ValueError('percentile must be in (0, 100)')
-		if not (float(cfg.thresh_ms) > 0.0):
-			raise ValueError('thresh_ms must be positive')
-		if int(cfg.min_pairs) < 0:
-			raise ValueError('min_pairs must be non-negative')
-		if cfg.apply_on not in ('any', 'super_only', 'off'):
-			raise ValueError("apply_on must be 'any', 'super_only', or 'off'")
+		self._validate_config(
+			percentile=cfg.percentile,
+			thresh_ms=cfg.thresh_ms,
+			min_pairs=cfg.min_pairs,
+			apply_on=cfg.apply_on,
+		)
 		self.cfg = cfg
+
+	@staticmethod
+	def _validate_config(
+		*,
+		percentile: float,
+		thresh_ms: float,
+		min_pairs: int,
+		apply_on: Literal['any', 'super_only', 'off'] | None = None,
+	) -> None:
+		if not (0.0 < float(percentile) < 100.0):
+			raise ValueError('percentile must be in (0, 100)')
+		if not (float(thresh_ms) > 0.0):
+			raise ValueError('thresh_ms must be positive')
+		if int(min_pairs) < 0:
+			raise ValueError('min_pairs must be non-negative')
+		if apply_on is not None and apply_on not in ('any', 'super_only', 'off'):
+			raise ValueError("apply_on must be 'any', 'super_only', or 'off'")
 
 	def should_apply(
 		self,
@@ -64,13 +79,12 @@ class FirstBreakGate:
 		p = self.cfg.percentile if percentile is None else float(percentile)
 		th = self.cfg.thresh_ms if thresh_ms is None else float(thresh_ms)
 		mp = self.cfg.min_pairs if min_pairs is None else int(min_pairs)
-
-		if not (0.0 < p < 100.0):
-			raise ValueError('percentile must be in (0, 100)')
-		if th <= 0.0:
-			raise ValueError('thresh_ms must be positive')
-		if mp < 0:
-			raise ValueError('min_pairs must be non-negative')
+		self._validate_config(
+			percentile=p,
+			thresh_ms=th,
+			min_pairs=mp,
+			apply_on=apply_on,
+		)
 
 		v = fb_idx_win.astype(np.float64, copy=False)
 		valid = v >= 0
