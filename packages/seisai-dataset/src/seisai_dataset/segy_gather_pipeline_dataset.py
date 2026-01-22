@@ -363,8 +363,6 @@ class SegyGatherPipelineDataset(Dataset):
 			output = self.output_builder.build_output(
 				sample, meta, fb_subset, offsets, info
 			)
-			if not self.verbose:
-				output['did_superwindow'] = None
 			return output
 
 		raise RuntimeError(
