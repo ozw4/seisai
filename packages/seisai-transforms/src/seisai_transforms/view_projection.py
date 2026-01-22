@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 
-
 _EPS = 1e-6  # 比較時の許容誤差（ほぼ等しいかの判定に使用）
 
 
@@ -61,7 +60,7 @@ def _resample_float_linear(v: np.ndarray, factor_h: float) -> np.ndarray:
 
 
 def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.ndarray:
-	"""生の初動インデックス列 `fb_idx`（0-based, -1 無効）を、
+	"""生の初動インデックス列 `fb_idx`（1..W-1 が有効（0は無効））を、
 	meta（hflip/factor_h/factor/start）に基づいて View 空間へ投影する。
 
 	処理順:
