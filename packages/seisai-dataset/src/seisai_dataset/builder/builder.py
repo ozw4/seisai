@@ -9,6 +9,12 @@ import torch
 from seisai_pick.gaussian_prob import gaussian_probs1d_np
 
 
+def _to_numpy(x, dtype=None) -> np.ndarray:
+	if isinstance(x, torch.Tensor):
+		x = x.detach().cpu().numpy()
+	return np.asarray(x, dtype=dtype)
+
+
 # ---------- Wave producers（波形から作る派生物） ----------
 class IdentitySignal:
 	def __init__(self, src: str = 'x_view', dst: str = 'x_id', copy: bool = False):
@@ -113,9 +119,7 @@ class FBGaussMap:
 				f"missing '{self.src}' (use ProjectToView before FBGaussMap)"
 			)
 
-		x_view = sample['x_view']
-		if isinstance(x_view, torch.Tensor):
-			x_view = x_view.detach().cpu().numpy()
+		x_view = _to_numpy(sample['x_view'])
 		H, W = x_view.shape
 
 		fb = np.asarray(sample['meta'][self.src], dtype=np.int64)
@@ -150,9 +154,7 @@ class SelectStack:
 		H = W = None
 		for k in self.keys:
 			v = sample[k]
-			if isinstance(v, torch.Tensor):
-				v = v.detach().cpu().numpy()
-			a = np.asarray(v, dtype=self.dtype)
+			a = _to_numpy(v, dtype=self.dtype)
 			if a.ndim == 2:
 				a = a[None, ...]  # (1,H,W)
 			elif a.ndim != 3:
