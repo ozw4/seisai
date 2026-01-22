@@ -2,12 +2,22 @@ import os
 
 import numpy as np
 import pytest
-import torch
+from seisai_dataset import (
+	BuildPlan,
+	FirstBreakGate,
+	FirstBreakGateConfig,
+	SegyGatherPipelineDataset,
+)
+from seisai_dataset.builder.builder import IdentitySignal, MaskedSignal, SelectStack
+from seisai_transforms.augment import (
+	DeterministicCropOrPad,
+	PerTraceStandardize,
+	ViewCompose,
+)
+from seisai_transforms.masking import MaskGenerator
 
-from seisai_dataset import SegyGatherPipelineDataset
-
-SEGY = os.getenv('FBP_TEST_SEGY')  # 例: /path/to/data.sgy
-FBNP = os.getenv('FBP_TEST_FB')  # 例: /path/to/data_fb.npy
+SEGY = os.getenv('FBP_TEST_SEGY')
+FBNP = os.getenv('FBP_TEST_FB')
 
 pytestmark = pytest.mark.skipif(
 	not (SEGY and FBNP),
@@ -15,60 +25,84 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _build_ds(mask_ratio: float) -> SegyGatherPipelineDataset:
-	return SegyGatherPipelineDataset(
+def _build_ds(mask_ratio: float):
+	transform = ViewCompose([PerTraceStandardize(), DeterministicCropOrPad(2048)])
+
+	fbgate = FirstBreakGate(
+		FirstBreakGateConfig(
+			apply_on='off',  # FBLC gate 無効（テストが安定）
+			min_pick_ratio=0.0,  # min_pick も無効
+		)
+	)
+
+	gen = MaskGenerator.traces(
+		ratio=float(mask_ratio), width=1, mode='replace', noise_std=1.0
+	)
+	mask_op = MaskedSignal(gen, src='x_view', dst='x_masked', mask_key='mask_bool')
+
+	plan = BuildPlan(
+		wave_ops=[
+			IdentitySignal(src='x_view', dst='x_orig', copy=True),
+			mask_op,
+		],
+		label_ops=[],
+		input_stack=SelectStack(keys='x_masked', dst='input'),
+		target_stack=SelectStack(keys='x_orig', dst='target'),
+	)
+
+	ds = SegyGatherPipelineDataset(
 		segy_files=[SEGY],
 		fb_files=[FBNP],
-		# ランダム性・再抽選を抑える（仕様テスト向け）
+		transform=transform,
+		fbgate=fbgate,
+		plan=plan,
 		use_superwindow=False,
-		augment_time_prob=0.0,
-		augment_space_prob=0.0,
-		augment_freq_prob=0.0,
-		flip=False,
-		pick_ratio=0.0,
-		reject_fblc=False,
 		valid=True,
 		verbose=False,
-		mask_ratio=mask_ratio,
-		mask_mode='replace',
-		mask_noise_std=1.0,
 	)
+	return ds, mask_op
+
+
+def _masked_traces(mask_bool: np.ndarray) -> int:
+	m = np.asarray(mask_bool)
+	return int(m[:, 0].sum())
 
 
 def test_mask_ratio_runtime_update_changes_mask_count():
-	ds = _build_ds(mask_ratio=0.0)
+	ds, mask_op = _build_ds(mask_ratio=0.0)
 
-	# 1st: マスク無効
 	a = ds[None]
-	Ha = a['original'].shape[1]
-	assert isinstance(a['masked'], torch.Tensor)
-	assert len(a['mask_indices']) == 0
+	H = int(a['input'].shape[1])
+	assert _masked_traces(a['mask_bool']) == 0
 
-	# 2nd: ランタイムに 50% へ更新 → 本数が変わる
-	ds.mask_ratio = 0.5
+	# ratio はジェネレータを作り直して差し替える（closure固定のため）
+	mask_op.gen = MaskGenerator.traces(
+		ratio=0.5, width=1, mode='replace', noise_std=1.0
+	)
+
 	b = ds[None]
-	Hb = b['original'].shape[1]
-	assert len(b['mask_indices']) == int(0.5 * Hb)
+	assert _masked_traces(b['mask_bool']) == int(round(0.5 * H))
 
 	ds.close()
 
 
 def test_mask_mode_and_noise_runtime_update_effect():
-	ds = _build_ds(mask_ratio=0.5)
+	ds, mask_op = _build_ds(mask_ratio=0.5)
 
-	# まず replace: 値が変わる（高確率）
 	x1 = ds[None]
-	assert len(x1['mask_indices']) == int(0.5 * x1['original'].shape[1])
-	# runtime で "add" & noise_std=0.0 → 値は変わらないはず
-	ds.mask_mode = 'add'
-	ds.mask_noise_std = 0.0
+	H = int(x1['input'].shape[1])
+	assert _masked_traces(x1['mask_bool']) == int(round(0.5 * H))
+
+	# mode/noise_std はそのまま更新できる
+	mask_op.gen.mode = 'add'
+	mask_op.gen.noise_std = 0.0
+
 	x2 = ds[None]
-	# 形・本数はそのまま
-	assert len(x2['mask_indices']) == int(0.5 * x2['original'].shape[1])
-	# 追加ノイズが0なので masked == original
+	assert _masked_traces(x2['mask_bool']) == int(round(0.5 * H))
+
 	np.testing.assert_allclose(
-		x2['masked'].cpu().numpy(),
-		x2['original'].cpu().numpy(),
+		x2['input'].cpu().numpy(),
+		x2['target'].cpu().numpy(),
 		atol=0.0,
 		rtol=0.0,
 	)
