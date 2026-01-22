@@ -88,6 +88,7 @@ class SegyGatherPipelineDataset(Dataset):
 
 		self._rng = np.random.default_rng()
 		self.max_trials = int(max_trials)
+		self._last_gate_reject: str | None = None
 
 		# components
 		self.subsetloader = TraceSubsetLoader(
@@ -135,98 +136,140 @@ class SegyGatherPipelineDataset(Dataset):
 	def __len__(self) -> int:
 		return 1024
 
+	def _draw_sample(self, info: dict, rng: np.random.Generator) -> dict:
+		seed = int(rng.integers(0, 2**31 - 1))
+		s = self.sampler.draw(info, py_random=random.Random(seed))
+		return {
+			'indices': np.asarray(s['indices'], dtype=np.int64),
+			'key_name': s['key_name'],
+			'secondary_key': s['secondary_key'],
+			'did_super': bool(s['did_super']),
+			'primary_unique': s['primary_unique'],
+		}
+
+	def _load_transform(
+		self,
+		info: dict,
+		indices: np.ndarray,
+		rng: np.random.Generator,
+	) -> tuple[np.ndarray, dict, np.ndarray, np.ndarray]:
+		mmap = info['mmap']
+		fb_all = info['fb']
+		fb_subset = fb_all[indices]
+
+		# 波形読み出し
+		x = self.subsetloader.load(mmap, indices)  # (H,W0) float32 を想定
+		offsets = info['offsets'][indices].astype(np.float32)
+
+		# 変換（Crop/Pad / TimeStretch 等）
+		out = self.transform(x, rng=rng, return_meta=True)
+		x_view, meta = out if isinstance(out, tuple) else (out, {})
+		if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
+			raise ValueError(
+				'transform は 2D numpy または (2D, meta) を返す必要があります'
+			)
+		H, W = x_view.shape
+		W0 = x.shape[1]
+		t_raw = np.arange(W0, dtype=np.float32) * float(info['dt_sec'])
+
+		meta['fb_idx_view'] = project_fb_idx_view(fb_subset, H, W, meta)
+		meta['offsets_view'] = project_offsets_view(offsets, H, meta)
+		meta['time_view'] = project_time_view(t_raw, H, W, meta)
+		return x_view, meta, offsets, fb_subset
+
+	def _apply_gates(
+		self, meta: dict, did_super: bool, info: dict
+	) -> bool:
+		# FBLC gate（After transform）
+		factor = float(meta.get('factor', 1.0))
+		dt_eff_sec = info['dt_sec'] / max(factor, 1e-9)
+		meta['dt_eff_sec'] = float(dt_eff_sec)
+		ok_fblc, p_ms, valid_pairs = self.fbgate.fblc_accept(
+			meta['fb_idx_view'], dt_eff_sec=dt_eff_sec, did_super=did_super
+		)
+		if not ok_fblc:
+			if self.verbose:
+				print(
+					f'Rejecting gather {info["path"]} key={meta.get("key_name", "")}:{meta.get("primary_unique", "")} '
+					f'(FBLC gate; pairs={valid_pairs}, p_ms={p_ms})'
+				)
+			self._last_gate_reject = 'fblc'
+			return False
+
+		self._last_gate_reject = None
+		return True
+
+	def _build_output(
+		self,
+		sample: dict,
+		meta: dict,
+		fb_subset: np.ndarray,
+		offsets: np.ndarray,
+		info: dict,
+	) -> dict:
+		dt_eff_sec = float(meta.get('dt_eff_sec', info['dt_sec']))
+		sample_for_plan = {
+			'x_view': sample['x_view'],  # (H,W)
+			'dt_sec': dt_eff_sec,
+			'offsets': offsets,  # (H,)
+			'fb_idx': fb_subset,  # (H,)
+			'meta': meta,
+			'file_path': info['path'],
+			'indices': sample['indices'],
+			'key_name': sample['key_name'],
+			'secondary_key': sample['secondary_key'],
+			'primary_unique': sample['primary_unique'],
+		}
+
+		self.plan.run(sample_for_plan, rng=self._rng)
+		if 'input' not in sample_for_plan or 'target' not in sample_for_plan:
+			raise KeyError("plan must populate 'input' and 'target'")
+
+		return {
+			'input': sample_for_plan['input'],  # torch.Tensor (C,H,W)
+			'target': sample_for_plan['target'],  # torch.Tensor (C2,H,W) など
+			'mask_bool': sample_for_plan.get('mask_bool'),  # (H,T) bool（ある場合）
+			'meta': meta,  # ビュー情報
+			'dt_sec': torch.tensor(dt_eff_sec, dtype=torch.float32),
+			'fb_idx': torch.from_numpy(fb_subset),
+			'offsets': torch.from_numpy(offsets),
+			'file_path': info['path'],
+			'indices': sample['indices'],
+			'key_name': sample['key_name'],
+			'secondary_key': sample['secondary_key'],
+			'primary_unique': sample['primary_unique'],
+			'did_superwindow': sample['did_super'] if self.verbose else None,
+		}
+
 	def __getitem__(self, _=None) -> dict:
 		rej_pick = 0
 		rej_fblc = 0
 		for _attempt in range(self.max_trials):
 			fidx = int(self._rng.integers(0, len(self.file_infos)))
 			info = self.file_infos[fidx]
-			mmap = info['mmap']
-			seed = int(self._rng.integers(0, 2**31 - 1))
+			sample = self._draw_sample(info, self._rng)
+			indices = sample['indices']
+			did_super = sample['did_super']
 
-			s = self.sampler.draw(info, py_random=random.Random(seed))
-			indices = np.asarray(s['indices'], dtype=np.int64)
-			key_name = s['key_name']
-			secondary_key = s['secondary_key']
-			did_super = bool(s['did_super'])
-			primary_unique_str = s['primary_unique']
-
-			fb_all = info['fb']
-			fb_subset = fb_all[indices]
-
-			# ピック数の最低限チェック（読み出し前に棄却したい時はこの位置）
+			fb_subset = info['fb'][indices]
 			ok_pick, _, _ = self.fbgate.min_pick_accept(fb_subset)
 			if not ok_pick:
 				rej_pick += 1
 				continue
 
-			# 波形読み出し
-			x = self.subsetloader.load(mmap, indices)  # (H,W0) float32 を想定
-			offsets = info['offsets'][indices].astype(np.float32)
-
-			# 変換（Crop/Pad / TimeStretch 等）
-			out = self.transform(x, rng=self._rng, return_meta=True)
-			x_view, meta = out if isinstance(out, tuple) else (out, {})
-			if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
-				raise ValueError(
-					'transform は 2D numpy または (2D, meta) を返す必要があります'
-				)
-			H, W = x_view.shape
-			W0 = x.shape[1]
-			t_raw = np.arange(W0, dtype=np.float32) * float(info['dt_sec'])
-
-			meta['fb_idx_view'] = project_fb_idx_view(fb_subset, H, W, meta)
-			meta['offsets_view'] = project_offsets_view(offsets, H, meta)
-			meta['time_view'] = project_time_view(t_raw, H, W, meta)
-
-			# FBLC gate（After transform）
-			factor = float(meta.get('factor', 1.0))
-			dt_eff_sec = info['dt_sec'] / max(factor, 1e-9)
-			ok_fblc, p_ms, valid_pairs = self.fbgate.fblc_accept(
-				meta['fb_idx_view'], dt_eff_sec=dt_eff_sec, did_super=did_super
+			x_view, meta, offsets, fb_subset = self._load_transform(
+				info, indices, self._rng
 			)
-			if not ok_fblc:
-				if self.verbose:
-					print(
-						f'Rejecting gather {info["path"]} key={key_name}:{primary_unique_str} '
-						f'(FBLC gate; pairs={valid_pairs}, p_ms={p_ms})'
-					)
-				rej_fblc += 1
+			meta['key_name'] = sample['key_name']
+			meta['primary_unique'] = sample['primary_unique']
+			sample['x_view'] = x_view
+
+			if not self._apply_gates(meta, did_super, info):
+				if self._last_gate_reject == 'fblc':
+					rej_fblc += 1
 				continue
 
-			# sample dict 準備（BuildPlan を使う場合ここから）
-			sample = {
-				'x_view': x_view,  # (H,W)
-				'dt_sec': float(dt_eff_sec),
-				'offsets': offsets,  # (H,)
-				'fb_idx': fb_subset,  # (H,)
-				'meta': meta,
-				'file_path': info['path'],
-				'indices': indices,
-				'key_name': key_name,
-				'secondary_key': secondary_key,
-				'primary_unique': primary_unique_str,
-			}
-
-			self.plan.run(sample, rng=self._rng)
-			if 'input' not in sample or 'target' not in sample:
-				raise KeyError("plan must populate 'input' and 'target'")
-
-			return {
-				'input': sample['input'],  # torch.Tensor (C,H,W)
-				'target': sample['target'],  # torch.Tensor (C2,H,W) など
-				'mask_bool': sample.get('mask_bool'),  # (H,T) bool（ある場合）
-				'meta': meta,  # ビュー情報
-				'dt_sec': torch.tensor(dt_eff_sec, dtype=torch.float32),
-				'fb_idx': torch.from_numpy(fb_subset),
-				'offsets': torch.from_numpy(offsets),
-				'file_path': info['path'],
-				'indices': indices,
-				'key_name': key_name,
-				'secondary_key': secondary_key,
-				'primary_unique': primary_unique_str,
-				'did_superwindow': did_super if self.verbose else None,
-			}
+			return self._build_output(sample, meta, fb_subset, offsets, info)
 
 		raise RuntimeError(
 			f'failed to draw a valid sample within max_trials={self.max_trials}; '
