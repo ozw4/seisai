@@ -82,16 +82,30 @@ class MakeTimeChannel:
 
 
 class MakeOffsetChannel:
-	"""(H,) オフセットを (H,W) に拡張。normalize=True で z-score"""
+	"""(H,) オフセットを (H,W) に拡張。normalize=True で valid traces のみ z-score（invalid は 0 固定）"""
 
 	def __init__(self, dst: str = 'offset_ch', normalize: bool = True):
 		self.dst, self.normalize = dst, normalize
 
 	def __call__(self, sample: dict[str, Any], rng=None) -> None:
 		off = sample['meta']['offsets_view'].astype(np.float32)
+		trace_valid = sample['meta']['trace_valid']
+		if trace_valid.shape[0] != off.shape[0]:
+			raise ValueError(
+				f'trace_valid length {trace_valid.shape[0]} != offsets_view length {off.shape[0]}'
+			)
+
 		if self.normalize:
-			s = off.std() + 1e-6
-			off = (off - off.mean()) / s
+			valid = trace_valid.astype(np.bool_, copy=False)
+			off_z = np.zeros_like(
+				off, dtype=np.float32
+			)  # invalid traces are forced to 0
+			if np.any(valid):
+				m = off[valid].mean()
+				s = off[valid].std() + 1e-6
+				off_z[valid] = (off[valid] - m) / s
+			off = off_z
+
 		H, W = sample['x_view'].shape
 		sample[self.dst] = np.repeat(off[:, None], W, axis=1)
 
