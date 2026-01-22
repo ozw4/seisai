@@ -173,6 +173,7 @@ class OutputBuilder:
 			'key_name': sample['key_name'],
 			'secondary_key': sample['secondary_key'],
 			'primary_unique': sample['primary_unique'],
+			'trace_valid': sample.get('trace_valid'),
 		}
 
 		self.plan.run(sample_for_plan, rng=self.rng)
@@ -193,6 +194,9 @@ class OutputBuilder:
 			'secondary_key': sample['secondary_key'],
 			'primary_unique': sample['primary_unique'],
 			'did_superwindow': sample['did_super'],
+			'trace_valid': torch.from_numpy(sample['trace_valid'])
+			if 'trace_valid' in sample and sample['trace_valid'] is not None
+			else None,
 		}
 
 
@@ -340,9 +344,13 @@ class SegyGatherPipelineDataset(Dataset):
 				rej_pick += 1
 				continue
 
-			x_view, meta, offsets, fb_subset = self.sample_transformer.load_transform(
-				info, indices, fb_subset, self._rng
+			x_view, meta, offsets, fb_subset, indices_pad, trace_valid = (
+				self.sample_transformer.load_transform(
+					info, indices, fb_subset, self._rng
+				)
 			)
+			sample['indices'] = indices_pad
+			sample['trace_valid'] = trace_valid
 			meta['key_name'] = sample['key_name']
 			meta['primary_unique'] = sample['primary_unique']
 			sample['x_view'] = x_view
