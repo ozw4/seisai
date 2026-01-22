@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import torch
+from seisai_utils.validator import (
+	require_all_finite,
+	require_float_array,
+	require_non_negative,
+	validate_array,
+)
 from torch import Tensor
 
 # -------------------- マスク生成 --------------------
@@ -35,23 +41,60 @@ def make_velocity_feasible_filt(
 	device: torch.device | None = None,
 	dtype: torch.dtype | None = None,
 ) -> Tensor:
-	assert vmin > 0.0 and vmax > 0.0 and vmax >= vmin
-	assert W > 0
+	if vmin <= 0.0 or vmax <= 0.0:
+		raise ValueError(
+			f'vmin and vmax must be positive. Got vmin={vmin}, vmax={vmax}'
+		)
+	if vmax < vmin:
+		raise ValueError(f'vmax must be >= vmin. Got vmin={vmin}, vmax={vmax}')
+	if W <= 0:
+		raise ValueError(f'W must be positive. Got W={W}')
+	# --- offsets の検証 (B,H) torch.Tensor ---
+	validate_array(offsets_m, allowed_ndims=(2,), name='offsets_m', backend='torch')
+	require_all_finite(offsets_m, name='offsets_m', backend='torch')
 	B, H = offsets_m.shape
 	dev = device or offsets_m.device
 
+	# --- dt_sec の検証と正規化 ---
 	if isinstance(dt_sec, torch.Tensor):
+		# torch.Tensor の場合: float, 非負, 有限, 次元 (B,), (B,1), (B,1,1) のみ許容
+		require_float_array(dt_sec, name='dt_sec', backend='torch')
+		require_non_negative(dt_sec, name='dt_sec', backend='torch')
+		require_all_finite(dt_sec, name='dt_sec', backend='torch')
+		validate_array(dt_sec, allowed_ndims=(1, 2, 3), name='dt_sec', backend='torch')
+
 		if dt_sec.ndim == 1:
+			if dt_sec.shape[0] != B:
+				raise ValueError(
+					f'dt_sec (ndim=1) must have shape (B,) aligned with offsets_m. '
+					f'Got {tuple(dt_sec.shape)} vs B={B}'
+				)
 			dt = dt_sec.view(B, 1, 1)
 		elif dt_sec.ndim == 2:
-			assert dt_sec.shape[1] == 1
+			if dt_sec.shape != (B, 1):
+				raise ValueError(
+					f'dt_sec (ndim=2) must have shape (B,1). '
+					f'Got {tuple(dt_sec.shape)} vs (B,1) with B={B}'
+				)
 			dt = dt_sec.view(B, 1, 1)
-		else:
-			assert dt_sec.shape[1:] in [(1, 1)]
+		else:  # ndim == 3
+			if dt_sec.shape[0] != B or dt_sec.shape[1:] != (1, 1):
+				raise ValueError(
+					f'dt_sec (ndim=3) must have shape (B,1,1). '
+					f'Got {tuple(dt_sec.shape)} vs (B,1,1) with B={B}'
+				)
 			dt = dt_sec.view(B, 1, 1)
+
 		dt = dt.to(device=dev, dtype=torch.float32)
 	else:
-		dt = torch.tensor(dt_sec, device=dev, dtype=torch.float32).view(B, 1, 1)
+		# スカラーとして解釈できる float/int のみ許容
+		if not isinstance(dt_sec, (float, int)):
+			raise TypeError(
+				f'dt_sec must be torch.Tensor or float-like scalar. Got {type(dt_sec).__name__}'
+			)
+		if dt_sec <= 0.0:
+			raise ValueError(f'dt_sec must be positive. Got {dt_sec}')
+		dt = torch.tensor(float(dt_sec), device=dev, dtype=torch.float32).view(B, 1, 1)
 
 	t = torch.arange(W, device=dev, dtype=torch.float32).view(1, 1, W) * dt  # (B,1,W)
 	x = offsets_m.to(device=dev, dtype=torch.float32).abs().view(B, H, 1)  # (B,H,1)
@@ -92,6 +135,8 @@ def apply_velocity_filt_logits(
 	"""softmax前の logits に log(mask^power) を加算。
 	mask=0 -> -inf 相当となり、softmax 後は厳密に 0。
 	"""
+	validate_array(logits, allowed_ndims=(4,), name='logits', backend='torch')
+	validate_array(mask, allowed_ndims=(3,), name='mask', backend='torch')
 	if power != 1.0:
 		mask = mask.pow(power)
 	# 0 -> -inf を厳密に作る
@@ -109,6 +154,8 @@ def apply_velocity_filt_prob(
 	renorm: bool = True,
 	eps: float = 1e-12,
 ) -> Tensor:
+	validate_array(prob, allowed_ndims=(4,), name='prob', backend='torch')
+	validate_array(mask, allowed_ndims=(3,), name='mask', backend='torch')
 	"""softmax後の確率に mask^power を乗算。必要なら再正規化（分布の総和=1）。"""
 	m = (
 		(mask.pow(power) if power != 1.0 else mask).unsqueeze(1).to(prob.dtype)
@@ -156,7 +203,7 @@ class ApplyVelocityFiltOp:
 	指定チャンネルのみ (B,H,W) に落としてマスク適用→(B,C,H,W) に戻す。
 	"""
 
-	def __init__(self, cfg: VelocityMaskConfig) -> None:
+	def __init__(self, cfg: VelocityFiltConfig) -> None:
 		self.cfg = cfg
 		chs = [cfg.channels] if isinstance(cfg.channels, int) else list(cfg.channels)
 		assert len(chs) > 0
@@ -176,9 +223,7 @@ class ApplyVelocityFiltOp:
 	def __call__(self, logits: Tensor, batch: Mapping[str, Any]) -> tuple[Tensor, dict]:
 		cfg = self.cfg
 		# ---- 入力検証（4Dのみ）
-		assert isinstance(logits, torch.Tensor) and logits.ndim == 4, (
-			'logits must be (B,C,H,W)'
-		)
+		validate_array(logits, allowed_ndims=(4,), name='logits', backend='torch')
 		B, C, H, W = logits.shape
 		ch_list = self._norm_channels(C)
 
@@ -192,7 +237,7 @@ class ApplyVelocityFiltOp:
 		assert isinstance(dt_sec, (torch.Tensor, float))
 
 		# ---- (B,H,W) の連続マスクを生成
-		mask = make_velocity_feasible_mask(
+		mask = make_velocity_feasible_filt(
 			offsets_m=offsets,
 			dt_sec=dt_sec,
 			W=W,
