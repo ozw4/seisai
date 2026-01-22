@@ -3,6 +3,9 @@ from __future__ import annotations
 import numpy as np
 
 
+_EPS = 1e-6  # 比較時の許容誤差（ほぼ等しいかの判定に使用）
+
+
 def _resample_idx_nearest(v: np.ndarray, factor_h: float) -> np.ndarray:
 	"""(H,) 整数インデックス列を H を保ったまま「最近傍補間」で再サンプルする。
 	目的:
@@ -88,12 +91,6 @@ def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.nd
 	fb = np.round(fb * factor).astype(np.int64) - start  # 0-based & round
 	fb[(fb <= 0) | (fb >= W)] = -1
 	return fb
-
-
-_EPS = 1e-6
-
-
-_EPS = 1e-6
 
 
 def project_offsets_view(offsets: np.ndarray, H: int, meta: dict) -> np.ndarray:
