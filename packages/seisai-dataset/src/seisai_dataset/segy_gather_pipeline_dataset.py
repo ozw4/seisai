@@ -53,12 +53,41 @@ class SampleTransformer:
 		indices: np.ndarray,
 		fb_subset: np.ndarray,
 		rng: np.random.Generator,
-	) -> tuple[np.ndarray, dict, np.ndarray, np.ndarray]:
+	) -> tuple[np.ndarray, dict, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 		mmap = info['mmap']
 
-		# 波形読み出し
-		x = self.subsetloader.load(mmap, indices)  # (H,W0) float32 を想定
-		offsets = info['offsets'][indices].astype(np.float32)
+		# 波形読み出し（subset_traces に満たない場合は loader が H 方向にパッドする）
+		x = self.subsetloader.load(mmap, indices)  # (H,W0)
+		H = int(x.shape[0])
+		W0 = int(x.shape[1])
+
+		# ここで offsets/fb/indices を H に合わせる（仕様）
+		H0 = int(indices.size)
+		if H0 > H:
+			raise ValueError(f'indices length {H0} > loaded H {H}')
+
+		offsets = info['offsets'][indices].astype(np.float32, copy=False)
+		fb_subset = np.asarray(fb_subset, dtype=np.int64)
+
+		trace_valid = np.zeros(H, dtype=np.bool_)
+		trace_valid[:H0] = True
+
+		if H > H0:
+			pad = H - H0
+			offsets = np.concatenate(
+				[offsets, np.zeros(pad, dtype=np.float32)],
+				axis=0,
+			)
+			fb_subset = np.concatenate(
+				[fb_subset, -np.ones(pad, dtype=np.int64)],
+				axis=0,
+			)
+			indices = np.concatenate(
+				[indices.astype(np.int64, copy=False), -np.ones(pad, dtype=np.int64)],
+				axis=0,
+			)
+		else:
+			indices = indices.astype(np.int64, copy=False)
 
 		# 変換（Crop/Pad / TimeStretch 等）
 		out = self.transform(x, rng=rng, return_meta=True)
@@ -67,14 +96,19 @@ class SampleTransformer:
 			raise ValueError(
 				'transform は 2D numpy または (2D, meta) を返す必要があります'
 			)
-		H, W = x_view.shape
-		W0 = x.shape[1]
+
+		Hv, W = x_view.shape
+		if Hv != H:
+			raise ValueError(f'transform must keep H: got Hv={Hv}, expected H={H}')
+
 		t_raw = np.arange(W0, dtype=np.float32) * float(info['dt_sec'])
 
+		meta['trace_valid'] = trace_valid
 		meta['fb_idx_view'] = project_fb_idx_view(fb_subset, H, W, meta)
 		meta['offsets_view'] = project_offsets_view(offsets, H, meta)
 		meta['time_view'] = project_time_view(t_raw, H, W, meta)
-		return x_view, meta, offsets, fb_subset
+
+		return x_view, meta, offsets, fb_subset, indices, trace_valid
 
 
 class GateEvaluator:
@@ -306,10 +340,8 @@ class SegyGatherPipelineDataset(Dataset):
 				rej_pick += 1
 				continue
 
-			x_view, meta, offsets, fb_subset = (
-				self.sample_transformer.load_transform(
-					info, indices, fb_subset, self._rng
-				)
+			x_view, meta, offsets, fb_subset = self.sample_transformer.load_transform(
+				info, indices, fb_subset, self._rng
 			)
 			meta['key_name'] = sample['key_name']
 			meta['primary_unique'] = sample['primary_unique']
