@@ -40,9 +40,13 @@ class SegyGatherPairDataset(Dataset):
 		max_trials: int = 2048,
 	) -> None:
 		if len(input_segy_files) == 0 or len(target_segy_files) == 0:
-			raise ValueError('input_segy_files / target_segy_files は空であってはならない')
+			raise ValueError(
+				'input_segy_files / target_segy_files は空であってはならない'
+			)
 		if len(input_segy_files) != len(target_segy_files):
-			raise ValueError('input_segy_files と target_segy_files の長さが一致していません')
+			raise ValueError(
+				'input_segy_files と target_segy_files の長さが一致していません'
+			)
 
 		self.input_segy_files = list(input_segy_files)
 		self.target_segy_files = list(target_segy_files)
@@ -129,7 +133,9 @@ class SegyGatherPairDataset(Dataset):
 					f'{input_path}={input_info["n_traces"]}, '
 					f'{target_path}={target_n_traces}'
 				)
-			if not np.isclose(input_info['dt_sec'], target_dt_sec, rtol=0.0, atol=1e-12):
+			if not np.isclose(
+				input_info['dt_sec'], target_dt_sec, rtol=0.0, atol=1e-12
+			):
 				input_obj = input_info.get('segy_obj')
 				if input_obj is not None:
 					input_obj.close()
@@ -199,7 +205,10 @@ class SegyGatherPairDataset(Dataset):
 					axis=0,
 				)
 				indices = np.concatenate(
-					[indices.astype(np.int64, copy=False), -np.ones(pad, dtype=np.int64)],
+					[
+						indices.astype(np.int64, copy=False),
+						-np.ones(pad, dtype=np.int64),
+					],
 					axis=0,
 				)
 			else:
@@ -262,7 +271,6 @@ class SegyGatherPairDataset(Dataset):
 				'key_name': sample['key_name'],
 				'secondary_key': sample['secondary_key'],
 				'primary_unique': sample['primary_unique'],
-				'did_superwindow': bool(sample['did_super']) if self.verbose else None,
 			}
 
 		raise RuntimeError(
