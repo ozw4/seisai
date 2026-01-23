@@ -7,6 +7,14 @@ import torch
 import torch.distributed as dist
 
 
+def is_dist_avail_and_initialized() -> bool:
+	if not torch.distributed.is_available():
+		return False
+	if not torch.distributed.is_initialized():
+		return False
+	return True
+
+
 class SmoothedValue:
 	"""Track a series of values and provide access to smoothed values over a
 	window or the global series average.
