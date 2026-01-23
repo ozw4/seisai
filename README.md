@@ -104,6 +104,41 @@ batch = next(iter(loader))
 #   input: (B,C,H,W), target: (B,C2,H,W), mask_bool (optional), meta, fb_idx, offsets, ...
 ```
 
+## Pair dataset example
+```python
+from torch.utils.data import DataLoader
+
+from seisai_dataset import BuildPlan, SegyGatherPairDataset
+from seisai_dataset.builder.builder import IdentitySignal, SelectStack
+from seisai_transforms.augment import RandomCropOrPad, ViewCompose
+
+input_segy_files = ["/path/noisy_001.sgy", "/path/noisy_002.sgy"]
+target_segy_files = ["/path/clean_001.sgy", "/path/clean_002.sgy"]
+
+transform = ViewCompose([RandomCropOrPad(target_len=2048)])
+
+plan = BuildPlan(
+    wave_ops=[
+        IdentitySignal(source_key="x_view_input", dst="x_in", copy=False),
+        IdentitySignal(source_key="x_view_target", dst="x_tg", copy=False),
+    ],
+    label_ops=[],
+    input_stack=SelectStack(keys="x_in", dst="input"),
+    target_stack=SelectStack(keys="x_tg", dst="target"),
+)
+
+ds = SegyGatherPairDataset(
+    input_segy_files=input_segy_files,
+    target_segy_files=target_segy_files,
+    transform=transform,
+    plan=plan,
+    use_header_cache=True,
+)
+
+loader = DataLoader(ds, batch_size=4, num_workers=2)
+batch = next(iter(loader))
+```
+
 ## Core piecies
 
 > SegyGatherPipelineDataset – sample → load → transform → FB gate → BuildPlan で input/target を組み立て。
