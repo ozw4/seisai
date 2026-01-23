@@ -17,8 +17,16 @@ def _to_numpy(x, dtype=None) -> np.ndarray:
 
 # ---------- Wave producers（波形から作る派生物） ----------
 class IdentitySignal:
-	def __init__(self, src: str = 'x_view', dst: str = 'x_id', copy: bool = False):
-		self.src, self.dst, self.copy = src, dst, copy
+	def __init__(
+		self,
+		src: str = 'x_view',
+		dst: str = 'x_id',
+		copy: bool = False,
+		source_key: str | None = None,
+	):
+		self.src = source_key if source_key is not None else src
+		self.dst = dst
+		self.copy = copy
 
 	def __call__(self, sample: dict[str, Any], rng=None) -> None:
 		if self.src not in sample:
