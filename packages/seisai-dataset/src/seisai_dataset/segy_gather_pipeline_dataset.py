@@ -180,10 +180,9 @@ class OutputBuilder:
 		if 'input' not in sample_for_plan or 'target' not in sample_for_plan:
 			raise KeyError("plan must populate 'input' and 'target'")
 
-		return {
+		out: dict = {
 			'input': sample_for_plan['input'],  # torch.Tensor (C,H,W)
 			'target': sample_for_plan['target'],  # torch.Tensor (C2,H,W) など
-			'mask_bool': sample_for_plan.get('mask_bool'),  # (H,T) bool（ある場合）
 			'meta': meta,  # ビュー情報
 			'dt_sec': torch.tensor(dt_eff_sec, dtype=torch.float32),
 			'fb_idx': torch.from_numpy(fb_subset),
@@ -194,10 +193,16 @@ class OutputBuilder:
 			'secondary_key': sample['secondary_key'],
 			'primary_unique': sample['primary_unique'],
 			'did_superwindow': sample['did_super'],
-			'trace_valid': torch.from_numpy(sample['trace_valid'])
-			if 'trace_valid' in sample and sample['trace_valid'] is not None
-			else None,
 		}
+		mask_bool = sample_for_plan.get('mask_bool')
+		if mask_bool is not None:
+			out['mask_bool'] = mask_bool
+
+		trace_valid = sample.get('trace_valid')
+		if trace_valid is not None:
+			out['trace_valid'] = torch.from_numpy(trace_valid)
+
+		return out
 
 
 class SegyGatherPipelineDataset(Dataset):
