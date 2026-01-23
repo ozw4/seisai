@@ -53,6 +53,7 @@ SegyGatherPairDataset(
   - 同じ長さで、`zip(..., strict=True)` でペア化できること。
 - `transform`
   - 2D array `(H, W0)` を受け取り `(H, W)` を返す（または `(x_view, meta)`）。
+  - **H（trace方向）を変えない**こと（`(H, W0) -> (H, W)`）。H を変える transform は非対応。
   - `rng` 引数を受け取り、乱数は **必ずその rng からのみ**消費すること（同期のため）。
 - `plan: BuildPlan`
   - ペア対応 plan（後述）で `input` と `target` を生成する。
@@ -128,6 +129,7 @@ SegyGatherPairDataset(
 - `meta: dict`
 - `dt_sec: float`
 - `offsets: np.ndarray`（必要なら。input_info から indices で切る）
+- `trace_valid: np.ndarray`（pad を行う場合。shape=(H,), bool）
 - `file_path_input: str`
 - `file_path_target: str`
 - `indices: np.ndarray`
@@ -151,6 +153,7 @@ SegyGatherPairDataset(
 - `meta: dict`
 - `dt_sec: torch.Tensor`
 - `offsets: torch.Tensor`（任意）
+- `trace_valid: torch.Tensor`（任意。pad を行う場合。shape=(H,), bool）
 - `file_path_input: str`
 - `file_path_target: str`
 - `indices: np.ndarray`
