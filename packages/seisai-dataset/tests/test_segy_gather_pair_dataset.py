@@ -192,3 +192,57 @@ def test_segy_gather_pair_dataset_mismatch_raises(tmp_path: Path) -> None:
 			use_header_cache=False,
 			max_trials=8,
 		)
+
+
+def test_segy_gather_pair_dataset_pads_when_gather_is_short(tmp_path: Path) -> None:
+	# gather（FFID=1）が subset_traces より短い場合、loader が H 方向に pad する
+	n_traces = 6
+	n_samples = 64
+	dt_us = 2000
+
+	t = np.arange(n_samples, dtype=np.float32)
+	target = np.stack([t + (10.0 * i) for i in range(n_traces)], axis=0)
+	inp = 2.0 * target
+
+	input_path = str(tmp_path / 'noisy_pad.sgy')
+	target_path = str(tmp_path / 'clean_pad.sgy')
+	write_unstructured_segy(input_path, inp, dt_us)
+	write_unstructured_segy(target_path, target, dt_us)
+
+	transform = Crop1DTransform(out_len=32)
+	plan = make_pair_plan()
+
+	ds = SegyGatherPairDataset(
+		input_segy_files=[input_path],
+		target_segy_files=[target_path],
+		transform=transform,
+		plan=plan,
+		primary_keys=('ffid',),
+		subset_traces=8,  # pad を発生させる
+		use_header_cache=False,
+		valid=True,
+		max_trials=64,
+	)
+
+	out = ds[0]
+	x_in = as_chw(out['input'])[0]
+	x_tg = as_chw(out['target'])[0]
+
+	# H が pad 後のサイズになっていること
+	assert x_in.shape[0] == 8
+	assert x_tg.shape[0] == 8
+
+	# pad 行はゼロ（関係式も維持される）
+	assert torch.allclose(x_in[6:], torch.zeros_like(x_in[6:]))
+	assert torch.allclose(x_tg[6:], torch.zeros_like(x_tg[6:]))
+	assert torch.allclose(x_in, 2.0 * x_tg)
+
+	# indices / offsets も pad されている（仕様にしている場合）
+	idx = out['indices']
+	assert idx.shape == (8,)
+	assert int(idx[6]) == -1 and int(idx[7]) == -1
+	off = out['offsets'].cpu().numpy()
+	assert off.shape == (8,)
+	assert float(off[6]) == 0.0 and float(off[7]) == 0.0
+
+	ds.close()
