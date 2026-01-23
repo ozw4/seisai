@@ -1,4 +1,4 @@
-from .builder.builder import BuildPlan
+from .builder.builder import BuildPlan, InputOnlyPlan
 from .config import FirstBreakGateConfig, LoaderConfig, TraceSubsetSamplerConfig
 from .gate_fblc import FirstBreakGate
 from .noise_decider import EventDetectConfig, NoiseDecision, decide_noise
@@ -12,6 +12,7 @@ __all__ = [
 	'EventDetectConfig',
 	'FirstBreakGate',
 	'FirstBreakGateConfig',
+	'InputOnlyPlan',
 	'LoaderConfig',
 	'NoiseDecision',
 	'SegyGatherPairDataset',

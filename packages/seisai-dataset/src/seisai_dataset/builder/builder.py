@@ -211,3 +211,33 @@ class BuildPlan:
 			op(sample, rng)
 		self.input_stack(sample, rng)
 		self.target_stack(sample, rng)
+
+
+class InputOnlyPlan:
+	"""BuildPlan 互換の "input のみ" 実行器。
+
+	- wave_ops / label_ops を順に適用
+	- input_stack で sample['input'] を構築
+	- target_stack は実行しない（推論用途）
+	"""
+
+	def __init__(
+		self,
+		wave_ops: Iterable,
+		label_ops: Iterable,
+		input_stack: SelectStack,
+	):
+		self.wave_ops = list(wave_ops)
+		self.label_ops = list(label_ops)
+		self.input_stack = input_stack
+
+	@classmethod
+	def from_build_plan(cls, plan: BuildPlan) -> InputOnlyPlan:
+		return cls(plan.wave_ops, plan.label_ops, plan.input_stack)
+
+	def run(self, sample: dict[str, Any], rng=None) -> None:
+		for op in self.wave_ops:
+			op(sample, rng)
+		for op in self.label_ops:
+			op(sample, rng)
+		self.input_stack(sample, rng)
