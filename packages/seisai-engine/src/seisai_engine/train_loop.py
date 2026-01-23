@@ -41,9 +41,7 @@ def train_step(
 	max_norm: float | None,
 	batch_index: int,
 ) -> tuple[torch.Tensor, bool, int]:
-	if not isinstance(batch, dict) or (
-		'input' not in batch or 'target' not in batch
-	):
+	if not isinstance(batch, dict) or ('input' not in batch or 'target' not in batch):
 		raise KeyError("batch must be a dict containing 'input' and 'target'")
 
 	x = batch['input'].to(device, non_blocking=True)
@@ -54,9 +52,7 @@ def train_step(
 		loss = criterion(pred, y, batch)
 
 	loss_to_backprop = (
-		loss / gradient_accumulation_steps
-		if gradient_accumulation_steps > 1
-		else loss
+		loss / gradient_accumulation_steps if gradient_accumulation_steps > 1 else loss
 	)
 	if local_scaler is not None:
 		local_scaler.scale(loss_to_backprop).backward()
