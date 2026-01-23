@@ -114,6 +114,7 @@ plan_fb = BuildPlan(
 )
 
 ds.plan = plan_fb  # プラン差し替え
+ds.output_builder.plan = plan_fb  # 出力ビルダーのプランも差し替え
 s = ds[0]
 x_in = s['input'][0].cpu().numpy()  # (H,W)
 oft = s['input'][1].cpu().numpy()  # (H,W)
