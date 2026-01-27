@@ -214,11 +214,11 @@ class BuildPlan:
 
 
 class InputOnlyPlan:
-	"""BuildPlan 互換の "input のみ" 実行器。
+	"""BuildPlan 互換の "input のみ" 実行器（推論用）。
 
 	- wave_ops / label_ops を順に適用
 	- input_stack で sample['input'] を構築
-	- target_stack は実行しない（推論用途）
+	- target_stack は実行しない
 	"""
 
 	def __init__(
@@ -232,8 +232,14 @@ class InputOnlyPlan:
 		self.input_stack = input_stack
 
 	@classmethod
-	def from_build_plan(cls, plan: BuildPlan) -> InputOnlyPlan:
-		return cls(plan.wave_ops, plan.label_ops, plan.input_stack)
+	def from_build_plan(
+		cls,
+		plan: 'BuildPlan',
+		*,
+		include_label_ops: bool = False,
+	) -> 'InputOnlyPlan':
+		label_ops = plan.label_ops if include_label_ops else []
+		return cls(plan.wave_ops, label_ops, plan.input_stack)
 
 	def run(self, sample: dict[str, Any], rng=None) -> None:
 		for op in self.wave_ops:
