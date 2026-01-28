@@ -27,7 +27,7 @@ class SegyGatherPairDataset(Dataset):
 		ffid_byte=segyio.TraceField.FieldRecord,
 		chno_byte=segyio.TraceField.TraceNumber,
 		cmp_byte=segyio.TraceField.CDP,
-		primary_keys: tuple[str, ...] | None = None,
+		primary_keys: tuple[str, ...] | None = ('ffid',),
 		primary_key_weights: tuple[float, ...] | None = None,
 		use_superwindow: bool = False,
 		sw_halfspan: int = 0,
