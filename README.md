@@ -139,7 +139,7 @@ loader = DataLoader(ds, batch_size=4, num_workers=2)
 batch = next(iter(loader))
 ```
 
-## Core piecies
+## Core pieces
 
 > SegyGatherPipelineDataset – sample → load → transform → FB gate → BuildPlan で input/target を組み立て。
 > TraceSubsetSampler – gather/subset の抽出（primary key / superwindow など）。
