@@ -8,10 +8,11 @@ import torch
 import torch.nn.functional as F
 from seisai_dataset import BuildPlan, SegyGatherPairDataset
 from seisai_dataset.builder.builder import IdentitySignal, SelectStack
+from seisai_engine.predict import _run_tiled
 from seisai_engine.train_loop import train_one_epoch
 from seisai_models.models.encdec2d import EncDec2D
 from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
-from seisai_utils.vis import ImshowPanel, save_imshow_row
+from seisai_utils.viz import ImshowPanel, save_imshow_row
 from torch.utils.data import DataLoader, Subset
 
 # -----------------
@@ -19,33 +20,57 @@ from torch.utils.data import DataLoader, Subset
 # -----------------
 # noisy/clean は 1対1で対応（同じ tracecount/nsamples/dt、同じ並びが前提）
 INPUT_SEGY_FILES = [
-	'/path/noisy_001.sgy',
-	'/path/noisy_002.sgy',
+	'/home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.30.00_bpf.sgy',
+	'/home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.31.00_bpf.sgy',
+	'/home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.32.00_bpf.sgy',
+	'/home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.33.00_bpf.sgy',
+	'/home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.34.00_bpf.sgy',
 ]
 TARGET_SEGY_FILES = [
-	'/path/clean_001.sgy',
-	'/path/clean_002.sgy',
+	'/home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.30.00_NR.sgy',
+	'/home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.31.00_NR.sgy',
+	'/home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.32.00_NR.sgy',
+	'/home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.33.00_NR.sgy',
+	'/home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.34.00_NR.sgy',
 ]
 
-BATCH_SIZE = 8
-EPOCHS = 10
+BATCH_SIZE = 16
+EPOCHS = 100
 LR = 1e-4
 
 SUBSET_TRACES = 128
-TIME_LEN = 4096
+TIME_LEN = 6016
 SAMPLES_PER_EPOCH = 256
 
 LOSS_KIND = 'l1'  # 'l1' or 'mse'
 
 # inference/vis
 INFER_BATCH_SIZE = 1
-INFER_MAX_BATCHES = 8
-VIS_N = 3
+INFER_MAX_BATCHES = 12
+VIS_N = 5
 VIS_OUT_DIR = './_pair_vis'
 
+
+INFER_SUBSET_TRACES = 4096
+
+# tiled inference (Trace方向タイル)
+TILE_H = 128
+OVERLAP_H = 64
+TILES_PER_BATCH = 16
+
 # vis style
-VIS_CMAP = 'seismic'  # 振幅の可視化に向く
+VIS_CMAP = 'seismic'
 VIS_TRANSPOSE_FOR_TRACE_TIME = True  # x=Trace, y=Time にそろえる
+
+VIS_PER_TRACE_NORM = True
+VIS_PER_TRACE_EPS = 1e-8
+
+
+def per_trace_zscore_hw(a_hw: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+	"""(H,W) をトレース毎（行ごと）に z-score。可視化専用。"""
+	m = a_hw.mean(axis=1, keepdims=True)
+	s = a_hw.std(axis=1, keepdims=True)
+	return (a_hw - m) / (s + eps)
 
 
 def criterion(pred: torch.Tensor, target: torch.Tensor, _batch: dict) -> torch.Tensor:
@@ -70,7 +95,7 @@ def save_pair_triptych(
 	out_dir: str,
 	batch_index: int = 0,
 ) -> None:
-	"""入力/正解/予測を横3枚で保存（vis.pyへ委譲）"""
+	"""入力/正解/予測を横3枚で保存（seisai_utils.vizへ委譲）"""
 	if x_in_bchw.ndim != 4 or x_tg_bchw.ndim != 4 or x_pr_bchw.ndim != 4:
 		raise ValueError('x_in/x_tg/x_pr must be (B,C,H,W)')
 	B, C, H, W = x_in_bchw.shape
@@ -85,10 +110,14 @@ def save_pair_triptych(
 	tg_hw = x_tg_bchw[batch_index, 0].detach().cpu().numpy()
 	pr_hw = x_pr_bchw[batch_index, 0].detach().cpu().numpy()
 
-	# 3枚で同一スケール
-	m = float(np.max(np.abs(np.stack([in_hw, tg_hw, pr_hw], axis=0))))
-	vmin = -m if m > 0 else None
-	vmax = m if m > 0 else None
+	if VIS_PER_TRACE_NORM:
+		in_hw = per_trace_zscore_hw(in_hw, eps=VIS_PER_TRACE_EPS)
+		tg_hw = per_trace_zscore_hw(tg_hw, eps=VIS_PER_TRACE_EPS)
+		pr_hw = per_trace_zscore_hw(pr_hw, eps=VIS_PER_TRACE_EPS)
+
+	# 3枚で同一スケール（あなたの調整を尊重して固定）
+	vmin = -3
+	vmax = 3
 
 	fp_in = str(meta.get('file_path_input', ''))
 	fp_tg = str(meta.get('file_path_target', ''))
@@ -116,13 +145,17 @@ def save_pair_triptych(
 				vmax=vmax,
 			),
 			ImshowPanel(
-				title='Pred (model)', data_hw=pr_hw, cmap=VIS_CMAP, vmin=vmin, vmax=vmax
+				title='Pred (model)',
+				data_hw=pr_hw,
+				cmap=VIS_CMAP,
+				vmin=vmin,
+				vmax=vmax,
 			),
 		],
 		suptitle=suptitle,
 		transpose_for_trace_time=VIS_TRANSPOSE_FOR_TRACE_TIME,
-		figsize=(21.0, 5.0),
-		dpi=150,
+		figsize=(20.0, 15.0),
+		dpi=300,
 	)
 
 
@@ -145,10 +178,22 @@ def run_infer_and_vis(
 		x_in = batch['input'].to(device=device, non_blocking=(device.type == 'cuda'))
 		x_tg = batch['target'].to(device=device, non_blocking=(device.type == 'cuda'))
 
-		x_pr = model(x_in)
+		# ★Trace方向(H)だけタイル推論：tile_w は「W全域」にする
+		W = int(x_in.shape[-1])
+		x_pr = _run_tiled(
+			model,
+			x_in,
+			tile=(int(TILE_H), W),
+			overlap=(int(OVERLAP_H), 0),
+			amp=True,
+			use_tqdm=False,
+			tiles_per_batch=int(TILES_PER_BATCH),
+			tile_transform=None,
+			post_tile_transform=None,
+		)
 
 		l1 = float(F.l1_loss(x_pr, x_tg).detach().cpu())
-		print(f'[infer] step={step} l1={l1:.6f}')
+		print(f'[infer] step={step} l1={l1:.6f}  (H={int(x_in.shape[-2])}, W={W})')
 
 		if step >= vis_n:
 			continue
@@ -161,7 +206,6 @@ def run_infer_and_vis(
 		else:
 			meta0 = {}
 
-		# batch 側にも入ってくることが多いので、あれば優先して補完
 		meta0 = dict(meta0)
 		fp_in = _first(batch.get('file_path_input'))
 		fp_tg = _first(batch.get('file_path_target'))
@@ -191,9 +235,21 @@ def run_infer_and_vis(
 def main() -> None:
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-	transform = ViewCompose(
+	# -----------------
+	# Train dataset (crop/padあり)
+	# -----------------
+	train_transform = ViewCompose(
 		[
 			RandomCropOrPad(target_len=TIME_LEN),
+			PerTraceStandardize(eps=1e-8),
+		]
+	)
+
+	# -----------------
+	# Infer dataset (cropなし)
+	# -----------------
+	infer_transform = ViewCompose(
+		[
 			PerTraceStandardize(eps=1e-8),
 		]
 	)
@@ -219,19 +275,20 @@ def main() -> None:
 		),
 	)
 
-	ds_full = SegyGatherPairDataset(
+	ds_train_full = SegyGatherPairDataset(
 		input_segy_files=INPUT_SEGY_FILES,
 		target_segy_files=TARGET_SEGY_FILES,
-		transform=transform,
+		transform=train_transform,
 		plan=plan,
 		subset_traces=SUBSET_TRACES,
+		primary_keys=('ffid,'),
 		valid=False,
 		verbose=True,
 		max_trials=2048,
 		use_header_cache=True,
 	)
 
-	train_ds = Subset(ds_full, range(SAMPLES_PER_EPOCH))
+	train_ds = Subset(ds_train_full, range(SAMPLES_PER_EPOCH))
 	train_loader = DataLoader(
 		train_ds,
 		batch_size=BATCH_SIZE,
@@ -278,7 +335,19 @@ def main() -> None:
 	# -----------------
 	# Inference + Visualization
 	# -----------------
-	infer_ds = Subset(ds_full, range(INFER_BATCH_SIZE * INFER_MAX_BATCHES))
+	ds_infer_full = SegyGatherPairDataset(
+		input_segy_files=INPUT_SEGY_FILES,
+		target_segy_files=TARGET_SEGY_FILES,
+		transform=infer_transform,
+		plan=plan,
+		subset_traces=int(INFER_SUBSET_TRACES),
+		valid=True,
+		verbose=True,
+		max_trials=2048,
+		use_header_cache=True,
+	)
+
+	infer_ds = Subset(ds_infer_full, range(INFER_BATCH_SIZE * INFER_MAX_BATCHES))
 	infer_loader = DataLoader(
 		infer_ds,
 		batch_size=INFER_BATCH_SIZE,
@@ -296,7 +365,8 @@ def main() -> None:
 		vis_n=VIS_N,
 	)
 
-	ds_full.close()
+	ds_train_full.close()
+	ds_infer_full.close()
 
 
 if __name__ == '__main__':
