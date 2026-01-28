@@ -22,6 +22,7 @@ from seisai_transforms.augment import (
 	ViewCompose,
 )
 from seisai_transforms.masking import MaskGenerator
+from seisai_utils.vis import imshow_hw, imshow_overlay_hw
 
 transform = ViewCompose(
 	[
@@ -128,31 +129,42 @@ TASK_NAME = 'First-Break: Input=x_view / Target=FBGauss'
 fig, axes = plt.subplots(2, 2, figsize=(11, 8), constrained_layout=True)
 fig.suptitle(TASK_NAME)
 
-axes[0][0].imshow(x_in.T, aspect='auto', vmin=-3.0, vmax=+3.0, cmap='seismic')
-axes[0][0].set_title('Input (x_view)')
-axes[0][0].set_xlabel('Trace (H)')
-axes[0][0].set_ylabel('Time (samples)')
-axes[0][1].imshow(
-	oft.T,
-	aspect='auto',
-	cmap='jet',
+imshow_hw(
+	axes[0][0],
+	x_in,
+	title='Input (x_view)',
+	cmap='seismic',
+	vmin=-3.0,
+	vmax=+3.0,
+	transpose_for_trace_time=True,
 )
-axes[0][1].set_title('Input (Offset)')
-axes[0][1].set_xlabel('Trace (H)')
-axes[0][1].set_ylabel('Time (samples)')
-axes[1][0].imshow(
-	time.T,
-	aspect='auto',
+imshow_hw(
+	axes[0][1],
+	oft,
+	title='Input (Offset)',
 	cmap='jet',
+	transpose_for_trace_time=True,
 )
-axes[1][0].set_title('Input (time)')
-axes[1][0].set_xlabel('Trace (H)')
-axes[1][0].set_ylabel('Time (samples)')
-
-axes[1][1].imshow(x_in.T, aspect='auto', vmin=-3.0, vmax=+3.0, cmap='seismic')
-axes[1][1].imshow(target.T, aspect='auto', cmap='jet', vmin=0, vmax=0.05, alpha=0.5)
-axes[1][1].set_title('Target (FB Gaussian Map)')
-axes[1][1].set_xlabel('Trace (H)')
-axes[1][1].set_ylabel('Time (samples)')
+imshow_hw(
+	axes[1][0],
+	time,
+	title='Input (time)',
+	cmap='jet',
+	transpose_for_trace_time=True,
+)
+imshow_overlay_hw(
+	axes[1][1],
+	x_in,
+	target,
+	transpose_for_trace_time=True,
+	base_title='Target (FB Gaussian Map)',
+	base_cmap='seismic',
+	base_vmin=-3.0,
+	base_vmax=+3.0,
+	overlay_cmap='jet',
+	overlay_vmin=0.0,
+	overlay_vmax=0.05,
+	overlay_alpha=0.5,
+)
 
 plt.show()
