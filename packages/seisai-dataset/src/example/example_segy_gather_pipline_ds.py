@@ -22,7 +22,7 @@ from seisai_transforms.augment import (
 	ViewCompose,
 )
 from seisai_transforms.masking import MaskGenerator
-from seisai_utils.vis import imshow_hw, imshow_overlay_hw
+from seisai_utils.viz import imshow_hw, imshow_overlay_hw
 
 transform = ViewCompose(
 	[
@@ -64,6 +64,7 @@ ds = SegyGatherPipelineDataset(
 	transform=transform,  # ← ViewCompose を渡す
 	fbgate=fbgate,  # ← FirstBreakGate を渡す
 	plan=plan,  # ← MAE（入力=出力）用
+	primary_keys=('ffid,'),
 	subset_traces=128,
 	valid=True,
 	verbose=True,
