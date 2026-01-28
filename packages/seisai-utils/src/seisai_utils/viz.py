@@ -39,9 +39,7 @@ def imshow_hw(
 	"""(H,W) を表示。transpose_for_trace_time=True で x=Trace, y=Time になるように表示する。"""
 	hw = _as_hw(data_hw)
 	img = hw.T if transpose_for_trace_time else hw
-	ax.imshow(
-		img, aspect='auto', origin='lower', cmap=cmap, vmin=vmin, vmax=vmax, alpha=alpha
-	)
+	ax.imshow(img, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax, alpha=alpha)
 
 	if title is not None:
 		ax.set_title(title)
