@@ -6,6 +6,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 
 @dataclass(frozen=True)
@@ -135,3 +136,105 @@ def save_imshow_row(
 
 	fig.savefig(png_path, dpi=dpi)
 	plt.close(fig)
+
+
+def per_trace_zscore_hw(a_hw: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+	"""(H,W) をトレース毎（行ごと）に z-score。
+
+	主に可視化用途を想定。
+	"""
+	hw = _as_hw(a_hw).astype(np.float32, copy=False)
+	m = hw.mean(axis=1, keepdims=True)
+	s = hw.std(axis=1, keepdims=True)
+	return (hw - m) / (s + float(eps))
+
+
+def save_triptych_bchw(
+	*,
+	x_in_bchw: np.ndarray | torch.Tensor,
+	x_tg_bchw: np.ndarray | torch.Tensor,
+	x_pr_bchw: np.ndarray | torch.Tensor,
+	out_path: str | Path,
+	titles: tuple[str, str, str] = ('Input', 'Target', 'Pred'),
+	suptitle: str | None = None,
+	batch_index: int = 0,
+	channel_index: int = 0,
+	per_trace_norm: bool = False,
+	per_trace_eps: float = 1e-8,
+	transpose_for_trace_time: bool = True,
+	cmap: str | None = None,
+	vmin: float | None = None,
+	vmax: float | None = None,
+	figsize: tuple[float, float] = (20.0, 15.0),
+	dpi: int = 300,
+) -> None:
+	"""入力/正解/予測を横3枚（triptych）で保存する。
+
+	Args:
+		x_in_bchw/x_tg_bchw/x_pr_bchw: (B,C,H,W)
+		out_path: 保存先 PNG
+		batch_index/channel_index: 表示する B/C の index
+		per_trace_norm: True の場合、各 (H,W) を行方向に z-score
+
+	"""
+
+	def _to_numpy_bchw(x):
+		import torch
+
+		if isinstance(x, torch.Tensor):
+			return x.detach().cpu().numpy()
+		return np.asarray(x)
+
+	in_bchw = _to_numpy_bchw(x_in_bchw)
+	tg_bchw = _to_numpy_bchw(x_tg_bchw)
+	pr_bchw = _to_numpy_bchw(x_pr_bchw)
+
+	if in_bchw.ndim != 4 or tg_bchw.ndim != 4 or pr_bchw.ndim != 4:
+		raise ValueError('x_in/x_tg/x_pr must be (B,C,H,W)')
+	if tg_bchw.shape != in_bchw.shape or pr_bchw.shape != in_bchw.shape:
+		raise ValueError('shape mismatch among input/target/pred')
+	B, C, _H, _W = in_bchw.shape
+	if not (0 <= batch_index < B):
+		raise ValueError(f'batch_index out of range: {batch_index} for B={B}')
+	if not (0 <= channel_index < C):
+		raise ValueError(f'channel_index out of range: {channel_index} for C={C}')
+
+	in_hw = in_bchw[batch_index, channel_index].astype(np.float32, copy=False)
+	tg_hw = tg_bchw[batch_index, channel_index].astype(np.float32, copy=False)
+	pr_hw = pr_bchw[batch_index, channel_index].astype(np.float32, copy=False)
+
+	if per_trace_norm:
+		in_hw = per_trace_zscore_hw(in_hw, eps=per_trace_eps)
+		tg_hw = per_trace_zscore_hw(tg_hw, eps=per_trace_eps)
+		pr_hw = per_trace_zscore_hw(pr_hw, eps=per_trace_eps)
+
+	save_imshow_row(
+		out_path,
+		[
+			ImshowPanel(
+				title=titles[0],
+				data_hw=in_hw,
+				cmap=cmap,
+				vmin=vmin,
+				vmax=vmax,
+			),
+			ImshowPanel(
+				title=titles[1],
+				data_hw=tg_hw,
+				cmap=cmap,
+				vmin=vmin,
+				vmax=vmax,
+			),
+			ImshowPanel(
+				title=titles[2],
+				data_hw=pr_hw,
+				cmap=cmap,
+				vmin=vmin,
+				vmax=vmax,
+			),
+		],
+		suptitle=suptitle,
+		transpose_for_trace_time=transpose_for_trace_time,
+		figsize=figsize,
+		dpi=dpi,
+	)
