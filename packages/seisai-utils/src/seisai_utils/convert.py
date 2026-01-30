@@ -36,3 +36,17 @@ def to_numpy(*xs):
 		return _conv(xs[0], 'arg1')
 
 	return tuple(_conv(x, f'arg{i + 1}') for i, x in enumerate(xs))
+
+
+def first_or_self(v):
+	"""DataLoader の default collate で list 化された値から 1要素目を取り出す。
+
+	- v が list なら v[0]（空なら None）
+	- それ以外なら v をそのまま返す
+
+	用途: batch 内の file_path / key_name 等（str が list[str] になりがち）を
+	可視化タイトル等で手軽に扱う。
+	"""
+	if isinstance(v, list):
+		return v[0] if len(v) > 0 else None
+	return v
