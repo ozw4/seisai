@@ -246,3 +246,128 @@ def test_segy_gather_pair_dataset_pads_when_gather_is_short(tmp_path: Path) -> N
 	assert float(off[6]) == 0.0 and float(off[7]) == 0.0
 
 	ds.close()
+
+
+def _read_trace_headers(path: str, indices: np.ndarray) -> dict[str, np.ndarray]:
+	idx = np.asarray(indices, dtype=np.int64)
+	if idx.ndim != 1:
+		raise ValueError('indices must be 1D')
+	if idx.size == 0:
+		raise ValueError('indices must be non-empty')
+	if np.any(idx < 0):
+		raise ValueError('indices must be non-negative for header read')
+
+	with segyio.open(path, 'r', ignore_geometry=True) as f:
+		ffid = np.array(
+			[int(f.header[int(i)][segyio.TraceField.FieldRecord]) for i in idx],
+			dtype=np.int64,
+		)
+		chno = np.array(
+			[int(f.header[int(i)][segyio.TraceField.TraceNumber]) for i in idx],
+			dtype=np.int64,
+		)
+		off = np.array(
+			[int(f.header[int(i)][segyio.TraceField.offset]) for i in idx],
+			dtype=np.int64,
+		)
+	return {'ffid': ffid, 'chno': chno, 'offset': off}
+
+
+def test_segy_gather_pair_dataset_pair_consistency_headers_shape_dtype_and_sync_crop(
+	tmp_path: Path,
+) -> None:
+	from seisai_transforms.augment import RandomCropOrPad
+
+	n_traces = 20
+	n_samples = 64
+	dt_us = 2000
+
+	subset_traces = 8
+	time_len = 32
+
+	t = np.arange(n_samples, dtype=np.float32)
+	target = np.stack([t + (1000.0 * i) for i in range(n_traces)], axis=0)
+	inp = 2.0 * target
+
+	input_path = str(tmp_path / 'noisy.sgy')
+	target_path = str(tmp_path / 'clean.sgy')
+	write_unstructured_segy(input_path, inp, dt_us)
+	write_unstructured_segy(target_path, target, dt_us)
+
+	transform = RandomCropOrPad(target_len=time_len)
+	plan = make_pair_plan()
+
+	ds = SegyGatherPairDataset(
+		input_segy_files=[input_path],
+		target_segy_files=[target_path],
+		transform=transform,
+		plan=plan,
+		primary_keys=('ffid',),
+		subset_traces=subset_traces,
+		use_header_cache=False,
+		valid=True,
+		verbose=True,
+		max_trials=64,
+	)
+	ds._rng = np.random.default_rng(0)
+
+	out = ds[0]
+
+	# ---- shape/dtype contract
+	assert 'input' in out and 'target' in out
+	assert isinstance(out['input'], torch.Tensor)
+	assert isinstance(out['target'], torch.Tensor)
+	assert out['input'].dtype == torch.float32
+	assert out['target'].dtype == torch.float32
+
+	x_in = as_chw(out['input'])
+	x_tg = as_chw(out['target'])
+
+	assert x_in.ndim == 3 and x_tg.ndim == 3
+	assert x_in.shape == x_tg.shape
+	assert x_in.shape[0] == 1
+	assert x_in.shape[1] == subset_traces
+	assert x_in.shape[2] == time_len
+
+	# ---- indices/offsets contract
+	assert isinstance(out['indices'], np.ndarray)
+	indices = np.asarray(out['indices'], dtype=np.int64)
+	assert indices.shape == (subset_traces,)
+	assert np.all(indices >= 0)
+	assert np.all(indices < n_traces)
+
+	assert isinstance(out['offsets'], torch.Tensor)
+	offsets = out['offsets'].detach().cpu().numpy()
+	assert offsets.shape == (subset_traces,)
+
+	# ---- transform sync (same crop window) + exact content check
+	assert isinstance(out.get('meta', {}), dict)
+	meta = out.get('meta', {})
+	assert 'start' in meta
+	start = int(meta['start'])
+	assert 0 <= start <= (n_samples - time_len)
+
+	exp_tg_hw = target[indices, start : start + time_len]
+	exp_in_hw = inp[indices, start : start + time_len]
+
+	got_tg_hw = x_tg[0].detach().cpu().numpy()
+	got_in_hw = x_in[0].detach().cpu().numpy()
+
+	assert np.array_equal(got_tg_hw, exp_tg_hw)
+	assert np.array_equal(got_in_hw, exp_in_hw)
+
+	# ---- pair trace correspondence (header-derived identifiers)
+	h_in = _read_trace_headers(input_path, indices)
+	h_tg = _read_trace_headers(target_path, indices)
+
+	assert np.array_equal(h_in['ffid'], h_tg['ffid'])
+	assert np.array_equal(h_in['chno'], h_tg['chno'])
+	assert np.array_equal(h_in['offset'], h_tg['offset'])
+
+	# dataset-provided offsets must match header offsets (float32)
+	assert np.array_equal(offsets.astype(np.float32), h_in['offset'].astype(np.float32))
+
+	# ---- trivial consistency: input is exactly 2x target in this synthetic setup
+	assert torch.allclose(x_in, 2.0 * x_tg, atol=0.0, rtol=0.0)
+
+	ds.close()
