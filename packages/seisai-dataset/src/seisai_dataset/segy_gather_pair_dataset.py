@@ -238,6 +238,7 @@ class SegyGatherPairDataset(Dataset):
 					'input/target transform shape mismatch: '
 					f'{x_view_input.shape} vs {x_view_target.shape}'
 				)
+			did_superwindow = bool(sample['did_super'])
 
 			dt_sec = float(input_info['dt_sec'])
 			sample_for_plan = {
@@ -252,7 +253,7 @@ class SegyGatherPairDataset(Dataset):
 				'key_name': sample['key_name'],
 				'secondary_key': sample['secondary_key'],
 				'primary_unique': sample['primary_unique'],
-				'did_super': bool(sample['did_super']),
+				'did_superwindow': did_superwindow,
 			}
 
 			self.plan.run(sample_for_plan, rng=self._rng)
@@ -271,6 +272,7 @@ class SegyGatherPairDataset(Dataset):
 				'key_name': sample['key_name'],
 				'secondary_key': sample['secondary_key'],
 				'primary_unique': sample['primary_unique'],
+				'did_superwindow': did_superwindow,
 			}
 
 		raise RuntimeError(
