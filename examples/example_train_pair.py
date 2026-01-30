@@ -281,7 +281,7 @@ def main() -> None:
 		transform=train_transform,
 		plan=plan,
 		subset_traces=SUBSET_TRACES,
-		primary_keys=('ffid,'),
+		primary_keys=('ffid'),
 		valid=False,
 		verbose=True,
 		max_trials=2048,
@@ -292,7 +292,7 @@ def main() -> None:
 	train_loader = DataLoader(
 		train_ds,
 		batch_size=BATCH_SIZE,
-		shuffle=False,
+		shuffle=True,
 		num_workers=0,
 		pin_memory=(device.type == 'cuda'),
 	)
