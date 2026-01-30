@@ -92,3 +92,26 @@ def huber_map(
 		abs_diff <= delta, squared_loss, delta * (abs_diff - 0.5 * delta)
 	)
 	return huber_loss
+
+
+def build_criterion(
+	kind: Literal['l1', 'mse', 'huber'] = 'l1', *, reduction='mean', huber_delta=1.0
+):
+	if kind == 'l1':
+		map_fn = l1_map
+	elif kind == 'mse':
+		map_fn = l2_map
+	elif kind == 'huber':
+		map_fn = lambda p, t: huber_map(p, t, delta=huber_delta)
+	else:
+		raise ValueError(kind)
+
+	pw = PixelwiseLoss(map_fn)
+
+	def _criterion(pred, target, batch):
+		b = {'target': target}
+		if 'mask_bool' in batch:
+			b['mask_bool'] = batch['mask_bool']
+		return pw(pred, b, reduction=reduction)
+
+	return _criterion
