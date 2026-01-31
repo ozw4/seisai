@@ -26,6 +26,35 @@ def _as_hw(a: np.ndarray) -> np.ndarray:
 	return a
 
 
+def to_numpy_bchw(x: torch.Tensor | np.ndarray, *, name: str) -> np.ndarray:
+	if isinstance(x, torch.Tensor):
+		if int(x.ndim) != 4:
+			raise ValueError(
+				f'{name} must be (B,C,H,W) tensor, got shape={tuple(x.shape)}'
+			)
+		return x.detach().cpu().numpy()
+	if isinstance(x, np.ndarray):
+		if int(x.ndim) != 4:
+			raise ValueError(f'{name} must be (B,C,H,W) array, got shape={x.shape}')
+		return x
+	raise TypeError(f'{name} must be torch.Tensor or numpy.ndarray')
+
+
+def select_hw(x_bchw: np.ndarray, *, b: int, c: int, name: str) -> np.ndarray:
+	if not (0 <= int(b) < int(x_bchw.shape[0])):
+		raise ValueError(
+			f'{name}: batch index out of range: b={b} B={int(x_bchw.shape[0])}'
+		)
+	if not (0 <= int(c) < int(x_bchw.shape[1])):
+		raise ValueError(
+			f'{name}: channel index out of range: c={c} C={int(x_bchw.shape[1])}'
+		)
+	hw = x_bchw[int(b), int(c)]
+	if hw.ndim != 2:
+		raise ValueError(f'{name}: expected (H,W), got {hw.shape}')
+	return np.asarray(hw)
+
+
 def imshow_hw(
 	ax,
 	data_hw: np.ndarray,
@@ -178,30 +207,20 @@ def save_triptych_bchw(
 
 	"""
 
-	def _to_numpy_bchw(x):
-		import torch
-
-		if isinstance(x, torch.Tensor):
-			return x.detach().cpu().numpy()
-		return np.asarray(x)
-
-	in_bchw = _to_numpy_bchw(x_in_bchw)
-	tg_bchw = _to_numpy_bchw(x_tg_bchw)
-	pr_bchw = _to_numpy_bchw(x_pr_bchw)
-
-	if in_bchw.ndim != 4 or tg_bchw.ndim != 4 or pr_bchw.ndim != 4:
-		raise ValueError('x_in/x_tg/x_pr must be (B,C,H,W)')
+	in_bchw = to_numpy_bchw(x_in_bchw, name='x_in_bchw')
+	tg_bchw = to_numpy_bchw(x_tg_bchw, name='x_tg_bchw')
+	pr_bchw = to_numpy_bchw(x_pr_bchw, name='x_pr_bchw')
 	if tg_bchw.shape != in_bchw.shape or pr_bchw.shape != in_bchw.shape:
 		raise ValueError('shape mismatch among input/target/pred')
-	B, C, _H, _W = in_bchw.shape
-	if not (0 <= batch_index < B):
-		raise ValueError(f'batch_index out of range: {batch_index} for B={B}')
-	if not (0 <= channel_index < C):
-		raise ValueError(f'channel_index out of range: {channel_index} for C={C}')
-
-	in_hw = in_bchw[batch_index, channel_index].astype(np.float32, copy=False)
-	tg_hw = tg_bchw[batch_index, channel_index].astype(np.float32, copy=False)
-	pr_hw = pr_bchw[batch_index, channel_index].astype(np.float32, copy=False)
+	in_hw = select_hw(in_bchw, b=batch_index, c=channel_index, name='x_in_bchw').astype(
+		np.float32, copy=False
+	)
+	tg_hw = select_hw(tg_bchw, b=batch_index, c=channel_index, name='x_tg_bchw').astype(
+		np.float32, copy=False
+	)
+	pr_hw = select_hw(pr_bchw, b=batch_index, c=channel_index, name='x_pr_bchw').astype(
+		np.float32, copy=False
+	)
 
 	if per_trace_norm:
 		in_hw = per_trace_zscore_hw(in_hw, eps=per_trace_eps)

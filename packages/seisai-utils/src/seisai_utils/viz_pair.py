@@ -7,7 +7,13 @@ from typing import Any
 import numpy as np
 import torch
 
-from seisai_utils.viz import ImshowPanel, save_imshow_row
+from seisai_utils.viz import (
+	ImshowPanel,
+	per_trace_zscore_hw,
+	save_imshow_row,
+	select_hw,
+	to_numpy_bchw,
+)
 
 
 @dataclass(frozen=True)
@@ -20,44 +26,6 @@ class PairTriptychVisConfig:
 	per_trace_eps: float = 1e-8
 	figsize: tuple[float, float] = (20.0, 15.0)
 	dpi: int = 300
-
-
-def _to_numpy_bchw(x: torch.Tensor | np.ndarray, *, name: str) -> np.ndarray:
-	if isinstance(x, torch.Tensor):
-		if int(x.ndim) != 4:
-			raise ValueError(
-				f'{name} must be (B,C,H,W) tensor, got shape={tuple(x.shape)}'
-			)
-		return x.detach().cpu().numpy()
-	if isinstance(x, np.ndarray):
-		if int(x.ndim) != 4:
-			raise ValueError(f'{name} must be (B,C,H,W) array, got shape={x.shape}')
-		return x
-	raise TypeError(f'{name} must be torch.Tensor or numpy.ndarray')
-
-
-def _select_hw(x_bchw: np.ndarray, *, b: int, c: int, name: str) -> np.ndarray:
-	if not (0 <= int(b) < int(x_bchw.shape[0])):
-		raise ValueError(
-			f'{name}: batch index out of range: b={b} B={int(x_bchw.shape[0])}'
-		)
-	if not (0 <= int(c) < int(x_bchw.shape[1])):
-		raise ValueError(
-			f'{name}: channel index out of range: c={c} C={int(x_bchw.shape[1])}'
-		)
-	hw = x_bchw[int(b), int(c)]
-	if hw.ndim != 2:
-		raise ValueError(f'{name}: expected (H,W), got {hw.shape}')
-	return np.asarray(hw)
-
-
-def _per_trace_zscore_hw(x_hw: np.ndarray, *, eps: float) -> np.ndarray:
-	x = np.asarray(x_hw, dtype=np.float32)
-	if x.ndim != 2:
-		raise ValueError(f'x_hw must be (H,W), got {x.shape}')
-	m = x.mean(axis=1, keepdims=True)
-	s = x.std(axis=1, keepdims=True) + float(eps)
-	return (x - m) / s
 
 
 def _pick_str_from_batch(batch: dict[str, Any], key: str, b: int) -> str | None:
@@ -117,23 +85,23 @@ def save_pair_triptych_png(
 	suptitle: str | None = None,
 	batch: dict[str, Any] | None = None,
 ) -> None:
-	x_in = _to_numpy_bchw(x_in_bchw, name='x_in_bchw')
-	x_tg = _to_numpy_bchw(x_tg_bchw, name='x_tg_bchw')
-	x_pr = _to_numpy_bchw(x_pr_bchw, name='x_pr_bchw')
+	x_in = to_numpy_bchw(x_in_bchw, name='x_in_bchw')
+	x_tg = to_numpy_bchw(x_tg_bchw, name='x_tg_bchw')
+	x_pr = to_numpy_bchw(x_pr_bchw, name='x_pr_bchw')
 
 	if x_in.shape != x_tg.shape or x_in.shape != x_pr.shape:
 		raise ValueError(
 			f'shape mismatch: in={x_in.shape} tg={x_tg.shape} pr={x_pr.shape}'
 		)
 
-	in_hw = _select_hw(x_in, b=b, c=c, name='x_in_bchw')
-	tg_hw = _select_hw(x_tg, b=b, c=c, name='x_tg_bchw')
-	pr_hw = _select_hw(x_pr, b=b, c=c, name='x_pr_bchw')
+	in_hw = select_hw(x_in, b=b, c=c, name='x_in_bchw')
+	tg_hw = select_hw(x_tg, b=b, c=c, name='x_tg_bchw')
+	pr_hw = select_hw(x_pr, b=b, c=c, name='x_pr_bchw')
 
 	if cfg.per_trace_norm:
-		in_hw = _per_trace_zscore_hw(in_hw, eps=cfg.per_trace_eps)
-		tg_hw = _per_trace_zscore_hw(tg_hw, eps=cfg.per_trace_eps)
-		pr_hw = _per_trace_zscore_hw(pr_hw, eps=cfg.per_trace_eps)
+		in_hw = per_trace_zscore_hw(in_hw, eps=cfg.per_trace_eps)
+		tg_hw = per_trace_zscore_hw(tg_hw, eps=cfg.per_trace_eps)
+		pr_hw = per_trace_zscore_hw(pr_hw, eps=cfg.per_trace_eps)
 
 	if suptitle is None:
 		suptitle = make_pair_suptitle(batch, b=b)
