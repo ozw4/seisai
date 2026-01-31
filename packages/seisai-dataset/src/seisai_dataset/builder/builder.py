@@ -191,18 +191,16 @@ class SelectStack:
 
 
 # ---------- パイプライン実行器 ----------
-class BuildPlan:
+class BasePlan:
 	def __init__(
 		self,
 		wave_ops: Iterable,
 		label_ops: Iterable,
 		input_stack: SelectStack,
-		target_stack: SelectStack,
 	):
 		self.wave_ops = list(wave_ops)
 		self.label_ops = list(label_ops)
 		self.input_stack = input_stack
-		self.target_stack = target_stack
 
 	def run(self, sample: dict[str, Any], rng=None) -> None:
 		for op in self.wave_ops:
@@ -210,10 +208,25 @@ class BuildPlan:
 		for op in self.label_ops:
 			op(sample, rng)
 		self.input_stack(sample, rng)
+
+
+class BuildPlan(BasePlan):
+	def __init__(
+		self,
+		wave_ops: Iterable,
+		label_ops: Iterable,
+		input_stack: SelectStack,
+		target_stack: SelectStack,
+	):
+		super().__init__(wave_ops, label_ops, input_stack)
+		self.target_stack = target_stack
+
+	def run(self, sample: dict[str, Any], rng=None) -> None:
+		super().run(sample, rng)
 		self.target_stack(sample, rng)
 
 
-class InputOnlyPlan:
+class InputOnlyPlan(BasePlan):
 	"""BuildPlan 互換の "input のみ" 実行器（推論用）。
 
 	- wave_ops / label_ops を順に適用
@@ -227,9 +240,8 @@ class InputOnlyPlan:
 		label_ops: Iterable,
 		input_stack: SelectStack,
 	):
-		self.wave_ops = list(wave_ops)
-		self.label_ops = list(label_ops)
-		self.input_stack = input_stack
+		super().__init__(wave_ops, label_ops, input_stack)
+		self.target_stack = None
 
 	@classmethod
 	def from_build_plan(
@@ -240,10 +252,3 @@ class InputOnlyPlan:
 	) -> 'InputOnlyPlan':
 		label_ops = plan.label_ops if include_label_ops else []
 		return cls(plan.wave_ops, label_ops, plan.input_stack)
-
-	def run(self, sample: dict[str, Any], rng=None) -> None:
-		for op in self.wave_ops:
-			op(sample, rng)
-		for op in self.label_ops:
-			op(sample, rng)
-		self.input_stack(sample, rng)
