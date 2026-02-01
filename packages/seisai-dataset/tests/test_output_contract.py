@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -15,15 +18,25 @@ from seisai_transforms.augment import (
 )
 from seisai_transforms.masking import MaskGenerator
 
-SEGY = (
+_DEFAULT_SEGY = Path(
 	'/home/dcuser/data/ActiveSeisField/aso19-2/input_TRCTAB_ml_fbpick_Aso19-2_wolmo.sgy'
 )
-FBNP = '/home/dcuser/data/ActiveSeisField/aso19-2/fb_Aso19-2.npy'
+_DEFAULT_FBNP = Path('/home/dcuser/data/ActiveSeisField/aso19-2/fb_Aso19-2.npy')
 
-pytestmark = pytest.mark.skipif(
-	not (SEGY and FBNP),
-	reason='Set FBP_TEST_SEGY and FBP_TEST_FB to run this test.',
-)
+SEGY = Path(os.environ.get('FBP_TEST_SEGY', str(_DEFAULT_SEGY)))
+FBNP = Path(os.environ.get('FBP_TEST_FB', str(_DEFAULT_FBNP)))
+
+pytestmark = [
+	pytest.mark.integration,
+	pytest.mark.skipif(
+		not (SEGY.exists() and FBNP.exists()),
+		reason=(
+			'Integration test data not found. '
+			f'Expected SEG-Y at {SEGY} and FB at {FBNP}. '
+			'Optionally set FBP_TEST_SEGY / FBP_TEST_FB to override.'
+		),
+	),
+]
 
 
 def _build_ds() -> SegyGatherPipelineDataset:
@@ -50,8 +63,8 @@ def _build_ds() -> SegyGatherPipelineDataset:
 	)
 
 	return SegyGatherPipelineDataset(
-		segy_files=[SEGY],
-		fb_files=[FBNP],
+		segy_files=[str(SEGY)],
+		fb_files=[str(FBNP)],
 		transform=transform,
 		fbgate=fbgate,
 		plan=plan,

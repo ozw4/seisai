@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import numpy as np
 import pytest
 from seisai_dataset import (
@@ -14,15 +17,27 @@ from seisai_transforms.augment import (
 )
 from seisai_transforms.masking import MaskGenerator
 
-SEGY = (
+# まずは「あなたの手元で何も設定しなくても動く」デフォルト
+_DEFAULT_SEGY = Path(
 	'/home/dcuser/data/ActiveSeisField/aso19-2/input_TRCTAB_ml_fbpick_Aso19-2_wolmo.sgy'
 )
-FBNP = '/home/dcuser/data/ActiveSeisField/aso19-2/fb_Aso19-2.npy'
+_DEFAULT_FBNP = Path('/home/dcuser/data/ActiveSeisField/aso19-2/fb_Aso19-2.npy')
 
-pytestmark = pytest.mark.skipif(
-	not (SEGY and FBNP),
-	reason='Set FBP_TEST_SEGY and FBP_TEST_FB to run this test.',
-)
+# env var は任意（必要な人だけ上書き）
+SEGY = Path(os.environ.get('FBP_TEST_SEGY', str(_DEFAULT_SEGY)))
+FBNP = Path(os.environ.get('FBP_TEST_FB', str(_DEFAULT_FBNP)))
+
+pytestmark = [
+	pytest.mark.integration,
+	pytest.mark.skipif(
+		not (SEGY.exists() and FBNP.exists()),
+		reason=(
+			'Integration test data not found. '
+			f'Expected SEG-Y at {SEGY} and FB at {FBNP}. '
+			'Optionally set FBP_TEST_SEGY / FBP_TEST_FB to override.'
+		),
+	),
+]
 
 
 def _build_ds(mask_ratio: float):
@@ -51,8 +66,8 @@ def _build_ds(mask_ratio: float):
 	)
 
 	ds = SegyGatherPipelineDataset(
-		segy_files=[SEGY],
-		fb_files=[FBNP],
+		segy_files=[str(SEGY)],
+		fb_files=[str(FBNP)],
 		transform=transform,
 		fbgate=fbgate,
 		plan=plan,
@@ -75,7 +90,6 @@ def test_mask_ratio_runtime_update_changes_mask_count():
 	H = int(a['input'].shape[1])
 	assert _masked_traces(a['mask_bool']) == 0
 
-	# ratio はジェネレータを作り直して差し替える（closure固定のため）
 	mask_op.gen = MaskGenerator.traces(
 		ratio=0.5, width=1, mode='replace', noise_std=1.0
 	)
@@ -93,7 +107,6 @@ def test_mask_mode_and_noise_runtime_update_effect():
 	H = int(x1['input'].shape[1])
 	assert _masked_traces(x1['mask_bool']) == int(round(0.5 * H))
 
-	# mode/noise_std はそのまま更新できる
 	mask_op.gen.mode = 'add'
 	mask_op.gen.noise_std = 0.0
 
