@@ -6,14 +6,7 @@ from collections import defaultdict, deque
 import torch
 import torch.distributed as dist
 
-
-def is_dist_avail_and_initialized() -> bool:
-	if not torch.distributed.is_available():
-		return False
-	if not torch.distributed.is_initialized():
-		return False
-	return True
-
+from seisai_utils.dist import is_dist_avail_and_initialized
 
 class SmoothedValue:
 	"""Track a series of values and provide access to smoothed values over a
