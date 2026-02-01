@@ -45,32 +45,15 @@ class SampleTransformer:
 		W0 = int(x.shape[1])
 
 		# ここで offsets/fb/indices を H に合わせる（仕様）
-		H0 = int(indices.size)
-		if H0 > H:
-			raise ValueError(f'indices length {H0} > loaded H {H}')
-
 		offsets = info['offsets'][indices].astype(np.float32, copy=False)
-		fb_subset = np.asarray(fb_subset, dtype=np.int64)
-
-		trace_valid = np.zeros(H, dtype=np.bool_)
-		trace_valid[:H0] = True
-
-		if H > H0:
-			pad = H - H0
-			offsets = np.concatenate(
-				[offsets, np.zeros(pad, dtype=np.float32)],
-				axis=0,
+		indices, offsets, fb_subset, trace_valid, _pad = (
+			SampleFlow.pad_indices_offsets_fb(
+				indices=indices,
+				offsets=offsets,
+				fb_subset=fb_subset,
+				H=H,
 			)
-			fb_subset = np.concatenate(
-				[fb_subset, -np.ones(pad, dtype=np.int64)],
-				axis=0,
-			)
-			indices = np.concatenate(
-				[indices.astype(np.int64, copy=False), -np.ones(pad, dtype=np.int64)],
-				axis=0,
-			)
-		else:
-			indices = indices.astype(np.int64, copy=False)
+		)
 
 		# 変換（Crop/Pad / TimeStretch 等）
 		out = self.transform(x, rng=rng, return_meta=True)

@@ -34,12 +34,37 @@ class SampleFlow:
 		offsets: np.ndarray,
 		H: int,
 	) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+		indices, offsets, _fb_subset, trace_valid, pad = self.pad_indices_offsets_fb(
+			indices=indices,
+			offsets=offsets,
+			fb_subset=None,
+			H=H,
+		)
+		return indices, offsets, trace_valid, pad
+
+	@staticmethod
+	def pad_indices_offsets_fb(
+		*,
+		indices: np.ndarray,
+		offsets: np.ndarray,
+		fb_subset: np.ndarray | None,
+		H: int,
+	) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, int]:
 		H0 = int(indices.size)
 		if H0 > H:
 			raise ValueError(f'indices length {H0} > loaded H {H}')
+		if fb_subset is not None and int(fb_subset.size) != H0:
+			raise ValueError(
+				f'fb_subset length {fb_subset.size} != indices length {H0}'
+			)
 
 		trace_valid = np.zeros(H, dtype=np.bool_)
 		trace_valid[:H0] = True
+
+		indices = indices.astype(np.int64, copy=False)
+		offsets = offsets.astype(np.float32, copy=False)
+		if fb_subset is not None:
+			fb_subset = np.asarray(fb_subset, dtype=np.int64)
 
 		pad = H - H0
 		if pad > 0:
@@ -48,13 +73,16 @@ class SampleFlow:
 				axis=0,
 			)
 			indices = np.concatenate(
-				[indices.astype(np.int64, copy=False), -np.ones(pad, dtype=np.int64)],
+				[indices, -np.ones(pad, dtype=np.int64)],
 				axis=0,
 			)
-		else:
-			indices = indices.astype(np.int64, copy=False)
+			if fb_subset is not None:
+				fb_subset = np.concatenate(
+					[fb_subset, -np.ones(pad, dtype=np.int64)],
+					axis=0,
+				)
 
-		return indices, offsets, trace_valid, pad
+		return indices, offsets, fb_subset, trace_valid, pad
 
 	def apply_transform(
 		self,
