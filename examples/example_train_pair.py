@@ -1,4 +1,13 @@
 # %%
+"""Train and run tiled-h inference on paired SEG-Y gathers.
+
+This script:
+- Builds a SeisAI dataset plan for paired input/target gathers
+- Trains an EncDec2D model for a configured number of epochs
+- Runs tiled-h inference on a validation subset
+- Saves triptych visualizations (input/target/prediction) to disk
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -69,9 +78,8 @@ def main(argv: list[str] | None = None) -> None:
 	input_segy_files = require_list_str(paths, 'input_segy_files')
 	target_segy_files = require_list_str(paths, 'target_segy_files')
 	if len(input_segy_files) != len(target_segy_files):
-		raise ValueError(
-			'paths.input_segy_files and paths.target_segy_files must have same length'
-		)
+		msg = 'paths.input_segy_files and paths.target_segy_files must have same length'
+		raise ValueError(msg)
 
 	max_trials = optional_int(ds_cfg, 'max_trials', 2048)
 	use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)
@@ -80,7 +88,8 @@ def main(argv: list[str] | None = None) -> None:
 	if not isinstance(primary_keys_list, list) or not all(
 		isinstance(x, str) for x in primary_keys_list
 	):
-		raise ValueError('dataset.primary_keys must be list[str]')
+		msg = 'dataset.primary_keys must be list[str]'
+		raise ValueError(msg)
 	primary_keys = tuple(primary_keys_list)
 
 	train_batch_size = require_int(train_cfg, 'batch_size')
@@ -126,7 +135,8 @@ def main(argv: list[str] | None = None) -> None:
 	out_chans = optional_int(model_cfg, 'out_chans', 1)
 
 	if loss_kind not in ('l1', 'mse'):
-		raise ValueError('train.loss_kind must be "l1" or "mse"')
+		msg = 'train.loss_kind must be "l1" or "mse"'
+		raise ValueError(msg)
 
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -200,7 +210,8 @@ def main(argv: list[str] | None = None) -> None:
 			on_step=None,
 		)
 		print(
-			f'epoch={epoch} loss={stats["loss"]:.6f} steps={int(stats["steps"])} samples={int(stats["samples"])}'
+			f'epoch={epoch} loss={stats["loss"]:.6f} steps={int(stats["steps"])} '
+			f'steps={int(stats["steps"])} samples={int(stats["samples"])}'
 		)
 
 	torch.manual_seed(seed_infer)
@@ -280,3 +291,5 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == '__main__':
 	main()
+
+# %%
