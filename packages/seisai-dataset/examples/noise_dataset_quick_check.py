@@ -1,3 +1,4 @@
+# %%
 """Quick check for NoiseTraceSubsetDataset.
 
 Requires:
@@ -14,6 +15,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
+from seisai_dataset.noise_dataset import NoiseTraceSubsetDataset
+from seisai_dataset.noise_decider import EventDetectConfig
 
 # transforms（任意）
 from seisai_transforms.augment import (
@@ -21,10 +25,6 @@ from seisai_transforms.augment import (
 	PerTraceStandardize,
 	ViewCompose,
 )
-
-from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
-from seisai_dataset.noise_dataset import NoiseTraceSubsetDataset
-from seisai_dataset.noise_decider import EventDetectConfig
 
 
 def main() -> None:
