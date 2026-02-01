@@ -74,8 +74,8 @@ def main(argv: list[str] | None = None) -> None:
 		)
 
 	max_trials = optional_int(ds_cfg, 'max_trials', 2048)
-	use_header_cache = optional_bool(ds_cfg, 'use_header_cache', True)
-	verbose = optional_bool(ds_cfg, 'verbose', True)
+	use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)
+	verbose: bool = optional_bool(ds_cfg, 'verbose', default=True)
 	primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
 	if not isinstance(primary_keys_list, list) or not all(
 		isinstance(x, str) for x in primary_keys_list
@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> None:
 	samples_per_epoch = require_int(train_cfg, 'samples_per_epoch')
 	loss_kind = optional_str(train_cfg, 'loss_kind', 'l1').lower()
 	seed_train = optional_int(train_cfg, 'seed', 42)
-	use_amp_train = optional_bool(train_cfg, 'use_amp', True)
+	use_amp_train = optional_bool(train_cfg, 'use_amp', default=True)
 	max_norm = optional_float(train_cfg, 'max_norm', 1.0)
 	train_num_workers = optional_int(train_cfg, 'num_workers', 0)
 
@@ -104,22 +104,24 @@ def main(argv: list[str] | None = None) -> None:
 	tile_h = require_int(tile_cfg, 'tile_h')
 	overlap_h = require_int(tile_cfg, 'overlap_h')
 	tiles_per_batch = require_int(tile_cfg, 'tiles_per_batch')
-	amp_infer = optional_bool(tile_cfg, 'amp', True)
-	use_tqdm = optional_bool(tile_cfg, 'use_tqdm', False)
+	amp_infer = optional_bool(tile_cfg, 'amp', default=True)
+	use_tqdm = optional_bool(tile_cfg, 'use_tqdm', default=False)
 
 	vis_out_dir = optional_str(vis_cfg, 'out_dir', './_pair_vis')
 	vis_n = require_int(vis_cfg, 'n')
 	cmap = optional_str(vis_cfg, 'cmap', 'seismic')
 	vmin = optional_float(vis_cfg, 'vmin', -3.0)
 	vmax = optional_float(vis_cfg, 'vmax', 3.0)
-	transpose_for_trace_time = optional_bool(vis_cfg, 'transpose_for_trace_time', True)
-	per_trace_norm = optional_bool(vis_cfg, 'per_trace_norm', True)
+	transpose_for_trace_time = optional_bool(
+		vis_cfg, 'transpose_for_trace_time', default=True
+	)
+	per_trace_norm = optional_bool(vis_cfg, 'per_trace_norm', default=True)
 	per_trace_eps = optional_float(vis_cfg, 'per_trace_eps', 1e-8)
 	figsize = optional_tuple2_float(vis_cfg, 'figsize', (20.0, 15.0))
 	dpi = optional_int(vis_cfg, 'dpi', 300)
 
 	backbone = optional_str(model_cfg, 'backbone', 'resnet18')
-	pretrained = optional_bool(model_cfg, 'pretrained', False)
+	pretrained = optional_bool(model_cfg, 'pretrained', default=False)
 	in_chans = optional_int(model_cfg, 'in_chans', 1)
 	out_chans = optional_int(model_cfg, 'out_chans', 1)
 
@@ -129,7 +131,7 @@ def main(argv: list[str] | None = None) -> None:
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 	torch.manual_seed(seed_train)
-	np.random.seed(seed_train)
+	_ = np.random.default_rng(seed_train)
 
 	train_transform = ViewCompose(
 		[
@@ -202,7 +204,7 @@ def main(argv: list[str] | None = None) -> None:
 		)
 
 	torch.manual_seed(seed_infer)
-	np.random.seed(seed_infer)
+	_ = np.random.default_rng(seed_infer)
 
 	ds_infer_full = SegyGatherPairDataset(
 		input_segy_files=input_segy_files,

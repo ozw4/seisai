@@ -8,6 +8,7 @@ import torch.distributed as dist
 
 from seisai_utils.dist import is_dist_avail_and_initialized
 
+
 class SmoothedValue:
 	"""Track a series of values and provide access to smoothed values over a
 	window or the global series average.
@@ -65,7 +66,8 @@ class SmoothedValue:
 		if self.count == 0:
 			try:
 				return self.fmt.format(median=0, avg=0, global_avg=0, max=0, value=0)
-			except Exception:
+			except (KeyError, IndexError, ValueError, TypeError):
+				# if format string is invalid or missing fields, return a simple zero
 				return '0'
 		return self.fmt.format(
 			median=self.median,
@@ -84,9 +86,9 @@ class MetricLogger:
 	def update(self, **kwargs):
 		for k, v in kwargs.items():
 			if isinstance(v, torch.Tensor):
-				v = v.item()
-			assert isinstance(v, (float, int))
-			self.meters[k].update(v)
+				v_ = v.item()
+			assert isinstance(v_, (float, int))
+			self.meters[k].update(v_)
 
 	def __getattr__(self, attr):
 		if attr in self.meters:
@@ -117,7 +119,6 @@ class MetricLogger:
 			iterable = zip(*iterable, strict=False)
 		else:
 			length = len(iterable)
-		i = 0
 		if not header:
 			header = ''
 		start_time = time.time()
@@ -149,7 +150,7 @@ class MetricLogger:
 				]
 			)
 		MB = 1024.0 * 1024.0
-		for obj in iterable:
+		for i, obj in enumerate(iterable):
 			data_time.update(time.time() - end)
 			yield obj  # <-- yield the batch in for loop
 			iter_time.update(time.time() - end)
@@ -179,7 +180,6 @@ class MetricLogger:
 							data=str(data_time),
 						)
 					)
-			i += 1
 			end = time.time()
 		total_time = time.time() - start_time
 		total_time_str = str(datetime.timedelta(seconds=int(total_time)))
