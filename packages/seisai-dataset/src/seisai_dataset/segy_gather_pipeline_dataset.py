@@ -30,6 +30,7 @@ from .gate_fblc import FirstBreakGate
 from .sample_flow import SampleFlow
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
+from .transform_contract import Transform2D, validate_transform_rng_meta
 
 
 class SampleTransformer:
@@ -60,11 +61,13 @@ class SampleTransformer:
 	def __init__(
 		self,
 		subsetloader: TraceSubsetLoader,
-		transform,
+		transform: Transform2D,
 	) -> None:
 		"""Initialize the transformer with a subset loader and transform callable."""
 		self.subsetloader = subsetloader
-		self.transform = transform
+		self.transform: Transform2D = validate_transform_rng_meta(
+			transform, name='transform'
+		)
 
 	def load_transform(
 		self,
@@ -214,7 +217,7 @@ class SegyGatherPipelineDataset(Dataset):
 		self,
 		segy_files: list[str],
 		fb_files: list[str],
-		transform,
+		transform: Transform2D,
 		fbgate: FirstBreakGate,
 		plan: BuildPlan,
 		*,

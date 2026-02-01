@@ -12,6 +12,7 @@ from .file_info import PairFileInfo, build_file_info_dataclass
 from .sample_flow import SampleFlow
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
+from .transform_contract import Transform2D
 
 
 class SegyGatherPairDataset(Dataset):
@@ -21,7 +22,7 @@ class SegyGatherPairDataset(Dataset):
 		self,
 		input_segy_files: list[str],
 		target_segy_files: list[str],
-		transform,
+		transform: Transform2D,
 		plan: BuildPlan,
 		*,
 		ffid_byte: int = segyio.TraceField.FieldRecord,
