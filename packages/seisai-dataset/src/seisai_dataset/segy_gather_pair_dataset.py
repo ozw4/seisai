@@ -1,5 +1,7 @@
 # %%
 import contextlib
+from typing import cast
+
 import numpy as np
 import segyio
 from torch.utils.data import Dataset
@@ -22,9 +24,9 @@ class SegyGatherPairDataset(Dataset):
 		transform,
 		plan: BuildPlan,
 		*,
-		ffid_byte=segyio.TraceField.FieldRecord,
-		chno_byte=segyio.TraceField.TraceNumber,
-		cmp_byte=segyio.TraceField.CDP,
+		ffid_byte: int = segyio.TraceField.FieldRecord,
+		chno_byte: int = segyio.TraceField.TraceNumber,
+		cmp_byte: int = segyio.TraceField.CDP,
 		primary_keys: tuple[str, ...] | None = ('ffid',),
 		primary_key_weights: tuple[float, ...] | None = None,
 		use_superwindow: bool = False,
@@ -38,13 +40,11 @@ class SegyGatherPairDataset(Dataset):
 		max_trials: int = 2048,
 	) -> None:
 		if len(input_segy_files) == 0 or len(target_segy_files) == 0:
-			raise ValueError(
-				'input_segy_files / target_segy_files は空であってはならない'
-			)
+			msg = 'input_segy_files / target_segy_files は空であってはならない'
+			raise ValueError(msg)
 		if len(input_segy_files) != len(target_segy_files):
-			raise ValueError(
-				'input_segy_files と target_segy_files の長さが一致していません'
-			)
+			msg = 'input_segy_files と target_segy_files の長さが一致していません'
+			raise ValueError(msg)
 
 		self.input_segy_files = list(input_segy_files)
 		self.target_segy_files = list(target_segy_files)
@@ -102,43 +102,46 @@ class SegyGatherPairDataset(Dataset):
 				use_header_cache=self.use_header_cache,
 				include_centroids=True,
 			)
-
 			target_obj = segyio.open(target_path, 'r', ignore_geometry=True)
 			target_mmap = target_obj.trace.raw[:]
 			target_n_samples = (
 				int(target_obj.samples.size) if target_obj.samples is not None else 0
 			)
 			target_n_traces = int(target_obj.tracecount)
-			target_dt_us = int(target_obj.bin[segyio.BinField.Interval])
+			target_dt_us = int(cast('int', target_obj.bin[segyio.BinField.Interval]))
+			target_dt_sec = target_dt_us * 1e-6
 			target_dt_sec = target_dt_us * 1e-6
 
 			if input_info.n_samples != target_n_samples:
 				if input_info.segy_obj is not None:
 					input_info.segy_obj.close()
 				target_obj.close()
-				raise ValueError(
+				msg = (
 					'nsamples mismatch: '
 					f'{input_path}={input_info.n_samples}, '
 					f'{target_path}={target_n_samples}'
 				)
+				raise ValueError(msg)
 			if input_info.n_traces != target_n_traces:
 				if input_info.segy_obj is not None:
 					input_info.segy_obj.close()
 				target_obj.close()
-				raise ValueError(
+				msg = (
 					'trace count mismatch: '
 					f'{input_path}={input_info.n_traces}, '
 					f'{target_path}={target_n_traces}'
 				)
+				raise ValueError(msg)
 			if not np.isclose(input_info.dt_sec, target_dt_sec, rtol=0.0, atol=1e-12):
 				if input_info.segy_obj is not None:
 					input_info.segy_obj.close()
 				target_obj.close()
-				raise ValueError(
+				msg = (
 					'dt mismatch: '
 					f'{input_path}={input_info.dt_sec}, '
 					f'{target_path}={target_dt_sec}'
 				)
+				raise ValueError(msg)
 
 			self.file_infos.append(
 				PairFileInfo(
