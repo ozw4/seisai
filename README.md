@@ -104,6 +104,12 @@ batch = next(iter(loader))
 #   input: (B,C,H,W), target: (B,C2,H,W), mask_bool (optional), meta, fb_idx, offsets, ...
 ```
 
+## Examples
+Noise-only TraceSubset quick check (requires `seisai-dataset`, `seisai-transforms`, `torch`, `numpy`, `segyio`):
+```bash
+python packages/seisai-dataset/examples/noise_dataset_quick_check.py
+```
+
 ## Pair dataset example
 ```python
 from torch.utils.data import DataLoader
