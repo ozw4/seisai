@@ -1,15 +1,13 @@
 # %%
 import contextlib
-import random
-
 import numpy as np
 import segyio
-import torch
 from torch.utils.data import Dataset
 
 from .builder.builder import BuildPlan
 from .config import LoaderConfig, TraceSubsetSamplerConfig
 from .file_info import build_file_info
+from .sample_flow import SampleFlow
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
 
@@ -74,6 +72,7 @@ class SegyGatherPairDataset(Dataset):
 		self.max_trials = int(max_trials)
 
 		self._rng = np.random.default_rng()
+		self.sample_flow = SampleFlow(transform, plan)
 
 		self.subsetloader = TraceSubsetLoader(
 			LoaderConfig(pad_traces_to=int(subset_traces))
@@ -183,9 +182,12 @@ class SegyGatherPairDataset(Dataset):
 			info = self.file_infos[pair_idx]
 			input_info = info['input_info']
 
-			seed = int(self._rng.integers(0, 2**31 - 1))
-			sample = self.sampler.draw(input_info, py_random=random.Random(seed))
-			indices = np.asarray(sample['indices'], dtype=np.int64)
+			sample = self.sample_flow.draw_sample(
+				input_info,
+				self._rng,
+				sampler=self.sampler,
+			)
+			indices = sample['indices']
 			if indices.size == 0:
 				continue
 
@@ -193,46 +195,24 @@ class SegyGatherPairDataset(Dataset):
 			x_tg = self.subsetloader.load(info['target_mmap'], indices)
 
 			H = int(x_in.shape[0])
-			H0 = int(indices.size)
-			if H0 > H:
-				raise ValueError(f'indices length {H0} > loaded H {H}')
-
 			offsets = input_info['offsets'][indices].astype(np.float32, copy=False)
-			if H > H0:
-				pad = H - H0
-				offsets = np.concatenate(
-					[offsets, np.zeros(pad, dtype=np.float32)],
-					axis=0,
-				)
-				indices = np.concatenate(
-					[
-						indices.astype(np.int64, copy=False),
-						-np.ones(pad, dtype=np.int64),
-					],
-					axis=0,
-				)
-			else:
-				indices = indices.astype(np.int64, copy=False)
+			indices, offsets, _trace_valid, _pad = self.sample_flow.pad_indices_offsets(
+				indices, offsets, H
+			)
 
 			seed = int(self._rng.integers(0, 2**31 - 1))
 			rng_in = np.random.default_rng(seed)
 			rng_tg = np.random.default_rng(seed)
-			out_in = self.transform(x_in, rng=rng_in, return_meta=True)
-			out_tg = self.transform(x_tg, rng=rng_tg, return_meta=True)
-
-			x_view_input, meta = out_in if isinstance(out_in, tuple) else (out_in, {})
-			x_view_target, _meta_tg = (
-				out_tg if isinstance(out_tg, tuple) else (out_tg, {})
+			x_view_input, meta = self.sample_flow.apply_transform(
+				x_in,
+				rng_in,
+				name='input',
 			)
-
-			if not isinstance(x_view_input, np.ndarray) or x_view_input.ndim != 2:
-				raise ValueError(
-					'transform(input) は 2D numpy または (2D, meta) を返す必要があります'
-				)
-			if not isinstance(x_view_target, np.ndarray) or x_view_target.ndim != 2:
-				raise ValueError(
-					'transform(target) は 2D numpy または (2D, meta) を返す必要があります'
-				)
+			x_view_target, _meta_tg = self.sample_flow.apply_transform(
+				x_tg,
+				rng_tg,
+				name='target',
+			)
 			if x_view_input.shape != x_view_target.shape:
 				raise ValueError(
 					'input/target transform shape mismatch: '
@@ -241,39 +221,40 @@ class SegyGatherPairDataset(Dataset):
 			did_superwindow = bool(sample['did_super'])
 
 			dt_sec = float(input_info['dt_sec'])
-			sample_for_plan = {
-				'x_view_input': x_view_input,
-				'x_view_target': x_view_target,
-				'meta': meta,
-				'dt_sec': dt_sec,
-				'offsets': offsets,
-				'file_path_input': input_info['path'],
-				'file_path_target': info['target_path'],
-				'indices': indices,
-				'key_name': sample['key_name'],
-				'secondary_key': sample['secondary_key'],
-				'primary_unique': sample['primary_unique'],
-				'did_superwindow': did_superwindow,
-			}
+			sample_for_plan = self.sample_flow.build_plan_input_base(
+				meta=meta,
+				dt_sec=dt_sec,
+				offsets=offsets,
+				indices=indices,
+				key_name=sample['key_name'],
+				secondary_key=sample['secondary_key'],
+				primary_unique=sample['primary_unique'],
+				extra={
+					'x_view_input': x_view_input,
+					'x_view_target': x_view_target,
+					'file_path_input': input_info['path'],
+					'file_path_target': info['target_path'],
+					'did_superwindow': did_superwindow,
+				},
+			)
 
-			self.plan.run(sample_for_plan, rng=self._rng)
-			if 'input' not in sample_for_plan or 'target' not in sample_for_plan:
-				raise KeyError("plan must populate 'input' and 'target'")
+			self.sample_flow.run_plan(sample_for_plan, rng=self._rng)
 
-			return {
-				'input': sample_for_plan['input'],
-				'target': sample_for_plan['target'],
-				'meta': meta,
-				'dt_sec': torch.tensor(dt_sec, dtype=torch.float32),
-				'offsets': torch.from_numpy(offsets),
-				'file_path_input': input_info['path'],
-				'file_path_target': info['target_path'],
-				'indices': indices,
-				'key_name': sample['key_name'],
-				'secondary_key': sample['secondary_key'],
-				'primary_unique': sample['primary_unique'],
-				'did_superwindow': did_superwindow,
-			}
+			return self.sample_flow.build_output_base(
+				sample_for_plan,
+				meta=meta,
+				dt_sec=dt_sec,
+				offsets=offsets,
+				indices=indices,
+				key_name=sample['key_name'],
+				secondary_key=sample['secondary_key'],
+				primary_unique=sample['primary_unique'],
+				extra={
+					'file_path_input': input_info['path'],
+					'file_path_target': info['target_path'],
+					'did_superwindow': did_superwindow,
+				},
+			)
 
 		raise RuntimeError(
 			f'failed to draw a valid sample within max_trials={self.max_trials}; '

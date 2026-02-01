@@ -1,7 +1,5 @@
 # %%
 import contextlib
-import random
-
 import numpy as np
 import segyio
 import torch
@@ -18,24 +16,9 @@ from .builder.builder import (
 from .config import LoaderConfig, TraceSubsetSamplerConfig
 from .file_info import build_file_info
 from .gate_fblc import FirstBreakGate
+from .sample_flow import SampleFlow
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
-
-
-class SampleSelector:
-	def __init__(self, sampler: TraceSubsetSampler) -> None:
-		self.sampler = sampler
-
-	def draw_sample(self, info: dict, rng: np.random.Generator) -> dict:
-		seed = int(rng.integers(0, 2**31 - 1))
-		s = self.sampler.draw(info, py_random=random.Random(seed))
-		return {
-			'indices': np.asarray(s['indices'], dtype=np.int64),
-			'key_name': s['key_name'],
-			'secondary_key': s['secondary_key'],
-			'did_super': bool(s['did_super']),
-			'primary_unique': s['primary_unique'],
-		}
 
 
 class SampleTransformer:
@@ -92,6 +75,10 @@ class SampleTransformer:
 		# 変換（Crop/Pad / TimeStretch 等）
 		out = self.transform(x, rng=rng, return_meta=True)
 		x_view, meta = out if isinstance(out, tuple) else (out, {})
+		if not isinstance(meta, dict):
+			raise ValueError(
+				f'transform meta must be dict, got {type(meta).__name__}'
+			)
 		if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
 			raise ValueError(
 				'transform は 2D numpy または (2D, meta) を返す必要があります'
@@ -146,65 +133,6 @@ class GateEvaluator:
 		return True
 
 
-class OutputBuilder:
-	def __init__(self, plan: BuildPlan, rng: np.random.Generator) -> None:
-		if not isinstance(plan, BuildPlan):
-			raise TypeError('plan must be BuildPlan')
-		self.plan = plan
-		self.rng = rng
-
-	def build_output(
-		self,
-		sample: dict,
-		meta: dict,
-		fb_subset: np.ndarray,
-		offsets: np.ndarray,
-		info: dict,
-	) -> dict:
-		dt_eff_sec = float(meta.get('dt_eff_sec', info['dt_sec']))
-		sample_for_plan = {
-			'x_view': sample['x_view'],  # (H,W)
-			'dt_sec': dt_eff_sec,
-			'offsets': offsets,  # (H,)
-			'fb_idx': fb_subset,  # (H,)
-			'meta': meta,
-			'file_path': info['path'],
-			'indices': sample['indices'],
-			'key_name': sample['key_name'],
-			'secondary_key': sample['secondary_key'],
-			'primary_unique': sample['primary_unique'],
-			'trace_valid': sample.get('trace_valid'),
-		}
-
-		self.plan.run(sample_for_plan, rng=self.rng)
-		if 'input' not in sample_for_plan or 'target' not in sample_for_plan:
-			raise KeyError("plan must populate 'input' and 'target'")
-
-		out: dict = {
-			'input': sample_for_plan['input'],  # torch.Tensor (C,H,W)
-			'target': sample_for_plan['target'],  # torch.Tensor (C2,H,W) など
-			'meta': meta,  # ビュー情報
-			'dt_sec': torch.tensor(dt_eff_sec, dtype=torch.float32),
-			'fb_idx': torch.from_numpy(fb_subset),
-			'offsets': torch.from_numpy(offsets),
-			'file_path': info['path'],
-			'indices': sample['indices'],
-			'key_name': sample['key_name'],
-			'secondary_key': sample['secondary_key'],
-			'primary_unique': sample['primary_unique'],
-			'did_superwindow': sample['did_super'],
-		}
-		mask_bool = sample_for_plan.get('mask_bool')
-		if mask_bool is not None:
-			out['mask_bool'] = mask_bool
-
-		trace_valid = sample.get('trace_valid')
-		if trace_valid is not None:
-			out['trace_valid'] = torch.from_numpy(trace_valid)
-
-		return out
-
-
 class SegyGatherPipelineDataset(Dataset):
 	"""SEG-Y ギャザー読み込み → サンプリング → 変換 → FBLC ゲート → （任意）BuildPlanで入出力生成。
 
@@ -236,10 +164,8 @@ class SegyGatherPipelineDataset(Dataset):
 		valid: bool = False,
 		verbose: bool = False,
 		max_trials: int = 2048,
-		sample_selector: SampleSelector | None = None,
 		sample_transformer: SampleTransformer | None = None,
 		gate_evaluator: GateEvaluator | None = None,
-		output_builder: OutputBuilder | None = None,
 	) -> None:
 		if len(segy_files) == 0 or len(fb_files) == 0:
 			raise ValueError('segy_files / fb_files は空であってはならない')
@@ -273,36 +199,31 @@ class SegyGatherPipelineDataset(Dataset):
 
 		self._rng = np.random.default_rng()
 		self.max_trials = int(max_trials)
+		self.sample_flow = SampleFlow(transform, plan)
 
 		# components
-		if sample_selector is None or sample_transformer is None:
+		if sample_transformer is None:
 			subsetloader = TraceSubsetLoader(
 				LoaderConfig(pad_traces_to=int(subset_traces))
 			)
-		if sample_selector is None:
-			sampler = TraceSubsetSampler(
-				TraceSubsetSamplerConfig(
-					primary_keys=self.primary_keys,
-					primary_key_weights=self.primary_key_weights,
-					use_superwindow=self.use_superwindow,
-					sw_halfspan=self.sw_halfspan,
-					sw_prob=self.sw_prob,
-					valid=self.valid,
-					subset_traces=int(subset_traces),
-				)
+		self.sampler = TraceSubsetSampler(
+			TraceSubsetSamplerConfig(
+				primary_keys=self.primary_keys,
+				primary_key_weights=self.primary_key_weights,
+				use_superwindow=self.use_superwindow,
+				sw_halfspan=self.sw_halfspan,
+				sw_prob=self.sw_prob,
+				valid=self.valid,
+				subset_traces=int(subset_traces),
 			)
-			sample_selector = SampleSelector(sampler)
+		)
 		if sample_transformer is None:
 			sample_transformer = SampleTransformer(subsetloader, transform)
 		if gate_evaluator is None:
 			gate_evaluator = GateEvaluator(fbgate, verbose=self.verbose)
-		if output_builder is None:
-			output_builder = OutputBuilder(plan, self._rng)
 
-		self.sample_selector = sample_selector
 		self.sample_transformer = sample_transformer
 		self.gate_evaluator = gate_evaluator
-		self.output_builder = output_builder
 
 		# ファイルごとのインデックス辞書等を構築
 		self.file_infos: list[dict] = []
@@ -340,7 +261,11 @@ class SegyGatherPipelineDataset(Dataset):
 		for _attempt in range(self.max_trials):
 			fidx = int(self._rng.integers(0, len(self.file_infos)))
 			info = self.file_infos[fidx]
-			sample = self.sample_selector.draw_sample(info, self._rng)
+			sample = self.sample_flow.draw_sample(
+				info,
+				self._rng,
+				sampler=self.sampler,
+			)
 			indices = sample['indices']
 			did_super = sample['did_super']
 
@@ -365,10 +290,47 @@ class SegyGatherPipelineDataset(Dataset):
 					rej_fblc += 1
 				continue
 
-			output = self.output_builder.build_output(
-				sample, meta, fb_subset, offsets, info
+			dt_eff_sec = float(meta.get('dt_eff_sec', info['dt_sec']))
+			sample_for_plan = self.sample_flow.build_plan_input_base(
+				meta=meta,
+				dt_sec=dt_eff_sec,
+				offsets=offsets,
+				indices=sample['indices'],
+				key_name=sample['key_name'],
+				secondary_key=sample['secondary_key'],
+				primary_unique=sample['primary_unique'],
+				extra={
+					'x_view': sample['x_view'],
+					'fb_idx': fb_subset,
+					'file_path': info['path'],
+					'trace_valid': sample.get('trace_valid'),
+				},
 			)
-			return output
+			self.sample_flow.run_plan(sample_for_plan, rng=self._rng)
+
+			out = self.sample_flow.build_output_base(
+				sample_for_plan,
+				meta=meta,
+				dt_sec=dt_eff_sec,
+				offsets=offsets,
+				indices=sample['indices'],
+				key_name=sample['key_name'],
+				secondary_key=sample['secondary_key'],
+				primary_unique=sample['primary_unique'],
+				extra={
+					'fb_idx': torch.from_numpy(fb_subset),
+					'file_path': info['path'],
+					'did_superwindow': sample['did_super'],
+				},
+			)
+			trace_valid = sample.get('trace_valid')
+			if trace_valid is not None:
+				out['trace_valid'] = torch.from_numpy(trace_valid)
+			mask_bool = sample_for_plan.get('mask_bool')
+			if mask_bool is not None:
+				out['mask_bool'] = mask_bool
+
+			return out
 
 		raise RuntimeError(
 			f'failed to draw a valid sample within max_trials={self.max_trials}; '
