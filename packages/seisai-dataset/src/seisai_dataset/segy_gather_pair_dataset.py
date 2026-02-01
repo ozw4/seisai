@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 
 from .builder.builder import BuildPlan
 from .config import LoaderConfig, TraceSubsetSamplerConfig
-from .file_info import build_file_info
+from .file_info import PairFileInfo, build_file_info_dataclass
 from .sample_flow import SampleFlow
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
@@ -89,11 +89,11 @@ class SegyGatherPairDataset(Dataset):
 			)
 		)
 
-		self.file_infos: list[dict] = []
+		self.file_infos: list[PairFileInfo] = []
 		for input_path, target_path in zip(
 			self.input_segy_files, self.target_segy_files, strict=True
 		):
-			input_info = build_file_info(
+			input_info = build_file_info_dataclass(
 				input_path,
 				ffid_byte=self.ffid_byte,
 				chno_byte=self.chno_byte,
@@ -112,62 +112,54 @@ class SegyGatherPairDataset(Dataset):
 			target_dt_us = int(target_obj.bin[segyio.BinField.Interval])
 			target_dt_sec = target_dt_us * 1e-6
 
-			if input_info['n_samples'] != target_n_samples:
-				input_obj = input_info.get('segy_obj')
-				if input_obj is not None:
-					input_obj.close()
+			if input_info.n_samples != target_n_samples:
+				if input_info.segy_obj is not None:
+					input_info.segy_obj.close()
 				target_obj.close()
 				raise ValueError(
 					'nsamples mismatch: '
-					f'{input_path}={input_info["n_samples"]}, '
+					f'{input_path}={input_info.n_samples}, '
 					f'{target_path}={target_n_samples}'
 				)
-			if input_info['n_traces'] != target_n_traces:
-				input_obj = input_info.get('segy_obj')
-				if input_obj is not None:
-					input_obj.close()
+			if input_info.n_traces != target_n_traces:
+				if input_info.segy_obj is not None:
+					input_info.segy_obj.close()
 				target_obj.close()
 				raise ValueError(
 					'trace count mismatch: '
-					f'{input_path}={input_info["n_traces"]}, '
+					f'{input_path}={input_info.n_traces}, '
 					f'{target_path}={target_n_traces}'
 				)
-			if not np.isclose(
-				input_info['dt_sec'], target_dt_sec, rtol=0.0, atol=1e-12
-			):
-				input_obj = input_info.get('segy_obj')
-				if input_obj is not None:
-					input_obj.close()
+			if not np.isclose(input_info.dt_sec, target_dt_sec, rtol=0.0, atol=1e-12):
+				if input_info.segy_obj is not None:
+					input_info.segy_obj.close()
 				target_obj.close()
 				raise ValueError(
 					'dt mismatch: '
-					f'{input_path}={input_info["dt_sec"]}, '
+					f'{input_path}={input_info.dt_sec}, '
 					f'{target_path}={target_dt_sec}'
 				)
 
 			self.file_infos.append(
-				{
-					'input_info': input_info,
-					'target_path': str(target_path),
-					'target_mmap': target_mmap,
-					'target_segy_obj': target_obj,
-					'target_n_samples': target_n_samples,
-					'target_n_traces': target_n_traces,
-					'target_dt_sec': float(target_dt_sec),
-				}
+				PairFileInfo(
+					input_info=input_info,
+					target_path=str(target_path),
+					target_mmap=target_mmap,
+					target_segy_obj=target_obj,
+					target_n_samples=target_n_samples,
+					target_n_traces=target_n_traces,
+					target_dt_sec=float(target_dt_sec),
+				)
 			)
 
 	def close(self) -> None:
 		for info in self.file_infos:
-			input_info = info.get('input_info', {})
-			segy_obj = input_info.get('segy_obj')
-			if segy_obj is not None:
+			if info.input_info.segy_obj is not None:
 				with contextlib.suppress(Exception):
-					segy_obj.close()
-			target_obj = info.get('target_segy_obj')
-			if target_obj is not None:
+					info.input_info.segy_obj.close()
+			if info.target_segy_obj is not None:
 				with contextlib.suppress(Exception):
-					target_obj.close()
+					info.target_segy_obj.close()
 		self.file_infos.clear()
 
 	def __del__(self) -> None:
@@ -180,7 +172,7 @@ class SegyGatherPairDataset(Dataset):
 		for _attempt in range(self.max_trials):
 			pair_idx = int(self._rng.integers(0, len(self.file_infos)))
 			info = self.file_infos[pair_idx]
-			input_info = info['input_info']
+			input_info = info.input_info
 
 			sample = self.sample_flow.draw_sample(
 				input_info,
@@ -191,11 +183,11 @@ class SegyGatherPairDataset(Dataset):
 			if indices.size == 0:
 				continue
 
-			x_in = self.subsetloader.load(input_info['mmap'], indices)
-			x_tg = self.subsetloader.load(info['target_mmap'], indices)
+			x_in = self.subsetloader.load(input_info.mmap, indices)
+			x_tg = self.subsetloader.load(info.target_mmap, indices)
 
 			H = int(x_in.shape[0])
-			offsets = input_info['offsets'][indices].astype(np.float32, copy=False)
+			offsets = input_info.offsets[indices].astype(np.float32, copy=False)
 			indices, offsets, _fb_subset, _trace_valid, _pad = (
 				self.sample_flow.pad_indices_offsets_fb(
 					indices=indices,
@@ -225,7 +217,7 @@ class SegyGatherPairDataset(Dataset):
 				)
 			did_superwindow = bool(sample['did_super'])
 
-			dt_sec = float(input_info['dt_sec'])
+			dt_sec = float(input_info.dt_sec)
 			sample_for_plan = self.sample_flow.build_plan_input_base(
 				meta=meta,
 				dt_sec=dt_sec,
@@ -237,8 +229,8 @@ class SegyGatherPairDataset(Dataset):
 				extra={
 					'x_view_input': x_view_input,
 					'x_view_target': x_view_target,
-					'file_path_input': input_info['path'],
-					'file_path_target': info['target_path'],
+					'file_path_input': input_info.path,
+					'file_path_target': info.target_path,
 					'did_superwindow': did_superwindow,
 				},
 			)
@@ -255,8 +247,8 @@ class SegyGatherPairDataset(Dataset):
 				secondary_key=sample['secondary_key'],
 				primary_unique=sample['primary_unique'],
 				extra={
-					'file_path_input': input_info['path'],
-					'file_path_target': info['target_path'],
+					'file_path_input': input_info.path,
+					'file_path_target': info.target_path,
 					'did_superwindow': did_superwindow,
 				},
 			)
