@@ -7,12 +7,14 @@ build-backend = "setuptools.build_meta"
 name = "seisai-utils"
 version = "0.1.0"
 requires-python = ">=3.9"
-license = {text = "MIT"}
-[tool.setuptools]
-package-dir = {"" = "src"}
+license = { text = "MIT" }
 dependencies = [
-  "yaml",
+  "PyYAML",
 ]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["seisai_utils*"]
