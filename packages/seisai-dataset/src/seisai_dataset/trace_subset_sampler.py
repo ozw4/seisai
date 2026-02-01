@@ -3,11 +3,11 @@ import random
 import numpy as np
 
 from .config import TraceSubsetSamplerConfig
+from .file_info import FileInfo
 
 
 class TraceSubsetSampler:
-	"""ギャザー(=keyで定義されるトレース集合)から、連続サブセット(最大H=subset_traces)の
-	trace indices を抽出するコンポーネント。
+	"""ギャザー(=keyで定義されるトレース集合)から、連続サブセット(最大H=subset_traces)の trace indices を抽出するコンポーネン.
 
 	入力: file_infos の 1 要素(dict) を想定（MaskedSegyGather が作る構造）
 	必須キー: '{ffid|chno|cmp}_unique_keys', '{ffid|chno|cmp}_key_to_indices',
@@ -26,8 +26,9 @@ class TraceSubsetSampler:
 		self.cfg = cfg
 		self._valid_primary = {'ffid', 'chno', 'cmp'}
 
-	# ---- public API ----
-	def draw(self, info: dict, *, py_random: random.Random | None = None) -> dict:
+	def draw(
+		self, info: dict | FileInfo, *, py_random: random.Random | None = None
+	) -> dict:
 		r = py_random or random
 
 		cmp_available = (
@@ -38,7 +39,7 @@ class TraceSubsetSampler:
 
 		# 1) primary key 候補の構築（重み付き / fallback 互換）
 		key_candidates, weight_candidates = self._build_primary_candidates(
-			cmp_available
+			cmp_available=cmp_available
 		)
 
 		# 選択
@@ -52,12 +53,13 @@ class TraceSubsetSampler:
 		unique_keys = info[f'{key_name}_unique_keys']
 		key_to_indices = info[f'{key_name}_key_to_indices']
 		if not unique_keys:
-			raise RuntimeError(f'No unique keys for {key_name}')
+			msg = f'No unique keys for {key_name}'
+			raise RuntimeError(msg)
 
 		key = r.choice(unique_keys)
 		indices = key_to_indices[key]
 
-		# 2) superwindow（距離KNN／インデックスwindow fallback）
+		# 2) superwindow(距離KNN/インデックスwindow fallback)
 		apply_super, did_super = False, False
 		if self.cfg.use_superwindow and self.cfg.sw_halfspan > 0:
 			apply_super = True
@@ -70,13 +72,13 @@ class TraceSubsetSampler:
 
 		indices = np.asarray(indices, dtype=np.int64)
 
-		# 3) secondary 整列（従来条件の踏襲）
+		# 3) secondary 整列(従来条件の踏襲)
 		secondary_key = self._choose_secondary_key(
-			key_name, apply_super, self.cfg.valid, r
+			key_name, apply_super=apply_super, valid=self.cfg.valid, r=r
 		)
 		indices = self._stable_lexsort(info, key_name, secondary_key, indices)
 
-		# 4) 連続サブセット抽出（最大 subset_traces）
+		# 4) 連続サブセット抽出(最大 subset_traces)
 		n_total = len(indices)
 		H = int(self.cfg.subset_traces)
 		if n_total >= H:
@@ -104,7 +106,7 @@ class TraceSubsetSampler:
 		}
 
 	# ---- helpers ----
-	def _build_primary_candidates(self, cmp_available: bool):
+	def _build_primary_candidates(self, *, cmp_available: bool):
 		if self.cfg.primary_keys:
 			kc, wc = [], []
 			for i, k in enumerate(self.cfg.primary_keys):
@@ -178,7 +180,7 @@ class TraceSubsetSampler:
 		return np.asarray(sel_keys, dtype=np.int64), k2map
 
 	def _choose_secondary_key(
-		self, key_name: str, apply_super: bool, valid: bool, r: random.Random
+		self, key_name: str, *, apply_super: bool, valid: bool, r: random.Random
 	) -> str:
 		if not apply_super and not valid:
 			if key_name == 'ffid':
