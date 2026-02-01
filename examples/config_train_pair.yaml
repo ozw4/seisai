@@ -1,0 +1,65 @@
+paths:
+  input_segy_files:
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.30.00_bpf.sgy
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.31.00_bpf.sgy
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.32.00_bpf.sgy
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.33.00_bpf.sgy
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.34.00_bpf.sgy
+
+  target_segy_files:
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.30.00_NR.sgy
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.31.00_NR.sgy
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.32.00_NR.sgy
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.33.00_NR.sgy
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.34.00_NR.sgy
+
+dataset:
+  max_trials: 2048
+  use_header_cache: true
+  verbose: true
+  primary_keys: [ffid]
+
+train:
+  batch_size: 8
+  epochs: 100
+  lr: 1.0e-4
+  subset_traces: 128
+  time_len: 6016
+  samples_per_epoch: 256
+  loss_kind: l1            # l1 or mse
+  seed: 42
+  use_amp: true
+  max_norm: 1.0
+  num_workers: 0
+
+infer:
+  batch_size: 1
+  max_batches: 12
+  subset_traces: 4096
+  seed: 43
+  num_workers: 0
+
+tile:
+  tile_h: 128
+  overlap_h: 64
+  tiles_per_batch: 16
+  amp: true
+  use_tqdm: false
+
+vis:
+  out_dir: ./_pair_vis
+  n: 5
+  cmap: seismic
+  vmin: -3
+  vmax: 3
+  transpose_for_trace_time: true
+  per_trace_norm: true
+  per_trace_eps: 1.0e-8
+  figsize: [20.0, 15.0]
+  dpi: 300
+
+model:
+  backbone: resnet18 # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
+  pretrained: true
+  in_chans: 1
+  out_chans: 1
