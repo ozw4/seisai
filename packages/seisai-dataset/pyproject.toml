@@ -8,7 +8,7 @@ name = "seisai-dataset"
 version = "0.1.0"
 description = "SEG-Y gather dataset toolkit for pytorch"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
   "numpy",
