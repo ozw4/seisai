@@ -1,17 +1,47 @@
+"""Sampling and preprocessing flow utilities for SeisAI datasets.
+
+This module provides the `SampleFlow` class, which:
+- draws samples from a provided sampler with a deterministic seed;
+- pads indices/offsets (optionally with an fb_subset) to a fixed length;
+- applies a transform that returns a 2D NumPy array (and optional metadata);
+- runs a plan that populates `input` (and optionally `target`) for training.
+"""
+
 import random
 
 import numpy as np
 import torch
 
+from .file_info import FileInfo
+
 
 class SampleFlow:
+	"""Sampling and preprocessing orchestrator for SeisAI datasets.
+
+	This class ties together a sampler, a transform, and a plan:
+	- `draw_sample` draws a deterministic sample using an RNG-derived seed.
+	- `pad_indices_offsets` / `pad_indices_offsets_fb` pad indices/offsets (and optional
+	  `fb_subset`) to a fixed length and return a validity mask.
+	- `apply_transform` applies the configured transform and validates its output.
+	- `run_plan` executes the configured plan to populate `input` (and optionally `target`).
+
+	Parameters
+	----------
+	transform
+		Callable that accepts `(x, rng=..., return_meta=True)` and returns either a 2D numpy
+		array or `(2D numpy array, meta dict)`.
+	plan
+		Object providing `run(sample_for_plan, rng=...)` that populates `sample_for_plan`.
+
+	"""
+
 	def __init__(self, transform, plan) -> None:
 		self.transform = transform
 		self.plan = plan
 
 	def draw_sample(
 		self,
-		info: dict,
+		info: dict | FileInfo,
 		rng: np.random.Generator,
 		*,
 		sampler,
@@ -98,7 +128,9 @@ class SampleFlow:
 				f'transform({name}) は 2D numpy または (2D, meta) を返す必要があります'
 			)
 		if not isinstance(meta, dict):
-			raise ValueError(f'transform({name}) meta must be dict, got {type(meta).__name__}')
+			raise ValueError(
+				f'transform({name}) meta must be dict, got {type(meta).__name__}'
+			)
 		return x_view, meta
 
 	def build_plan_input_base(
