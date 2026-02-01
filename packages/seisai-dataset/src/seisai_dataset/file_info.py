@@ -1,12 +1,56 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import segyio
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class FileInfo:
+	path: str
+	mmap: np.ndarray
+	segy_obj: segyio.SegyFile
+	dt_sec: float
+	n_traces: int
+	n_samples: int
+	ffid_values: np.ndarray
+	chno_values: np.ndarray
+	cmp_values: np.ndarray | None
+	ffid_key_to_indices: dict[int, np.ndarray] | None
+	chno_key_to_indices: dict[int, np.ndarray] | None
+	cmp_key_to_indices: dict[int, np.ndarray] | None
+	ffid_unique_keys: list[int] | None
+	chno_unique_keys: list[int] | None
+	cmp_unique_keys: list[int] | None
+	offsets: np.ndarray
+	ffid_centroids: dict[int, tuple[float, float]] | None
+	chno_centroids: dict[int, tuple[float, float]] | None
+	fb: np.ndarray | None = None
+
+	def __getitem__(self, key: str):
+		return getattr(self, key)
+
+	def __setitem__(self, key: str, value) -> None:
+		setattr(self, key, value)
+
+	def get(self, key: str, default=None):
+		return getattr(self, key, default)
+
+
+@dataclass(slots=True)
+class PairFileInfo:
+	input_info: FileInfo
+	target_path: str
+	target_mmap: np.ndarray
+	target_segy_obj: segyio.SegyFile
+	target_n_samples: int
+	target_n_traces: int
+	target_dt_sec: float
 
 
 def load_headers_with_cache(
@@ -286,3 +330,25 @@ def build_file_info(
 		'ffid_centroids': ffid_centroids,
 		'chno_centroids': chno_centroids,
 	}
+
+
+def build_file_info_dataclass(
+	segy_path: str,
+	*,
+	ffid_byte,
+	chno_byte,
+	cmp_byte=None,
+	header_cache_dir: str | None = None,
+	use_header_cache: bool = True,
+	include_centroids: bool = False,
+) -> FileInfo:
+	info = build_file_info(
+		segy_path,
+		ffid_byte=ffid_byte,
+		chno_byte=chno_byte,
+		cmp_byte=cmp_byte,
+		header_cache_dir=header_cache_dir,
+		use_header_cache=use_header_cache,
+		include_centroids=include_centroids,
+	)
+	return FileInfo(**info)
