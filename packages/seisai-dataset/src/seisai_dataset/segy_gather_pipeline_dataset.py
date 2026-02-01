@@ -1,5 +1,16 @@
+"""SEG-Y gather dataset pipeline.
+
+This module provides a `torch.utils.data.Dataset` implementation that:
+- loads SEG-Y gathers and corresponding first-break (FB) picks,
+- samples a subset of traces (optionally with superwindow logic),
+- applies a user-provided transform and projects metadata to the view,
+- applies first-break quality gates (min-pick and FBLC),
+- optionally builds model inputs/targets via a `BuildPlan`.
+"""
+
 # %%
 import contextlib
+
 import numpy as np
 import segyio
 import torch
@@ -22,11 +33,36 @@ from .trace_subset_sampler import TraceSubsetSampler
 
 
 class SampleTransformer:
+	"""Load a subset of SEG-Y traces and apply the configured transform.
+
+	This helper encapsulates:
+	- loading a fixed-size trace subset via `TraceSubsetLoader` (with padding as needed),
+	- aligning indices/offsets/first-break picks to the loaded height (H),
+	- applying the user transform and projecting metadata to the transformed view.
+
+	Parameters
+	----------
+	subsetloader : TraceSubsetLoader
+		Loader used to read and (optionally) pad the trace subset.
+	transform
+		Callable applied to the loaded gather. Expected signature:
+		`transform(x: np.ndarray, rng: np.random.Generator, return_meta: bool=True)
+		-> np.ndarray | tuple[np.ndarray, dict]`.
+
+	Notes
+	-----
+	`load_transform` returns `(x_view, meta, offsets, fb_subset, indices, trace_valid)`,
+	where `meta` is augmented with view-projected fields like `fb_idx_view`,
+	`offsets_view`, and `time_view`.
+
+	"""
+
 	def __init__(
 		self,
 		subsetloader: TraceSubsetLoader,
 		transform,
 	) -> None:
+		"""Initialize the transformer with a subset loader and transform callable."""
 		self.subsetloader = subsetloader
 		self.transform = transform
 
@@ -39,12 +75,12 @@ class SampleTransformer:
 	) -> tuple[np.ndarray, dict, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 		mmap = info.mmap
 
-		# 波形読み出し（subset_traces に満たない場合は loader が H 方向にパッドする）
+		# 波形読み出し(subset_traces に満たない場合は loader が H 方向にパッドする)
 		x = self.subsetloader.load(mmap, indices)  # (H,W0)
 		H = int(x.shape[0])
 		W0 = int(x.shape[1])
 
-		# ここで offsets/fb/indices を H に合わせる（仕様）
+		# ここで offsets/fb/indices を H に合わせる (仕様)
 		offsets = info.offsets[indices].astype(np.float32, copy=False)
 		indices, offsets, fb_subset, trace_valid, _pad = (
 			SampleFlow.pad_indices_offsets_fb(
@@ -55,21 +91,20 @@ class SampleTransformer:
 			)
 		)
 
-		# 変換（Crop/Pad / TimeStretch 等）
+		# 変換 (Crop/Pad / TimeStretch 等)
 		out = self.transform(x, rng=rng, return_meta=True)
 		x_view, meta = out if isinstance(out, tuple) else (out, {})
 		if not isinstance(meta, dict):
-			raise ValueError(
-				f'transform meta must be dict, got {type(meta).__name__}'
-			)
+			msg = f'transform meta must be dict, got {type(meta).__name__}'
+			raise TypeError(msg)
 		if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
-			raise ValueError(
-				'transform は 2D numpy または (2D, meta) を返す必要があります'
-			)
+			msg = 'transform は 2D numpy または (2D, meta) を返す必要があります'
+			raise ValueError(msg)
 
 		Hv, W = x_view.shape
 		if Hv != H:
-			raise ValueError(f'transform must keep H: got Hv={Hv}, expected H={H}')
+			msg = f'transform must keep H: got Hv={Hv}, expected H={H}'
+			raise ValueError(msg)
 
 		t_raw = np.arange(W0, dtype=np.float32) * float(info.dt_sec)
 
@@ -82,12 +117,40 @@ class SampleTransformer:
 
 
 class GateEvaluator:
+	"""Evaluate first-break quality gates for a gather.
+
+	Attributes
+	----------
+	fbgate : FirstBreakGate
+		Gate implementation providing min-pick and FBLC checks.
+	verbose : bool
+		Whether to print rejection details.
+	last_reject : str | None
+		Most recent rejection reason ("min_pick" or "fblc").
+
+	"""
+
 	def __init__(self, fbgate: FirstBreakGate, *, verbose: bool = False) -> None:
+		"""Initialize the gate evaluator with a gate implementation and verbosity."""
 		self.fbgate = fbgate
 		self.verbose = bool(verbose)
 		self.last_reject: str | None = None
 
 	def min_pick_accept(self, fb_subset: np.ndarray) -> bool:
+		"""Check whether the gather passes the minimum pick-count quality gate.
+
+		Parameters
+		----------
+		fb_subset : np.ndarray
+			First-break pick indices for the currently sampled trace subset.
+
+		Returns
+		-------
+		bool
+			True if the minimum pick criterion is satisfied; otherwise False, with
+			`last_reject` set to "min_pick".
+
+		"""
 		ok_pick, _, _ = self.fbgate.min_pick_accept(fb_subset)
 		if not ok_pick:
 			self.last_reject = 'min_pick'
@@ -95,8 +158,30 @@ class GateEvaluator:
 		self.last_reject = None
 		return True
 
-	def apply_gates(self, meta: dict, did_super: bool, info: FileInfo) -> bool:
-		# FBLC gate（After transform）
+	def apply_gates(self, meta: dict, *, did_super: bool, info: FileInfo) -> bool:
+		"""Apply post-transform first-break quality gates to a gather.
+
+		This currently evaluates the FBLC (first-break linearity/consistency) gate
+		using first-break indices projected into the transformed view.
+
+		Parameters
+		----------
+		meta : dict
+			Metadata dictionary produced/augmented during transformation; must
+			include `fb_idx_view` and may include `factor` for effective dt scaling.
+		did_super : bool
+			Whether the sample was drawn using the superwindow logic.
+		info : FileInfo
+			File-level metadata (e.g., `dt_sec`, `path`) for the current gather.
+
+		Returns
+		-------
+		bool
+			True if the gather passes all gates; otherwise False, with `last_reject`
+			set to the rejection reason (currently "fblc").
+
+		"""
+		# FBLC gate (After transform)
 		factor = float(meta.get('factor', 1.0))
 		dt_eff_sec = info.dt_sec / max(factor, 1e-9)
 		meta['dt_eff_sec'] = float(dt_eff_sec)
@@ -151,9 +236,11 @@ class SegyGatherPipelineDataset(Dataset):
 		gate_evaluator: GateEvaluator | None = None,
 	) -> None:
 		if len(segy_files) == 0 or len(fb_files) == 0:
-			raise ValueError('segy_files / fb_files は空であってはならない')
+			msg = 'segy_files / fb_files は空であってはならない'
+			raise ValueError(msg)
 		if len(segy_files) != len(fb_files):
-			raise ValueError('segy_files と fb_files の長さが一致していません')
+			msg = 'segy_files と fb_files の長さが一致していません'
+			raise ValueError(msg)
 
 		self.segy_files = list(segy_files)
 		self.fb_files = list(fb_files)
@@ -200,10 +287,11 @@ class SegyGatherPipelineDataset(Dataset):
 				subset_traces=int(subset_traces),
 			)
 		)
+
 		if sample_transformer is None:
-			sample_transformer = SampleTransformer(subsetloader, transform)
+			sample_transformer = SampleTransformer(subsetloader, self.transform)
 		if gate_evaluator is None:
-			gate_evaluator = GateEvaluator(fbgate, verbose=self.verbose)
+			gate_evaluator = GateEvaluator(self.fbgate, verbose=self.verbose)
 
 		self.sample_transformer = sample_transformer
 		self.gate_evaluator = gate_evaluator
@@ -225,6 +313,11 @@ class SegyGatherPipelineDataset(Dataset):
 			self.file_infos.append(info)
 
 	def close(self) -> None:
+		"""Close any open SEG-Y file handles and release cached file metadata.
+
+		This method is safe to call multiple times and suppresses exceptions raised
+		while closing individual SEG-Y objects.
+		"""
 		for info in self.file_infos:
 			if info.segy_obj is not None:
 				with contextlib.suppress(Exception):
@@ -232,12 +325,15 @@ class SegyGatherPipelineDataset(Dataset):
 		self.file_infos.clear()
 
 	def __del__(self) -> None:
+		"""Finalize the dataset by closing any open SEG-Y resources."""
 		self.close()
 
 	def __len__(self) -> int:
+		"""Return the nominal dataset length for iteration purposes."""
 		return 1024
 
-	def __getitem__(self, _=None) -> dict:
+	def __getitem__(self, _: int | None = None) -> dict:
+		"""Return a single sampled and processed gather from the dataset."""
 		rej_pick = 0
 		rej_fblc = 0
 		for _attempt in range(self.max_trials):
@@ -267,7 +363,9 @@ class SegyGatherPipelineDataset(Dataset):
 			meta['primary_unique'] = sample['primary_unique']
 			sample['x_view'] = x_view
 
-			if not self.gate_evaluator.apply_gates(meta, did_super, info):
+			if not self.gate_evaluator.apply_gates(
+				meta, did_super=did_super, info=info
+			):
 				if self.gate_evaluator.last_reject == 'fblc':
 					rej_fblc += 1
 				continue
@@ -314,8 +412,9 @@ class SegyGatherPipelineDataset(Dataset):
 
 			return out
 
-		raise RuntimeError(
+		msg = (
 			f'failed to draw a valid sample within max_trials={self.max_trials}; '
 			f'rejections: min_pick={rej_pick}, fblc={rej_fblc}, '
 			f'files={len(self.file_infos)}'
 		)
+		raise RuntimeError(msg)
