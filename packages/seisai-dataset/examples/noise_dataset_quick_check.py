@@ -19,7 +19,7 @@ from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
 from seisai_dataset.noise_dataset import NoiseTraceSubsetDataset
 from seisai_dataset.noise_decider import EventDetectConfig
 
-# transforms（任意）
+# transforms(任意)
 from seisai_transforms.augment import (
 	DeterministicCropOrPad,
 	PerTraceStandardize,
@@ -28,6 +28,11 @@ from seisai_transforms.augment import (
 
 
 def main() -> None:
+	"""Run a quick sanity check for `NoiseTraceSubsetDataset`.
+
+	This script loads a single sample from the configured SEG-Y file(s),
+	applies basic transforms, and prints key metadata and tensor shapes.
+	"""
 	# ====== 編集パラメータ ======
 	segy_files = [
 		'/workspace/example_data/merged_F1.sgy',
@@ -42,9 +47,10 @@ def main() -> None:
 
 	for p in segy_files:
 		if not Path(p).exists():
-			raise FileNotFoundError(f'SEGY not found: {p}')
+			msg = f'SEGY not found: {p}'
+			raise FileNotFoundError(msg)
 
-	# transforms（例）
+	# transforms(例)
 	transform = ViewCompose([DeterministicCropOrPad(target_len), PerTraceStandardize()])
 
 	loader_cfg = LoaderConfig(pad_traces_to=int(subset_traces))
