@@ -46,7 +46,7 @@ class FbSegKLLossView:
 		assert isinstance(target, torch.Tensor), 'target must be Tensor'
 		assert target.shape == pred.shape, 'target must have same shape as pred'
 
-		B, C, H, W = pred.shape
+		B, _, H, _ = pred.shape
 
 		# view mask の取得（>0 を True とみなす）。bool 以外なら >0 で変換。
 		assert 'meta' in batch and isinstance(batch['meta'], Mapping), (
