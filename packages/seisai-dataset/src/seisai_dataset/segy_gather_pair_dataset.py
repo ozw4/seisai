@@ -196,8 +196,13 @@ class SegyGatherPairDataset(Dataset):
 
 			H = int(x_in.shape[0])
 			offsets = input_info['offsets'][indices].astype(np.float32, copy=False)
-			indices, offsets, _trace_valid, _pad = self.sample_flow.pad_indices_offsets(
-				indices, offsets, H
+			indices, offsets, _fb_subset, _trace_valid, _pad = (
+				self.sample_flow.pad_indices_offsets_fb(
+					indices=indices,
+					offsets=offsets,
+					fb_subset=None,
+					H=H,
+				)
 			)
 
 			seed = int(self._rng.integers(0, 2**31 - 1))
