@@ -1,7 +1,10 @@
+"""Logging utilities for tracking and reporting smoothed metrics during training."""
+
 import datetime
 import itertools
 import time
 from collections import defaultdict, deque
+from collections.abc import Iterable
 
 import torch
 import torch.distributed as dist
@@ -10,11 +13,13 @@ from seisai_utils.dist import is_dist_avail_and_initialized
 
 
 class SmoothedValue:
-	"""Track a series of values and provide access to smoothed values over a
+	"""Track a series of values and provide access to smoothed values over a.
+
 	window or the global series average.
 	"""
 
-	def __init__(self, window_size=20, fmt=None):
+	def __init__(self, window_size: int = 20, fmt: str | None = None) -> None:
+		"""Initialize the smoothed value tracker with a window size and format."""
 		if fmt is None:
 			fmt = '{median:.4f} ({global_avg:.4f})'
 		self.deque = deque(maxlen=window_size)
@@ -22,13 +27,13 @@ class SmoothedValue:
 		self.count = 0
 		self.fmt = fmt
 
-	def update(self, value, n=1):
+	def update(self, value: float, n: int = 1) -> None:
 		self.deque.append(value)
 		self.count += n
 		self.total += value * n
 
-	def synchronize_between_processes(self):
-		"""Warning: does not synchronize the deque!"""
+	def synchronize_between_processes(self) -> None:
+		"""Warning: does not synchronize the deque!."""
 		if not is_dist_avail_and_initialized():
 			return
 		t = torch.tensor([self.count, self.total], dtype=torch.float64, device='cuda')
@@ -39,30 +44,31 @@ class SmoothedValue:
 		self.total = t[1]
 
 	@property
-	def median(self):
+	def median(self) -> float:
 		d = torch.tensor(list(self.deque))
 		return d.median().item()
 
 	@property
-	def avg(self):
+	def avg(self) -> float:
 		d = torch.tensor(list(self.deque), dtype=torch.float32)
 		return d.mean().item()
 
 	@property
-	def global_avg(self):
+	def global_avg(self) -> float:
 		if self.count == 0:
 			return 0.0
 		return self.total / self.count
 
 	@property
-	def max(self):
+	def max(self) -> float:
 		return max(self.deque)
 
 	@property
-	def value(self):
+	def value(self) -> float:
 		return self.deque[-1]
 
-	def __str__(self):
+	def __str__(self) -> str:
+		"""Return a formatted string representation of the smoothed values."""
 		if self.count == 0:
 			try:
 				return self.fmt.format(median=0, avg=0, global_avg=0, max=0, value=0)
@@ -79,27 +85,38 @@ class SmoothedValue:
 
 
 class MetricLogger:
-	def __init__(self, delimiter='\t'):
+	"""Log and synchronize multiple smoothed metrics during iteration.
+
+	Attributes
+	----------
+	meters : dict[str, SmoothedValue]
+		Mapping of metric names to smoothed value trackers.
+	delimiter : str
+		Delimiter used when formatting metric output.
+
+	"""
+
+	def __init__(self, delimiter: str = '\t') -> None:
+		"""Initialize a metric logger with an optional delimiter for output formatting."""
 		self.meters = defaultdict(SmoothedValue)
 		self.delimiter = delimiter
 
 	def update(self, **kwargs):
 		for k, v in kwargs.items():
 			if isinstance(v, torch.Tensor):
-				v_ = v.item()
-			assert isinstance(v_, (float, int))
-			self.meters[k].update(v_)
+				v = v.item()
+			assert isinstance(v, (float, int))
+			self.meters[k].update(v)
 
 	def __getattr__(self, attr):
 		if attr in self.meters:
 			return self.meters[attr]
 		if attr in self.__dict__:
 			return self.__dict__[attr]
-		raise AttributeError(
-			f"'{type(self).__name__}' object has no attribute '{attr}'"
-		)
+		msg = f"'{type(self).__name__}' object has no attribute '{attr}'"
+		raise AttributeError(msg)
 
-	def __str__(self):
+	def __str__(self) -> str:
 		loss_str = []
 		for name, meter in self.meters.items():
 			loss_str.append(f'{name}: {meter!s}')
@@ -109,10 +126,10 @@ class MetricLogger:
 		for meter in self.meters.values():
 			meter.synchronize_between_processes()
 
-	def add_meter(self, name, meter):
+	def add_meter(self, name: str, meter: SmoothedValue) -> None:
 		self.meters[name] = meter
 
-	def log_every(self, iterable, print_freq, header=None):
+	def log_every(self, iterable: Iterable, print_freq: int, header: str | None = None):
 		if isinstance(iterable, list):
 			length = max(len(x) for x in iterable)
 			iterable = [x if len(x) == length else itertools.cycle(x) for x in iterable]
