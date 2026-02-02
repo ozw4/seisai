@@ -22,15 +22,18 @@ class Crop1DTransform:
 		return_meta: bool = False,
 	) -> np.ndarray | tuple[np.ndarray, dict]:
 		if not isinstance(x, np.ndarray) or x.ndim != 2:
-			raise ValueError('x must be a 2D numpy array')
+			msg = 'x must be a 2D numpy array'
+			raise ValueError(msg)
 		H, W0 = x.shape
 		if H <= 0 or W0 <= 0:
 			raise ValueError('x must have positive shape')
 		out_len = int(self.out_len)
 		if out_len <= 0:
-			raise ValueError('out_len must be > 0')
+			msg = 'out_len must be > 0'
+			raise ValueError(msg)
 		if out_len > W0:
-			raise ValueError(f'W0({W0}) < out_len({out_len}); test expects crop-only')
+			msg = f'W0({W0}) < out_len({out_len}); test expects crop-only'
+			raise ValueError(msg)
 
 		start = int(rng.integers(0, W0 - out_len + 1))
 		x_view = x[:, start : start + out_len]
@@ -94,7 +97,8 @@ def as_chw(x: torch.Tensor) -> torch.Tensor:
 		return x.unsqueeze(0)
 	if x.ndim == 3:
 		return x
-	raise ValueError(f'expected 2D or 3D tensor, got shape={tuple(x.shape)}')
+	msg = f'expected 2D or 3D tensor, got shape={tuple(x.shape)}'
+	raise ValueError(msg)
 
 
 def test_segy_gather_pair_dataset_sync_transform_and_plan(tmp_path: Path) -> None:
@@ -130,7 +134,8 @@ def test_segy_gather_pair_dataset_sync_transform_and_plan(tmp_path: Path) -> Non
 	ds._rng = np.random.default_rng(0)
 
 	out = ds[0]
-	assert 'input' in out and 'target' in out
+	assert 'input' in out
+	assert 'target' in out
 	assert isinstance(out['input'], torch.Tensor)
 	assert isinstance(out['target'], torch.Tensor)
 
@@ -195,7 +200,7 @@ def test_segy_gather_pair_dataset_mismatch_raises(tmp_path: Path) -> None:
 
 
 def test_segy_gather_pair_dataset_pads_when_gather_is_short(tmp_path: Path) -> None:
-	# gather（FFID=1）が subset_traces より短い場合、loader が H 方向に pad する
+	# gather(FFID=1)が subset_traces より短い場合、loader が H 方向に pad する
 	n_traces = 6
 	n_samples = 64
 	dt_us = 2000
@@ -232,18 +237,20 @@ def test_segy_gather_pair_dataset_pads_when_gather_is_short(tmp_path: Path) -> N
 	assert x_in.shape[0] == 8
 	assert x_tg.shape[0] == 8
 
-	# pad 行はゼロ（関係式も維持される）
+	# pad 行はゼロ(関係式も維持される)
 	assert torch.allclose(x_in[6:], torch.zeros_like(x_in[6:]))
 	assert torch.allclose(x_tg[6:], torch.zeros_like(x_tg[6:]))
 	assert torch.allclose(x_in, 2.0 * x_tg)
 
-	# indices / offsets も pad されている（仕様にしている場合）
+	# indices / offsets も pad されている(仕様にしている場合)
 	idx = out['indices']
 	assert idx.shape == (8,)
-	assert int(idx[6]) == -1 and int(idx[7]) == -1
+	assert int(idx[6]) == -1
+	assert int(idx[7]) == -1
 	off = out['offsets'].cpu().numpy()
 	assert off.shape == (8,)
-	assert float(off[6]) == 0.0 and float(off[7]) == 0.0
+	assert float(off[6]) == 0.0
+	assert float(off[7]) == 0.0
 
 	ds.close()
 
@@ -251,11 +258,14 @@ def test_segy_gather_pair_dataset_pads_when_gather_is_short(tmp_path: Path) -> N
 def _read_trace_headers(path: str, indices: np.ndarray) -> dict[str, np.ndarray]:
 	idx = np.asarray(indices, dtype=np.int64)
 	if idx.ndim != 1:
-		raise ValueError('indices must be 1D')
+		msg = 'indices must be 1D'
+		raise ValueError(msg)
 	if idx.size == 0:
-		raise ValueError('indices must be non-empty')
+		msg = 'indices must be non-empty'
+		raise ValueError(msg)
 	if np.any(idx < 0):
-		raise ValueError('indices must be non-negative for header read')
+		msg = 'indices must be non-negative for header read'
+		raise ValueError(msg)
 
 	with segyio.open(path, 'r', ignore_geometry=True) as f:
 		ffid = np.array(
