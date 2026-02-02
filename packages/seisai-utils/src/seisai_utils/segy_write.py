@@ -26,7 +26,8 @@ def _cast_like_dtype(x: np.ndarray, dtype: np.dtype) -> np.ndarray:
 		y = np.clip(y, info.min, info.max)
 		return y.astype(dt, copy=False)
 
-	raise TypeError(f'unsupported dtype: {dt}')
+	msg = f'unsupported dtype: {dt}'
+	raise TypeError(msg)
 
 
 def write_segy_like_input(
@@ -120,9 +121,11 @@ def write_segy_like_input(
 			msg = 'trace_indices must be non-empty'
 			raise ValueError(msg)
 		if len(set(trace_indices)) != len(trace_indices):
-			raise ValueError('trace_indices must be unique')
+			msg = 'trace_indices must be unique'
+			raise ValueError(msg)
 		if min(trace_indices) < 0 or max(trace_indices) >= n_traces:
-			raise ValueError(f'trace_indices out of range: valid=[0,{n_traces - 1}]')
+			msg = f'trace_indices out of range: valid=[0,{n_traces - 1}]'
+			raise ValueError(msg)
 		if int(data_hw.shape[0]) != len(trace_indices):
 			msg = f'data_hw H must equal len(trace_indices)={len(trace_indices)}, got {int(data_hw.shape[0])}'
 			raise ValueError(msg)
