@@ -1,36 +1,108 @@
-# packages/seisai-builders/src/seisai_builders/builder.py
+"""Dataset build plans and feature/label producers for SeisAI.
+
+This module defines small, composable operations that transform an in-memory
+`sample` dict (waveforms, metadata, labels) into model-ready tensors, and plan
+executors that run these operations in sequence.
+
+Main components:
+- Wave producers: IdentitySignal, MaskedSignal, MakeTimeChannel, MakeOffsetChannel
+- Label producers: FBGaussMap
+- Stack/selection utilities: SelectStack
+- Pipeline executors: BasePlan, BuildPlan, InputOnlyPlan
+"""
+
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import torch
 from seisai_pick.gaussian_prob import gaussian_probs1d_np
 
+if TYPE_CHECKING:
+	from collections.abc import Iterable
 
-def _to_numpy(x, dtype=None) -> np.ndarray:
+	from numpy.typing import ArrayLike, DTypeLike
+
+
+def _to_numpy(x: ArrayLike, dtype: DTypeLike | None = None) -> np.ndarray:
 	if isinstance(x, torch.Tensor):
 		x = x.detach().cpu().numpy()
 	return np.asarray(x, dtype=dtype)
 
 
-# ---------- Wave producers（波形から作る派生物） ----------
+# ---------- Wave producers(波形から作る派生物) ----------
 class IdentitySignal:
+	"""Copy or reference a waveform-like entry from `sample` into another key.
+
+	This operator reads a waveform-like value (typically a NumPy array or Torch tensor)
+	from `sample[self.src]` and writes it to `sample[self.dst]`.
+
+	Parameters
+	----------
+	src : str, default 'x_view'
+		Source key to read from `sample` (ignored if `source_key` is provided).
+	dst : str, default 'x_id'
+		Destination key to write into `sample`.
+	copy : bool, default False
+		If True, copy/clone the source value; if False, store a reference.
+	source_key : str | None, default None
+		Optional override for the source key; takes precedence over `src`.
+
+	Notes
+	-----
+	- When `copy=True`, supported types are `numpy.ndarray` and `torch.Tensor`.
+	- The operator mutates `sample` in-place and returns None.
+
+	"""
+
 	def __init__(
 		self,
 		src: str = 'x_view',
 		dst: str = 'x_id',
+		*,
 		copy: bool = False,
 		source_key: str | None = None,
-	):
+	) -> None:
+		"""Initialize an IdentitySignal operator.
+
+		Parameters
+		----------
+		src : str, default 'x_view'
+			Source key to read from `sample` (ignored if `source_key` is provided).
+		dst : str, default 'x_id'
+			Destination key to write into `sample`.
+		copy : bool, default False
+			If True, copy/clone the source value; if False, store a reference.
+		source_key : str | None, default None
+			Optional override for the source key; takes precedence over `src`.
+
+		"""
 		self.src = source_key if source_key is not None else src
 		self.dst = dst
 		self.copy = copy
 
 	def __call__(self, sample: dict[str, Any], rng=None) -> None:
+		"""Copy or reference a waveform-like entry from `sample` into `sample[self.dst]`.
+
+		Parameters
+		----------
+		sample : dict[str, Any]
+			Sample dictionary containing at least `self.src`.
+		rng : Any, optional
+			Unused; accepted for pipeline compatibility.
+
+		Raises
+		------
+		KeyError
+			If `self.src` is missing from `sample`.
+		TypeError
+			If `copy=True` and the source value type is unsupported.
+
+		"""
 		if self.src not in sample:
-			raise KeyError(f'missing sample key: {self.src}')
+			msg = f'missing sample key: {self.src}'
+			raise KeyError(msg)
 		x = sample[self.src]
 		if not self.copy:
 			sample[self.dst] = x
@@ -41,16 +113,18 @@ class IdentitySignal:
 		if isinstance(x, torch.Tensor):
 			sample[self.dst] = x.clone()
 			return
-		raise TypeError(f'unsupported type for copy: {type(x).__name__}')
+		msg = f'unsupported type for copy: {type(x).__name__}'
+		raise TypeError(msg)
 
 
 class MaskedSignal:
-	"""MaskGenerator を使って x_view にピクセル単位マスクを適用し、
+	"""MaskGenerator を使って x_view にピクセル単位マスクを適用し.
+
 	破壊後テンソルと boolean マスクを sample に格納する。
 	- src: 入力キー (H,T) or (C,H,T)
-	- dst: 出力キー（破壊後）
+	- dst: 出力キー(破壊後)
 	- mask_key: 生成された bool マスク (H,T) の保存先キー
-	- mode: 'replace' または 'add'
+	- mode: 'replace' または 'add'.
 	"""
 
 	def __init__(
@@ -60,7 +134,7 @@ class MaskedSignal:
 		src: str = 'x_view',
 		dst: str = 'x_masked',
 		mask_key: str = 'mask_bool',
-		mode: Literal['replace', 'add'] | None = None,  # ← 任意化（整合チェック用）
+		mode: Literal['replace', 'add'] | None = None,  # ← 任意化(整合チェック用)
 	):
 		self.gen = generator
 		self.src = src
@@ -71,14 +145,14 @@ class MaskedSignal:
 	def __call__(self, sample: dict[str, Any], rng=None) -> None:
 		r = rng or np.random.default_rng()
 		x = sample[self.src]
-		# MaskGenerator.apply は mode 引数を受けないため渡さない（生成器に保持されている）
+		# MaskGenerator.apply は mode 引数を受けないため渡さない(生成器に保持されている)
 		xm, m = self.gen.apply(x, rng=r, mask=None, return_mask=True)
 		sample[self.dst] = xm
 		sample[self.mask_key] = m
 
 
 class MakeTimeChannel:
-	"""(H,W) -> (H,W) 時刻チャネル（秒）。Crop/Pad後に使うこと"""
+	"""(H,W) -> (H,W) 時刻チャネル(秒)。Crop/Pad後に使うこと"""
 
 	def __init__(self, dst: str = 'time_ch'):
 		self.dst = dst
@@ -90,7 +164,7 @@ class MakeTimeChannel:
 
 
 class MakeOffsetChannel:
-	"""(H,) オフセットを (H,W) に拡張。normalize=True で valid traces のみ z-score（invalid は 0 固定）"""
+	"""(H,) オフセットを (H,W) に拡張。normalize=True で valid traces のみ z-score(invalid は 0 固定)"""
 
 	def __init__(self, dst: str = 'offset_ch', normalize: bool = True):
 		self.dst, self.normalize = dst, normalize
@@ -118,11 +192,11 @@ class MakeOffsetChannel:
 		sample[self.dst] = np.repeat(off[:, None], W, axis=1)
 
 
-# ---------- Label producers（ラベルから作る派生物） ----------
+# ---------- Label producers(ラベルから作る派生物) ----------
 
 
 class FBGaussMap:
-	"""fb_idx_view → ガウスマップ（各有効行の面積=1, CE前提, ガウスはビンindex基準）"""
+	"""fb_idx_view → ガウスマップ(各有効行の面積=1, CE前提, ガウスはビンindex基準)"""
 
 	def __init__(
 		self, dst: str = 'fb_map', sigma: float = 1.5, src: str = 'fb_idx_view'
@@ -157,7 +231,7 @@ class FBGaussMap:
 		sample[self.dst] = y
 
 
-# ---------- 共通セレクタ（入力にもターゲットにも使う） ----------
+# ---------- 共通セレクタ(入力にもターゲットにも使う) ----------
 class SelectStack:
 	"""keys の2D/3Dを (C,H,W) に連結し、dst に格納。
 	- 2D(H,W) は自動で [None, ...] して C 次元を付与
@@ -227,7 +301,7 @@ class BuildPlan(BasePlan):
 
 
 class InputOnlyPlan(BasePlan):
-	"""BuildPlan 互換の "input のみ" 実行器（推論用）。
+	"""BuildPlan 互換の "input のみ" 実行器(推論用)。
 
 	- wave_ops / label_ops を順に適用
 	- input_stack で sample['input'] を構築
@@ -246,9 +320,9 @@ class InputOnlyPlan(BasePlan):
 	@classmethod
 	def from_build_plan(
 		cls,
-		plan: 'BuildPlan',
+		plan: BuildPlan,
 		*,
 		include_label_ops: bool = False,
-	) -> 'InputOnlyPlan':
+	) -> InputOnlyPlan:
 		label_ops = plan.label_ops if include_label_ops else []
 		return cls(plan.wave_ops, label_ops, plan.input_stack)
