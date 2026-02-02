@@ -1,3 +1,15 @@
+"""View-space projection utilities for SeisAI transforms.
+
+This module provides helper functions to project 1D per-trace arrays into a
+"view" coordinate system based on transformation metadata (e.g., horizontal
+flip, H-axis scaling, time scaling, and window start).
+
+Public functions:
+- project_fb_idx_view: project first-break indices into view space.
+- project_offsets_view: project per-trace offsets into view space.
+- project_time_view: project a 1D time grid into view space.
+"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -6,18 +18,21 @@ _EPS = 1e-6  # 比較時の許容誤差(ほぼ等しいかの判定に使用)
 
 
 def _resample_idx_nearest(v: np.ndarray, factor_h: float) -> np.ndarray:
-	"""(H,) 整数インデックス列を H を保ったまま「最近傍補間」で再サンプルする。
+	"""(H,) 整数インデックス列を H を保ったまま「最近傍補間」で再サンプルする.
+
 	目的:
-	  - fb_idx のような「離散位置」を線形でぼかさず、段差を保ったまま伸縮する。
+	- fb_idx のような「離散位置」を線形でぼかさず、段差を保ったまま伸縮する。
 
 	契約:
-	  - v: (H,), int 系(-1 は無効)
-	  - factor_h: >0、1.0 で恒等。中心 (H-1)/2 を固定してスケール。
-	  - 端はクリップ(外挿なし)
+	- v: (H,), int 系(-1 は無効)
+	- factor_h: >0、1.0 で恒等。中心 (H-1)/2 を固定してスケール。
+	- 端はクリップ(外挿なし)
+
 	無効の扱い:
-	  - 最近傍に選ばれた元値が -1 なら出力も -1(無効の“にじみ”は起こさない)
+	- 最近傍に選ばれた元値が -1 なら出力も -1(無効の“にじみ”は起こさない)
+
 	戻り値:
-	  - (H,), int64
+	- (H,), int64
 	"""
 	H = int(v.shape[0])
 	if H == 0 or abs(factor_h - 1.0) <= 1e-6:
@@ -29,13 +44,13 @@ def _resample_idx_nearest(v: np.ndarray, factor_h: float) -> np.ndarray:
 	j = np.floor(src + 0.5).astype(np.int64)  # 最近傍
 	j = np.clip(j, 0, H - 1)  # 端クリップ
 
-	out = v[j].astype(np.int64, copy=True)  # -1 はそのまま保持
-	return out
+	return v[j].astype(np.int64, copy=True)
 
 
 def _resample_float_linear(v: np.ndarray, factor_h: float) -> np.ndarray:
-	"""トレース方向(H軸)の中心固定・線形補間で、(H,) の float 系列を
-	同じ H のままリサンプリングする。
+	"""(H,) の float 系列を中心固定・線形補間で同じ H のままリサンプリングする.
+
+	トレース方向(H軸)の中心を固定し、線形補間で拡大/縮小する。
 
 	契約:
 	- 入力 v: 形状 (H,), dtype は float を想定(例: offsets)
@@ -60,8 +75,7 @@ def _resample_float_linear(v: np.ndarray, factor_h: float) -> np.ndarray:
 
 
 def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.ndarray:
-	"""生の初動インデックス列 `fb_idx`(1..W-1 が有効(0は無効))を、
-	meta(hflip/factor_h/factor/start)に基づいて View 空間へ投影する。
+	"""生の初動インデックス列 `fb_idx`(1..W-1 が有効(0は無効))を、meta(hflip/factor_h/factor/start)に基づいて View 空間へ投影する.
 
 	処理順:
 	1) H方向: hflip → factor_h による再サンプル(線形、無効値伝播ルール適用)
@@ -79,7 +93,8 @@ def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.nd
 	"""
 	fb = np.asarray(fb_idx, dtype=np.int64).copy()
 	if fb.shape[0] != H:
-		raise ValueError(f'fb_idx length {fb.shape[0]} != H {H}')
+		msg = f'fb_idx length {fb.shape[0]} != H {H}'
+		raise ValueError(msg)
 	if meta.get('hflip', False):
 		fb = fb[::-1]
 	f_h = float(meta.get('factor_h', 1.0))
@@ -93,8 +108,7 @@ def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.nd
 
 
 def project_offsets_view(offsets: np.ndarray, H: int, meta: dict) -> np.ndarray:
-	"""生のオフセット列 (H,) を meta の H 方向変換(hflip / factor_h)に合わせて
-	View 空間へ投影して返す。
+	"""生のオフセット列 (H,) を meta の H 方向変換(hflip / factor_h)に合わせて View 空間へ投影して返す.
 
 	Parameters
 	----------
@@ -118,16 +132,19 @@ def project_offsets_view(offsets: np.ndarray, H: int, meta: dict) -> np.ndarray:
 	"""
 	off = np.asarray(offsets, dtype=np.float32)
 	if off.ndim != 1:
-		raise ValueError('offsets must be 1D')
+		msg = 'offsets must be 1D'
+		raise ValueError(msg)
 	if off.shape[0] != H:
-		raise ValueError(f'offsets length {off.shape[0]} != H {H}')
+		msg = f'offsets length {off.shape[0]} != H {H}'
+		raise ValueError(msg)
 
 	if bool(meta.get('hflip', False)):
 		off = off[::-1].copy()
 
 	factor_h = float(meta.get('factor_h', 1.0))
 	if factor_h <= 0.0:
-		raise ValueError("meta['factor_h'] must be > 0")
+		msg = "meta['factor_h'] must be > 0"
+		raise ValueError(msg)
 
 	if abs(factor_h - 1.0) <= _EPS:
 		return off
@@ -137,7 +154,9 @@ def project_offsets_view(offsets: np.ndarray, H: int, meta: dict) -> np.ndarray:
 
 
 def project_time_view(time_1d: np.ndarray, H: int, W: int, meta: dict) -> np.ndarray:
-	"""生の時間軸(1D, 秒)を meta の時間ストレッチ / クロップに追従させ、
+	"""Project a 1D time axis (seconds) into view space based on meta.
+
+	生の時間軸(1D, 秒)を meta の時間ストレッチ / クロップに追従させ、
 	全トレース共通の 1D 時間グリッド (W,) を返す。
 	注: H はインターフェイス整合のための引数で計算には使用しない。
 
@@ -165,18 +184,21 @@ def project_time_view(time_1d: np.ndarray, H: int, W: int, meta: dict) -> np.nda
 	"""
 	t_raw = np.asarray(time_1d, dtype=np.float64)
 	if t_raw.ndim != 1 or t_raw.size < 2:
-		raise ValueError('time_1d must be 1D with length >= 2')
+		msg = 'time_1d must be 1D with length >= 2'
+		raise ValueError(msg)
 
 	dt0 = float(np.mean(np.diff(t_raw)))
 	t0 = float(t_raw[0])
 
 	factor = float(meta.get('factor', 1.0))
 	if factor <= 0.0:
-		raise ValueError("meta['factor'] must be > 0")
+		msg = "meta['factor'] must be > 0"
+		raise ValueError(msg)
 
 	start = int(meta.get('start', 0))
 	if start < 0:
-		raise ValueError("meta['start'] must be >= 0")
+		msg = "meta['start'] must be >= 0"
+		raise ValueError(msg)
 
 	tv = t0 + (np.arange(W, dtype=np.float64) + start) * (dt0 / factor)
 	return tv.astype(np.float32)
