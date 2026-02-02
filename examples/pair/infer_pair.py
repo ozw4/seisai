@@ -24,6 +24,19 @@ from torch.utils.data import DataLoader, Subset
 
 
 def main(argv: list[str] | None = None) -> None:
+	"""Run tiled-h inference on paired SEG-Y gathers and save triptych PNGs.
+
+	Parameters
+	----------
+	argv : list[str] | None, optional
+		Command-line arguments (excluding the program name). If None, arguments
+		are read from ``sys.argv``.
+
+	Returns
+	-------
+	None
+
+	"""
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--config', default='./config_train_pair.yaml')
 	parser.add_argument('--ckpt', default=None)
@@ -37,9 +50,11 @@ def main(argv: list[str] | None = None) -> None:
 
 	ckpt = load_checkpoint(ckpt_path)
 	if not isinstance(ckpt.get('model_cfg'), dict):
-		raise ValueError('checkpoint model_cfg must be dict')
+		msg = 'checkpoint model_cfg must be dict'
+		raise ValueError(msg)
 	if ckpt['model_cfg'] != asdict(cfg.model):
-		raise ValueError('checkpoint model_cfg does not match config model')
+		msg = 'checkpoint model_cfg does not match config model'
+		raise ValueError(msg)
 
 	model = build_model(cfg.model)
 	model.load_state_dict(ckpt['model_state_dict'], strict=True)
