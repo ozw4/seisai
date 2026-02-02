@@ -11,7 +11,7 @@ Reduction = Literal['mean', 'sum', 'none']
 
 class FbSegKLLossView:
 	"""First-break セグメンテーション用 KL 損失。
-	- 任意チャネル C に対応（各チャネルで W 方向に正規化して KL を計算し、C 次元で平均）
+	- 任意チャネル C に対応(各チャネルで W 方向に正規化して KL を計算し、C 次元で平均)
 	- meta['fb_idx_view']>0 の (B,H) トレースのみで集約
 
 	IF:
@@ -22,7 +22,7 @@ class FbSegKLLossView:
 	  batch['meta']['fb_idx_view']: (B,H)；True(>0) のトレースを採用
 
 	Notes:
-	  - target は各 (b,c,h, :) で非負、W 方向に正規化されていなくてもよい（内部で正規化）
+	  - target は各 (b,c,h, :) で非負、W 方向に正規化されていなくてもよい(内部で正規化)
 	  - C>1 の場合は、各チャネルの KL を平均して (B,H) に集約する
 
 	"""
@@ -48,7 +48,7 @@ class FbSegKLLossView:
 
 		B, _, H, _ = pred.shape
 
-		# view mask の取得（>0 を True とみなす）。bool 以外なら >0 で変換。
+		# view mask の取得(>0 を True とみなす)。bool 以外なら >0 で変換。
 		assert 'meta' in batch and isinstance(batch['meta'], Mapping), (
 			"batch['meta'] is required"
 		)
@@ -63,7 +63,7 @@ class FbSegKLLossView:
 		assert view_mask.shape == (B, H), "meta['fb_idx_view'] must be (B,H)"
 		view_mask = view_mask.to(device=pred.device)
 
-		# q, p の計算（W 次元で確率分布化）、KL(q||p) を W で和
+		# q, p の計算(W 次元で確率分布化)、KL(q||p) を W で和
 		log_p = F.log_softmax(pred / self.tau, dim=-1)  # (B,C,H,W)
 
 		q_raw = (target + self.eps).clamp_min(0)  # (B,C,H,W)

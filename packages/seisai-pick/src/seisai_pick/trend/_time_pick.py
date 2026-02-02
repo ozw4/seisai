@@ -6,7 +6,7 @@ from torch import Tensor
 
 def _argmax_time_parabolic(prob_bhw: Tensor, dt_sec: Tensor) -> Tensor:
 	"""(B,H,W) の確率から放物線補間付きargmaxで連続時刻[s]を返す → (B,H)
-	端ビン(idx==0 or W-1)では補間量dは0（=そのままargmax）。
+	端ビン(idx==0 or W-1)では補間量dは0(=そのままargmax)。
 	"""
 	assert prob_bhw.ndim == 3
 	B, H, W = prob_bhw.shape

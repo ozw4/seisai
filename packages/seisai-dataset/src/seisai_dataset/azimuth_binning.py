@@ -11,19 +11,19 @@ class AzimuthBinConfig:
 	degrees: bool = True
 
 	# ヒストグラム
-	bins: int = 720  # 0.5°刻み相当（degrees=Trueの場合）
-	# 平滑カーネル（円周）
+	bins: int = 720  # 0.5°刻み相当(degrees=Trueの場合)
+	# 平滑カーネル(円周)
 	smooth: Literal['moving', 'gaussian'] = 'moving'
-	win_bins: int = 15  # 移動平均の窓（bin数）。~7–21が無難
+	win_bins: int = 15  # 移動平均の窓(bin数)。~7–21が無難
 	gauss_sigma_bins: float = 6.0  # gaussianの場合のσ[bin]
 
 	# 谷検出のしきい値
-	min_prominence: float = 0.02  # 谷のプロミネンス閾値（全カウントに対する比率）
-	min_sep_bins: int = 20  # 隣接する谷の最小距離（bin）
+	min_prominence: float = 0.02  # 谷のプロミネンス閾値(全カウントに対する比率)
+	min_sep_bins: int = 20  # 隣接する谷の最小距離(bin)
 
-	# フォールバック（CDF等分）
+	# フォールバック(CDF等分)
 	min_traces_per_bin: int = (
-		200  # これを満たすKに自動調整（K=floor(N/min_traces_per_bin)）
+		200  # これを満たすKに自動調整(K=floor(N/min_traces_per_bin))
 	)
 	max_bins_when_fallback: int = 12
 
@@ -56,7 +56,7 @@ def _circ_smooth(h: np.ndarray, cfg: AzimuthBinConfig) -> np.ndarray:
 	n = int(h.size)
 	if cfg.smooth == 'moving':
 		w = int(max(1, cfg.win_bins))
-		# FFT畳み込み（円周）
+		# FFT畳み込み(円周)
 		ker = np.zeros(n)
 		half = w // 2
 		ker[: half + 1] = 1.0
@@ -111,9 +111,9 @@ def _find_valleys(
 	if not keep:
 		return np.asarray([], dtype=np.int64)
 
-	# NMS 的な最小距離間引き（谷が近すぎる場合は深い方を残す）
+	# NMS 的な最小距離間引き(谷が近すぎる場合は深い方を残す)
 	keep = np.asarray(keep, dtype=np.int64)
-	order = np.argsort(H[keep])  # 深い順に処理（小さい方が先）
+	order = np.argsort(H[keep])  # 深い順に処理(小さい方が先)
 	sel = []
 	used = np.zeros(n, dtype=bool)
 	for j in order:
@@ -129,13 +129,13 @@ def _find_valleys(
 
 
 def _labels_from_cuts(a_bin: np.ndarray, cuts: np.ndarray) -> np.ndarray:
-	# cuts は「谷」のbinインデックス（境界）。谷[i]〜谷[i+1]の間が1ビン。
+	# cuts は「谷」のbinインデックス(境界)。谷[i]〜谷[i+1]の間が1ビン。
 	if cuts.size == 0:
 		return np.zeros_like(a_bin, dtype=np.int64)
 	cuts_sorted = np.sort(cuts)
 	# a_bin ∈ [0, bins-1] を、循環的に区間割り当て
 	# まず各サンプルがどの cut より右にあるかを数えてラベル化
-	# 例: cuts=[10, 50, 300] → ラベルは {0,1,2}（最後の境界〜先頭も1区間）
+	# 例: cuts=[10, 50, 300] → ラベルは {0,1,2}(最後の境界〜先頭も1区間)
 	labels = np.zeros_like(a_bin, dtype=np.int64)
 	for k, c in enumerate(cuts_sorted):
 		labels += (a_bin >= c).astype(np.int64)
@@ -148,13 +148,13 @@ def bin_azimuth_dynamic(
 	cfg: AzimuthBinConfig = AzimuthBinConfig(),
 ) -> dict:
 	"""
-	ヒストグラム＋円周平滑で“谷”を境界に方位ビンを自動生成。
-	失敗時（谷が無い・制約未満）は CDF 等分でフォールバック（要警告）。
+	ヒストグラム+円周平滑で“谷”を境界に方位ビンを自動生成。
+	失敗時(谷が無い・制約未満)は CDF 等分でフォールバック(要警告)。
 
 	Returns:
 	  {
 	    'labels': ndarray[int] shape (N,),  # 各サンプルのビンラベル
-	    'cuts_bins': ndarray[int],          # 境界のbinインデックス（回転後座標）
+	    'cuts_bins': ndarray[int],          # 境界のbinインデックス(回転後座標)
 	    'origin_rad': float,                # 最大ギャップ回転の原点(rad)
 	    'used_fallback': bool,
 	    'hist': ndarray[float],             # 回転後ヒスト
@@ -178,7 +178,7 @@ def bin_azimuth_dynamic(
 
 	used_fallback = False
 	if valleys.size == 0:
-		# フォールバック：CDF等分（Kは件数から決める）
+		# フォールバック：CDF等分(Kは件数から決める)
 		K = max(
 			1,
 			min(cfg.max_bins_when_fallback, a_rot.size // int(cfg.min_traces_per_bin)),
@@ -193,7 +193,7 @@ def bin_azimuth_dynamic(
 				'hist': h,
 				'hist_smooth': H,
 			}
-		# 分位点（回転後座標で）
+		# 分位点(回転後座標で)
 		q = np.linspace(0.0, 1.0, K + 1, endpoint=False)[1:]
 		edges = np.quantile(a_rot, q, method='linear')
 		# 分位点をbinインデックスに変換

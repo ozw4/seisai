@@ -10,7 +10,7 @@ from seisai_pick.trend.trend_fit import (
 )
 
 
-# ---------- デモ（合成データ生成 → 両手法で推定 → 可視化） ----------
+# ---------- デモ(合成データ生成 → 両手法で推定 → 可視化) ----------
 @torch.no_grad()
 def _make_synthetic(
 	B: int = 1,
@@ -18,12 +18,12 @@ def _make_synthetic(
 	W: int = 256,
 	*,
 	# 外れ値の制御
-	outlier_frac: float = 0.30,  # ランダム外れの割合（全トレースに対して）
+	outlier_frac: float = 0.30,  # ランダム外れの割合(全トレースに対して)
 	outlier_mode: str = 'shift',  # "shift" | "random"
 	outlier_shift_ms: float = 520.0,  # shiftモードの平均量[ms]
 	outlier_std_ms: float = 15.0,  # shiftモードの標準偏差[ms]
-	outlier_blocks: int = 0,  # 連続ブロック外れの個数（0で無効）
-	block_len: int = 24,  # ブロック長（トレース数）
+	outlier_blocks: int = 0,  # 連続ブロック外れの個数(0で無効)
+	block_len: int = 24,  # ブロック長(トレース数)
 	seed: int = 0,
 ):
 	"""合成の first-break っぽい時刻列と確率マップ(prob)を生成。
@@ -54,11 +54,11 @@ def _make_synthetic(
 
 	valid = torch.ones_like(t_true, dtype=torch.bool)
 
-	# 観測（モデル出力相当）: ノイズは強め
+	# 観測(モデル出力相当): ノイズは強め
 	noise = 0.1 * torch.randn_like(t_true)
 	t_pred = t_true + noise
 
-	# --- 外れ値インデックスの作成（ランダム + 連続ブロック） ---
+	# --- 外れ値インデックスの作成(ランダム + 連続ブロック) ---
 	n_rand = int(round(outlier_frac * H))
 	rand_idx = (
 		torch.randperm(H, generator=g, device=device)[:n_rand]
@@ -109,7 +109,7 @@ def _make_synthetic(
 	dt = 0.002  # 2ms
 	dt_sec = torch.full((B, 1), dt, dtype=torch.float32, device=device)
 
-	# prob をガウスで作る（softmax正規化）
+	# prob をガウスで作る(softmax正規化)
 	t_idx = torch.arange(W, device=device, dtype=torch.float32).view(1, 1, W)
 	mu_idx = (t_true / dt).clamp(0, W - 1)  # (B,H)
 	sigma_ms = 12.0
@@ -133,7 +133,7 @@ def main():
 		power=conf_power,
 	).to(t_pred)
 
-	# IRLS（w_conf を直接渡す設計に変更）
+	# IRLS(w_conf を直接渡す設計に変更)
 	trend_t_i, trend_s_i, v_i, w_conf_used, covered = robust_linear_trend(
 		offsets,
 		t_pred,
@@ -148,7 +148,7 @@ def main():
 		use_taper=True,
 	)
 
-	# RANSAC（同様に w_conf を渡す）
+	# RANSAC(同様に w_conf を渡す)
 	trend_t_r, trend_s_r, v_r, _, _ = robust_linear_trend_sections_ransac(
 		offsets,
 		t_pred,
@@ -192,7 +192,7 @@ def main():
 	plt.legend()
 	plt.grid(True)
 
-	# 2) 速度（v_trend） vs trace index
+	# 2) 速度(v_trend) vs trace index
 	plt.figure()
 	plt.title('Trend velocity vs trace index')
 	plt.xlabel('trace index')

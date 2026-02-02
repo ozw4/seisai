@@ -21,7 +21,7 @@ def fake_info():
 		'offsets': offsets,
 		'ffid_key_to_indices': key_to_idx,
 		'ffid_unique_keys': uniq,
-		# セントロイドなしで OK（index window fallback 動作を確認）
+		# セントロイドなしで OK(index window fallback 動作を確認)
 		'ffid_centroids': None,
 	}
 
@@ -36,7 +36,7 @@ def test_sampler_semantics_without_superwindow():
 		subset_traces=8,
 	)
 	sampler = TraceSubsetSampler(cfg)
-	out = sampler.draw(info)  # random は許容（仕様テスト）
+	out = sampler.draw(info)  # random は許容(仕様テスト)
 
 	# 仕様：出力項目
 	assert set(out.keys()) == {

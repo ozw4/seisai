@@ -9,7 +9,7 @@ from .file_info import FileInfo
 class TraceSubsetSampler:
 	"""ギャザー(=keyで定義されるトレース集合)から、連続サブセット(最大H=subset_traces)の trace indices を抽出するコンポーネン.
 
-	入力: file_infos の 1 要素(dict) を想定（MaskedSegyGather が作る構造）
+	入力: file_infos の 1 要素(dict) を想定(MaskedSegyGather が作る構造)
 	必須キー: '{ffid|chno|cmp}_unique_keys', '{ffid|chno|cmp}_key_to_indices',
 				'{ffid|chno|cmp}_values', 'offsets',
 				'ffid_centroids','chno_centroids' (あれば距離KNNに使用)
@@ -37,7 +37,7 @@ class TraceSubsetSampler:
 			and len(info['cmp_unique_keys']) > 0
 		)
 
-		# 1) primary key 候補の構築（重み付き / fallback 互換）
+		# 1) primary key 候補の構築(重み付き / fallback 互換)
 		key_candidates, weight_candidates = self._build_primary_candidates(
 			cmp_available=cmp_available
 		)

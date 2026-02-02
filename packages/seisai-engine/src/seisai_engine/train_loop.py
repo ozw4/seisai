@@ -18,7 +18,7 @@ def setup_amp(
 	scaler: torch.cuda.amp.GradScaler | None,
 ) -> tuple[Callable[[], Any], torch.cuda.amp.GradScaler | None]:
 	do_amp = bool(use_amp and device.type == 'cuda')
-	# 新API（将来の非推奨回避）: torch.amp.autocast('cuda', enabled=True/False)
+	# 新API(将来の非推奨回避): torch.amp.autocast('cuda', enabled=True/False)
 	autocast_ctx = (lambda: torch.amp.autocast('cuda')) if do_amp else nullcontext
 	local_scaler = (
 		scaler
@@ -173,7 +173,7 @@ def train_one_epoch(
 				on_step=on_step,
 			)
 
-	# 端数（accumの余り）があれば最後に一度だけstepする
+	# 端数(accumの余り)があれば最後に一度だけstepする
 	if saw_any_batch and (last_i + 1) % gradient_accumulation_steps != 0:
 		if local_scaler is not None:
 			local_scaler.unscale_(optimizer)

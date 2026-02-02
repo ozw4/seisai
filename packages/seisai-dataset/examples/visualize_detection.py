@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import segyio
 
-# seisai-dataset（I/Oとサンプリング）
+# seisai-dataset(I/Oとサンプリング)
 from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
 from seisai_dataset.file_info import load_headers_with_cache
 
@@ -18,7 +18,7 @@ from seisai_dataset.noise_decider import EventDetectConfig, decide_noise
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from seisai_dataset.trace_subset_sampler import TraceSubsetSampler
 
-# transforms（必要に応じて有効化）
+# transforms(必要に応じて有効化)
 from seisai_transforms.augment import (
 	DeterministicCropOrPad,
 	PerTraceStandardize,
@@ -36,7 +36,7 @@ def _plot_gather_with_series(
 	title: str = '',
 	eps: float = 1e-10,
 ) -> None:
-	"""- 表示前に per-trace z-score 標準化（standardize_per_trace）を適用
+	"""- 表示前に per-trace z-score 標準化(standardize_per_trace)を適用
 	- x軸は [ms]。imshow の extent も ms に合わせる
 	- 表示クリップは vmin=-3, vmax=+3
 	"""
@@ -46,14 +46,14 @@ def _plot_gather_with_series(
 	if dt_sec <= 0.0:
 		raise ValueError('dt_sec must be > 0')
 
-	# 1) トレース毎 z-score（seisai-transforms 実装を利用）
+	# 1) トレース毎 z-score(seisai-transforms 実装を利用)
 	xz = standardize_per_trace_np(x.astype(np.float32, copy=False), eps=eps)
 
 	# 2) 時間軸 [ms]
 	scale = 1_000.0
 	t_ms = np.arange(T, dtype=np.float64) * float(dt_sec) * scale
 
-	# 3) 描画（画像も series も ms で統一）
+	# 3) 描画(画像も series も ms で統一)
 	fig = plt.figure(figsize=(10, 6))
 	ax0 = fig.add_axes([0.10, 0.35, 0.85, 0.60])
 	im = ax0.imshow(
@@ -124,7 +124,7 @@ def _build_file_info(
 		build_index_map(cmp_values) if (cmp_values is not None) else None
 	)
 
-	# ★ TraceSubsetSampler.draw が参照する *_unique_keys を必ず入れる（KeyError対策）
+	# ★ TraceSubsetSampler.draw が参照する *_unique_keys を必ず入れる(KeyError対策)
 	ffid_unique_keys = (
 		list(ffid_key_to_indices.keys()) if ffid_key_to_indices is not None else None
 	)
@@ -172,7 +172,7 @@ def collect_examples(
 	max_trials: int = 5000,
 	seed: int = 0,
 ):
-	"""A棄却（reject_A）/B棄却（reject_B）/ノイズ（noise）の各クラスで want_per_class 件収集。
+	"""A棄却(reject_A)/B棄却(reject_B)/ノイズ(noise)の各クラスで want_per_class 件収集。
 	未達の場合は RuntimeError に不足カテゴリと観測内訳を含めて失敗させる。
 	"""
 	if want_per_class < 1:
@@ -187,7 +187,7 @@ def collect_examples(
 	]
 
 	got_A, got_B, got_N = [], [], []
-	# 観測内訳（試行全体で何件ずつ出会ったか）
+	# 観測内訳(試行全体で何件ずつ出会ったか)
 	observed = {'reject_A': 0, 'reject_B': 0, 'noise': 0, 'other': 0}
 	trials = 0
 
@@ -277,7 +277,7 @@ def collect_examples(
 	return got_A, got_B, got_N
 
 
-# ---------------------------- Main（例） ----------------------------
+# ---------------------------- Main(例) ----------------------------
 if __name__ == '__main__':
 	# ====== 編集パラメータ ======
 	segy_files = [

@@ -16,7 +16,7 @@ from seisai_dataset.config import FirstBreakGateConfig
 from seisai_dataset.gate_fblc import FirstBreakGate
 from seisai_dataset.segy_gather_pipeline_dataset import SegyGatherPipelineDataset
 
-# ▼ パッケージからのインポート（必要に応じてモジュールパスを調整）
+# ▼ パッケージからのインポート(必要に応じてモジュールパスを調整)
 from seisai_transforms.augment import (
 	PerTraceStandardize,
 	ViewCompose,
@@ -63,12 +63,12 @@ ds = SegyGatherPipelineDataset(
 	fb_files=fb_files,
 	transform=transform,  # ← ViewCompose を渡す
 	fbgate=fbgate,  # ← FirstBreakGate を渡す
-	plan=plan,  # ← MAE（入力=出力）用
+	plan=plan,  # ← MAE(入力=出力)用
 	primary_keys=('ffid,'),
 	subset_traces=128,
 	valid=True,
 	verbose=True,
-	max_trials=1024,  # 無限ループ保護（前提の実装に対応）
+	max_trials=1024,  # 無限ループ保護(前提の実装に対応)
 )
 
 s = ds[0]
@@ -76,7 +76,7 @@ x_in = s['input'][0].cpu().numpy()  # (H,W)d
 target = s['target'][0].cpu().numpy()  # (H,W)
 H, W = x_in.shape
 
-# ---- 6) 可視化（2サブプロット、タイトル=タスク名）
+# ---- 6) 可視化(2サブプロット、タイトル=タスク名)
 TASK_NAME = 'MAE: Input=x_masked / Target=x_masked'
 fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
 fig.suptitle(TASK_NAME)
@@ -96,10 +96,10 @@ plt.show()
 ###
 plan_fb = BuildPlan(
 	wave_ops=[
-		MakeTimeChannel(dst='time_ch'),  # (H,W) 時刻チャネル（秒）
+		MakeTimeChannel(dst='time_ch'),  # (H,W) 時刻チャネル(秒)
 		MakeOffsetChannel(
 			dst='offset_ch', normalize=True
-		),  # (H,W) オフセット（z-score）。生値にしたい場合は normalize=False
+		),  # (H,W) オフセット(z-score)。生値にしたい場合は normalize=False
 	],
 	label_ops=[
 		FBGaussMap(dst='fb_map', sigma=10),  # (H,W) 各行の面積=1のガウスマップ
@@ -125,7 +125,7 @@ time = s['input'][2].cpu().numpy()  # (H,W)
 target = s['target'][0].cpu().numpy()  # (H,W)
 H, W = x_in.shape
 
-# ---- 6) 可視化（2サブプロット、タイトル=タスク名）
+# ---- 6) 可視化(2サブプロット、タイトル=タスク名)
 TASK_NAME = 'First-Break: Input=x_view / Target=FBGauss'
 fig, axes = plt.subplots(2, 2, figsize=(11, 8), constrained_layout=True)
 fig.suptitle(TASK_NAME)

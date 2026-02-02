@@ -17,20 +17,20 @@ from torch import Tensor
 @torch.no_grad()
 def trace_confidence_from_prob(
 	prob: Tensor | np.ndarray,  # (B,H,W) after softmax
-	floor: float = 0.2,  # 最低重み（自己強化の回避用）
-	power: float = 0.5,  # 緩和（0.5 = sqrt）
-	eps: float = 1e-9,  # 数値下限（log(0)回避）
+	floor: float = 0.2,  # 最低重み(自己強化の回避用)
+	power: float = 0.5,  # 緩和(0.5 = sqrt)
+	eps: float = 1e-9,  # 数値下限(log(0)回避)
 ) -> Tensor | np.ndarray:
 	"""エントロピーで (B,H) の自信度を算出。
 	すべてNumPy入力→NumPyで返却。それ以外→Torchで返却。内部計算はTorch(CPU)。
 	"""
-	# 返却形態の決定（単一引数でも利用可）
+	# 返却形態の決定(単一引数でも利用可)
 	all_numpy = require_all_numpy(prob)
 
-	# Torchへ正規化（dtype/deviceはprob基準）
+	# Torchへ正規化(dtype/deviceはprob基準)
 	t_prob = to_torch(prob)
 
-	# 入力検証（Torchバックエンド）
+	# 入力検証(Torchバックエンド)
 	validate_array(
 		t_prob, allowed_ndims=(3,), name='prob', backend='torch', shape_hint='(B,H,W)'
 	)
@@ -49,7 +49,7 @@ def trace_confidence_from_prob(
 	p = t_prob.clamp_min(eps)
 	H = -(p * p.log()).sum(dim=-1)  # (B,H)
 	Hnorm = H / float(math.log(W))  # 0..1 に正規化
-	w = (1.0 - Hnorm).clamp(0.0, 1.0)  # 尖り＝自信度
+	w = (1.0 - Hnorm).clamp(0.0, 1.0)  # 尖り=自信度
 	out = w.clamp_min(floor) ** power  # floor適用→緩和
 
 	return to_numpy(out) if all_numpy else out

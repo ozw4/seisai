@@ -19,7 +19,7 @@ from .builder import (
 
 # ---------------- 基本ユニット ----------------
 class BuildUnit:
-	"""一方（input か target どちらか）の組立ユニット。"""
+	"""一方(input か target どちらか)の組立ユニット。"""
 
 	def __init__(self, ops: list[Callable], stack: SelectStack):
 		self.ops = ops
@@ -46,7 +46,7 @@ def _need(ctx: dict[str, Any], name: str):
 
 
 def make_registry(ctx: dict[str, Any] | None = None) -> dict[str, RegItem]:
-	"""タグ→レシピのレジストリ。ctx には依存物を入れる（例: masker, fb_sigma, offset_normalize）。"""
+	"""タグ→レシピのレジストリ。ctx には依存物を入れる(例: masker, fb_sigma, offset_normalize)。"""
 	{} if ctx is None else dict(ctx)
 	reg: dict[str, RegItem] = {}
 
@@ -96,10 +96,10 @@ def builder(
 	to_torch: bool = True,
 	registry: dict[str, RegItem] | None = None,
 ) -> BuildUnit:
-	"""単独（input か target 片側）用のビルダー。
-	- tags: 生成したいチャネルのタグ列（例: ["masked","time_ch"]）
-	- ctx : タグが必要とする依存物（input/target で別 dict を渡す）
-	- dst : 最終的に格納するキー名（"input"や"target"など）
+	"""単独(input か target 片側)用のビルダー。
+	- tags: 生成したいチャネルのタグ列(例: ["masked","time_ch"])
+	- ctx : タグが必要とする依存物(input/target で別 dict を渡す)
+	- dst : 最終的に格納するキー名("input"や"target"など)
 	"""
 	ctx = {} if ctx is None else dict(ctx)
 	reg = registry or make_registry(ctx)
@@ -114,7 +114,7 @@ def builder(
 	produced_ops: dict[str, Callable] = {}
 	keys: list[str] = []
 
-	# タグ順にオペレータを構築（同じキーは一度だけ作る）
+	# タグ順にオペレータを構築(同じキーは一度だけ作る)
 	for tag in tags:
 		op, key = reg[tag].factory(ctx)
 		if key not in produced_ops:

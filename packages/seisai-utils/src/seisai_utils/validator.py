@@ -8,7 +8,7 @@ from torch import Tensor
 
 Backend = Literal['numpy', 'torch', 'auto']
 
-# 例示表記（必要に応じて拡張）
+# 例示表記(必要に応じて拡張)
 _SHAPE_EXAMPLES = {1: '(W,)', 2: '(H,W)', 3: '(C,H,W)', 4: '(B,C,H,W)'}
 
 
@@ -91,7 +91,7 @@ def validate_torch(
 	require_non_empty_torch(x, name=name)
 
 
-# ---------- 汎用（自動/明示バックエンド） ----------
+# ---------- 汎用(自動/明示バックエンド) ----------
 def validate_array(
 	x,
 	*,

@@ -6,7 +6,7 @@
 #   # cfg は少なくとも以下の属性を持つこと:
 #   #  - offsets_key, fb_idx_key, dt_key
 #   #  - conf_floor, conf_power
-#   #  - fit: TrendFitStrategy インスタンス（IRLSStrategy/RANSACStrategy等）
+#   #  - fit: TrendFitStrategy インスタンス(IRLSStrategy/RANSACStrategy等)
 #   #  - prior_sigma_ms, prior_alpha, prior_conf_gate, prior_log_eps
 #   #  - logit_clip, channels, aux_key
 #   #  - tau (>0)
@@ -32,11 +32,11 @@ def _resolve_channels(ch_spec: int | Iterable[int], C: int) -> Sequence[int]:
 
 
 class TrendPriorCELoss:
-	"""Trend Prior の CE/KL 正則化をクラス化（戦略DI対応, t抽出=放物線argmax）。
+	"""Trend Prior の CE/KL 正則化をクラス化(戦略DI対応, t抽出=放物線argmax)。
 	Args:
 	  cfg: TrendPrior 用設定。少なくとも本ファイル冒頭の IF コメントで列挙した属性を持つこと。
 	Note:
-	  - reduction は 'mean' のみ許容（スカラー返却）。'sum'/'none'は未対応。
+	  - reduction は 'mean' のみ許容(スカラー返却)。'sum'/'none'は未対応。
 	  - return_aux=True の場合は (loss, aux) を返す。
 	"""
 
@@ -66,13 +66,13 @@ def trend_prior_ce(
 	batch: Mapping[str, Any],
 	cfg: Any,  # 必須属性は冒頭コメントを参照
 ) -> tuple[Tensor, dict[str, Any]]:
-	"""Trend Prior の KL/CE 正則化（教師=prior, 学習対象=logits/τ）。戦略DI対応。
+	"""Trend Prior の KL/CE 正則化(教師=prior, 学習対象=logits/τ)。戦略DI対応。
 	t抽出は期待値ではなく放物線argmaxを用いる。
 	"""
 	assert logits.ndim == 4, 'logits must be (B,C,H,W)'
 	B, C, H, W = logits.shape
 
-	# ---- cfg 必須属性チェック（フォールバック禁止）
+	# ---- cfg 必須属性チェック(フォールバック禁止)
 	for k in (
 		'offsets_key',
 		'fb_idx_key',
@@ -90,7 +90,7 @@ def trend_prior_ce(
 		'tau',
 	):
 		assert hasattr(cfg, k), f'cfg.{k} is required'
-	# StrategyはProtocol想定（@runtime_checkable未使用）なのでcallableでチェック
+	# StrategyはProtocol想定(@runtime_checkable未使用)なのでcallableでチェック
 	assert callable(cfg.fit), 'cfg.fit must be a callable TrendFitStrategy-like object'
 	assert float(cfg.tau) > 0.0 and float(cfg.prior_sigma_ms) > 0.0
 
@@ -118,7 +118,7 @@ def trend_prior_ce(
 	num_used_ch = 0
 
 	for c in chs:
-		# --- prob と confidence（トレース毎） ---
+		# --- prob と confidence(トレース毎) ---
 		logit_c = torch.nan_to_num(
 			logits[:, c], nan=0.0, posinf=cfg.logit_clip, neginf=-cfg.logit_clip
 		).clamp_(-cfg.logit_clip, cfg.logit_clip)  # (B,H,W)
@@ -128,7 +128,7 @@ def trend_prior_ce(
 			prob=prob_c, floor=float(cfg.conf_floor), power=float(cfg.conf_power)
 		).to(logit_c)  # (B,H)
 
-		# --- 早期ゲート（中央値）
+		# --- 早期ゲート(中央値)
 		use_mask = valid
 		conf_med = w_conf[use_mask].median() if use_mask.any() else w_conf.median()
 		alpha_eff = (
@@ -141,10 +141,10 @@ def trend_prior_ce(
 		if alpha_eff == 0.0:
 			continue  # このチャネルは寄与0
 
-		# --- 到達候補: 放物線argmax t_sec（期待値ではない） ---
+		# --- 到達候補: 放物線argmax t_sec(期待値ではない) ---
 		t_sec = _argmax_time_parabolic(prob_c, dt_sec)  # (B,H) [s]
 
-		# --- トレンド推定（Strategy をそのまま呼び出し）
+		# --- トレンド推定(Strategy をそのまま呼び出し)
 		trend_t, trend_s, v_trend, w_used, covered = cfg.fit(
 			offsets=offsets.to(logit_c),
 			t_sec=t_sec.to(logit_c),
@@ -152,7 +152,7 @@ def trend_prior_ce(
 			w_conf=w_conf,
 		)  # すべて (B,H)
 
-		# --- ガウス prior（trend 中心）
+		# --- ガウス prior(trend 中心)
 		prior = (
 			gaussian_prior_from_trend(
 				t_trend_sec=trend_t,
@@ -166,7 +166,7 @@ def trend_prior_ce(
 			.clamp_(min=0.0)
 		)  # (B,H,W)
 
-		# --- KL/CE（prior を教師分布として CE を計算）
+		# --- KL/CE(prior を教師分布として CE を計算)
 		log_p = torch.log_softmax(logit_c / float(cfg.tau), dim=-1)  # (B,H,W)
 		assert torch.isfinite(log_p).all() and torch.isfinite(prior).all(), (
 			'non-finite in prior/log_p'

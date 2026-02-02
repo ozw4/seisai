@@ -2,8 +2,8 @@
 # 出力サイズポリシーを切り替え可能な薄いユニット。
 # - policy: "match_input" | "native" | "fixed" | "scale"
 # - data_kind: "continuous" | "discrete" で補間法を自動選択
-#     * continuous: 連続値（回帰/確率/ロジット等）→ bilinear（align_corners=False）
-#     * discrete  : 離散ラベル（クラスID等）       → nearest
+#     * continuous: 連続値(回帰/確率/ロジット等)→ bilinear(align_corners=False)
+#     * discrete  : 離散ラベル(クラスID等)       → nearest
 from __future__ import annotations
 
 from typing import Literal
@@ -40,8 +40,8 @@ class Resizer(nn.Module):
 	- 入力は 4D (B, C, H, W) を前提。
 	- policy に応じて目標サイズを決定し、F.interpolate でリサイズ。
 	- data_kind:
-	    * "continuous": デフォルト補間 'bilinear'（align_corners=False, 勾配可）
-	    * "discrete"  : デフォルト補間 'nearest'（離散ラベル保持）
+	    * "continuous": デフォルト補間 'bilinear'(align_corners=False, 勾配可)
+	    * "discrete"  : デフォルト補間 'nearest'(離散ラベル保持)
 	"""
 
 	def __init__(
@@ -62,13 +62,13 @@ class Resizer(nn.Module):
 		# 後方互換なし: 旧名が来たら即失敗
 		if isinstance(data_kind, str) and data_kind in ('logits', 'labels'):
 			raise AssertionError(
-				"data_kind は 'continuous' / 'discrete' を使用してください（'logits'/'labels' は廃止）"
+				"data_kind は 'continuous' / 'discrete' を使用してください('logits'/'labels' は廃止)"
 			)
 		assert data_kind in ('continuous', 'discrete')
 		self.policy: Policy = policy
 		self.data_kind: DataKind = data_kind
 
-		# 既定の補間モードを data_kind で決定（手動指定があればそれを優先）
+		# 既定の補間モードを data_kind で決定(手動指定があればそれを優先)
 		if interp is None:
 			self.interp: Interpolation = (
 				'bilinear' if data_kind == 'continuous' else 'nearest'
@@ -111,7 +111,7 @@ class Resizer(nn.Module):
 		*,
 		ref: torch.Tensor | None = None,
 	) -> tuple[int, int] | None:
-		"""目標サイズを返す。None のときはリサイズしない（native）。"""
+		"""目標サイズを返す。None のときはリサイズしない(native)。"""
 		if self.policy == 'native':
 			return None
 
@@ -149,7 +149,7 @@ class Resizer(nn.Module):
 		return F.interpolate(y, size=Htgt, mode=mode, **kwargs)
 
 
-# 便利関数（continuous/discreteで補間法を固定）
+# 便利関数(continuous/discreteで補間法を固定)
 def resize_continuous(
 	y: torch.Tensor,
 	*,

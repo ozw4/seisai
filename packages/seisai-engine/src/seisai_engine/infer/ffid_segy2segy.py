@@ -103,11 +103,11 @@ def run_ffid_gather_infer_and_write_segy(
 ) -> list[Path]:
 	"""FFID gather 単位で推論して、入力SEGYと同じサイズ/ヘッダ維持でSEGY出力する。
 
-	- FFIDごとに gather(H,W) を作る（H=trace数, W=全サンプル）
+	- FFIDごとに gather(H,W) を作る(H=trace数, W=全サンプル)
 	- per-trace mean/std で標準化して推論
-	- 出力を mean/std で denorm して元スケールに戻す（A案）
+	- 出力を mean/std で denorm して元スケールに戻す(A案)
 	- trace_indices を使って file 内の元のtrace順へ戻し、fileごとに full (n_traces,n_samples) を作る
-	- write_segy_like_input で保存（headerは触らない、sample format維持）
+	- write_segy_like_input で保存(headerは触らない、sample format維持)
 
 	Returns:
 		各入力ファイルに対応する出力SEGYパス

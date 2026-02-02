@@ -42,7 +42,7 @@ class RandomFreqFilter:
 			self.cfg.width,
 			self.cfg.roll,
 			self.cfg.restandardize,
-			rng=rng,  # ★ rng を下に渡す（再現性◯）
+			rng=rng,  # ★ rng を下に渡す(再現性◯)
 		)
 		return (y, {}) if return_meta else y
 
@@ -170,9 +170,9 @@ class DeterministicCropOrPad:
 
 
 class PerTraceStandardize:
-	"""トレース方向（最後の軸=W）で平均0・分散1に標準化する。
+	"""トレース方向(最後の軸=W)で平均0・分散1に標準化する。
 	- NumPy:  (W,), (H,W), (C,H,W), (B,C,H,W)
-	- Torch:  (W,), (H,W), (C,H,W), (B,C,H,W)（CPU/GPU両対応）
+	- Torch:  (W,), (H,W), (C,H,W), (B,C,H,W)(CPU/GPU両対応)
 	"""
 
 	def __init__(self, eps: float = 1e-10):
@@ -184,8 +184,8 @@ class PerTraceStandardize:
 		rng: np.random.Generator | None = None,
 		return_meta: bool = False,
 	):
-		"""x: np.ndarray または torch.Tensor（CPU/GPU）
-		rng はインターフェース維持のためのダミー（未使用）。
+		"""x: np.ndarray または torch.Tensor(CPU/GPU)
+		rng はインターフェース維持のためのダミー(未使用)。
 		return_meta=True の場合は (y, {}) を返す。
 		"""
 		# backend='auto' で NumPy / Torch 両方を検証

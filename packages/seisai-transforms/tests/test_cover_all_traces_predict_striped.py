@@ -1,5 +1,5 @@
 # test_cover_all_traces_predict_striped.py
-# - cover_all_traces_predict_striped が「完全被覆（全トレースが各オフセットにつき1回はマスクされる）」を
+# - cover_all_traces_predict_striped が「完全被覆(全トレースが各オフセットにつき1回はマスクされる)」を
 #   実際の入出力経路で満たしているかを検証します。
 # - モデルは恒等写像だが、フォワード入力から「全ゼロ行=マスクされた行」を検出・カウントします。
 # - noise_std=0, mask_noise_mode='replace' とすることで、マスク行が 0 に置換される前提で検出します。
@@ -14,7 +14,7 @@ from torch import nn
 
 class ProbeIdentity(nn.Module):
 	"""恒等出力しつつ、バッチ内の各サンプル・各トレース行が
-	「マスク（=全ゼロ行）」として出現した回数を seen[b,h] に累積する。
+	「マスク(=全ゼロ行)」として出現した回数を seen[b,h] に累積する。
 	"""
 
 	def __init__(self, B: int, H: int):
@@ -27,7 +27,7 @@ class ProbeIdentity(nn.Module):
 		# x: (N,1,H,W)  ※N = B * (#並列パス)
 		assert x.dim() == 4 and x.size(2) == self.H
 		N = x.size(0)
-		# 行が完全に 0 か判定（noise_std=0 & replace 前提）
+		# 行が完全に 0 か判定(noise_std=0 & replace 前提)
 		row_zero = x[:, 0].abs().sum(dim=-1) == 0  # (N,H) bool
 		b_idx = (torch.arange(N, device=x.device) % self.B).to(torch.long)  # (N,)
 		add = row_zero.to(torch.float32)  # (N,H)
@@ -39,7 +39,7 @@ class ProbeIdentity(nn.Module):
 
 
 def _run_one_case(H, W, band_width, mask_ratio, offsets, B=2, device='cpu'):
-	# 入力を非ゼロにしておく（0埋めマスク検出の前提）
+	# 入力を非ゼロにしておく(0埋めマスク検出の前提)
 	torch.manual_seed(0)
 	x = torch.randn(B, 1, H, W, device=device) + 1.0
 
@@ -72,7 +72,7 @@ def _run_one_case(H, W, band_width, mask_ratio, offsets, B=2, device='cpu'):
 def test_complete_coverage():
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
 	cases = [
-		# band_width=1（従来相当）
+		# band_width=1(従来相当)
 		dict(H=17, W=64, band_width=1, mask_ratio=0.5, offsets=(0,)),
 		dict(H=33, W=40, band_width=1, mask_ratio=0.3, offsets=(0, 1, 2)),
 		# 幅付きバンド

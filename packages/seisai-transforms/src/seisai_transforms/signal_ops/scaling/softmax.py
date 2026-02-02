@@ -5,7 +5,7 @@ from torch import Tensor
 
 
 def softmax_per_trace_np(x: np.ndarray, eps: float = 1e-10) -> np.ndarray:
-	"""トレース毎（最後の軸=W）にソフトマックスを適用する NumPy 実装。
+	"""トレース毎(最後の軸=W)にソフトマックスを適用する NumPy 実装。
 	(W,), (H,W), (C,H,W), (B,C,H,W) を受け付ける。
 	"""
 	validate_array(x, allowed_ndims=(1, 2, 3, 4), name='x')
@@ -18,7 +18,7 @@ def softmax_per_trace_np(x: np.ndarray, eps: float = 1e-10) -> np.ndarray:
 
 
 def softmax_per_trace_torch(x: Tensor, eps: float = 1e-10) -> Tensor:
-	"""トレース毎（最後の軸=W）にソフトマックスを適用する Torch 実装。
+	"""トレース毎(最後の軸=W)にソフトマックスを適用する Torch 実装。
 	(W,), (H,W), (C,H,W), (B,C,H,W) を受け付け、W は最後の軸と仮定。
 	"""
 	validate_array(x, allowed_ndims=(1, 2, 3, 4), name='x', backend='torch')
@@ -31,9 +31,9 @@ def softmax_per_trace_torch(x: Tensor, eps: float = 1e-10) -> Tensor:
 
 
 class PerTraceSoftmax:
-	"""トレース方向（最後の軸=W）でソフトマックス正規化する。
+	"""トレース方向(最後の軸=W)でソフトマックス正規化する。
 	- NumPy: (W,), (H,W), (C,H,W), (B,C,H,W)
-	- Torch: (W,), (H,W), (C,H,W), (B,C,H,W)（CPU/GPU 両対応）
+	- Torch: (W,), (H,W), (C,H,W), (B,C,H,W)(CPU/GPU 両対応)
 	"""
 
 	def __init__(self, eps: float = 1e-10):
@@ -45,8 +45,8 @@ class PerTraceSoftmax:
 		rng: np.random.Generator | None = None,
 		return_meta: bool = False,
 	):
-		"""x: np.ndarray または torch.Tensor（CPU/GPU）
-		rng はインターフェース維持のためのダミー（未使用）。
+		"""x: np.ndarray または torch.Tensor(CPU/GPU)
+		rng はインターフェース維持のためのダミー(未使用)。
 		return_meta=True の場合は (y, {}) を返す。
 		"""
 		validate_array(

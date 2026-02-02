@@ -2,7 +2,7 @@
 # File: packages/seisai-engine/src/seisai_engine/postprocess/velocity_mask.py
 # 依存: torch
 # 目的: 速度円錐に基づく可到達領域マスクの生成と、logits/prob への適用
-# 仕様: (B,C,H,W) 専用（Compose互換）。対象チャンネルのみ (B,H,W) に落として処理→戻す。
+# 仕様: (B,C,H,W) 専用(Compose互換)。対象チャンネルのみ (B,H,W) に落として処理→戻す。
 # ============================================================
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def make_velocity_feasible_filt(
 	return m  # (B,H,W) in [0,1]
 
 
-# -------------------- 適用（logits / prob） --------------------
+# -------------------- 適用(logits / prob) --------------------
 
 
 def apply_velocity_filt_logits(
@@ -156,7 +156,7 @@ def apply_velocity_filt_prob(
 ) -> Tensor:
 	validate_array(prob, allowed_ndims=(4,), name='prob', backend='torch')
 	validate_array(mask, allowed_ndims=(3,), name='mask', backend='torch')
-	"""softmax後の確率に mask^power を乗算。必要なら再正規化（分布の総和=1）。"""
+	"""softmax後の確率に mask^power を乗算。必要なら再正規化(分布の総和=1)。"""
 	m = (
 		(mask.pow(power) if power != 1.0 else mask).unsqueeze(1).to(prob.dtype)
 	)  # (B,1,H,W)
@@ -169,12 +169,12 @@ def apply_velocity_filt_prob(
 	return y
 
 
-# -------------------- Compose 連携用の Op（(B,C,H,W) 専用） --------------------
+# -------------------- Compose 連携用の Op((B,C,H,W) 専用) --------------------
 
 
 @dataclass(frozen=True)
 class VelocityFiltConfig:
-	# 適用先（学習=logits 推奨。可視化/後段整形で prob を使うなら "prob"）
+	# 適用先(学習=logits 推奨。可視化/後段整形で prob を使うなら "prob")
 	operate_on: Literal['logits', 'prob'] = 'logits'
 	# 速度制約
 	vmin: float = 1500.0
@@ -198,7 +198,7 @@ class VelocityFiltConfig:
 
 
 class ApplyVelocityFiltOp:
-	"""PostprocessCompose 互換の op（非in-place）。
+	"""PostprocessCompose 互換の op(非in-place)。
 	(logits, batch) -> (logits, aux)。入力は (B,C,H,W) のみを受け付ける。
 	指定チャンネルのみ (B,H,W) に落としてマスク適用→(B,C,H,W) に戻す。
 	"""
@@ -222,7 +222,7 @@ class ApplyVelocityFiltOp:
 	@torch.no_grad()
 	def __call__(self, logits: Tensor, batch: Mapping[str, Any]) -> tuple[Tensor, dict]:
 		cfg = self.cfg
-		# ---- 入力検証（4Dのみ）
+		# ---- 入力検証(4Dのみ)
 		validate_array(logits, allowed_ndims=(4,), name='logits', backend='torch')
 		B, C, H, W = logits.shape
 		ch_list = self._norm_channels(C)
@@ -269,7 +269,7 @@ class ApplyVelocityFiltOp:
 			for ch in ch_list:
 				out[:, ch, :, :] = out[:, ch, :, :] + log_m[:, 0, :, :]
 		else:
-			# prob 乗算 + 再正規化（必要なら）
+			# prob 乗算 + 再正規化(必要なら)
 			m = mask.unsqueeze(1).to(out.dtype)  # (B,1,H,W)
 			for ch in ch_list:
 				y = out[:, ch, :, :] * m[:, 0, :, :]  # (B,H,W)

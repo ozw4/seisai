@@ -39,7 +39,7 @@ TRAIN_FB_PATH = (
 	'/home/dcuser/data/ActiveSeisField/TSTKRES/fb_time_all_1341ch.crd.0613.ReMerge.npy'
 )
 
-# いまは訓練データで推論（後で分けやすいように変数名だけ分ける）
+# いまは訓練データで推論(後で分けやすいように変数名だけ分ける)
 INFER_SEGY_PATH = TRAIN_SEGY_PATH
 INFER_FB_PATH = TRAIN_FB_PATH
 
@@ -51,7 +51,7 @@ SUBSET_TRACES = 128
 TRAIN_TIME_LEN = 4096
 SAMPLES_PER_EPOCH = 256  # reduces one epoch length (Dataset.__len__ is fixed)
 
-# Inference config（pad-only + W tile）
+# Inference config(pad-only + W tile)
 INFER_TARGET_LEN = 6016
 INFER_TILE_W = 6016
 INFER_OVERLAP_W = 1024
@@ -82,7 +82,7 @@ def fb_gauss_map_from_idx(
 	sigma: float = 10.0,
 	trace_valid: np.ndarray | None = None,
 ) -> np.ndarray:
-	"""fb_idx_view (H,) -> (H,W) ガウスheatmap（無効は0）"""
+	"""fb_idx_view (H,) -> (H,W) ガウスheatmap(無効は0)"""
 	fb = np.asarray(fb_idx_view, dtype=np.int64)
 	H = int(fb.shape[0])
 
@@ -112,10 +112,10 @@ def save_infer_triptych_no_lines(
 	batch_index: int = 0,
 	sigma: float = 10.0,
 ) -> None:
-	"""横3枚（線なし・間引きなし）:
-	(1) input gather（ch0）
-	(2) GT FB heatmap（FBGaussMap: fb_idx_view -> gauss）
-	(3) Pred FB heatmap（FBGaussMap: pred_idx_view -> gauss）
+	"""横3枚(線なし・間引きなし):
+	(1) input gather(ch0)
+	(2) GT FB heatmap(FBGaussMap: fb_idx_view -> gauss)
+	(3) Pred FB heatmap(FBGaussMap: pred_idx_view -> gauss)
 	"""
 	if x_bchw.ndim != 4:
 		raise ValueError(f'x_bchw must be (B,C,H,W), got {tuple(x_bchw.shape)}')
@@ -142,13 +142,13 @@ def save_infer_triptych_no_lines(
 	# (1) gather: input ch0  (H,W)
 	gather_hw = x_bchw[batch_index, 0, :, :W].detach().cpu()
 
-	# (2) GT gauss map（既存の FBGaussMap を使う）
+	# (2) GT gauss map(既存の FBGaussMap を使う)
 	gt_op = FBGaussMap(dst='gt_map', sigma=float(sigma), src='fb_idx_view')
 	gt_sample = {'x_view': gather_hw, 'meta': meta}
 	gt_op(gt_sample)
 	gt_map = gt_sample['gt_map']  # (H,W) np.float32
 
-	# (3) Pred gauss map（pred_idx_view を meta に足して同じ op で生成）
+	# (3) Pred gauss map(pred_idx_view を meta に足して同じ op で生成)
 	logits_hw = logits_b1hw[batch_index, 0, :, :W].detach().cpu()  # (H,W)
 	pred_idx = logits_hw.argmax(dim=-1).numpy().astype(np.int64)  # (H,)
 
@@ -205,14 +205,14 @@ def run_inference_with_vis(
 	infer_fb_files: list[str],
 	train_plan: BuildPlan,
 ) -> None:
-	# 推論では target を作らない（= InputOnlyPlan）
+	# 推論では target を作らない(= InputOnlyPlan)
 	infer_plan = (
 		train_plan
 		if isinstance(train_plan, InputOnlyPlan)
 		else InputOnlyPlan.from_build_plan(train_plan, include_label_ops=False)
 	)
 
-	# 推論 transform は crop無し（標準化だけ）
+	# 推論 transform は crop無し(標準化だけ)
 	infer_transform = ViewCompose([PerTraceStandardize(eps=1e-8)])
 
 	infer_cfg = InferenceGatherWindowsConfig(
@@ -234,7 +234,7 @@ def run_inference_with_vis(
 		header_cache_dir=None,
 	)
 
-	# デモ用途で先頭だけ回す（必要ならこの Subset を外してOK）
+	# デモ用途で先頭だけ回す(必要ならこの Subset を外してOK)
 	n_take = min(len(infer_ds_full), INFER_MAX_BATCHES * INFER_BATCH_SIZE)
 	infer_ds = Subset(infer_ds_full, range(n_take))
 

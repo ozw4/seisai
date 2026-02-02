@@ -119,7 +119,7 @@ def build_allowed_negative_start_ranges(
 
 class SeismicPUWindowDataset(Dataset):
 	"""60 s 窓を前提にしていた実装を一般化。
-	任意の fs（サンプリング周波数）と win_sec（窓長）、pad_seconds（前後パディング秒）に対応。
+	任意の fs(サンプリング周波数)と win_sec(窓長)、pad_seconds(前後パディング秒)に対応。
 
 	- npy: shape (C, N)
 	- 1ファイルの時間範囲: [JST日付00:00:00 - pad, 翌日00:00:00 + pad)

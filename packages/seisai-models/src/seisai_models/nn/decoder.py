@@ -30,7 +30,7 @@ class UnetDecoder2d(nn.Module):
 		decoder_channels = tuple(dec)
 		self.decoder_channels = decoder_channels
 
-		# --- scale_factors も need に合わせる（★これが今回の修正ポイント） ---
+		# --- scale_factors も need に合わせる(★これが今回の修正ポイント) ---
 		sf = list(
 			scale_factors
 			if isinstance(scale_factors, (list, tuple))

@@ -267,11 +267,11 @@ def inflate_input_convs_to_2ch(
 	fix_backbone: bool = True,
 ) -> None:
 	"""Make the *raw-input path* truly 2ch end-to-end:
-	  - pre_down[0] and pre_down[1] convs → (in=2, out=2) ＋ 対応BNを2ch化
-	  - backbone 最初の Conv を汎用に特定（stem_0 / stem.conv / patch_embed.proj / conv1 など）し in を 2ch にinflate
+	  - pre_down[0] and pre_down[1] convs → (in=2, out=2) + 対応BNを2ch化
+	  - backbone 最初の Conv を汎用に特定(stem_0 / stem.conv / patch_embed.proj / conv1 など)し in を 2ch にinflate
 
 	Tips:
-	  - 既存 1ch 重みを複製して2chへ展開（init_mode='duplicate' 推奨）
+	  - 既存 1ch 重みを複製して2chへ展開(init_mode='duplicate' 推奨)
 	  - Caformer 等でも最初の Conv を自動検出
 	"""
 	# (A) pre_down の 2段を 2→2 に強制
@@ -333,7 +333,7 @@ def _register_grad_mask_for_old_in_channels(conv: nn.Conv2d, old_in_ch: int):
 	assert isinstance(conv, nn.Conv2d)
 	assert conv.weight.size(1) >= old_in_ch
 
-	# マスクを buffer に持たせる（後からall-onesに差し替えれば解除できる）
+	# マスクを buffer に持たせる(後からall-onesに差し替えれば解除できる)
 	mask = torch.zeros_like(conv.weight)
 	mask[:, old_in_ch:, :, :] = 1.0  # 新チャンネルのみ学習
 	conv.register_buffer('_grad_mask_in_old', mask, persistent=False)
@@ -370,7 +370,7 @@ def _remove_grad_mask(conv: nn.Conv2d):
 def find_input_convs_for_inflation(model: nn.Module):
 	"""あなたのNetAEに合わせて、入力を最初に受けるConvを列挙。
 	- pre_down[0] の先頭Conv
-	- pre_down[1] の先頭Conv（あれば）
+	- pre_down[1] の先頭Conv(あれば)
 	- backbone.stem_0 も対象
 	"""
 	convs = []
@@ -395,7 +395,7 @@ def find_input_convs_for_inflation(model: nn.Module):
 
 
 def freeze_original_in_channels(model: nn.Module, old_in_ch: int = 1):
-	"""旧 in-ch を凍結（新規追加チャンネルのみ学習）するフックを登録。"""
+	"""旧 in-ch を凍結(新規追加チャンネルのみ学習)するフックを登録。"""
 	for conv in find_input_convs_for_inflation(model):
 		if conv.in_channels >= old_in_ch + 1:
 			_register_grad_mask_for_old_in_channels(conv, old_in_ch)

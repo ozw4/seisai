@@ -9,7 +9,7 @@ class PixelwiseLoss:
 	IF: loss = PixelwiseLoss(criterion)(pred, batch, reduction='mean')
 	  - pred: (B,C,H,W)
 	  - batch['target']: (B,C,H,W)
-	  - 任意: batch['mask_bool']: (B,H) もしくは (B,C,H,W) の bool（True=採用）
+	  - 任意: batch['mask_bool']: (B,H) もしくは (B,C,H,W) の bool(True=採用)
 	"""
 
 	def __init__(self, criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]):

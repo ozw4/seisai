@@ -12,21 +12,21 @@ def cover_all_traces_predict_striped(
 	x: torch.Tensor,  # (B,1,H,W)
 	*,
 	mask_ratio: float = 0.5,  # 1パスで隠すトレース割合
-	band_width: int = 1,  # 連続バンド幅（>=1）
+	band_width: int = 1,  # 連続バンド幅(>=1)
 	noise_std: float = 1.0,
 	mask_noise_mode: Literal['replace', 'add'] = 'replace',
 	use_amp: bool = True,
 	device=None,
-	# 等間隔ストライプの「開始オフセット」を複数与えると TTA（平均化）になる
+	# 等間隔ストライプの「開始オフセット」を複数与えると TTA(平均化)になる
 	offsets: Sequence[int] = (0,),
 	passes_batch: int = 4,
 ) -> torch.Tensor:
-	"""等間隔（striped）マスクで全トレースを一度は隠し、その位置の予測を合成。
-	offsets を複数与えると、開始位置をずらした複数ラウンドの平均（TTA）を行う。
+	"""等間隔(striped)マスクで全トレースを一度は隠し、その位置の予測を合成。
+	offsets を複数与えると、開始位置をずらした複数ラウンドの平均(TTA)を行う。
 
 	- band_width=1 で従来の「1トレース幅」
 	- mask_ratio * H / band_width ≒ 1パスに含めるバンド本数
-	- num_passes は自動決定（完全被覆になる）
+	- num_passes は自動決定(完全被覆になる)
 	"""
 	if x.dim() != 4 or x.size(1) != 1:
 		raise ValueError('x must be (B,1,H,W)')
@@ -45,7 +45,7 @@ def cover_all_traces_predict_striped(
 	B, _, H, W = x.shape
 	w = int(band_width)
 
-	# ---- 連続バンド（ブロック）を構成 ----
+	# ---- 連続バンド(ブロック)を構成 ----
 	# 例: H=10, w=4 -> [0..3],[4..7],[8..9]
 	blocks = []
 	i = 0
@@ -59,10 +59,10 @@ def cover_all_traces_predict_striped(
 	traces_per_pass = max(1, min(int(round(mask_ratio * H)), H))
 	blocks_per_pass = max(1, min(math.ceil(traces_per_pass / w), num_blocks))
 
-	# 等間隔化のためのパス数（ブロックを K 分割して mod K ごとに採る）
+	# 等間隔化のためのパス数(ブロックを K 分割して mod K ごとに採る)
 	K = max(1, math.ceil(num_blocks / blocks_per_pass))
 
-	# 出力は TTA（offsets の数）で平均
+	# 出力は TTA(offsets の数)で平均
 	y_sum = torch.zeros_like(x)
 	hits = torch.zeros((B, 1, H, 1), dtype=torch.int32, device=device)
 
@@ -111,7 +111,7 @@ def cover_all_traces_predict_striped(
 					y_sum[:, :, rows_dev, :] += yb[k, :, :, rows_dev, :]
 					hits[:, :, rows_dev, :] += 1
 
-	# 平均化（全行 hit>=1 のはず。もし0があれば設計ミス）
+	# 平均化(全行 hit>=1 のはず。もし0があれば設計ミス)
 	hits_clamped = hits.clamp_min(1)
 	y_full = y_sum / hits_clamped
 	return y_full

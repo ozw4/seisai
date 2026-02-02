@@ -37,7 +37,7 @@ def _shift_robust_l2_pertrace_vec(
 	"""W軸の±max_shift の範囲で per-(b,h) の MSE を最小化した値を返す。
 	返り値: (B, H)
 
-	外側で行う前提のチェック（重複排除）:
+	外側で行う前提のチェック(重複排除):
 	  - pred/gt の 4D 形状一致・device/dtype 整合
 	  - gt の dtype/device を pred に合わせる
 	この関数でのみ保持する最小限の前提:
@@ -51,7 +51,7 @@ def _shift_robust_l2_pertrace_vec(
 	minW = W - S
 	device = pred.device
 
-	# 各シフトの比較開始位置を構築（gather で抽出）
+	# 各シフトの比較開始位置を構築(gather で抽出)
 	s_offsets = torch.arange(-S, S + 1, device=device)  # (K,)
 	start_pred = torch.clamp(s_offsets, min=0)  # (K,)
 	start_gt = torch.clamp(-s_offsets, min=0)  # (K,)
@@ -121,7 +121,7 @@ class ShiftRobustPerTraceMSE:
 				mask_bool, pred, ch_reduce=self.ch_reduce
 			)
 
-		# FIX: デバイス不一致の是正（直接渡された trace_mask を pred.device へ移動）
+		# FIX: デバイス不一致の是正(直接渡された trace_mask を pred.device へ移動)
 		if trace_mask.device != pred.device:
 			trace_mask = trace_mask.to(device=pred.device, non_blocking=True)
 

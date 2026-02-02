@@ -1,4 +1,4 @@
-# gate_fblc.py （抜粋）---------------------------------------------
+# gate_fblc.py (抜粋)---------------------------------------------
 from typing import Literal
 
 import numpy as np

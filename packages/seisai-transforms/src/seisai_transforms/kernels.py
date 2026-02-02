@@ -14,10 +14,10 @@ __all__ = [
 
 
 def _time_stretch_poly(x_hw: np.ndarray, factor: float) -> np.ndarray:
-	"""時間軸のみを factor 倍にリサンプルする（中心固定ではなく t=0 起点）。
+	"""時間軸のみを factor 倍にリサンプルする(中心固定ではなく t=0 起点)。
 	- 入力: x_hw (H,W)
 	- 出力: (H,W') で W' は factor に応じて変化
-	- 補間: resample_poly（IIR前提の polyphase）、端のパディングは 'line'
+	- 補間: resample_poly(IIR前提の polyphase)、端のパディングは 'line'
 	- 例外: factor <= 0.0 は即時失敗
 	"""
 	if x_hw.ndim != 2:
@@ -39,9 +39,9 @@ def _time_stretch_poly(x_hw: np.ndarray, factor: float) -> np.ndarray:
 
 def _spatial_stretch(x_hw: np.ndarray, factor: float) -> np.ndarray:
 	"""幾何ストレッチ: H方向(トレース方向)のみ中心固定で座標写像し、出力は (H,W) を保つ。
-	- 伸縮は1回の座標変換で実施（ぼかし用の拡大→縮小の2段ズームは廃止）
-	- T軸は不変（zoom=(?, 1.0) 相当）
-	- 補間: H方向の線形補間（境界はedge-clamp）
+	- 伸縮は1回の座標変換で実施(ぼかし用の拡大→縮小の2段ズームは廃止)
+	- T軸は不変(zoom=(?, 1.0) 相当)
+	- 補間: H方向の線形補間(境界はedge-clamp)
 
 	契約:
 	x_hw: (H, W) float/np.ndarray
@@ -66,13 +66,13 @@ def _spatial_stretch(x_hw: np.ndarray, factor: float) -> np.ndarray:
 	dst = np.arange(H, dtype=np.float32)
 	src = c + (dst - c) / float(factor)
 
-	# 境界はエッジ複製（reflectではなくclip）
+	# 境界はエッジ複製(reflectではなくclip)
 	src = np.clip(src, 0.0, H - 1.0)
 	h0 = np.floor(src).astype(np.int64)
 	h1 = np.clip(h0 + 1, 0, H - 1)
 	w = (src - h0).astype(np.float32)  # (H,)
 
-	# H方向1次補間（ブロードキャストで (H,W) を一括計算）
+	# H方向1次補間(ブロードキャストで (H,W) を一括計算)
 	y = (1.0 - w)[:, None] * x_hw[h0, :] + w[:, None] * x_hw[h1, :]
 	return y.astype(x_hw.dtype, copy=False)
 

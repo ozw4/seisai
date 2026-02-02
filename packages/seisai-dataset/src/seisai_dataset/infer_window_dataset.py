@@ -31,8 +31,8 @@ class InferenceGatherWindowsConfig:
 	"""推論用: gather を決定論で window 列挙する設定。
 
 	メモ:
-	- W 方向は crop しない（不足時のみ右 0pad）。長い W は engine 側が tiled 推論で全域予測。
-	- H 方向は window 列挙し、不足は 0pad（pad_last=True のとき末尾 window も追加）。
+	- W 方向は crop しない(不足時のみ右 0pad)。長い W は engine 側が tiled 推論で全域予測。
+	- H 方向は window 列挙し、不足は 0pad(pad_last=True のとき末尾 window も追加)。
 	"""
 
 	domains: tuple[DomainName, ...] = ('shot',)
@@ -123,15 +123,15 @@ class InferenceGatherWindowsDataset(Dataset):
 		- file_path: str
 		- primary_key: int
 		- gather_len: int   # group の総トレース数
-		- abs_h: np.ndarray (H,) int64  # group 内の絶対トレース位置（pad は -1）
+		- abs_h: np.ndarray (H,) int64  # group 内の絶対トレース位置(pad は -1)
 		- trace_valid: np.ndarray (H,) bool
-		- raw_idx_global: np.ndarray (H,) int64  # raw-global row（pad は -1）
+		- raw_idx_global: np.ndarray (H,) int64  # raw-global row(pad は -1)
 		- fb_idx_view: np.ndarray (H,) int64  # pad は -1
 		- offsets_view: np.ndarray (H,) float32
 		- time_view: np.ndarray (W,) float32
 		- dt_sec: float32
 		- dt_eff_sec: float32  # dt_sec / factor
-		- n_total: int  # 全ファイル総トレース数（raw-global）
+		- n_total: int  # 全ファイル総トレース数(raw-global)
 
 	注:
 	- H 方向 window pad は 0 埋め、trace_valid=False, raw_idx_global=-1。

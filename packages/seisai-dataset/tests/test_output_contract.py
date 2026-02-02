@@ -44,7 +44,7 @@ def _build_ds() -> SegyGatherPipelineDataset:
 
 	fbgate = FirstBreakGate(
 		FirstBreakGateConfig(
-			apply_on='off',  # FBLC gate 無効（契約テストを安定化）
+			apply_on='off',  # FBLC gate 無効(契約テストを安定化)
 			min_pick_ratio=0.0,  # min_pick も無効
 		)
 	)
@@ -146,7 +146,7 @@ def test_output_contract_v0():
 	assert indices.dtype == np.int64
 	assert indices.shape == (H,)
 
-	# indices と trace_valid の整合（-1 が pad）
+	# indices と trace_valid の整合(-1 が pad)
 	tv_np = trace_valid.cpu().numpy()
 	np.testing.assert_array_equal(tv_np, indices != -1)
 

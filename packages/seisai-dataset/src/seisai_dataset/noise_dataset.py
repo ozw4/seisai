@@ -9,7 +9,7 @@ import numpy as np
 import segyio
 import torch
 
-# transforms（任意）
+# transforms(任意)
 from seisai_transforms.augment import (
 	DeterministicCropOrPad,
 	PerTraceStandardize,
@@ -21,14 +21,14 @@ from torch.utils.data import Dataset
 from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
 from seisai_dataset.file_info import build_file_info
 
-# 共通の判定ロジック（ここに一本化）
+# 共通の判定ロジック(ここに一本化)
 from seisai_dataset.noise_decider import EventDetectConfig, decide_noise
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from seisai_dataset.trace_subset_sampler import TraceSubsetSampler
 
 
 class NoiseTraceSubsetDataset(Dataset):
-	"""SEG-Y から TraceSubset を抽出 → （任意）Transform → decide_noise() でイベント除外し、
+	"""SEG-Y から TraceSubset を抽出 → (任意)Transform → decide_noise() でイベント除外し、
 	ノイズのみ返す Dataset。
 	"""
 
@@ -76,7 +76,7 @@ class NoiseTraceSubsetDataset(Dataset):
 		self.sampler = TraceSubsetSampler(self.sampler_cfg)
 		self.loader = TraceSubsetLoader(self.loader_cfg)
 
-		# file infos（supergatherは使わない）
+		# file infos(supergatherは使わない)
 		self.file_infos: list[dict] = [
 			build_file_info(
 				p,
@@ -113,7 +113,7 @@ class NoiseTraceSubsetDataset(Dataset):
 			# --- 3) ロード (H,T) ---
 			x = self.loader.load(mmap, indices).astype(np.float32, copy=False)
 
-			# --- 4) Transform（任意・最終長合わせ/標準化など）---
+			# --- 4) Transform(任意・最終長合わせ/標準化など)---
 			meta = {}
 			if self.transform is not None:
 				out = self.transform(x)
@@ -126,7 +126,7 @@ class NoiseTraceSubsetDataset(Dataset):
 						'transform must return 2D numpy array or (array, meta)'
 					)
 
-			# --- 5) 共通判定ロジック（noise_decider）---
+			# --- 5) 共通判定ロジック(noise_decider)---
 			dec = decide_noise(x, dt_sec, self.detect_cfg)
 			if not dec.is_noise:
 				if self.verbose:
@@ -146,7 +146,7 @@ class NoiseTraceSubsetDataset(Dataset):
 				'is_noise': True,
 			}
 
-		# ここまで到達＝ max_retries 回すべて「イベント含み」で棄却された
+		# ここまで到達= max_retries 回すべて「イベント含み」で棄却された
 		raise RuntimeError('Failed to sample noise-only TraceSubset within max_retries')
 
 	def close(self) -> None:

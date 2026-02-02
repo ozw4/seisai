@@ -17,7 +17,7 @@ class SegmentationHead2d(nn.Module):
 
 
 class SegClsHead2d(nn.Module):
-	"""判別（分類）タスク向け 2D セグメンテーションヘッド。
+	"""判別(分類)タスク向け 2D セグメンテーションヘッド。
 	入力:  x (B, C_in, H, W)
 	出力:  y (B, num_classes, H_out, W_out)
 	  - 二値: num_classes=1 + activation='sigmoid'

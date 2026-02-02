@@ -14,11 +14,11 @@ class TiledWConfig:
 
 	想定:
 	- 入力は (B,C,H,W)
-	- H は分割しない（tile_h=H, overlap_h=0）
+	- H は分割しない(tile_h=H, overlap_h=0)
 	- W は tile_w を基準に分割する
 
 	注意:
-	- W < tile_w は設定ミスとして即失敗（フォールバックしない）
+	- W < tile_w は設定ミスとして即失敗(フォールバックしない)
 	- model は out_chans 属性を持ち、out_chans==1 を前提
 	"""
 
@@ -35,11 +35,11 @@ class TiledHConfig:
 
 	想定:
 	- 入力は (B,C,H,W)
-	- W は分割しない（tile_w=W, overlap_w=0）
+	- W は分割しない(tile_w=W, overlap_w=0)
 	- H は tile_h を基準に分割する
 
 	注意:
-	- H < tile_h は設定ミスとして即失敗（フォールバックしない）
+	- H < tile_h は設定ミスとして即失敗(フォールバックしない)
 	- model は out_chans 属性を持ち、out_chans==1 を前提
 	"""
 
@@ -190,7 +190,7 @@ def iter_infer_loader_tiled_w(
 
 	loader は (x_bchw, metas) を返す想定:
 	- x_bchw: torch.Tensor (B,C,H,W)
-	- metas: list[dict] （長さ B）
+	- metas: list[dict] (長さ B)
 
 	例: InferenceGatherWindowsDataset + collate_pad_w_right
 	"""
@@ -255,9 +255,9 @@ def iter_infer_loader_tiled_h(
 
 	loader は (x_bchw, metas) を返す想定:
 	- x_bchw: torch.Tensor (B,C,H,W)
-	- metas: list[dict] （長さ B）
+	- metas: list[dict] (長さ B)
 
-	例: InferenceGatherWindowsDataset + collate_pad_h_bottom 等（H の pad/crop を自前で揃える場合）
+	例: InferenceGatherWindowsDataset + collate_pad_h_bottom 等(H の pad/crop を自前で揃える場合)
 	"""
 	cfg = cfg or TiledHConfig()
 	_validate_tiled_h_cfg(cfg)
@@ -316,7 +316,7 @@ def run_infer_loader_tiled_w(
 	tile_transform: TileTransform | None = None,
 	post_tile_transform: PostTileTransform | None = None,
 ) -> list[tuple[torch.Tensor, list[dict[str, Any]]]]:
-	"""iter_infer_loader_tiled_w の収集版（小規模デモ用）。"""
+	"""iter_infer_loader_tiled_w の収集版(小規模デモ用)。"""
 	return list(
 		iter_infer_loader_tiled_w(
 			model,
@@ -343,7 +343,7 @@ def run_infer_loader_tiled_h(
 	tile_transform: TileTransform | None = None,
 	post_tile_transform: PostTileTransform | None = None,
 ) -> list[tuple[torch.Tensor, list[dict[str, Any]]]]:
-	"""iter_infer_loader_tiled_h の収集版（小規模デモ用）。"""
+	"""iter_infer_loader_tiled_h の収集版(小規模デモ用)。"""
 	return list(
 		iter_infer_loader_tiled_h(
 			model,

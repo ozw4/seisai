@@ -5,7 +5,7 @@ from .stalta import stalta_1d
 
 
 def _ms_to_samples(dt_sec: float, ms: float) -> int:
-	"""Ms をサンプル数へ変換（最低1）。"""
+	"""Ms をサンプル数へ変換(最低1)。"""
 	if dt_sec <= 0.0:
 		raise ValueError('dt_sec must be > 0')
 	n = int(round(ms / (dt_sec * 1e3)))
@@ -23,8 +23,8 @@ def _picks_hist_from_R(
 ) -> None:
 	"""STALTA時系列 R から「初動run開始」を複数抽出し、hist[t] をインクリメントして貯める。
 	- 連続 on 長が min_on_len に達した時点の run開始インデックスを pick とする
-	- pick 直後は refr_len サンプル分スキップ（リフラクトリ）
-	- ヒステリシス: on条件は R>=thr_on、offリセットは R<=thr_off（thr_on>=thr_off を仮定）
+	- pick 直後は refr_len サンプル分スキップ(リフラクトリ)
+	- ヒステリシス: on条件は R>=thr_on、offリセットは R<=thr_off(thr_on>=thr_off を仮定)
 	"""
 	T = R.size
 	if T == 0:
@@ -50,7 +50,7 @@ def _picks_hist_from_R(
 				continue
 		elif v <= thr_off:
 			run = 0
-		# thr_off < v < thr_on のときは run を保持（ヒステリシス）
+		# thr_off < v < thr_on のときは run を保持(ヒステリシス)
 		t += 1
 
 
@@ -76,8 +76,8 @@ def _stalta_pick_hist(
 
 @njit(cache=True, fastmath=True)
 def _sliding_sum_same(hist: np.ndarray, win: int) -> np.ndarray:
-	"""非巡回・端部寄せの移動和（長さwin）。中心寄せではなく「可能な限り左寄せ」する。
-	例: t を中心にせず、区間 [t, t+win) を優先的に取る（端で範囲補正）。
+	"""非巡回・端部寄せの移動和(長さwin)。中心寄せではなく「可能な限り左寄せ」する。
+	例: t を中心にせず、区間 [t, t+win) を優先的に取る(端で範囲補正)。
 	"""
 	T = hist.size
 	win = max(win, 1)
@@ -115,8 +115,8 @@ def detect_event_pick_cluster(
 	"""リフラクトリ付き「初動候補クラスタ」方式。
 	戻り値: (is_event, pick_hist[T], cluster_counts[T])
 
-	- pick_hist[t]: 各トレースで抽出された初動run開始のヒスト（同一tに複数あれば合算）
-	- cluster_counts[t]: 窓long=win_msの移動和（時刻t近傍のクラスタ本数）
+	- pick_hist[t]: 各トレースで抽出された初動run開始のヒスト(同一tに複数あれば合算)
+	- cluster_counts[t]: 窓long=win_msの移動和(時刻t近傍のクラスタ本数)
 	- is_event: max(cluster_counts) >= min_traces
 	"""
 	if x_ht.ndim != 2:
@@ -193,7 +193,7 @@ def detect_event_stalta_majority(
 	戻り値: (is_event, counts[T])  ※counts[t]はその時刻の「閾値以上トレース本数」
 
 	前提:
-	- x_htは (H,T) の実数配列（float32/float64）
+	- x_htは (H,T) の実数配列(float32/float64)
 	- dt_sec > 0
 	- 0 < sta_ms < lta_ms
 	- thr > 0, min_traces >= 1

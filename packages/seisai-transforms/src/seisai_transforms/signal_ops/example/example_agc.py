@@ -8,7 +8,7 @@ import numpy as np
 # あなたの実装に合わせてimportパスを調整してください
 from seisai_transforms.signal_ops.scaling.agc import (
 	agc_np,  # 一般的なRMSベースAGC
-)  # ロバスト統計ベースAGC（MAD/IQR）
+)  # ロバスト統計ベースAGC(MAD/IQR)
 from seisai_transforms.signal_ops.scaling.robust_agc import (
 	robust_agc_np,
 )
@@ -17,7 +17,7 @@ from seisai_transforms.signal_ops.scaling.robust_agc import (
 def make_composite_wave(
 	W: int, fs: int, rng: np.random.Generator
 ) -> tuple[np.ndarray, np.ndarray]:
-	"""合成波形（1D）を生成：低周波+高周波+トレンド+振幅変化+スパイク+ノイズ
+	"""合成波形(1D)を生成：低周波+高周波+トレンド+振幅変化+スパイク+ノイズ
 	返り値: t(s), x
 	"""
 	t = np.arange(W) / float(fs)
@@ -46,7 +46,7 @@ def main():
 
 	t, x = make_composite_wave(W, fs, rng)
 
-	# --- AGC（RMSベース） ---
+	# --- AGC(RMSベース) ---
 	y_agc, g_agc = agc_np(
 		x,
 		win=256,
@@ -57,7 +57,7 @@ def main():
 		return_gain=True,
 	)
 
-	# --- Robust AGC（MAD/IQRベース, 推奨: MAD, gamma=0.75）---
+	# --- Robust AGC(MAD/IQRベース, 推奨: MAD, gamma=0.75)---
 	y_rob, meta = robust_agc_np(
 		x,
 		win=600,
@@ -89,8 +89,8 @@ def main():
 	plt.tight_layout()
 	plt.show()
 
-	# --- 参考: AGCのゲイン可視化（dB） ---
-	# Robust AGCは μ 引き算＋σ^γ で正規化するため、純粋な“ゲイン”は定義しない。
+	# --- 参考: AGCのゲイン可視化(dB) ---
+	# Robust AGCは μ 引き算+σ^γ で正規化するため、純粋な“ゲイン”は定義しない。
 	fig2, ax2 = plt.subplots(1, 1, figsize=(12, 3), sharex=True)
 	gain_db = 20.0 * np.log10(np.maximum(g_agc, 1e-12))
 	ax2.plot(t, gain_db)

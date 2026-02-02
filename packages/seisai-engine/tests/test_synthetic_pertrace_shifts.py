@@ -21,8 +21,8 @@ def make_synthetic_stack(
 ):
 	"""合成データを生成:
 	- gt: ランダム波形 (B,C,H,W)
-	- pred: 各トレース(b,h)毎に W 方向へランダムシフト（[-S, S]）+ 微小ノイズ
-	- shifts: (B,H) の整数シフト量（pred = roll(gt, shifts)）
+	- pred: 各トレース(b,h)毎に W 方向へランダムシフト([-S, S])+ 微小ノイズ
+	- shifts: (B,H) の整数シフト量(pred = roll(gt, shifts))
 	"""
 	assert max_true_shift >= 0 and W - max_true_shift > 0
 	g = torch.Generator().manual_seed(seed)
@@ -71,7 +71,7 @@ def test_shift_robust_vs_plain_mse_on_shifted_predictions():
 		B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=7
 	)
 
-	# ずらしたままの MSE は > 0 になる（シフトに頑健ではない）
+	# ずらしたままの MSE は > 0 になる(シフトに頑健ではない)
 	plain_mse = ((pred - gt) ** 2).mean()
 
 	# shift-robust は 0 近傍
@@ -87,7 +87,7 @@ def test_shift_robust_insufficient_max_shift_yields_positive_loss():
 		B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=99
 	)
 
-	# 与える許容シフトを意図的に小さく（true > allowed）
+	# 与える許容シフトを意図的に小さく(true > allowed)
 	S_allowed = 2
 	per_trace = _shift_robust_l2_pertrace_vec(pred, gt, max_shift=S_allowed)
 	assert (per_trace > 1e-8).any()
@@ -100,7 +100,7 @@ def test_ShiftRobustPerTraceMSE_with_trace_mask_preselection():
 		B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=2024
 	)
 
-	# ランダムに約半分のトレースを採用（True=採用）
+	# ランダムに約半分のトレースを採用(True=採用)
 	torch.manual_seed(1)
 	mask_bh = torch.rand(B, H) > 0.5
 
@@ -108,7 +108,7 @@ def test_ShiftRobustPerTraceMSE_with_trace_mask_preselection():
 	per_trace = _shift_robust_l2_pertrace_vec(pred, gt, max_shift=S_true)
 	loss_ref = per_trace[mask_bh].mean()
 
-	# クラス経由（mask_bool=(B,H) を渡す）
+	# クラス経由(mask_bool=(B,H) を渡す)
 	crit = ShiftRobustPerTraceMSE(max_shift=S_true, ch_reduce='all')
 	batch = {'target': gt, 'mask_bool': mask_bh}
 	loss_cls = crit(pred, batch, reduction='mean')
@@ -122,7 +122,7 @@ def test_ShiftRobustPerTraceMSE_with_pixel_mask_uniform_W():
 		B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=777
 	)
 
-	# (B,H) で採用トレースを作り、pixelマスクへ拡張（W方向一様・ch全True）
+	# (B,H) で採用トレースを作り、pixelマスクへ拡張(W方向一様・ch全True)
 	torch.manual_seed(3)
 	mask_bh = torch.rand(B, H) > 0.6
 	pixel_mask = mask_bh[:, None, :, None].expand(-1, C, -1, W).clone()
@@ -131,7 +131,7 @@ def test_ShiftRobustPerTraceMSE_with_pixel_mask_uniform_W():
 	per_trace = _shift_robust_l2_pertrace_vec(pred, gt, max_shift=S_true)
 	loss_ref = per_trace[mask_bh].mean()
 
-	# クラス経由（pixel mask → (B,H) に正規化される前提）
+	# クラス経由(pixel mask → (B,H) に正規化される前提)
 	crit = ShiftRobustPerTraceMSE(max_shift=S_true, ch_reduce='all')
 	batch = {'target': gt, 'mask_bool': pixel_mask}
 	loss_cls = crit(pred, batch, reduction='mean')
@@ -151,7 +151,7 @@ def test_noise_tolerance_small_noise_yields_small_loss():
 
 
 def test_loss_nonincreasing_as_allowed_shift_increases():
-	"""許容シフト max_shift を増やすほど損失（mean）は非増加（単調減少または等しい）。"""
+	"""許容シフト max_shift を増やすほど損失(mean)は非増加(単調減少または等しい)。"""
 	B, C, H, W, S_true = 1, 2, 40, 256, 5
 	pred, gt, _ = make_synthetic_stack(
 		B, C, H, W, max_true_shift=S_true, noise_std=0.01, seed=123
@@ -167,7 +167,7 @@ def test_loss_nonincreasing_as_allowed_shift_increases():
 
 
 def test_sum_loss_increases_when_more_traces_are_selected():
-	"""True=採用の trace マスクで、選択本数を増やすほど sum 損失は非減少（単調増加または等しい）。"""
+	"""True=採用の trace マスクで、選択本数を増やすほど sum 損失は非減少(単調増加または等しい)。"""
 	B, C, H, W, S_true = 1, 2, 30, 128, 4
 	pred, gt, _ = make_synthetic_stack(
 		B, C, H, W, max_true_shift=S_true, noise_std=0.02, seed=777

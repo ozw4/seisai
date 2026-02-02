@@ -15,13 +15,13 @@ def compute_local_event_probabilities(
 	p_ht : np.ndarray
 	    形状 (H, T) の初動確率。0〜1 を想定。
 	half_window : int
-	    時刻 t を中心にした左右の窓半幅（サンプル数）。Δ に相当。
+	    時刻 t を中心にした左右の窓半幅(サンプル数)。Δ に相当。
 
 	戻り値
 	-------
 	q_ht : np.ndarray
-	    形状 (H, T)。q_ht[h, t] はトレース h の時刻 t 近傍（±half_window）で
-	    少なくとも1回イベントが起こる確率（Poisson 近似）。
+	    形状 (H, T)。q_ht[h, t] はトレース h の時刻 t 近傍(±half_window)で
+	    少なくとも1回イベントが起こる確率(Poisson 近似)。
 	S_t : np.ndarray
 	    形状 (T,)。各時刻 t 近傍でイベントが見えているチャンネル割合の期待値。
 	    S_t[t] = mean_h q_ht[h, t]
@@ -51,7 +51,7 @@ def compute_local_event_probabilities(
 		)  # (H, T+2*pad+1)
 
 		win = 2 * half_window + 1
-		# 各 t について実質的に [t-half_window, t+half_window]（端部はクリップ）の和
+		# 各 t について実質的に [t-half_window, t+half_window](端部はクリップ)の和
 		m_ht = cs[:, win : win + T] - cs[:, :T]  # (H, T)
 
 	q_ht = 1.0 - np.exp(-m_ht)  # Poisson 近似
@@ -71,12 +71,12 @@ def smooth_1d(
 	x_t : np.ndarray
 	    形状 (T,) の 1D 配列。
 	window : int
-	    平滑化窓長（サンプル数）。1 以下ならコピーして返す。
+	    平滑化窓長(サンプル数)。1 以下ならコピーして返す。
 
 	戻り値
 	-------
 	y_t : np.ndarray
-	    平滑化後の 1D 配列（形状 (T,)）。
+	    平滑化後の 1D 配列(形状 (T,))。
 	"""
 	validate_numpy(x, allowed_ndims=(1,), name='x')
 	if window <= 1:
@@ -106,15 +106,15 @@ def detect_event_peaks(
 	min_score : float
 	    ピークとして採用するための最小スコア。
 	min_distance : int
-	    採用するピーク間の最小距離（サンプル数）。
+	    採用するピーク間の最小距離(サンプル数)。
 	    この距離未満で競合する場合はスコアが高い方を優先する。
 	smooth_window : int
-	    平滑化窓長（サンプル数）。1 なら平滑なし。
+	    平滑化窓長(サンプル数)。1 なら平滑なし。
 
 	戻り値
 	-------
 	peak_indices : np.ndarray
-	    形状 (K,) の int 配列。イベント候補ピークの時刻インデックス（昇順）。
+	    形状 (K,) の int 配列。イベント候補ピークの時刻インデックス(昇順)。
 	"""
 	validate_numpy(S_t, allowed_ndims=(1,), name='S_t')
 	if min_distance < 0:
@@ -166,7 +166,7 @@ def compute_window_event_probabilities(
 	win_right: int,
 ) -> np.ndarray:
 	"""Step3 (前半):
-	各イベント候補ピーク k（時刻 peak_indices[k]）に対して、
+	各イベント候補ピーク k(時刻 peak_indices[k])に対して、
 	[t - win_left, t + win_right] の窓内で少なくとも 1 回イベントが
 	起こるトレースごとの確率 q_hk を計算する。
 
@@ -177,15 +177,15 @@ def compute_window_event_probabilities(
 	peak_indices : np.ndarray
 	    形状 (K,) のイベント候補ピークの時刻インデックス。
 	win_left : int
-	    ピークから左側の窓長（サンプル数）。
+	    ピークから左側の窓長(サンプル数)。
 	win_right : int
-	    ピークから右側の窓長（サンプル数）。
+	    ピークから右側の窓長(サンプル数)。
 
 	戻り値
 	-------
 	q_hk : np.ndarray
 	    形状 (H, K)。q_hk[h, k] はピーク k の窓内でトレース h に
-	    少なくとも 1 回イベントが起きる確率（Poisson 近似）。
+	    少なくとも 1 回イベントが起きる確率(Poisson 近似)。
 	"""
 	validate_numpy(p_ht, allowed_ndims=(2,), name='p_ht')
 	validate_numpy(peak_indices, allowed_ndims=(1,), name='peak_indices')
@@ -235,8 +235,8 @@ def compute_event_scores(
 	q_hk : np.ndarray
 	    形状 (H, K)。トレース h × ピーク k の局所イベント確率。
 	weights_h : np.ndarray or None
-	    形状 (H,) のチャネル重み（SNR や距離など）。
-	    None の場合は一様重み（1/H）が使用される。
+	    形状 (H,) のチャネル重み(SNR や距離など)。
+	    None の場合は一様重み(1/H)が使用される。
 	    重みは内部で正規化され、合計 1 になる。
 
 	戻り値
@@ -283,27 +283,27 @@ def detect_events_from_probabilities(
 	パラメータ
 	----------
 	p_ht : np.ndarray
-	    形状 (H, T) の初動確率（Step0 の出力）。
+	    形状 (H, T) の初動確率(Step0 の出力)。
 	half_window : int
-	    Step1 で q_h(t) を計算する際の局所窓半幅（サンプル数）。
+	    Step1 で q_h(t) を計算する際の局所窓半幅(サンプル数)。
 	smooth_window : int
-	    Step2 で S(t) を平滑化する移動平均窓長（サンプル数）。
+	    Step2 で S(t) を平滑化する移動平均窓長(サンプル数)。
 	min_score : float
 	    Step2 のピーク検出で採用する最小スコア。
 	min_peak_distance : int
-	    Step2 のピーク間最小距離（サンプル数）。
+	    Step2 のピーク間最小距離(サンプル数)。
 	peak_win_left : int
-	    Step3 で各ピークのイベント窓を取る際の左側の窓長（サンプル数）。
+	    Step3 で各ピークのイベント窓を取る際の左側の窓長(サンプル数)。
 	peak_win_right : int
-	    Step3 で各ピークのイベント窓を取る際の右側の窓長（サンプル数）。
+	    Step3 で各ピークのイベント窓を取る際の右側の窓長(サンプル数)。
 	weights_h : np.ndarray or None
-	    Step3 でイベントスコアを計算する際のチャネル重み（形状 (H,)）。
+	    Step3 でイベントスコアを計算する際のチャネル重み(形状 (H,))。
 	    None の場合は一様重み。
 
 	戻り値
 	-------
 	peak_indices : np.ndarray
-	    形状 (K,) のイベント候補ピークの時刻インデックス（昇順）。
+	    形状 (K,) のイベント候補ピークの時刻インデックス(昇順)。
 	score_k : np.ndarray
 	    形状 (K,) のイベント確信度 Score_k。
 	S_t : np.ndarray
@@ -311,7 +311,7 @@ def detect_events_from_probabilities(
 	q_ht : np.ndarray
 	    形状 (H, T) の Step1 局所イベント確率。
 	q_hk : np.ndarray
-	    形状 (H, K) の Step3 局所イベント確率（ピーク窓ごと）。
+	    形状 (H, K) の Step3 局所イベント確率(ピーク窓ごと)。
 	"""
 	validate_numpy(p_ht, allowed_ndims=(2,), name='p_ht')
 	if weights_h is not None:

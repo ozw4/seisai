@@ -97,7 +97,7 @@ def imshow_overlay_hw(
 	overlay_vmax: float | None = None,
 	overlay_alpha: float = 0.5,
 ) -> None:
-	"""Base の上に overlay を重ねる（example_segy_gather_pipline_ds.py のやつ）。"""
+	"""Base の上に overlay を重ねる(example_segy_gather_pipline_ds.py のやつ)。"""
 	base = _as_hw(base_hw)
 	ov = _as_hw(overlay_hw)
 	if base.shape != ov.shape:
@@ -134,7 +134,7 @@ def save_imshow_row(
 	figsize: tuple[float, float] = (21.0, 5.0),
 	dpi: int = 150,
 ) -> None:
-	"""横一列に並べて保存（入力/GT/Pred みたいな triptych 用）。"""
+	"""横一列に並べて保存(入力/GT/Pred みたいな triptych 用)。"""
 	panels = list(panels)
 	if len(panels) == 0:
 		raise ValueError('panels must be non-empty')
@@ -168,7 +168,7 @@ def save_imshow_row(
 
 
 def per_trace_zscore_hw(a_hw: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-	"""(H,W) をトレース毎（行ごと）に z-score。
+	"""(H,W) をトレース毎(行ごと)に z-score。
 
 	主に可視化用途を想定。
 	"""
@@ -197,7 +197,7 @@ def save_triptych_bchw(
 	figsize: tuple[float, float] = (20.0, 15.0),
 	dpi: int = 300,
 ) -> None:
-	"""入力/正解/予測を横3枚（triptych）で保存する。
+	"""入力/正解/予測を横3枚(triptych)で保存する。
 
 	Args:
 		x_in_bchw/x_tg_bchw/x_pr_bchw: (B,C,H,W)

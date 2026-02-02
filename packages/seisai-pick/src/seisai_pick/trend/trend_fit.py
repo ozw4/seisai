@@ -22,7 +22,7 @@ def _apply_speed_bounds_on_slowness(
 	b_slope: Tensor,  # slope (= slowness) [s/m], shape (B,1) or (Ba,)
 	vmin: float | None,
 	vmax: float | None,
-	symmetric: bool,  # True: |v|∈[vmin,vmax] を符号保持で許容（v∈[-vmax,-vmin]∪[vmin,vmax]）
+	symmetric: bool,  # True: |v|∈[vmin,vmax] を符号保持で許容(v∈[-vmax,-vmin]∪[vmin,vmax])
 ) -> Tensor:
 	# slowness bounds: s = 1/v
 	min_s = 0.0 if vmax is None else 1.0 / float(vmax)
@@ -68,7 +68,7 @@ def _validation(offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, 
 			shape_hint='(B,H)',
 		)
 
-	# ---- パラメータ検証（スカラー系） ----
+	# ---- パラメータ検証(スカラー系) ----
 	assert section_len >= 4 and stride >= 1 and iters >= 1, 'invalid IRLS/window params'
 	if vmin is not None:
 		assert vmin > 0
@@ -93,7 +93,7 @@ def robust_linear_trend(
 	vmax: float | None = 8000.0,  # None → 片側無制限
 	sort_offsets: bool = True,
 	use_taper: bool = True,
-	abs_velocity: bool = False,  # True: v∈[-vmax,-vmin]∪[vmin,vmax] を許容（出力は符号付き）
+	abs_velocity: bool = False,  # True: v∈[-vmax,-vmin]∪[vmin,vmax] を許容(出力は符号付き)
 ) -> tuple[
 	Tensor | np.ndarray,
 	Tensor | np.ndarray,
@@ -103,15 +103,15 @@ def robust_linear_trend(
 ]:
 	"""Windowed IRLS で t(x) ≈ a + s·x を推定。
 	- 入力がすべてNumPyなら NumPy を返す。そうでなければ Torch を返す。
-	- 内部計算は Torch（CPU）で行う。dtype は t_sec に合わせて統一。
+	- 内部計算は Torch(CPU)で行う。dtype は t_sec に合わせて統一。
 	"""
-	# 返却形態の決定（全入力が NumPy なら True）
+	# 返却形態の決定(全入力が NumPy なら True)
 	if valid is None:
 		all_numpy = require_all_numpy(offsets, t_sec, w_conf)
 	else:
 		all_numpy = require_all_numpy(offsets, t_sec, w_conf, valid)
 
-	# Torchへ正規化（CPU/ dtype は t_sec に合わせる）
+	# Torchへ正規化(CPU/ dtype は t_sec に合わせる)
 	t_tsec = to_torch(t_sec)
 	t_offsets = to_torch(offsets, like=t_tsec)
 	t_wconf = to_torch(w_conf, like=t_tsec)
@@ -127,7 +127,7 @@ def robust_linear_trend(
 	if (t_valid is not None) and (t_valid.ndim == 1):
 		t_valid = t_valid.unsqueeze(0)
 
-	# 入力検証（Torchバックエンド）
+	# 入力検証(Torchバックエンド)
 	_validation(
 		t_offsets, t_tsec, t_valid, t_wconf, vmax, vmin, section_len, stride, iters
 	)
@@ -135,7 +135,7 @@ def robust_linear_trend(
 	# dtype/device を完全一致
 	t_offsets = t_offsets.to(t_tsec)
 
-	# ---- 本体（従来Torch実装そのまま）----
+	# ---- 本体(従来Torch実装そのまま)----
 	B, H = t_offsets.shape
 	x0, y0 = t_offsets, t_tsec
 	v0 = torch.ones_like(t_tsec) if t_valid is None else (t_valid > 0).to(t_tsec)
@@ -253,7 +253,7 @@ def robust_linear_trend_sections_ransac(
 	refine_irls_iters: int = 1,
 	use_inlier_blend: bool = True,
 	sort_offsets: bool = True,
-	abs_velocity: bool = False,  # True で v を対称許容（出力は符号付き）
+	abs_velocity: bool = False,  # True で v を対称許容(出力は符号付き)
 ) -> tuple[
 	Tensor | np.ndarray,
 	Tensor | np.ndarray,
@@ -261,9 +261,9 @@ def robust_linear_trend_sections_ransac(
 	Tensor | np.ndarray,
 	Tensor | np.ndarray,
 ]:
-	"""RANSAC ベースの線形トレンド推定（NumPy/Torch両対応）。
+	"""RANSAC ベースの線形トレンド推定(NumPy/Torch両対応)。
 	- 入力がすべて NumPy なら NumPy を返す。そうでなければ Torch を返す。
-	- 内部計算は Torch（CPU）で行い、dtype は t_sec に合わせる。
+	- 内部計算は Torch(CPU)で行い、dtype は t_sec に合わせる。
 	"""
 	# 返却形態の決定
 	if valid is None:
@@ -271,7 +271,7 @@ def robust_linear_trend_sections_ransac(
 	else:
 		all_numpy = require_all_numpy(offsets, t_sec, w_conf, valid)
 
-	# Torchへ正規化（CPU, dtype を t_sec に合わせる）
+	# Torchへ正規化(CPU, dtype を t_sec に合わせる)
 	t_tsec = to_torch(t_sec)
 	t_offsets = to_torch(offsets, like=t_tsec)
 	t_wconf = to_torch(w_conf, like=t_tsec)
@@ -286,7 +286,7 @@ def robust_linear_trend_sections_ransac(
 	if (t_valid is not None) and (t_valid.ndim == 1):
 		t_valid = t_valid.unsqueeze(0)
 
-	# 入力検証（Torchバックエンド）
+	# 入力検証(Torchバックエンド)
 	_validation(
 		t_offsets,
 		t_tsec,
@@ -303,7 +303,7 @@ def robust_linear_trend_sections_ransac(
 	# dtype/device 完全一致
 	t_offsets = t_offsets.to(t_tsec)
 
-	# ---- 本体処理（従来Torch実装）----
+	# ---- 本体処理(従来Torch実装)----
 	B, H = t_offsets.shape
 	x0, y0 = t_offsets, t_tsec
 	v0 = torch.ones_like(t_tsec) if t_valid is None else (t_valid > 0).to(t_tsec)

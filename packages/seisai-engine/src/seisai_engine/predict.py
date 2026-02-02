@@ -6,16 +6,16 @@ from seisai_transforms.augment import ViewCompose
 from seisai_utils.validator import validate_array
 from tqdm.auto import tqdm
 
-# (H,W) -> (H,W) を想定（ViewCompose 相当）
+# (H,W) -> (H,W) を想定(ViewCompose 相当)
 PreView = Callable[[np.ndarray], np.ndarray]
-# (B,C,ph,pw) -> (B,C,ph,pw) を想定（タイル単位の正規化など）
+# (B,C,ph,pw) -> (B,C,ph,pw) を想定(タイル単位の正規化など)
 TileTransform = Callable[[torch.Tensor], torch.Tensor]
-# (B,C,ph,pw) -> (B,C,ph,pw) を想定（タイル単位の予測後処理など）
+# (B,C,ph,pw) -> (B,C,ph,pw) を想定(タイル単位の予測後処理など)
 PostTileTransform = Callable[[torch.Tensor], torch.Tensor]
 
 
 class _NoRandRNG:
-	# 乱数使用を禁止するダミー RNG（PreView 内で rng を使ったら即失敗）
+	# 乱数使用を禁止するダミー RNG(PreView 内で rng を使ったら即失敗)
 	def random(self, *a, **k):
 		raise RuntimeError('random() forbidden in deterministic inference')
 
@@ -63,7 +63,7 @@ def _run_tiled(
 			starts.append(nxt)
 		return sorted(set(starts))
 
-	# Hann 窓ベースの 2D 重み（中心が大きく、端が小さい）
+	# Hann 窓ベースの 2D 重み(中心が大きく、端が小さい)
 	def _make_tile_weight(
 		tile_h: int, tile_w: int, device: torch.device
 	) -> torch.Tensor:
@@ -80,7 +80,7 @@ def _run_tiled(
 		eps = 1e-3
 		w2d = torch.clamp(w2d, min=eps)
 
-		# shape: (1,1,H,W) にしておく（B,C に broadcast させる）
+		# shape: (1,1,H,W) にしておく(B,C に broadcast させる)
 		return w2d.view(1, 1, tile_h, tile_w)
 
 	ys = _tile_starts(h, tile_h, ov_h)
@@ -182,7 +182,7 @@ def infer_tiled_chw(
 
 	x_np = np.ascontiguousarray(x_chw, dtype=np.float32)
 
-	# 3) Torch へ 1 回だけ変換（以降はTorchでタイル推論）
+	# 3) Torch へ 1 回だけ変換(以降はTorchでタイル推論)
 	device = next(model.parameters()).device
 	x_t = torch.from_numpy(x_np).unsqueeze(0).to(device=device, dtype=torch.float32)
 

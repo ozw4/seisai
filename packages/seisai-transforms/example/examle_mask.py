@@ -1,12 +1,12 @@
 # %%
-# パラメータ・スイープ例（可視化つき、subplot禁止のため全て単独Figure）
+# パラメータ・スイープ例(可視化つき、subplot禁止のため全て単独Figure)
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
 from seisai_transforms.masking import MaskGenerator
 
-# ---- 合成データ（同一）----
+# ---- 合成データ(同一)----
 H, T = 64, 256
 base_rng = np.random.default_rng(0)
 t = np.linspace(0.0, 1.0, T, dtype=np.float32)
@@ -104,7 +104,7 @@ checker_cases = [
 		noise_std=0.3,
 		seed=202,
 	),
-	# 位相ズラし（offset でタイルの位相を変更 → 推論時アンサンブルの例）
+	# 位相ズラし(offset でタイルの位相を変更 → 推論時アンサンブルの例)
 	dict(
 		block_h=8,
 		block_t=16,

@@ -2,7 +2,7 @@ import numpy as np
 from numba import njit, prange
 
 
-# === 1D: ユーザーの逐次和アルゴリズム（そのまま採用） =====================
+# === 1D: ユーザーの逐次和アルゴリズム(そのまま採用) =====================
 @njit(cache=True, fastmath=True)
 def stalta_1d(trc, ns=10, nl=100, eps=1e-12):
 	tmax = trc.size
@@ -29,10 +29,10 @@ def stalta_1d(trc, ns=10, nl=100, eps=1e-12):
 	return R
 
 
-# === (H,T): 2Dを各トレース独立に並列処理（時間=最後の軸） ==================
+# === (H,T): 2Dを各トレース独立に並列処理(時間=最後の軸) ==================
 @njit(cache=True, fastmath=True, parallel=True)
 def stalta_2d(x_2d, ns=10, nl=100, eps=1e-12):
-	"""x_2d: shape (H, T) の連続配列（C連続推奨）
+	"""x_2d: shape (H, T) の連続配列(C連続推奨)
 	戻り: shape (H, T) の float64
 	"""
 	H, T = x_2d.shape
@@ -49,10 +49,10 @@ def stalta(x, ns=10, nl=100, eps=1e-12, axis=-1, out_dtype=None):
 	"""任意次元の配列 x に対して、指定 axis (=時間軸) に沿って STALTA を計算。
 	- x shape 例:
 		(T,), (H,T), (B,H,T), (B,C,H,T), ...
-	- axis は時間軸（デフォ = -1 = 最後の軸）
-	- 出力 shape は入力と同じ。dtype は out_dtype か、なければ入力 dtype を継承（float32/64のみ）。
+	- axis は時間軸(デフォ = -1 = 最後の軸)
+	- 出力 shape は入力と同じ。dtype は out_dtype か、なければ入力 dtype を継承(float32/64のみ)。
 	"""
-	# ガード（サイレント劣化禁止）
+	# ガード(サイレント劣化禁止)
 	if not (
 		isinstance(ns, int) and isinstance(nl, int) and ns > 0 and nl > 0 and nl >= ns
 	):
@@ -66,7 +66,7 @@ def stalta(x, ns=10, nl=100, eps=1e-12, axis=-1, out_dtype=None):
 	T = x_last.shape[-1]
 	lead_shape = x_last.shape[:-1]
 
-	# 2) 2D (N, T) へまとめる（C連続＆float64でJITに優しい形に）
+	# 2) 2D (N, T) へまとめる(C連続＆float64でJITに優しい形に)
 	x_2d = x_last.reshape(-1, T)
 	x_2d = np.ascontiguousarray(x_2d, dtype=np.float64)
 

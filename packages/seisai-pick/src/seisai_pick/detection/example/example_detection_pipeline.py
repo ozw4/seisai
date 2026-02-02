@@ -25,8 +25,8 @@ def _make_synthetic_probabilities(
 	seed: int = 0,
 ) -> np.ndarray:
 	"""合成 p_ht を作る:
-	- イベント k ごとに、中心 t0_k（秒）・振幅 amp_k・時間幅 sigma_sec
-	- チャネルごとに線形 moveout（samples/ch）= slopes[k] を適用
+	- イベント k ごとに、中心 t0_k(秒)・振幅 amp_k・時間幅 sigma_sec
+	- チャネルごとに線形 moveout(samples/ch)= slopes[k] を適用
 	- 各イベントを和して [0,1] にクリップ
 	"""
 	if not (len(event_secs) == len(slopes_samp_per_ch) == len(amps)):
@@ -44,7 +44,7 @@ def _make_synthetic_probabilities(
 			shift = slope * h  # samples
 			p[h] += amp * np.exp(-0.5 * ((t_idx - (mu + shift)) / sigma) ** 2)
 
-	# 0-1 へ正規化（最大1に抑えつつ軽いノイズ）
+	# 0-1 へ正規化(最大1に抑えつつ軽いノイズ)
 	p += noise_level * rng.random((H, T))
 	p = np.clip(p, 0.0, 1.0)
 	return p
@@ -55,7 +55,7 @@ if __name__ == '__main__':
 	dt_sec = 0.01  # 100 Hz
 	H = 24
 	T = 6000  # 60 秒間
-	# イベント: 中心時刻（秒）, moveout の傾き（samples/チャネル）, 振幅
+	# イベント: 中心時刻(秒), moveout の傾き(samples/チャネル), 振幅
 	event_secs = [10.0, 30.0, 45.0]
 	slopes = [20, -0.2, 0.0]  # 遅い右上がり／やや速い左上がり／ほぼ水平
 	amps = [0.9, 0.7, 0.6]
@@ -73,11 +73,11 @@ if __name__ == '__main__':
 		seed=42,
 	)
 
-	# ---- Step1 の窓（Δ）を秒 → サンプルに変換 ----
+	# ---- Step1 の窓(Δ)を秒 → サンプルに変換 ----
 	half_window_sec = 1.5
 	half_window = int(round(half_window_sec / dt_sec))
 
-	# ---- Step2 のパラメータ（秒 → サンプル） ----
+	# ---- Step2 のパラメータ(秒 → サンプル) ----
 	min_score = 0.6
 	min_distance_sec = 5.0
 	min_distance = int(round(min_distance_sec / dt_sec))
@@ -99,7 +99,7 @@ if __name__ == '__main__':
 		peak_detector_fn=P_fn,
 	)
 
-	# ---- 結果表示（秒に変換）----
+	# ---- 結果表示(秒に変換)----
 	t_peaks_sec = peak_indices * dt_sec
 	print('ground truth event times (s):', event_secs)
 	print(f'Detected {peak_indices.size} events')

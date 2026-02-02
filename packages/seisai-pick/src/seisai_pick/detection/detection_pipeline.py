@@ -57,7 +57,7 @@ def run_event_detection_pipeline(
 	S_t : np.ndarray
 		形状 (T,) の float64 配列。Step1 で得られた time support。
 	event_scores : np.ndarray
-		形状 (K,) の float64 配列。各イベント候補のスコア（S_t[peak_indices]）。
+		形状 (K,) の float64 配列。各イベント候補のスコア(S_t[peak_indices])。
 
 	Raises
 	------
@@ -96,7 +96,7 @@ def run_event_detection_pipeline(
 	if peak_indices.size == 0:
 		event_scores = np.zeros(0, dtype=np.float64)
 	else:
-		# 範囲チェック（バグ検知用）
+		# 範囲チェック(バグ検知用)
 		if peak_indices.min() < 0 or peak_indices.max() >= T:
 			raise ValueError('peak_indices must be in [0, T-1]')
 		event_scores = S_t[peak_indices].astype(np.float64)

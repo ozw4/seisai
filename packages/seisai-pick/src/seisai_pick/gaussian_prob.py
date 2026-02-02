@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 
-# --- 共通: ビン（index）基準のガウス分布生成 ---
+# --- 共通: ビン(index)基準のガウス分布生成 ---
 def gaussian_probs1d_np(
 	mu: np.ndarray, sigma_bins: np.ndarray | float, W: int
 ) -> np.ndarray:

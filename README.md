@@ -2,7 +2,7 @@
 
 Modular, PyTorch-friendly **SEG-Y gather dataset toolkit** (monorepo).
 
-> Note: 現状は monorepo 内のサブパッケージを editable install して使う前提です（`import seisai` はまだ用意していません）。
+> Note: 現状は monorepo 内のサブパッケージを editable install して使う前提です(`import seisai` はまだ用意していません)。
 > Dataset の入口は **`seisai_dataset`** です。
 
 ## Install (local dev / monorepo)
@@ -148,12 +148,12 @@ batch = next(iter(loader))
 ## Core pieces
 
 > SegyGatherPipelineDataset – sample → load → transform → FB gate → BuildPlan で input/target を組み立て。
-> TraceSubsetSampler – gather/subset の抽出（primary key / superwindow など）。
+> TraceSubsetSampler – gather/subset の抽出(primary key / superwindow など)。
 > TraceSubsetLoader – segyio mmap load + padding。
-> ViewCompose + augmenters – time/space/freq 等の独立コンポーネント（meta を統合）。
-> MaskGenerator / MaskedSignal – bool mask を生成して replace/add を適用（mask_bool を出力）。
-> FirstBreakGate – FBLC gate（apply_on="off" で無効化可）。
-> FBGaussMap – fb_idx_view から Gaussian heatmap を生成（fb_seg 用）。
+> ViewCompose + augmenters – time/space/freq 等の独立コンポーネント(meta を統合)。
+> MaskGenerator / MaskedSignal – bool mask を生成して replace/add を適用(mask_bool を出力)。
+> FirstBreakGate – FBLC gate(apply_on="off" で無効化可)。
+> FBGaussMap – fb_idx_view から Gaussian heatmap を生成(fb_seg 用)。
 
 ## Testing
 ```bash

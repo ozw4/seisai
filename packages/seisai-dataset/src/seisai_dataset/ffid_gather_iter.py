@@ -15,7 +15,7 @@ SortWithinGather = Literal['none', 'chno', 'offset']
 
 @dataclass(frozen=True)
 class FfidGather:
-	"""FFID（=shot gather）単位で取り出した gather とメタ情報。"""
+	"""FFID(=shot gather)単位で取り出した gather とメタ情報。"""
 
 	file_idx: int
 	file_path: str
@@ -51,9 +51,9 @@ def _sort_indices_within_gather(
 class FFIDGatherIterator:
 	"""SEG-Y を FFID ごとに順に取り出す iterator。
 
-	- trace の並びは、デフォルトで chno で安定ソート（mergesort）
-	- x_hw は float32 で返す（mmap -> gather slice）
-	- caller は close() を呼ぶ（segyio ハンドルを保持する）
+	- trace の並びは、デフォルトで chno で安定ソート(mergesort)
+	- x_hw は float32 で返す(mmap -> gather slice)
+	- caller は close() を呼ぶ(segyio ハンドルを保持する)
 	"""
 
 	def __init__(
@@ -118,8 +118,8 @@ class FFIDGatherIterator:
 		"""FFID gather を順に yield。
 
 		Args:
-			ffids: 指定した FFID のみを処理（None なら全 FFID）
-			file_indices: 指定したファイル index のみを処理（None なら全ファイル）
+			ffids: 指定した FFID のみを処理(None なら全 FFID)
+			file_indices: 指定したファイル index のみを処理(None なら全ファイル)
 
 		"""
 		ffid_set = None

@@ -165,7 +165,7 @@ def build_index_map(arr: np.ndarray | None) -> dict[int, np.ndarray] | None:
 	"""1次元配列 arr から {値 -> その値を持つトレースのインデックス配列(int32)} を作る。
 	- arr が None のときは None を返す
 	- 安定性のため mergesort を使用
-	- 戻り値の各インデックス配列は dtype=int32（GPU転送やシリアライズで軽量）
+	- 戻り値の各インデックス配列は dtype=int32(GPU転送やシリアライズで軽量)
 	"""
 	if arr is None:
 		return None
@@ -209,11 +209,11 @@ def build_file_info(
 ) -> dict:
 	"""SEG-Y 1ファイルから dataset が要求する file_info dict を構築する共通関数。
 
-	- ヘッダは load_headers_with_cache() を用いて取得（cache_dir の有無で自動切替）
-	- インデックスマップ（{値→行インデックス配列}）を安定ソートで構築
-	- mmap を開いた segyio オブジェクトを保持（caller が close() を呼ぶこと）
+	- ヘッダは load_headers_with_cache() を用いて取得(cache_dir の有無で自動切替)
+	- インデックスマップ({値→行インデックス配列})を安定ソートで構築
+	- mmap を開いた segyio オブジェクトを保持(caller が close() を呼ぶこと)
 	- include_centroids=True の場合、座標が読めたときのみキーごとのセントロイドを付与
-	  （座標が欠落/不一致なら警告を出して None を格納）
+	  (座標が欠落/不一致なら警告を出して None を格納)
 
 	Returns (dict):
 	  path, mmap, segy_obj, dt_sec, n_traces, n_samples,
@@ -243,11 +243,11 @@ def build_file_info(
 	n_samples = int(meta['n_samples'])
 	dt_sec = dt_us * 1e-6
 
-	# mmap 用に開いて保持（caller が close する）
+	# mmap 用に開いて保持(caller が close する)
 	f = segyio.open(segy_path, 'r', ignore_geometry=True)
 	mmap = f.trace.raw[:]
 
-	# index maps（安定ソート）と unique_keys
+	# index maps(安定ソート)と unique_keys
 	ffid_key_to_indices = build_index_map(ffid_values)
 	chno_key_to_indices = build_index_map(chno_values)
 	cmp_key_to_indices = (
@@ -262,7 +262,7 @@ def build_file_info(
 	chno_centroids = None
 
 	if include_centroids:
-		# 座標読み出し（失敗/不一致時は警告して None）
+		# 座標読み出し(失敗/不一致時は警告して None)
 		try:
 			srcx = np.asarray(
 				f.attributes(segyio.TraceField.SourceX)[:], dtype=np.float64
@@ -280,7 +280,7 @@ def build_file_info(
 			scal = np.asarray(
 				f.attributes(segyio.TraceField.SourceGroupScalar)[:], dtype=np.float64
 			)
-			# SEG-Y の SourceGroupScalar: 負値は分母（1/|scal|）
+			# SEG-Y の SourceGroupScalar: 負値は分母(1/|scal|)
 			scal_eff = np.where(
 				scal == 0.0, 1.0, np.where(scal > 0.0, scal, 1.0 / np.abs(scal))
 			)

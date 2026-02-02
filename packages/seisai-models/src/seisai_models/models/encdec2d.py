@@ -11,7 +11,7 @@ class EncDec2D(nn.Module):
 	"""timm バックボーン + U-Net デコーダの汎用ネットワーク。
 
 	timm バックボーンの前に Conv+BN+ReLU の前段ステージを任意段数挿入できる。
-	SAME などの動的パディングはモデル外（データローダ側）で行うこと。
+	SAME などの動的パディングはモデル外(データローダ側)で行うこと。
 
 	"""
 
@@ -74,10 +74,10 @@ class EncDec2D(nn.Module):
 
 		# 追加のダウンサンプル段
 		self.extra_down = nn.ModuleList()
-		# 1) backbone のチャンネル列（深い→浅い）
+		# 1) backbone のチャンネル列(深い→浅い)
 		ecs_base = [fi['num_chs'] for fi in self.backbone.feature_info][::-1]
 
-		# 2) extra_down を作る（最深の上に積む）
+		# 2) extra_down を作る(最深の上に積む)
 		self.extra_down = nn.ModuleList()
 		c_in = ecs_base[0] if ecs_base else 0
 		extra_out_channels: list[int] = []
@@ -122,7 +122,7 @@ class EncDec2D(nn.Module):
 			out_channels=out_chans,
 		)
 
-		# 推論時の TTA（flip）を使うか
+		# 推論時の TTA(flip)を使うか
 		self.use_tta = True
 
 	def _encode(self, x) -> list[torch.Tensor]:
@@ -137,13 +137,13 @@ class EncDec2D(nn.Module):
 		# backbone → deepest-first
 		feats = self.backbone(x)[::-1]
 
-		# extra_down（最深側を前に積む）
+		# extra_down(最深側を前に積む)
 		top = feats[0]
 		for b in self.extra_down:
 			top = b(top)
 			feats = [top] + feats
 
-		# ★pre_down 出力を浅い側（末尾）に積む
+		# ★pre_down 出力を浅い側(末尾)に積む
 		feats = feats + pre_feats[::-1]
 
 		return feats
@@ -177,7 +177,7 @@ class EncDec2D(nn.Module):
 		if self.training or not self.use_tta:
 			return y
 
-		# eval 時のみ簡易 TTA（左右反転）
+		# eval 時のみ簡易 TTA(左右反転)
 		p1 = self._proc_flip(x)
 		p1 = F.interpolate(p1, size=(H, W), mode='bilinear', align_corners=False)
 		return torch.quantile(torch.stack([y, p1]), q=0.5, dim=0)

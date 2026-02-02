@@ -23,7 +23,7 @@ _DEFAULT_SEGY = Path(
 )
 _DEFAULT_FBNP = Path('/home/dcuser/data/ActiveSeisField/aso19-2/fb_Aso19-2.npy')
 
-# env var は任意（必要な人だけ上書き）
+# env var は任意(必要な人だけ上書き)
 SEGY = Path(os.environ.get('FBP_TEST_SEGY', str(_DEFAULT_SEGY)))
 FBNP = Path(os.environ.get('FBP_TEST_FB', str(_DEFAULT_FBNP)))
 
@@ -45,7 +45,7 @@ def _build_ds(mask_ratio: float):
 
 	fbgate = FirstBreakGate(
 		FirstBreakGateConfig(
-			apply_on='off',  # FBLC gate 無効（テストが安定）
+			apply_on='off',  # FBLC gate 無効(テストが安定)
 			min_pick_ratio=0.0,  # min_pick も無効
 		)
 	)

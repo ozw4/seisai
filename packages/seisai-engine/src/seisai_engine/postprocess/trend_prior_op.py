@@ -58,8 +58,8 @@ def _resolve_channels(ch_spec: int | Iterable[int], C: int) -> Sequence[int]:
 
 class TrendPriorOp:
 	"""(B,C,H,W) logits を受け取り、選択チャネルに trend 中心の Gaussian prior を
-	log 空間で合成して返す。prior_mode='logit' のみを提供（損失計算は別モジュール）。
-	トレンド推定は Strategy インスタンス（IRLS/RANSAC等）で差し替え。
+	log 空間で合成して返す。prior_mode='logit' のみを提供(損失計算は別モジュール)。
+	トレンド推定は Strategy インスタンス(IRLS/RANSAC等)で差し替え。
 	"""
 
 	def __init__(self, cfg: TrendPriorConfig) -> None:
@@ -111,7 +111,7 @@ class TrendPriorOp:
 				prob=prob, floor=cfg.conf_floor, power=cfg.conf_power
 			).to(logit)  # (B,H)
 
-			# --- 早期ゲート（中央値） ---
+			# --- 早期ゲート(中央値) ---
 			use_mask = valid
 			conf_med = w_conf[use_mask].median() if use_mask.any() else w_conf.median()
 			alpha_eff = (
@@ -130,7 +130,7 @@ class TrendPriorOp:
 			# --- 到達候補: 確率重心 t_mu ---
 			t_sec = _argmax_time_parabolic(prob, dt_sec)  # (B,H) [s]
 
-			# --- トレンド推定（Strategy 呼び出し） ---
+			# --- トレンド推定(Strategy 呼び出し) ---
 			trend_t, trend_s, v_trend, w_used, covered = cfg.fit(
 				offsets=offsets.to(logit),
 				t_sec=t_sec.to(logit),
@@ -138,7 +138,7 @@ class TrendPriorOp:
 				w_conf=w_conf,
 			)
 
-			# --- Gaussian prior（trend中心） ---
+			# --- Gaussian prior(trend中心) ---
 			prior = (
 				gaussian_prior_from_trend(
 					t_trend_sec=trend_t,
@@ -152,7 +152,7 @@ class TrendPriorOp:
 				.clamp_(min=0.0)
 			)  # (B,H,W)
 
-			# --- logit 合成（log prior を加算） ---
+			# --- logit 合成(log prior を加算) ---
 			log_prior = torch.log(prior.clamp_min(cfg.prior_log_eps)).to(torch.float32)
 
 			device_type = 'cuda' if logit.is_cuda else 'cpu'

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-_EPS = 1e-6  # 比較時の許容誤差（ほぼ等しいかの判定に使用）
+_EPS = 1e-6  # 比較時の許容誤差(ほぼ等しいかの判定に使用)
 
 
 def _resample_idx_nearest(v: np.ndarray, factor_h: float) -> np.ndarray:
@@ -11,11 +11,11 @@ def _resample_idx_nearest(v: np.ndarray, factor_h: float) -> np.ndarray:
 	  - fb_idx のような「離散位置」を線形でぼかさず、段差を保ったまま伸縮する。
 
 	契約:
-	  - v: (H,), int 系（-1 は無効）
+	  - v: (H,), int 系(-1 は無効)
 	  - factor_h: >0、1.0 で恒等。中心 (H-1)/2 を固定してスケール。
-	  - 端はクリップ（外挿なし）
+	  - 端はクリップ(外挿なし)
 	無効の扱い:
-	  - 最近傍に選ばれた元値が -1 なら出力も -1（無効の“にじみ”は起こさない）
+	  - 最近傍に選ばれた元値が -1 なら出力も -1(無効の“にじみ”は起こさない)
 	戻り値:
 	  - (H,), int64
 	"""
@@ -34,17 +34,17 @@ def _resample_idx_nearest(v: np.ndarray, factor_h: float) -> np.ndarray:
 
 
 def _resample_float_linear(v: np.ndarray, factor_h: float) -> np.ndarray:
-	"""トレース方向（H軸）の中心固定・線形補間で、(H,) の float 系列を
+	"""トレース方向(H軸)の中心固定・線形補間で、(H,) の float 系列を
 	同じ H のままリサンプリングする。
 
 	契約:
-	- 入力 v: 形状 (H,), dtype は float を想定（例: offsets）
+	- 入力 v: 形状 (H,), dtype は float を想定(例: offsets)
 	- factor_h: >0 の拡大率。1.0 で恒等。中心 (H-1)/2 を固定して拡大/縮小。
-	- 端はクリップ（外挿なし）
+	- 端はクリップ(外挿なし)
 	戻り値:
 	- 形状 (H,), dtype=float32
 	例外:
-	- H==0 の場合は v.astype(np.float32, copy=True) を返す（恒等）
+	- H==0 の場合は v.astype(np.float32, copy=True) を返す(恒等)
 	"""
 	H = int(v.shape[0])
 	if H == 0 or abs(factor_h - 1.0) <= 1e-6:
@@ -60,13 +60,13 @@ def _resample_float_linear(v: np.ndarray, factor_h: float) -> np.ndarray:
 
 
 def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.ndarray:
-	"""生の初動インデックス列 `fb_idx`（1..W-1 が有効（0は無効））を、
-	meta（hflip/factor_h/factor/start）に基づいて View 空間へ投影する。
+	"""生の初動インデックス列 `fb_idx`(1..W-1 が有効(0は無効))を、
+	meta(hflip/factor_h/factor/start)に基づいて View 空間へ投影する。
 
 	処理順:
-	1) H方向: hflip → factor_h による再サンプル（線形、無効値伝播ルール適用）
+	1) H方向: hflip → factor_h による再サンプル(線形、無効値伝播ルール適用)
 	2) T方向: 0-based のまま round(fb * factor) - start で時間窓へ写像
-	3) 範囲外は -1（無効）にする。0..W-1 のみ有効。
+	3) 範囲外は -1(無効)にする。0..W-1 のみ有効。
 
 	引数:
 	- fb_idx: (H,), int。0-based。-1 は無効。
@@ -93,15 +93,15 @@ def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.nd
 
 
 def project_offsets_view(offsets: np.ndarray, H: int, meta: dict) -> np.ndarray:
-	"""生のオフセット列 (H,) を meta の H 方向変換（hflip / factor_h）に合わせて
+	"""生のオフセット列 (H,) を meta の H 方向変換(hflip / factor_h)に合わせて
 	View 空間へ投影して返す。
 
 	Parameters
 	----------
 	offsets : np.ndarray
-		形状 (H,) の 1D 配列（float 可）。各トレースの受信点オフセット [m]。
+		形状 (H,) の 1D 配列(float 可)。各トレースの受信点オフセット [m]。
 	H : int
-		ビューのトレース数（offsets 長と一致している必要がある）。
+		ビューのトレース数(offsets 長と一致している必要がある)。
 	meta : dict
 		{'hflip': bool, 'factor_h': float} を想定。存在しない場合は既定値 False / 1.0。
 
@@ -137,16 +137,16 @@ def project_offsets_view(offsets: np.ndarray, H: int, meta: dict) -> np.ndarray:
 
 
 def project_time_view(time_1d: np.ndarray, H: int, W: int, meta: dict) -> np.ndarray:
-	"""生の時間軸（1D, 秒）を meta の時間ストレッチ / クロップに追従させ、
+	"""生の時間軸(1D, 秒)を meta の時間ストレッチ / クロップに追従させ、
 	全トレース共通の 1D 時間グリッド (W,) を返す。
 	注: H はインターフェイス整合のための引数で計算には使用しない。
 
 	Parameters
 	----------
 	time_1d : np.ndarray
-		形状 (W0,) の等間隔時刻列（例: np.arange(W0) * dt0 + t0）。
+		形状 (W0,) の等間隔時刻列(例: np.arange(W0) * dt0 + t0)。
 	H : int
-		ビューのトレース数（未使用）。
+		ビューのトレース数(未使用)。
 	W : int
 		出力時間グリッドのサンプル数。
 	meta : dict

@@ -1,5 +1,5 @@
 # %%
-# (B,C,H,W) 専用版 velocity_filt の可視化付き使用例（ノイズ注入つき）
+# (B,C,H,W) 専用版 velocity_filt の可視化付き使用例(ノイズ注入つき)
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
@@ -33,7 +33,7 @@ def demo() -> None:
 		taper_ms=taper_ms,
 	)  # (B,H,W)
 
-	# ---- 疑似ログits（真の速度 v_true に沿ってピーク）------------
+	# ---- 疑似ログits(真の速度 v_true に沿ってピーク)------------
 	v_true = torch.tensor([2500.0]).view(B, 1, 1)  # (B,1,1)
 	t = torch.arange(W, dtype=torch.float32).view(1, 1, W) * dt_sec.view(B, 1, 1)
 	x = offsets_m.abs().view(B, H, 1)  # (B,H,1)
@@ -41,7 +41,7 @@ def demo() -> None:
 	peak = torch.exp(-0.5 * ((t - t_center) / 0.010) ** 2)  # σ=10ms
 	logits = (10.0 * peak).unsqueeze(1).clone()  # (B,1,H,W)
 
-	# ---- ノイズ付加（例：標準偏差指定） ----------------------------
+	# ---- ノイズ付加(例：標準偏差指定) ----------------------------
 	noise_std = 8.0
 	logits = logits + noise_std * torch.randn_like(logits)
 	logits = logits.clamp_(-12.0, 12.0)
@@ -53,11 +53,11 @@ def demo() -> None:
 	prob_raw = F.softmax(logits, dim=-1)[:, 0]  # (B,H,W)
 	prob_filted = F.softmax(filted_logits, dim=-1)[:, 0]  # (B,H,W)
 
-	# ---- 可視化（RawProb と FiltedProb で vmin/vmax を統一） ------
+	# ---- 可視化(RawProb と FiltedProb で vmin/vmax を統一) ------
 	t_ms = (torch.arange(W, dtype=torch.float32) * dt_sec[0] * 1000.0).numpy()
 	y_off = offsets_m[0].numpy()
 
-	# 共有カラースケールを計算（RawとFiltedの両方から）
+	# 共有カラースケールを計算(RawとFiltedの両方から)
 	vmin_img = float(torch.minimum(prob_raw.min(), prob_raw.min()))
 	vmax_img = float(torch.maximum(prob_raw.max(), prob_raw.max()))
 	# ほぼ[0,1]のはずだが、数値誤差を考慮してクリップ

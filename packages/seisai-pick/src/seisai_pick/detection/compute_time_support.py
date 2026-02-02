@@ -153,7 +153,7 @@ def compute_time_support_from_pick_cluster(
 	ピーク開始位置のヒストグラムを作成する。その後，長さ `win_len` の窓で
 	`_sliding_sum_same` により移動和を計算し，クラスタ本数系列を得る。
 	最後にチャネル数 H で割ることで，S_t を「1 チャネルあたりの平均ピック数」として
-	0 付近〜おおよそ 1 程度のスケールに正規化する（複数イベントが重なると 1 を超えることもある）。
+	0 付近〜おおよそ 1 程度のスケールに正規化する(複数イベントが重なると 1 を超えることもある)。
 
 	Parameters
 	----------
@@ -234,7 +234,7 @@ def compute_time_support_from_majority(
 	Returns
 	-------
 	np.ndarray
-		形状 (T,) の float64 配列。各時刻 t における閾値以上チャネル割合 S_t（0〜1）。
+		形状 (T,) の float64 配列。各時刻 t における閾値以上チャネル割合 S_t(0〜1)。
 
 	Raises
 	------
@@ -277,13 +277,13 @@ def compute_time_support_from_probabilities(
 	p_ht : np.ndarray
 	    形状 (H, T) の初動“確率風”スコア。確率出力を想定するので [0,1] 範囲を要求。
 	half_window : int
-	    時刻 t を中心にした左右の窓半幅（サンプル数）。Δ に相当。0 以上。
+	    時刻 t を中心にした左右の窓半幅(サンプル数)。Δ に相当。0 以上。
 
 	Returns
 	-------
 	S_t : np.ndarray
 	    形状 (T,) の float64 配列。各時刻 t における time support スコア。
-	    0〜1 の範囲に収まる（p_ht が [0,1] の場合）。
+	    0〜1 の範囲に収まる(p_ht が [0,1] の場合)。
 
 	Raises
 	------
@@ -301,7 +301,7 @@ def compute_time_support_from_probabilities(
 
 	x = np.asarray(p_ht, dtype=np.float64)
 
-	# p が [0,1] に入っていることを確認（確率前提の Step1 なのでここは厳しめに見る）
+	# p が [0,1] に入っていることを確認(確率前提の Step1 なのでここは厳しめに見る)
 	if np.any(x < 0.0) or np.any(x > 1.0):
 		raise ValueError('p_ht must be in [0, 1]')
 
@@ -310,7 +310,7 @@ def compute_time_support_from_probabilities(
 		return x.mean(axis=0)
 
 	# half_window が極端に大きい設定は明示的に弾いておく
-	# （全域より十分大きい窓は意味を持ちにくいため）
+	# (全域より十分大きい窓は意味を持ちにくいため)
 	if 2 * half_window + 1 > T:
 		raise ValueError('2 * half_window + 1 must be <= T')
 

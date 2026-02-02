@@ -17,7 +17,7 @@ from seisai_transforms._signal_ops import compute_envelope
 class EventDetectConfig:
 	"""包絡→STALTA を用いたイベント検出設定。
 	- A方式: 多数決 + 連続長
-	- B方式: 初動候補クラスタ（ヒステリシス + リフラクトリ）
+	- B方式: 初動候補クラスタ(ヒステリシス + リフラクトリ)
 	"""
 
 	# Preprocess
@@ -33,7 +33,7 @@ class EventDetectConfig:
 	min_traces: int = 8
 	min_duration_ms: float = 20.0
 
-	# B) 初動候補クラスタ（ヒステリシス＋リフラクトリ）
+	# B) 初動候補クラスタ(ヒステリシス+リフラクトリ)
 	thr_on: float = 4.5
 	thr_off: float = 1.5
 	min_on_ms: float = 8.0
@@ -47,7 +47,7 @@ DecisionReason = Literal['noise', 'reject_A', 'reject_B']
 
 @dataclass(frozen=True)
 class NoiseDecision:
-	"""判定結果 + デバッグ用の時系列（可視化に使える）"""
+	"""判定結果 + デバッグ用の時系列(可視化に使える)"""
 
 	is_noise: bool
 	reason: DecisionReason
@@ -56,7 +56,7 @@ class NoiseDecision:
 	cluster: np.ndarray | None = None  # B: pick_hist の移動和 (T,)
 
 
-# ---- 判定本体（Dataset / Examples で共通利用）----
+# ---- 判定本体(Dataset / Examples で共通利用)----
 def decide_noise(
 	x: np.ndarray,  # (H, T) 実数
 	dt_sec: float,  # サンプリング間隔 [s]
@@ -82,11 +82,11 @@ def decide_noise(
 	if cfg.thr_on < cfg.thr_off:
 		raise ValueError('thr_on must be >= thr_off')
 
-	# 1) 前処理（包絡は任意）
+	# 1) 前処理(包絡は任意)
 	sig = compute_envelope(x, axis=-1) if cfg.use_envelope else x
 	M = int(cfg.min_traces) if cfg.min_traces >= 1 else 1
 
-	# 2) 方式B：初動候補クラスタ（安全側のフィルタを先に）
+	# 2) 方式B：初動候補クラスタ(安全側のフィルタを先に)
 	is_event_B, pick_hist, cluster = detect_event_pick_cluster(
 		sig,
 		dt_sec,
@@ -117,7 +117,7 @@ def decide_noise(
 	if is_event_A:
 		return NoiseDecision(False, 'reject_A', counts, None, None)
 
-	# 4) ノイズ（どちらの検出器にも引っかからない）
+	# 4) ノイズ(どちらの検出器にも引っかからない)
 	return NoiseDecision(True, 'noise', counts, pick_hist, cluster)
 
 

@@ -19,15 +19,15 @@ def detect_event_peaks(
 	min_score : float
 		ピークとして採用するための最小スコア。
 	min_distance : int
-		採用するピーク間の最小距離（サンプル数）。
+		採用するピーク間の最小距離(サンプル数)。
 		この距離未満で競合する場合はスコアが高い方を優先する。
 	smooth_window : int
-		平滑化窓長（サンプル数）。1 なら平滑なし。
+		平滑化窓長(サンプル数)。1 なら平滑なし。
 
 	戻り値
 	-------
 	peak_indices : np.ndarray
-		形状 (K,) の int 配列。イベント候補ピークの時刻インデックス（昇順）。
+		形状 (K,) の int 配列。イベント候補ピークの時刻インデックス(昇順)。
 	"""
 	validate_numpy(S_t, allowed_ndims=(1,), name='S_t')
 	if min_distance < 0:
