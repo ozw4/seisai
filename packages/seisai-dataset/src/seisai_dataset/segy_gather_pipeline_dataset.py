@@ -202,12 +202,12 @@ class GateEvaluator:
 
 
 class SegyGatherPipelineDataset(Dataset):
-	"""SEG-Y ギャザー読み込み → サンプリング → 変換 → FBLC ゲート → （任意）BuildPlanで入出力生成。
+	"""SEG-Y ギャザー読み込み → サンプリング → 変換) → FBLC ゲート → (任意) BuildPlanで入出力生成.
 
 	期待する transform:  x(H,W) -> x_view  もしくは  (x_view, meta)
 	- meta は少なくとも { 'hflip':bool, 'factor':float, 'start':int, 'did_space':bool, 'factor_h':float } の任意サブセット
-	期待する fbgate: FirstBreakGate（min_pick_accept と fblc_accept を持つ）
-	期待する plan:  BuildPlan（任意）。与えれば sample に 'input' / 'target' などを組み立てる
+	期待する fbgate: FirstBreakGate (min_pick_accept と fblc_accept を持つ)
+	期待する plan:  BuildPlan (任意)。与えれば sample に 'input' / 'target' などを組み立てる
 	"""
 
 	def __init__(
@@ -218,9 +218,9 @@ class SegyGatherPipelineDataset(Dataset):
 		fbgate: FirstBreakGate,
 		plan: BuildPlan,
 		*,
-		ffid_byte=segyio.TraceField.FieldRecord,
-		chno_byte=segyio.TraceField.TraceNumber,
-		cmp_byte=segyio.TraceField.CDP,
+		ffid_byte: int = segyio.TraceField.FieldRecord,
+		chno_byte: int = segyio.TraceField.TraceNumber,
+		cmp_byte: int = segyio.TraceField.CDP,
 		primary_keys: tuple[str, ...] | None = None,
 		primary_key_weights: tuple[float, ...] | None = None,
 		use_superwindow: bool = False,
