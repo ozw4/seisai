@@ -120,13 +120,26 @@ class IdentitySignal:
 
 
 class MaskedSignal:
-	"""MaskGenerator を使って x_view にピクセル単位マスクを適用し.
+	"""Apply a generated boolean mask to a waveform and store both result and mask.
 
-	破壊後テンソルと boolean マスクを sample に格納する。
-	- src: 入力キー (H,T) or (C,H,T)
-	- dst: 出力キー(破壊後)
-	- mask_key: 生成された bool マスク (H,T) の保存先キー
-	- mode: 'replace' または 'add'.
+	This operator uses a provided MaskGenerator to mask `sample[src]`, writes the
+	masked waveform to `sample[dst]`, and stores the boolean mask in
+	`sample[mask_key]`.
+
+	Parameters
+	----------
+	generator
+		MaskGenerator instance used to apply masking to the input waveform.
+	src : str, default 'x_view'
+		Input key in `sample` containing the waveform array/tensor.
+	dst : str, default 'x_masked'
+		Output key in `sample` where the masked waveform will be stored.
+	mask_key : str, default 'mask_bool'
+		Key in `sample` where the generated boolean mask will be stored.
+	mode : {'replace', 'add'} | None, optional
+		Optional mode hint kept for compatibility/validation; the actual masking mode
+		is controlled by the generator itself.
+
 	"""
 
 	def __init__(
