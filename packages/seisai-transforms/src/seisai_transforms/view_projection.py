@@ -6,6 +6,7 @@ flip, H-axis scaling, time scaling, and window start).
 
 Public functions:
 - project_fb_idx_view: project first-break indices into view space.
+- project_pick_csr_view: project CSR pick lists into view space.
 - project_offsets_view: project per-trace offsets into view space.
 - project_time_view: project a 1D time grid into view space.
 """
@@ -35,16 +36,47 @@ def _resample_idx_nearest(v: np.ndarray, factor_h: float) -> np.ndarray:
 	- (H,), int64
 	"""
 	H = int(v.shape[0])
-	if H == 0 or abs(factor_h - 1.0) <= 1e-6:
-		return v.copy()
+	# Keep the mapping identical to CSR projection (`project_pick_csr_view`).
+	j = _nearest_resample_indices(H, factor_h)
+	return v[j].astype(np.int64, copy=True)
+
+
+def _nearest_resample_indices(H: int, factor_h: float) -> np.ndarray:
+	"""Return dst->src indices for the H-axis nearest-neighbor resample used by fb_idx."""
+	H = int(H)
+	if H <= 0:
+		return np.zeros(0, dtype=np.int64)
+	if abs(float(factor_h) - 1.0) <= 1e-6:
+		return np.arange(H, dtype=np.int64)
 
 	c = (H - 1) * 0.5
 	dst = np.arange(H, dtype=np.float32)
-	src = c + (dst - c) / float(factor_h)  # 連続座標
-	j = np.floor(src + 0.5).astype(np.int64)  # 最近傍
-	j = np.clip(j, 0, H - 1)  # 端クリップ
+	src = c + (dst - c) / float(factor_h)  # continuous coordinate
+	j = np.floor(src + 0.5).astype(np.int64)  # nearest
+	return np.clip(j, 0, H - 1)
 
-	return v[j].astype(np.int64, copy=True)
+
+def _project_trace_src_map(H: int, meta: dict) -> np.ndarray:
+	"""Build dst-trace -> src-trace mapping following the same order as fb projection.
+
+	Applies:
+	1) hflip (reverse trace order)
+	2) factor_h nearest-neighbor resample (center-fixed, no extrapolation)
+	"""
+	H = int(H)
+	if H <= 0:
+		return np.zeros(0, dtype=np.int64)
+
+	hflip = bool(meta.get('hflip', False))
+	f_h = float(meta.get('factor_h', 1.0))
+	if f_h <= 0.0:
+		raise ValueError("meta['factor_h'] must be > 0")
+
+	src = np.arange(H, dtype=np.int64)
+	if hflip:
+		src = src[::-1]
+	j = _nearest_resample_indices(H, f_h)
+	return src[j].astype(np.int64, copy=False)
 
 
 def _resample_float_linear(v: np.ndarray, factor_h: float) -> np.ndarray:
@@ -102,15 +134,9 @@ def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.nd
 		msg = f'fb_idx length {fb.shape[0]} != H {H}'
 		raise ValueError(msg)
 
-	if meta.get('hflip', False):
-		fb = fb[::-1]
-
-	f_h = float(meta.get('factor_h', 1.0))
-	if f_h <= 0.0:
-		msg = "meta['factor_h'] must be > 0"
-		raise ValueError(msg)
-	if abs(f_h - 1.0) > 1e-6:
-		fb = _resample_idx_nearest(fb, f_h)
+	# H方向: hflip → factor_h (same mapping as CSR projection)
+	src_map = _project_trace_src_map(H, meta)
+	fb = fb[src_map]
 
 	factor = float(meta.get('factor', 1.0))
 	if factor <= 0.0:
@@ -132,6 +158,129 @@ def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.nd
 	)  # 0-based mapping; 0 is treated as invalid
 	fb[(fb <= 0) | (fb >= W)] = -1
 	return fb
+
+
+def project_pick_csr_view(
+	indptr: np.ndarray, data: np.ndarray, H: int, W: int, meta: dict
+) -> tuple[np.ndarray, np.ndarray]:
+	"""Project CSR pick lists into view space based on meta(hflip/factor_h/factor/start).
+
+	This is the CSR (per-trace variable-length list) counterpart of `project_fb_idx_view`
+	and follows the same order and meta interpretation:
+	1) H方向: hflip → factor_h (nearest-neighbor resample in trace axis)
+	2) T方向: pick_v = round(pick * factor) - start
+	3) 範囲外/無効は捨てる: pick_v <= 0 or pick_v >= W
+
+	Parameters
+	----------
+	indptr, data
+		CSR arrays of shape `(H+1,)` and `(nnz,)`.
+		Pick values follow the same rule as fb: `<=0` are invalid, `>0` are valid.
+	H, W
+		Output view dimensions. H must match `len(indptr)-1`.
+	meta
+		Transform metadata. Uses the same keys as `project_fb_idx_view`:
+		`hflip: bool`, `factor_h: float`, `factor: float`, `start: int`.
+
+	Returns
+	-------
+	(indptr_v, data_v)
+		View-projected CSR arrays (both int64).
+
+	Raises
+	------
+	ValueError
+		If CSR arrays are invalid or meta values are invalid.
+	"""
+	H = int(H)
+	W = int(W)
+	if W <= 0:
+		raise ValueError(f'W must be > 0, got {W}')
+
+	ip_in = np.asarray(indptr)
+	if ip_in.ndim != 1:
+		raise ValueError(f'indptr must be 1D, got shape={ip_in.shape}')
+	if not np.issubdtype(ip_in.dtype, np.integer):
+		raise ValueError(f'indptr must be integer dtype, got {ip_in.dtype}')
+	if int(ip_in.size) != H + 1:
+		raise ValueError(f'indptr length {ip_in.size} != H+1 {H + 1}')
+	if H == 0:
+		if int(ip_in.size) != 1:
+			raise ValueError(f'indptr length {ip_in.size} != H+1 {H + 1}')
+		d_in = np.asarray(data)
+		if d_in.ndim != 1:
+			raise ValueError(f'data must be 1D, got shape={d_in.shape}')
+		if int(d_in.size) != 0:
+			raise ValueError('data must be empty when H==0')
+		return np.zeros(1, dtype=np.int64), np.zeros(0, dtype=np.int64)
+
+	if int(ip_in[0]) != 0:
+		raise ValueError(f'indptr[0] must be 0, got {int(ip_in[0])}')
+	if np.any(ip_in[1:] < ip_in[:-1]):
+		raise ValueError('indptr must be monotonic non-decreasing')
+
+	d_in = np.asarray(data)
+	if d_in.ndim != 1:
+		raise ValueError(f'data must be 1D, got shape={d_in.shape}')
+	if not np.issubdtype(d_in.dtype, np.integer):
+		raise ValueError(f'data must be integer dtype, got {d_in.dtype}')
+	if int(ip_in[-1]) != int(d_in.size):
+		raise ValueError(
+			f'indptr[-1] must equal len(data)={d_in.size}, got {int(ip_in[-1])}'
+		)
+
+	ip = ip_in.astype(np.int64, copy=False)
+	d = d_in.astype(np.int64, copy=False)
+
+	# --- H direction: hflip -> factor_h ---
+	src_map = _project_trace_src_map(H, meta)
+
+	# --- T direction: factor/start ---
+	factor = float(meta.get('factor', 1.0))
+	if factor <= 0.0:
+		raise ValueError("meta['factor'] must be > 0")
+
+	start_raw = meta.get('start', 0)
+	start_f = float(start_raw)
+	if start_f < 0.0:
+		raise ValueError("meta['start'] must be >= 0")
+	if abs(start_f - round(start_f)) > 1e-9:
+		raise ValueError("meta['start'] must be an integer >= 0")
+	start = round(start_f)
+
+	out_indptr = np.zeros(H + 1, dtype=np.int64)
+	out_chunks: list[np.ndarray] = []
+	nnz = 0
+	for t in range(H):
+		src = int(src_map[t])
+		st = int(ip[src])
+		en = int(ip[src + 1])
+		if st == en:
+			out_indptr[t + 1] = nnz
+			continue
+
+		v = d[st:en]
+		v = v[v > 0]  # enforce pick<=0 invalid
+		if v.size == 0:
+			out_indptr[t + 1] = nnz
+			continue
+
+		vv = np.round(v * factor).astype(np.int64) - start
+		vv = vv[(vv > 0) & (vv < W)]
+		if vv.size == 0:
+			out_indptr[t + 1] = nnz
+			continue
+
+		out_chunks.append(vv.astype(np.int64, copy=False))
+		nnz += int(vv.size)
+		out_indptr[t + 1] = nnz
+
+	out_data = (
+		np.concatenate(out_chunks, axis=0)
+		if nnz > 0
+		else np.zeros(0, dtype=np.int64)
+	)
+	return out_indptr, out_data
 
 
 def project_offsets_view(offsets: np.ndarray, H: int, meta: dict) -> np.ndarray:
