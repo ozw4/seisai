@@ -25,13 +25,17 @@ class FirstBreakGate:
 		apply_on: Literal['any', 'super_only', 'off'] | None = None,
 	) -> None:
 		if not (0.0 < float(percentile) < 100.0):
-			raise ValueError('percentile must be in (0, 100)')
+			msg = 'percentile must be in (0, 100)'
+			raise ValueError(msg)
 		if not (float(thresh_ms) > 0.0):
-			raise ValueError('thresh_ms must be positive')
+			msg = 'thresh_ms must be positive'
+			raise ValueError(msg)
 		if int(min_pairs) < 0:
-			raise ValueError('min_pairs must be non-negative')
+			msg = 'min_pairs must be non-negative'
+			raise ValueError(msg)
 		if apply_on is not None and apply_on not in ('any', 'super_only', 'off'):
-			raise ValueError("apply_on must be 'any', 'super_only', or 'off'")
+			msg = "apply_on must be 'any', 'super_only', or 'off'"
+			raise ValueError(msg)
 
 	def should_apply(
 		self,
@@ -46,7 +50,8 @@ class FirstBreakGate:
 			return True
 		if ap == 'super_only':
 			return bool(did_super)
-		raise ValueError("apply_on must be 'any', 'super_only', or 'off'")
+		msg = "apply_on must be 'any', 'super_only', or 'off'"
+		raise ValueError(msg)
 
 	def min_pick_accept(self, fb_idx_win: np.ndarray) -> tuple[bool, int, float]:
 		r = self.cfg.min_pick_ratio

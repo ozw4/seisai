@@ -316,6 +316,23 @@ def load_train_config(config_path: str | Path) -> PairTrainConfig:
 
 
 def load_infer_config(config_path: str | Path) -> PairInferConfig:
+	"""Load and validate an inference configuration for paired SEG-Y examples.
+
+	Parameters
+	----------
+	config_path : str | Path
+		Path to a configuration file consumable by `seisai_utils.config.load_config`.
+
+	Returns
+	-------
+	PairInferConfig
+		A validated, strongly-typed inference configuration.
+
+	Raises
+	------
+	ValueError
+		If required configuration keys are missing or have invalid types/values.
+	"""
 	cfg = load_config(str(config_path))
 
 	paths = require_dict(cfg, 'paths')

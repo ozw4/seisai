@@ -61,10 +61,26 @@ class SmoothedValue:
 
 	@property
 	def max(self) -> float:
+		"""Return the maximum value in the current window.
+
+		Raises
+		------
+		ValueError
+			If no values have been recorded yet.
+
+		"""
 		return max(self.deque)
 
 	@property
 	def value(self) -> float:
+		"""Return the most recently added value in the window.
+
+		Raises
+		------
+		IndexError
+			If no values have been recorded yet.
+
+		"""
 		return self.deque[-1]
 
 	def __str__(self) -> str:
@@ -105,10 +121,30 @@ class MetricLogger:
 		for k, v in kwargs.items():
 			if isinstance(v, torch.Tensor):
 				v = v.item()
-			assert isinstance(v, (float, int))
+			if not isinstance(v, (float, int)):
+				msg = f"Metric '{k}' must be a float or int, got {type(v).__name__}"
+				raise TypeError(msg)
 			self.meters[k].update(v)
 
-	def __getattr__(self, attr):
+	def __getattr__(self, attr: str) -> SmoothedValue:
+		"""Provide attribute-style access to registered meters.
+
+		Parameters
+		----------
+		attr : str
+			Name of the meter to retrieve.
+
+		Returns
+		-------
+		SmoothedValue
+			The requested meter instance.
+
+		Raises
+		------
+		AttributeError
+			If the attribute is not a registered meter and not present on the instance.
+
+		"""
 		if attr in self.meters:
 			return self.meters[attr]
 		if attr in self.__dict__:
@@ -117,16 +153,32 @@ class MetricLogger:
 		raise AttributeError(msg)
 
 	def __str__(self) -> str:
+		"""Return a formatted string representation of all tracked metrics."""
 		loss_str = []
 		for name, meter in self.meters.items():
 			loss_str.append(f'{name}: {meter!s}')
 		return self.delimiter.join(loss_str)
 
-	def synchronize_between_processes(self):
+	def synchronize_between_processes(self) -> None:
+		"""Synchronize all registered meters across distributed processes.
+
+		This calls :meth:`SmoothedValue.synchronize_between_processes` on every meter,
+		updating each meter's global `count` and `total` via `torch.distributed`.
+		"""
 		for meter in self.meters.values():
 			meter.synchronize_between_processes()
 
 	def add_meter(self, name: str, meter: SmoothedValue) -> None:
+		"""Add a pre-configured meter to the logger.
+
+		Parameters
+		----------
+		name : str
+			The metric name to associate with the meter.
+		meter : SmoothedValue
+			The smoothed value tracker instance to register.
+
+		"""
 		self.meters[name] = meter
 
 	def log_every(self, iterable: Iterable, print_freq: int, header: str | None = None):
