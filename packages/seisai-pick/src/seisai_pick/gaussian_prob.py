@@ -3,6 +3,49 @@ import torch
 
 
 # --- 共通: ビン(index)基準のガウス分布生成 ---
+def gaussian_pulse1d_np(
+	mu: np.ndarray | float, sigma_bins: np.ndarray | float, W: int
+) -> np.ndarray:
+	"""Peak-normalized 1D Gaussian pulse (peak=1) on discrete bins.
+
+	Parameters
+	----------
+	mu
+		Center bin index (can be scalar or array-like). For integer mu and if that bin
+		exists, the maximum value becomes exactly 1.
+	sigma_bins
+		Standard deviation in bins. Must be > 0 (broadcastable to mu).
+	W
+		Output width (number of bins). Must be > 0.
+
+	Returns
+	-------
+	np.ndarray
+		Shape (..., W) where ... is broadcasted from mu/sigma. Dtype is float32.
+
+	Raises
+	------
+	ValueError
+		If W <= 0 or sigma_bins <= 0, or if mu/sigma contain non-finite values.
+	"""
+	if W <= 0:
+		raise ValueError('W must be positive')
+
+	m = np.asarray(mu, dtype=np.float64)
+	s = np.asarray(sigma_bins, dtype=np.float64)
+	if np.any(~np.isfinite(m)):
+		raise ValueError('mu must be finite')
+	if np.any(~np.isfinite(s)):
+		raise ValueError('sigma must be finite (bins)')
+	if np.any(s <= 0):
+		raise ValueError('sigma must be positive (bins)')
+
+	xs = np.arange(W, dtype=np.float64)
+	z = -0.5 * ((xs - m[..., None]) / s[..., None]) ** 2
+	g = np.exp(z).astype(np.float32, copy=False)
+	return g
+
+
 def gaussian_probs1d_np(
 	mu: np.ndarray, sigma_bins: np.ndarray | float, W: int
 ) -> np.ndarray:
