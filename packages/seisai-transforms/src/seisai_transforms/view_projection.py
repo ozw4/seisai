@@ -75,34 +75,61 @@ def _resample_float_linear(v: np.ndarray, factor_h: float) -> np.ndarray:
 
 
 def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.ndarray:
-	"""生の初動インデックス列 `fb_idx`(1..W-1 が有効(0は無効))を、meta(hflip/factor_h/factor/start)に基づいて View 空間へ投影する.
+	"""生の初動インデックス列 `fb_idx` を、meta(hflip/factor_h/factor/start)に基づいて View 空間へ投影する.
+
+	前提:
+	- インデックスは 0-based だが、0 は無効扱い(有効なのは 1..W-1).
+	- -1 は無効値。
 
 	処理順:
-	1) H方向: hflip → factor_h による再サンプル(線形、無効値伝播ルール適用)
-	2) T方向: 0-based のまま round(fb * factor) - start で時間窓へ写像
-	3) 範囲外は -1(無効)にする。0..W-1 のみ有効。
+	1) H方向: hflip → factor_h による再サンプル(最近傍、無効値伝播ルール適用)
+	2) T方向: round(fb * factor) - start で時間窓へ写像(0以下は無効扱い)
+	3) 範囲外は -1(無効)にする。有効範囲は 1..W-1。
 
 	引数:
-	- fb_idx: (H,), int。0-based。-1 は無効。
+	- fb_idx: (H,), int。0-based。-1 は無効。0 も無効扱い。
 	- H, W : x_view の形状に一致するトレース数・サンプル数
 	- meta : dict。{'hflip':bool, 'factor_h':float, 'factor':float, 'start':int}
+
 	戻り値:
-	- fb_idx_view: (H,), int64。0..W-1 が有効、-1 が無効。
+	- fb_idx_view: (H,), int64。1..W-1 が有効、-1 が無効。
+
 	例外:
-	- H と fb_idx 長さ不一致、factor<=0 などの不正は ValueError。
+	- H と fb_idx 長さ不一致、factor<=0、start<0、factor_h<=0 などの不正は ValueError。
 	"""
 	fb = np.asarray(fb_idx, dtype=np.int64).copy()
 	if fb.shape[0] != H:
 		msg = f'fb_idx length {fb.shape[0]} != H {H}'
 		raise ValueError(msg)
+
 	if meta.get('hflip', False):
 		fb = fb[::-1]
+
 	f_h = float(meta.get('factor_h', 1.0))
+	if f_h <= 0.0:
+		msg = "meta['factor_h'] must be > 0"
+		raise ValueError(msg)
 	if abs(f_h - 1.0) > 1e-6:
 		fb = _resample_idx_nearest(fb, f_h)
+
 	factor = float(meta.get('factor', 1.0))
-	start = int(meta.get('start', 0))
-	fb = np.round(fb * factor).astype(np.int64) - start  # 0-based & round
+	if factor <= 0.0:
+		msg = "meta['factor'] must be > 0"
+		raise ValueError(msg)
+
+	start_raw = meta.get('start', 0)
+	start_f = float(start_raw)
+	if start_f < 0.0:
+		msg = "meta['start'] must be >= 0"
+		raise ValueError(msg)
+	if abs(start_f - round(start_f)) > 1e-9:
+		msg = "meta['start'] must be an integer >= 0"
+		raise ValueError(msg)
+	start = round(start_f)
+
+	fb = (
+		np.round(fb * factor).astype(np.int64) - start
+	)  # 0-based mapping; 0 is treated as invalid
 	fb[(fb <= 0) | (fb >= W)] = -1
 	return fb
 
