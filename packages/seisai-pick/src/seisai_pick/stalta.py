@@ -1,10 +1,42 @@
+"""STA/LTA (Short-Term Average / Long-Term Average) utilities.
+
+This module provides Numba-accelerated STA/LTA ratio computations for:
+- 1D traces (`stalta_1d`)
+- 2D arrays processed trace-by-trace in parallel (`stalta_2d`)
+- Arbitrary-dimensional inputs via a convenience wrapper (`stalta`) using `StaltaParams`
+"""
+
+from typing import Any, NamedTuple
+
 import numpy as np
 from numba import njit, prange
+from numpy.typing import NDArray
 
 
 # === 1D: ユーザーの逐次和アルゴリズム(そのまま採用) =====================
 @njit(cache=True, fastmath=True)
-def stalta_1d(trc, ns=10, nl=100, eps=1e-12):
+def stalta_1d(
+	trc: NDArray[Any], ns: int = 10, nl: int = 100, eps: float = 1e-12
+) -> NDArray[np.float64]:
+	"""Compute the STA/LTA ratio for a single 1D trace.
+
+	Parameters
+	----------
+	trc : numpy.ndarray
+		1D input trace (time series).
+	ns : int, default=10
+		STA window length in samples.
+	nl : int, default=100
+		LTA window length in samples (must be >= ns).
+	eps : float, default=1e-12
+		Small value to avoid division by zero.
+
+	Returns
+	-------
+	numpy.ndarray
+		STA/LTA ratio array of the same length as `trc` with dtype float64.
+
+	"""
 	tmax = trc.size
 	R = np.zeros(tmax, dtype=np.float64)
 	s_sta = 0.0
@@ -31,9 +63,27 @@ def stalta_1d(trc, ns=10, nl=100, eps=1e-12):
 
 # === (H,T): 2Dを各トレース独立に並列処理(時間=最後の軸) ==================
 @njit(cache=True, fastmath=True, parallel=True)
-def stalta_2d(x_2d, ns=10, nl=100, eps=1e-12):
-	"""x_2d: shape (H, T) の連続配列(C連続推奨)
-	戻り: shape (H, T) の float64
+def stalta_2d(
+	x_2d: NDArray[Any], ns: int = 10, nl: int = 100, eps: float = 1e-12
+) -> NDArray[np.float64]:
+	"""Compute STA/LTA ratio for a 2D array trace-by-trace in parallel.
+
+	Parameters
+	----------
+	x_2d : numpy.ndarray
+		Input array of shape (H, T), where T is the time axis (last axis).
+	ns : int, default=10
+		STA window length in samples.
+	nl : int, default=100
+		LTA window length in samples (must be >= ns).
+	eps : float, default=1e-12
+		Small value to avoid division by zero.
+
+	Returns
+	-------
+	numpy.ndarray
+		STA/LTA ratio array of shape (H, T) with dtype float64.
+
 	"""
 	H, T = x_2d.shape
 	out = np.empty((H, T), dtype=np.float64)
@@ -43,22 +93,81 @@ def stalta_2d(x_2d, ns=10, nl=100, eps=1e-12):
 
 
 # === 汎用ラッパ: 任意次元 (..., T) に対応 / axis で時間軸を指定 =================
+class StaltaParams(NamedTuple):
+	"""Parameters for STA/LTA computation.
 
+	Attributes
+	----------
+	ns : int
+		STA window length in samples.
+	nl : int
+		LTA window length in samples (must be >= ns).
+	eps : float
+		Small value to avoid division by zero.
+	axis : int
+		Time axis index in the input array.
+	out_dtype : Any | None
+		Output dtype; if None, an appropriate dtype is chosen automatically.
 
-def stalta(x, ns=10, nl=100, eps=1e-12, axis=-1, out_dtype=None):
-	"""任意次元の配列 x に対して、指定 axis (=時間軸) に沿って STALTA を計算。
-	- x shape 例:
-		(T,), (H,T), (B,H,T), (B,C,H,T), ...
-	- axis は時間軸(デフォ = -1 = 最後の軸)
-	- 出力 shape は入力と同じ。dtype は out_dtype か、なければ入力 dtype を継承(float32/64のみ)。
 	"""
+
+	ns: int = 10
+	nl: int = 100
+	eps: float = 1e-12
+	axis: int = -1
+	out_dtype: Any | None = None
+
+
+def stalta(x: Any, params: StaltaParams | None = None, **kwargs: Any) -> NDArray[Any]:
+	"""Compute STA/LTA ratio along a time axis.
+
+	Parameters
+	----------
+	x : array_like
+		Input array with time along `axis`.
+	params : StaltaParams | None
+		Grouped parameters for STA/LTA computation; if None, defaults are used.
+	**kwargs : Any
+		Backward-compatible overrides for: ns, nl, eps, axis, out_dtype.
+
+	Returns
+	-------
+	numpy.ndarray
+		STA/LTA ratio array with the same shape as `x`.
+
+	Raises
+	------
+	ValueError
+		If window sizes are invalid (ns>0, nl>=ns).
+	TypeError
+		If unexpected keyword arguments are provided.
+
+	"""
+	if params is None:
+		params = StaltaParams()
+
+	if kwargs:
+		allowed = set(StaltaParams._fields)
+		unknown = set(kwargs) - allowed
+		if unknown:
+			msg = f'Unexpected keyword argument(s): {sorted(unknown)}'
+			raise TypeError(msg)
+		data = params._asdict()
+		data.update(kwargs)
+		params = StaltaParams(**data)
+
+	ns = params.ns
+	nl = params.nl
+	eps = params.eps
+	axis = params.axis
+	out_dtype = params.out_dtype
+
 	# ガード(サイレント劣化禁止)
 	if not (
 		isinstance(ns, int) and isinstance(nl, int) and ns > 0 and nl > 0 and nl >= ns
 	):
-		raise ValueError(
-			f'Invalid window sizes: ns={ns}, nl={nl}. Require integers, ns>0, nl>=ns.'
-		)
+		msg = f'Invalid window sizes: ns={ns}, nl={nl}. Require integers, ns>0, nl>=ns.'
+		raise ValueError(msg)
 
 	x = np.asarray(x)
 	# 1) 時間軸を末尾へ
@@ -66,7 +175,7 @@ def stalta(x, ns=10, nl=100, eps=1e-12, axis=-1, out_dtype=None):
 	T = x_last.shape[-1]
 	lead_shape = x_last.shape[:-1]
 
-	# 2) 2D (N, T) へまとめる(C連続＆float64でJITに優しい形に)
+	# 2) 2D (N, T) へまとめる(C連続&float64でJITに優しい形に)
 	x_2d = x_last.reshape(-1, T)
 	x_2d = np.ascontiguousarray(x_2d, dtype=np.float64)
 
@@ -74,7 +183,7 @@ def stalta(x, ns=10, nl=100, eps=1e-12, axis=-1, out_dtype=None):
 	r_2d = stalta_2d(x_2d, ns=ns, nl=nl, eps=eps)
 
 	# 4) 元の形に戻す→元の axis に戻す
-	r_last = r_2d.reshape(lead_shape + (T,))
+	r_last = r_2d.reshape((*lead_shape, T))
 	r = np.moveaxis(r_last, -1, axis)
 
 	# 5) 出力 dtype
