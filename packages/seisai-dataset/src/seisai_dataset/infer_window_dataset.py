@@ -20,6 +20,7 @@ from .builder.builder import BuildPlan, InputOnlyPlan
 from .config import LoaderConfig
 from .file_info import build_file_info
 from .trace_subset_preproc import TraceSubsetLoader
+from .transform_contract import Transform2D, validate_transform_rng_meta
 
 
 DomainName = Literal['shot', 'recv', 'cmp']
@@ -145,7 +146,7 @@ class InferenceGatherWindowsDataset(Dataset):
 		*,
 		plan: BuildPlan | InputOnlyPlan,
 		cfg: InferenceGatherWindowsConfig | None = None,
-		transform=None,
+		transform: Transform2D | None = None,
 		ffid_byte=segyio.TraceField.FieldRecord,
 		chno_byte=segyio.TraceField.TraceNumber,
 		cmp_byte=segyio.TraceField.CDP,
@@ -189,7 +190,9 @@ class InferenceGatherWindowsDataset(Dataset):
 
 		if transform is None:
 			transform = ViewCompose([PerTraceStandardize()])
-		self.transform = transform
+		self.transform: Transform2D = validate_transform_rng_meta(
+			transform, name='transform'
+		)
 
 		self.ffid_byte = ffid_byte
 		self.chno_byte = chno_byte

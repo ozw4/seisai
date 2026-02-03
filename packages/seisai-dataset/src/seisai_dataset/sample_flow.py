@@ -12,7 +12,8 @@ import random
 import numpy as np
 import torch
 
-from .file_info import FileInfo
+
+from .transform_contract import Transform2D, validate_transform_rng_meta
 
 
 class SampleFlow:
@@ -34,9 +35,10 @@ class SampleFlow:
 		Object providing `run(sample_for_plan, rng=...)` that populates `sample_for_plan`.
 
 	"""
-
-	def __init__(self, transform, plan) -> None:
-		self.transform = transform
+	def __init__(self, transform: Transform2D | object, plan) -> None:
+		self.transform: Transform2D = validate_transform_rng_meta(
+			transform, name='transform'
+		)
 		self.plan = plan
 
 	def draw_sample(
