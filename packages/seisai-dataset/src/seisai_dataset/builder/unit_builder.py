@@ -9,6 +9,7 @@ import numpy as np
 # 既存の operator / stack / plan は流用
 from .builder import (
 	FBGaussMap,
+	PhasePSNMap,
 	IdentitySignal,
 	MakeOffsetChannel,
 	MakeTimeChannel,
@@ -80,6 +81,15 @@ def make_registry(ctx: dict[str, Any] | None = None) -> dict[str, RegItem]:
 		factory=lambda c: (
 			FBGaussMap(dst='fb_map', sigma=float(c.get('fb_sigma', 1.5))),
 			'fb_map',
+		)
+	)
+	reg['psn_map'] = RegItem(
+		factory=lambda c: (
+			PhasePSNMap(
+				dst='psn_map',
+				sigma=float(c.get('phase_sigma', c.get('psn_sigma', 1.5))),
+			),
+			'psn_map',
 		)
 	)
 

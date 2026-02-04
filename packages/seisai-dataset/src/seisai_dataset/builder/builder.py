@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import torch
-from seisai_pick.gaussian_prob import gaussian_probs1d_np
+from seisai_pick.gaussian_prob import gaussian_probs1d_np, gaussian_pulse1d_np
+from seisai_transforms.view_projection import project_pick_csr_view
 
 if TYPE_CHECKING:
 	from collections.abc import Iterable
@@ -438,6 +439,135 @@ class FBGaussMap:
 			g = gaussian_probs1d_np(mu, self.sigma, W)  # (Nv, W)
 			y[valid] = g
 		sample[self.dst] = y
+
+
+# ---------- Label producers(phase picks) ----------
+class PhasePSNMap:
+	"""Create a 3-class probability target map for P/S/Noise from CSR picks.
+
+	This label producer:
+	- projects CSR picks into view space using `project_pick_csr_view`
+	- creates per-pick peak-normalized Gaussian pulses (peak=1) using `gaussian_pulse1d_np`
+	- merges multiple picks per trace with a saturation-friendly rule:
+	  `p = 1 - Π(1 - g_i)` (applied sequentially)
+	- builds Noise as `noise = max(1 - p - s, 0)` and renormalizes to ensure
+	  per-pixel `P+S+Noise == 1`
+
+	Outputs
+	-------
+	sample[dst]
+		Float32 array of shape (3, H, W) in channel order [P, S, Noise].
+	sample[label_valid_dst]
+		Bool array of shape (H,), True only when:
+		- meta['trace_valid'][t] is True (if present), and
+		- the trace has at least one valid P or S pick after view projection.
+	"""
+
+	def __init__(
+		self,
+		*,
+		dst: str = 'psn_map',
+		sigma: float = 1.5,
+		p_indptr: str = 'p_indptr',
+		p_data: str = 'p_data',
+		s_indptr: str = 's_indptr',
+		s_data: str = 's_data',
+		label_valid_dst: str = 'label_valid',
+	) -> None:
+		if float(sigma) <= 0.0:
+			raise ValueError('sigma must be positive')
+		self.dst = dst
+		self.sigma = float(sigma)
+		self.p_indptr = p_indptr
+		self.p_data = p_data
+		self.s_indptr = s_indptr
+		self.s_data = s_data
+		self.label_valid_dst = label_valid_dst
+
+	def __call__(
+		self, sample: dict[str, Any], rng: np.random.Generator | None = None
+	) -> None:
+		if 'x_view' not in sample:
+			raise KeyError("missing 'x_view'")
+		if 'meta' not in sample or not isinstance(sample['meta'], dict):
+			raise KeyError("missing 'meta' dict")
+
+		x_view = _to_numpy(sample['x_view'])
+		if x_view.ndim not in (2, 3):
+			raise ValueError(
+				f'x_view must be 2D or 3D, got shape={x_view.shape} (ndim={x_view.ndim})'
+			)
+		H, W = x_view.shape[-2:]
+		meta = sample['meta']
+
+		for k in (self.p_indptr, self.p_data, self.s_indptr, self.s_data):
+			if k not in sample:
+				raise KeyError(f"missing sample key: {k}")
+
+		p_ip = _to_numpy(sample[self.p_indptr])
+		p_d = _to_numpy(sample[self.p_data])
+		s_ip = _to_numpy(sample[self.s_indptr])
+		s_d = _to_numpy(sample[self.s_data])
+
+		p_ip_v, p_d_v = project_pick_csr_view(p_ip, p_d, H=H, W=W, meta=meta)
+		s_ip_v, s_d_v = project_pick_csr_view(s_ip, s_d, H=H, W=W, meta=meta)
+
+		p_has = np.diff(p_ip_v) > 0
+		s_has = np.diff(s_ip_v) > 0
+		has_pick = p_has | s_has
+
+		trace_valid = meta.get('trace_valid', None)
+		if trace_valid is None:
+			tv = np.ones(H, dtype=np.bool_)
+		else:
+			tv = np.asarray(trace_valid, dtype=np.bool_)
+			if tv.shape != (H,):
+				raise ValueError(f"meta['trace_valid'] shape {tv.shape} != ({H},)")
+
+		label_valid = tv & has_pick
+
+		# --- build P/S maps ---
+		p_map = np.zeros((H, W), dtype=np.float32)
+		s_map = np.zeros((H, W), dtype=np.float32)
+		one = np.float32(1.0)
+
+		for t in range(H):
+			# P
+			st = int(p_ip_v[t])
+			en = int(p_ip_v[t + 1])
+			if st != en:
+				mu = p_d_v[st:en]
+				g = gaussian_pulse1d_np(mu=mu, sigma_bins=self.sigma, W=W)  # (K,W)
+				p_map[t] = one - np.prod(one - g, axis=0, dtype=np.float32)
+
+			# S
+			st = int(s_ip_v[t])
+			en = int(s_ip_v[t + 1])
+			if st != en:
+				mu = s_d_v[st:en]
+				g = gaussian_pulse1d_np(mu=mu, sigma_bins=self.sigma, W=W)  # (K,W)
+				s_map[t] = one - np.prod(one - g, axis=0, dtype=np.float32)
+
+		noise = (one - p_map - s_map).astype(np.float32, copy=False)
+		np.maximum(noise, 0.0, out=noise)
+
+		den = (p_map + s_map + noise).astype(np.float32, copy=False)
+		zero = den <= 0.0
+		if np.any(zero):
+			# Degenerate pixels: force Noise=1.
+			p_map[zero] = 0.0
+			s_map[zero] = 0.0
+			noise[zero] = 1.0
+			den[zero] = 1.0
+
+		p_map = (p_map / den).astype(np.float32, copy=False)
+		s_map = (s_map / den).astype(np.float32, copy=False)
+		noise = (noise / den).astype(np.float32, copy=False)
+
+		sample[self.dst] = np.stack([p_map, s_map, noise], axis=0).astype(
+			np.float32, copy=False
+		)
+		sample[self.label_valid_dst] = label_valid
 
 
 # ---------- 共通セレクタ(入力にもターゲットにも使う) ----------
