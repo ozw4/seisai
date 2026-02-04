@@ -449,9 +449,9 @@ class PhasePSNMap:
 	- projects CSR picks into view space using `project_pick_csr_view`
 	- creates per-pick peak-normalized Gaussian pulses (peak=1) using `gaussian_pulse1d_np`
 	- merges multiple picks per trace with a saturation-friendly rule:
-	  `p = 1 - Π(1 - g_i)` (applied sequentially)
+	`p = 1 - Π(1 - g_i)` (applied sequentially)
 	- builds Noise as `noise = max(1 - p - s, 0)` and renormalizes to ensure
-	  per-pixel `P+S+Noise == 1`
+	per-pixel `P+S+Noise == 1`
 
 	Outputs
 	-------
@@ -475,7 +475,8 @@ class PhasePSNMap:
 		label_valid_dst: str = 'label_valid',
 	) -> None:
 		if float(sigma) <= 0.0:
-			raise ValueError('sigma must be positive')
+			msg = 'sigma must be positive'
+			raise ValueError(msg)
 		self.dst = dst
 		self.sigma = float(sigma)
 		self.p_indptr = p_indptr
@@ -488,21 +489,23 @@ class PhasePSNMap:
 		self, sample: dict[str, Any], rng: np.random.Generator | None = None
 	) -> None:
 		if 'x_view' not in sample:
-			raise KeyError("missing 'x_view'")
+			msg = "missing 'x_view'"
+			raise KeyError(msg)
 		if 'meta' not in sample or not isinstance(sample['meta'], dict):
-			raise KeyError("missing 'meta' dict")
+			msg = "missing 'meta' dict"
+			raise KeyError(msg)
 
 		x_view = _to_numpy(sample['x_view'])
 		if x_view.ndim not in (2, 3):
-			raise ValueError(
-				f'x_view must be 2D or 3D, got shape={x_view.shape} (ndim={x_view.ndim})'
-			)
+			msg = f'x_view must be 2D or 3D, got shape={x_view.shape} (ndim={x_view.ndim})'
+			raise ValueError(msg)
 		H, W = x_view.shape[-2:]
 		meta = sample['meta']
 
 		for k in (self.p_indptr, self.p_data, self.s_indptr, self.s_data):
 			if k not in sample:
-				raise KeyError(f"missing sample key: {k}")
+				msg = f'missing sample key: {k}'
+				raise KeyError(msg)
 
 		p_ip = _to_numpy(sample[self.p_indptr])
 		p_d = _to_numpy(sample[self.p_data])
@@ -522,7 +525,8 @@ class PhasePSNMap:
 		else:
 			tv = np.asarray(trace_valid, dtype=np.bool_)
 			if tv.shape != (H,):
-				raise ValueError(f"meta['trace_valid'] shape {tv.shape} != ({H},)")
+				msg = f"meta['trace_valid'] shape {tv.shape} != ({H},)"
+				raise ValueError(msg)
 
 		label_valid = tv & has_pick
 
