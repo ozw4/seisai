@@ -31,6 +31,12 @@ class FileInfo:
 	ffid_centroids: dict[int, tuple[float, float]] | None
 	chno_centroids: dict[int, tuple[float, float]] | None
 	fb: np.ndarray | None = None
+	# Optional CSR phase picks (PhaseNet-style training). Stored as raw arrays to keep
+	# file_info pickle/lightweight and avoid carrying variable-length lists in outputs.
+	p_indptr: np.ndarray | None = None
+	p_data: np.ndarray | None = None
+	s_indptr: np.ndarray | None = None
+	s_data: np.ndarray | None = None
 
 	def __getitem__(self, key: str):
 		return getattr(self, key)
