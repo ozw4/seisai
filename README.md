@@ -101,13 +101,82 @@ loader = DataLoader(ds, batch_size=2, num_workers=2)
 batch = next(iter(loader))
 
 # batch is a dict; keys include:
-#   input: (B,C,H,W), target: (B,C2,H,W), mask_bool (optional), meta, fb_idx, offsets, ...
+#   input, target, mask_bool (optional), meta, trace_valid, fb_idx, offsets, dt_sec, indices, file_path, key_name
+```
+
+## Phase Picks (P/S/Noise) Quick Start
+
+Natural-earthquake style phase classification can be trained with CSR phase picks and a 3-class target map (P/S/Noise).
+
+See specs:
+- `docs/spec/phase_pick_files_spec.md`
+- `docs/spec/segy_gather_phase_pipeline_dataset_output_contract.md`
+
+```python
+from torch.utils.data import DataLoader
+
+from seisai_dataset import (
+    BuildPlan,
+    FirstBreakGate,
+    FirstBreakGateConfig,
+    SegyGatherPhasePipelineDataset,
+)
+from seisai_dataset.builder.builder import (
+    IdentitySignal,
+    PhasePSNMap,
+    SelectStack,
+)
+from seisai_transforms.augment import (
+    PerTraceStandardize,
+    RandomCropOrPad,
+    ViewCompose,
+)
+
+# ---- 1) transform: (H,W0) -> (H,W)
+transform = ViewCompose([
+    PerTraceStandardize(),
+    RandomCropOrPad(target_len=2048),
+])
+
+# ---- 2) gate: disable FBLC for a stable quickstart
+fbgate = FirstBreakGate(
+    FirstBreakGateConfig(
+        apply_on="off",
+        min_pick_ratio=0.0,
+    )
+)
+
+# ---- 3) plan: build input and 3-class target (P/S/Noise)
+plan = BuildPlan(
+    wave_ops=[IdentitySignal(src="x_view", dst="x", copy=False)],
+    label_ops=[PhasePSNMap(dst="psn_map", sigma=1.5)],
+    input_stack=SelectStack(keys="x", dst="input"),
+    target_stack=SelectStack(keys="psn_map", dst="target"),
+)
+
+ds = SegyGatherPhasePipelineDataset(
+    segy_files=["/path/input.sgy"],
+    phase_pick_files=["/path/phase_picks.npz"],
+    transform=transform,
+    fbgate=fbgate,
+    plan=plan,
+    include_empty_gathers=False,
+    use_header_cache=True,
+)
+
+loader = DataLoader(ds, batch_size=1, num_workers=0)
+batch = next(iter(loader))
 ```
 
 ## Examples
 Noise-only TraceSubset quick check (requires `seisai-dataset`, `seisai-transforms`, `torch`, `numpy`, `segyio`):
 ```bash
 python packages/seisai-dataset/examples/noise_dataset_quick_check.py
+```
+
+Phase pick dataset quick check (requires `seisai-dataset`, `seisai-pick`, `seisai-transforms`, `torch`, `numpy`, `segyio`):
+```bash
+python packages/seisai-dataset/examples/phase_dataset_quick_check.py
 ```
 
 ## Pair dataset example
