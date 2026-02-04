@@ -286,9 +286,6 @@ def soft_label_ce_masked_mean(
 
 	pixel_mask = pixel_mask.to(device=logits.device, non_blocking=True)
 	denom = pixel_mask.sum(dtype=torch.float32)
-	if denom.item() == 0:
-		# Keep the loss connected to `logits` so that backward() works and gradients are zero.
-		return logits.sum(dtype=torch.float32) * 0.0
 
 	# Select only masked pixels to avoid 0*NaN propagation when masked-out entries are non-finite.
 	logits_bhwc = logits.permute(0, 2, 3, 1)  # (B,H,W,C)
@@ -297,7 +294,10 @@ def soft_label_ce_masked_mean(
 	target_nc = target_bhwc[pixel_mask]  # (N,C)
 	log_p_nc = F.log_softmax(logits_nc, dim=-1)
 	loss_n = -(target_nc * log_p_nc).sum(dim=-1)  # (N,)
-	return loss_n.sum(dtype=torch.float32) / denom
+	loss_sum = loss_n.sum(dtype=torch.float32)
+	# When denom==0, logits_nc/target_nc are empty => loss_sum==0. Use denom.clamp_min(1)
+	# to return an explicit 0 without introducing a GPU sync via denom.item().
+	return loss_sum / denom.clamp_min(1.0)
 
 
 __all__ = [
