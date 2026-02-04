@@ -45,3 +45,5 @@ debug_*/
 *.o
 *.a
 
+workflow/
+code_snippet/
