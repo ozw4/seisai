@@ -339,7 +339,7 @@ def main() -> None:
 		fbgate=fbgate,
 		plan=train_plan,
 		subset_traces=SUBSET_TRACES,
-		valid=True,
+		secondary_key_fixed=True,
 		verbose=True,
 		max_trials=2048,
 	)

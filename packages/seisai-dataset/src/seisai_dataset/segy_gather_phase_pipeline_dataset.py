@@ -68,7 +68,7 @@ class SegyGatherPhasePipelineDataset(Dataset):
 		use_header_cache: bool = True,
 		header_cache_dir: str | None = None,
 		subset_traces: int = 128,
-		valid: bool = False,
+		secondary_key_fixed: bool = False,
 		verbose: bool = False,
 		max_trials: int = 2048,
 		sample_transformer: SampleTransformer | None = None,
@@ -106,7 +106,7 @@ class SegyGatherPhasePipelineDataset(Dataset):
 		self.use_header_cache = bool(use_header_cache)
 		self.header_cache_dir = header_cache_dir
 
-		self.valid = bool(valid)
+		self.secondary_key_fixed = bool(secondary_key_fixed)
 		self.verbose = bool(verbose)
 
 		self._rng = np.random.default_rng()
@@ -125,7 +125,7 @@ class SegyGatherPhasePipelineDataset(Dataset):
 				use_superwindow=self.use_superwindow,
 				sw_halfspan=self.sw_halfspan,
 				sw_prob=self.sw_prob,
-				valid=self.valid,
+				secondary_key_fixed=self.secondary_key_fixed,
 				subset_traces=int(self.subset_traces),
 			)
 		)

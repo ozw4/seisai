@@ -17,6 +17,7 @@ from seisai_utils.config import (
 	require_int,
 	require_list_str,
 )
+
 from .build_plan import build_plan
 
 __all__ = ['build_dataset']
@@ -68,7 +69,7 @@ def build_dataset(cfg: dict) -> SegyGatherPhasePipelineDataset:
 	ds_cfg = require_dict(cfg, 'dataset')
 	train_cfg = require_dict(cfg, 'train')
 	transform_cfg = require_dict(cfg, 'transform')
-	fbgate_cfg = cfg.get('fbgate', None)
+	fbgate_cfg = cfg.get('fbgate')
 	if fbgate_cfg is not None and not isinstance(fbgate_cfg, dict):
 		raise TypeError('fbgate must be dict')
 
@@ -88,7 +89,9 @@ def build_dataset(cfg: dict) -> SegyGatherPhasePipelineDataset:
 	include_empty_gathers = optional_bool(
 		ds_cfg, 'include_empty_gathers', default=False
 	)
-	valid = optional_bool(ds_cfg, 'valid', default=False)
+	secondary_key_fixed = optional_bool(
+		ds_cfg, 'secondary_key_fixed', default=False
+	)
 	primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
 	primary_keys = _validate_primary_keys(primary_keys_list)
 
@@ -117,7 +120,7 @@ def build_dataset(cfg: dict) -> SegyGatherPhasePipelineDataset:
 		include_empty_gathers=bool(include_empty_gathers),
 		use_header_cache=bool(use_header_cache),
 		primary_keys=primary_keys,
-		valid=bool(valid),
+		secondary_key_fixed=bool(secondary_key_fixed),
 		verbose=bool(verbose),
 		max_trials=int(max_trials),
 	)

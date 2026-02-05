@@ -42,7 +42,7 @@ SegyGatherPairDataset(
     use_header_cache: bool = True,
     header_cache_dir: str | None = None,
     subset_traces: int = 128,
-    valid: bool = False,
+    secondary_key_fixed: bool = False,
     verbose: bool = False,
     max_trials: int = 2048,
 )

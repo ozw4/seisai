@@ -39,7 +39,7 @@ def build_pair_dataset(
 	transform: ViewCompose,
 	plan: BuildPlan,
 	subset_traces: int,
-	valid: bool,
+	secondary_key_fixed: bool,
 ) -> SegyGatherPairDataset:
 	_validate_files(paths)
 
@@ -50,7 +50,7 @@ def build_pair_dataset(
 		plan=plan,
 		subset_traces=int(subset_traces),
 		primary_keys=ds_cfg.primary_keys,
-		valid=bool(valid),
+		secondary_key_fixed=bool(secondary_key_fixed),
 		verbose=bool(ds_cfg.verbose),
 		max_trials=int(ds_cfg.max_trials),
 		use_header_cache=bool(ds_cfg.use_header_cache),

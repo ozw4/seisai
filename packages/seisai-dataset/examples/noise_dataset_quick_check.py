@@ -41,7 +41,7 @@ def main() -> None:
 	subset_traces = 128
 	use_cache = False
 	cache_dir = './.segy_hdr_cache'
-	valid = True
+	secondary_key_fixed = True
 	seed = 0
 	# ============================
 
@@ -59,7 +59,7 @@ def main() -> None:
 		use_superwindow=False,
 		sw_halfspan=0,
 		sw_prob=0.0,
-		valid=bool(valid),
+		secondary_key_fixed=bool(secondary_key_fixed),
 		subset_traces=int(subset_traces),
 	)
 	detect_cfg = EventDetectConfig()
@@ -71,7 +71,7 @@ def main() -> None:
 		detect_cfg=detect_cfg,
 		transform=transform,
 		header_cache_dir=cache_dir if use_cache else None,
-		valid=bool(valid),
+		secondary_key_fixed=bool(secondary_key_fixed),
 		verbose=True,
 		seed=int(seed),
 	)

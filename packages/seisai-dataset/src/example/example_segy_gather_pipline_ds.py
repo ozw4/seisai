@@ -66,7 +66,7 @@ ds = SegyGatherPipelineDataset(
 	plan=plan,  # ← MAE(入力=出力)用
 	primary_keys=('ffid,'),
 	subset_traces=128,
-	valid=True,
+	secondary_key_fixed=True,
 	verbose=True,
 	max_trials=1024,  # 無限ループ保護(前提の実装に対応)
 )

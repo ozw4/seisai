@@ -114,7 +114,7 @@ def build_dataset(
 		subset_traces=int(subset_traces),
 		use_superwindow=False,
 		use_header_cache=False,
-		valid=True,
+		secondary_key_fixed=True,
 		verbose=False,
 		max_trials=int(max_trials),
 	)

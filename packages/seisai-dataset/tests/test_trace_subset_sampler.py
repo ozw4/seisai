@@ -32,7 +32,7 @@ def test_sampler_semantics_without_superwindow():
 		primary_keys=('ffid',),
 		primary_key_weights=(1.0,),
 		use_superwindow=False,
-		valid=True,
+		secondary_key_fixed=True,
 		subset_traces=8,
 	)
 	sampler = TraceSubsetSampler(cfg)
@@ -51,5 +51,9 @@ def test_sampler_semantics_without_superwindow():
 	assert idx.dtype == np.int64
 	assert len(idx) <= 8
 	assert out['key_name'] == 'ffid'
-	assert out['secondary_key'] in {'chno', 'ffid', 'offset'}  # valid=True → "chno"
+	assert out['secondary_key'] in {
+		'chno',
+		'ffid',
+		'offset',
+	}  # secondary_key_fixed=True → "chno"
 	assert out['did_super'] in {False, True}  # 今回は False のはず

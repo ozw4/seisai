@@ -46,7 +46,7 @@ class NoiseTraceSubsetDataset(Dataset):
 		cmp_byte=segyio.TraceField.CDP,
 		header_cache_dir: str | None = None,
 		max_retries: int = 1000,
-		valid: bool = False,
+		secondary_key_fixed: bool = False,
 		verbose: bool = False,
 		seed: int | None = None,
 	) -> None:
@@ -65,7 +65,7 @@ class NoiseTraceSubsetDataset(Dataset):
 
 		self.header_cache_dir = header_cache_dir
 		self.max_retries = int(max_retries)
-		self.valid = bool(valid)
+		self.secondary_key_fixed = bool(secondary_key_fixed)
 		self.verbose = bool(verbose)
 		self.transform = transform
 		self._rng = np.random.default_rng(

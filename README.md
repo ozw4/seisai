@@ -1,29 +1,48 @@
 # seisai
 
-Modular, PyTorch-friendly **SEG-Y gather dataset toolkit** (monorepo).
+PyTorch で扱いやすい **SEG-Y gather データセット + 学習/推論ユーティリティ**のモノレポです。
 
-> Note: 現状は monorepo 内のサブパッケージを editable install して使う前提です(`import seisai` はまだ用意していません)。
-> Dataset の入口は **`seisai_dataset`** です。
+- このリポジトリは `packages/*` に複数の Python パッケージを持ちます。
+- いまのところ **`import seisai` のような統合トップレベルパッケージはありません**。
+  - 入口は用途ごとに `seisai_dataset`, `seisai_transforms`, `seisai_engine`, `seisai_models`, `seisai_pick`, `seisai_utils` です。
+
+動作確認は主に Python 3.10/3.11 (CI も 3.10/3.11) です。
+
+## パッケージ構成
+
+| package | import | 役割 |
+|---|---|---|
+| `seisai-utils` | `seisai_utils` | YAML 設定ローダ/型チェック、可視化ヘルパなど |
+| `seisai-transforms` | `seisai_transforms` | 2D 波形 view の augment、mask、view projection など |
+| `seisai-pick` | `seisai_pick` | pick/検出のユーティリティ (gaussian, STA/LTA など) |
+| `seisai-dataset` | `seisai_dataset` | SEG-Y gather Dataset 群 (pipeline / phase / pair) |
+| `seisai-models` | `seisai_models` | モデル群 (例: `EncDec2D`) + timm backbone |
+| `seisai-engine` | `seisai_engine` | train loop / loss / metrics / tiled inference など |
 
 ## Install (local dev / monorepo)
 
-このリポジトリ直下で、依存順に editable install してください。
+このリポジトリ直下で **editable install** してください。
+
+> 依存関係: utils → transforms → pick → dataset → models → engine
 
 ```bash
-# core utils
-pip install -e packages/seisai-utils
+python -m pip install -U pip
 
-# pick utilities (required by dataset builders)
-pip install -e packages/seisai-pick
-
-# transforms (currently required; dataset imports view_projection)
-pip install -e packages/seisai-transforms
-
-# dataset
-pip install -e packages/seisai-dataset
+# まとめて editable install (CI と同じ順序)
+for p in seisai-utils seisai-transforms seisai-pick seisai-dataset seisai-models seisai-engine; do
+  pip install -e "packages/$p"
+done
 ```
 
-## Quick Start
+メモ:
+- `seisai-dataset` は `segyio`, `torch` を使います。
+- `seisai-pick` は `numba` 依存があります。
+- `seisai-models` は `timm` を使います。
+
+## Quick Start: SegyGatherPipelineDataset
+
+「SEG-Y → gather 抽出 → transform → gate → BuildPlan で input/target を組み立て」という最小例です。
+
 ```python
 from torch.utils.data import DataLoader
 
@@ -52,7 +71,7 @@ transform = ViewCompose([
     RandomCropOrPad(target_len=2048),
 ])
 
-# ---- 2) gate: disable FBLC for a stable quickstart
+# ---- 2) gate: quickstart は安定化のため FBLC を無効化
 fbgate = FirstBreakGate(
     FirstBreakGateConfig(
         apply_on="off",
@@ -60,7 +79,7 @@ fbgate = FirstBreakGate(
     )
 )
 
-# ---- 3) plan: build input/target (example: recon with masking)
+# ---- 3) plan: input/target を構成 (例: recon + masking)
 mask_gen = MaskGenerator.traces(
     ratio=0.25,      # masked trace ratio (per-gather)
     width=1,
@@ -80,12 +99,11 @@ plan = BuildPlan(
         mask_op,
     ],
     label_ops=[
-        # fb target example (optional):
+        # fb heatmap 例 (必要なら):
         # FBGaussMap(dst="fb_map", sigma=1.5, src="fb_idx_view"),
     ],
     input_stack=SelectStack(keys="x_masked", dst="input"),
-    target_stack=SelectStack(keys="x_orig", dst="target"),   # recon target
-    # fb_seg target にしたい場合は target_stack=SelectStack("fb_map","target") にする
+    target_stack=SelectStack(keys="x_orig", dst="target"),
 )
 
 ds = SegyGatherPipelineDataset(
@@ -100,15 +118,16 @@ ds = SegyGatherPipelineDataset(
 loader = DataLoader(ds, batch_size=2, num_workers=2)
 batch = next(iter(loader))
 
-# batch is a dict; keys include:
-#   input, target, mask_bool (optional), meta, trace_valid, fb_idx, offsets, dt_sec, indices, file_path, key_name
+# batch は dict
+# 代表的なキー: input, target, mask_bool(任意), meta, trace_valid, fb_idx, offsets, dt_sec,
+#              indices, file_path, key_name, secondary_key, primary_unique, did_superwindow
 ```
 
-## Phase Picks (P/S/Noise) Quick Start
+## Quick Start: Phase Picks (P/S/Noise)
 
-Natural-earthquake style phase classification can be trained with CSR phase picks and a 3-class target map (P/S/Noise).
+CSR 形式の phase pick から P/S/Noise (3-class) の soft target map を作る例です。
 
-See specs:
+仕様:
 - `docs/spec/phase_pick_files_spec.md`
 - `docs/spec/segy_gather_phase_pipeline_dataset_output_contract.md`
 
@@ -132,13 +151,11 @@ from seisai_transforms.augment import (
     ViewCompose,
 )
 
-# ---- 1) transform: (H,W0) -> (H,W)
 transform = ViewCompose([
     PerTraceStandardize(),
     RandomCropOrPad(target_len=2048),
 ])
 
-# ---- 2) gate: disable FBLC for a stable quickstart
 fbgate = FirstBreakGate(
     FirstBreakGateConfig(
         apply_on="off",
@@ -146,7 +163,6 @@ fbgate = FirstBreakGate(
     )
 )
 
-# ---- 3) plan: build input and 3-class target (P/S/Noise)
 plan = BuildPlan(
     wave_ops=[IdentitySignal(src="x_view", dst="x", copy=False)],
     label_ops=[PhasePSNMap(dst="psn_map", sigma=1.5)],
@@ -168,18 +184,13 @@ loader = DataLoader(ds, batch_size=1, num_workers=0)
 batch = next(iter(loader))
 ```
 
-## Examples
-Noise-only TraceSubset quick check (requires `seisai-dataset`, `seisai-transforms`, `torch`, `numpy`, `segyio`):
-```bash
-python packages/seisai-dataset/examples/noise_dataset_quick_check.py
-```
-
-Phase pick dataset quick check (requires `seisai-dataset`, `seisai-pick`, `seisai-transforms`, `torch`, `numpy`, `segyio`):
-```bash
-python packages/seisai-dataset/examples/phase_dataset_quick_check.py
-```
-
 ## Pair dataset example
+
+入力 SEG-Y とターゲット SEG-Y のペアを同期サンプリングして `input/target` を作る例です。
+
+仕様:
+- `docs/spec/segy_gather_pair_dataset_spec.md`
+
 ```python
 from torch.utils.data import DataLoader
 
@@ -198,8 +209,8 @@ plan = BuildPlan(
         IdentitySignal(source_key="x_view_target", dst="x_tg", copy=False),
     ],
     label_ops=[],
-    input_stack=SelectStack(keys="x_in", dst="input"),
-    target_stack=SelectStack(keys="x_tg", dst="target"),
+    input_stack=SelectStack(keys=["x_in"], dst="input"),
+    target_stack=SelectStack(keys=["x_tg"], dst="target"),
 )
 
 ds = SegyGatherPairDataset(
@@ -214,25 +225,91 @@ loader = DataLoader(ds, batch_size=4, num_workers=2)
 batch = next(iter(loader))
 ```
 
-## Core pieces
+## Examples (実行スクリプト)
 
-> SegyGatherPipelineDataset – sample → load → transform → FB gate → BuildPlan で input/target を組み立て。
-> TraceSubsetSampler – gather/subset の抽出(primary key / superwindow など)。
-> TraceSubsetLoader – segyio mmap load + padding。
-> ViewCompose + augmenters – time/space/freq 等の独立コンポーネント(meta を統合)。
-> MaskGenerator / MaskedSignal – bool mask を生成して replace/add を適用(mask_bool を出力)。
-> FirstBreakGate – FBLC gate(apply_on="off" で無効化可)。
-> FBGaussMap – fb_idx_view から Gaussian heatmap を生成(fb_seg 用)。
+### 1) データセット単体の quick check
+
+```bash
+# noise-only TraceSubset の簡易チェック
+python packages/seisai-dataset/examples/noise_dataset_quick_check.py
+
+# phase pick dataset の簡易チェック
+python packages/seisai-dataset/examples/phase_dataset_quick_check.py
+```
+
+### 2) 学習スクリプト (root/examples)
+
+このリポジトリには **YAML 設定で学習/可視化まで回すサンプル**が入っています。
+
+- `examples/example_train_psn.py` : P/S/Noise (3-class) 学習 + デバッグ PNG 出力
+- `examples/example_train_pair.py` : paired SEG-Y 学習 + tiled-h 推論 + triptych 可視化
+- `examples/example_train_fbp.py` : first-break 系の学習例
+- `examples/examples_train_blindtrace.py` : mask/blindtrace 系の学習例
+
+実行例:
+
+```bash
+# PSN (設定ファイルは examples/config_train_psn.yaml)
+python examples/example_train_psn.py --config examples/config_train_psn.yaml
+
+# Pair
+python examples/example_train_pair.py --config examples/config_train_pair.yaml
+```
+
+挙動メモ:
+- YAML は常に読み込みます。
+- `examples/example_train_psn.py` は YAML 内の相対パスを「YAML ファイルの場所」基準で解決します。
+  - それ以外のスクリプトは現状、パスはそのまま解釈するため、実行時の cwd に依存します。
+- `examples/example_train_psn.py` は `--vis_out_dir` で出力先を上書きできます (e2e テストで利用)。
+
+同梱データでの最小実行 (1 epoch / PNG 出力):
+
+```bash
+python examples/example_train_psn.py --config tests/e2e/config_train_psn.yaml --vis_out_dir ./_psn_vis
+```
+
+### 3) パッケージ内の小さな例
+
+```bash
+python packages/seisai-engine/example/example2.py
+python packages/seisai-engine/example/example_mask_velocity.py
+python packages/seisai-engine/example/example_trend_prior_op.py
+
+python packages/seisai-transforms/example/examle_mask.py
+python packages/seisai-pick/example/example_trend_fit.py
+```
 
 ## Testing
-```bash
-pytest -q
 
-# Enable integration tests with real data
-export FBP_TEST_SEGY=/abs/path/sample.sgy
-export FBP_TEST_FB=/abs/path/fb.npy
+```bash
 pytest -q
 ```
 
+- `tests/e2e/` には **同梱サンプル (tests/data)** を使う軽量な e2e が含まれます。
+- `packages/seisai-dataset/tests/` には、実データがある場合にだけ動く integration が含まれます。
+
+ユニットテストだけ回したい場合:
+
+```bash
+pytest -q -m "not integration"
+```
+
+### dataset の integration (実データが必要)
+
+`seisai-dataset` の一部 integration テストは大きい SEG-Y と first-break を必要とし、無い場合は skip されます。
+
+```bash
+export FBP_TEST_SEGY=/abs/path/sample.sgy
+export FBP_TEST_FB=/abs/path/fb.npy
+pytest -q -m integration
+```
+
+## ドキュメント
+
+- Dataset 出力契約: `docs/spec/segy_gather_pipeline_dataset_output_contract.md`
+- Pair dataset 仕様: `docs/spec/segy_gather_pair_dataset_spec.md`
+- 入力前提 (SEG-Y): `docs/spec/segy_gahter_pipeline_dataset_input_assumptions.md`
+
 ## License
+
 MIT

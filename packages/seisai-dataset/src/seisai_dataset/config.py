@@ -18,8 +18,8 @@ class TraceSubsetSamplerConfig:
 	use_superwindow: bool = False
 	sw_halfspan: int = 0  # 片側キー数(K = 1 + 2*sw_halfspan)
 	sw_prob: float = 0.3  # superwindow を適用する確率(<1.0なら確率適用)
-	# secondary 整列ルールを固定したいときに valid=True(従来互換)
-	valid: bool = False
+	# secondary 整列ルールを固定したいときに secondary_key_fixed=True
+	secondary_key_fixed: bool = False
 	# 連続サブセット本数(不足時は後段でパディング)
 	subset_traces: int = 128
 

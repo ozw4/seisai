@@ -126,7 +126,7 @@ def test_segy_gather_pair_dataset_sync_transform_and_plan(tmp_path: Path) -> Non
 		primary_keys=('ffid',),
 		subset_traces=8,
 		use_header_cache=False,
-		valid=False,
+		secondary_key_fixed=False,
 		verbose=True,
 		max_trials=64,
 	)
@@ -225,7 +225,7 @@ def test_segy_gather_pair_dataset_pads_when_gather_is_short(tmp_path: Path) -> N
 		primary_keys=('ffid',),
 		subset_traces=8,  # pad を発生させる
 		use_header_cache=False,
-		valid=True,
+		secondary_key_fixed=True,
 		max_trials=64,
 	)
 
@@ -315,7 +315,7 @@ def test_segy_gather_pair_dataset_pair_consistency_headers_shape_dtype_and_sync_
 		primary_keys=('ffid',),
 		subset_traces=subset_traces,
 		use_header_cache=False,
-		valid=True,
+		secondary_key_fixed=True,
 		verbose=True,
 		max_trials=64,
 	)

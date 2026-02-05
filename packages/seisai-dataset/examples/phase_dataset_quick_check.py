@@ -195,7 +195,7 @@ def main() -> None:
 		subset_traces=int(subset_traces),
 		include_empty_gathers=bool(include_empty_gathers),
 		use_header_cache=bool(use_header_cache),
-		valid=True,
+		secondary_key_fixed=True,
 		verbose=False,
 		primary_keys=('ffid',),
 		max_trials=256,
@@ -279,7 +279,7 @@ def main() -> None:
 		subset_traces=int(subset_traces),
 		include_empty_gathers=bool(include_empty_gathers),
 		use_header_cache=bool(use_header_cache),
-		valid=True,
+		secondary_key_fixed=True,
 		verbose=False,
 		max_trials=256,
 	)

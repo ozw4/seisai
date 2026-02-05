@@ -178,7 +178,7 @@ header検証(ffid/chno/offset一致)を成立させるのは `write_unstructured
 1. **padを含むケース**
    - `subset_traces > n_traces` にして `indices` に -1 を含め、
      pad領域の `input/target` がゼロになっていることを検証(header検証は -1 を除外して行う)。
-2. **valid=False の secondary_key 非決定性**
+2. **secondary_key_fixed=False の secondary_key 非決定性**
    - RNG固定で secondary_key の分岐を安定化しつつ、
      期待する並び(chno or offset)を検証。
 3. **header cache の整合性**

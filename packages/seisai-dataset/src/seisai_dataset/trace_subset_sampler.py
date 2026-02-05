@@ -74,7 +74,10 @@ class TraceSubsetSampler:
 
 		# 3) secondary 整列(従来条件の踏襲)
 		secondary_key = self._choose_secondary_key(
-			key_name, apply_super=apply_super, valid=self.cfg.valid, r=r
+			key_name,
+			apply_super=apply_super,
+			secondary_key_fixed=self.cfg.secondary_key_fixed,
+			r=r,
 		)
 		indices = self._stable_lexsort(info, key_name, secondary_key, indices)
 
@@ -180,16 +183,21 @@ class TraceSubsetSampler:
 		return np.asarray(sel_keys, dtype=np.int64), k2map
 
 	def _choose_secondary_key(
-		self, key_name: str, *, apply_super: bool, valid: bool, r: random.Random
+		self,
+		key_name: str,
+		*,
+		apply_super: bool,
+		secondary_key_fixed: bool,
+		r: random.Random,
 	) -> str:
-		if not apply_super and not valid:
+		if not apply_super and not secondary_key_fixed:
 			if key_name == 'ffid':
 				return r.choice(('chno', 'offset'))
 			if key_name == 'chno':
 				return r.choice(('ffid', 'offset'))
 			# 'cmp'
 			return 'offset'
-		if apply_super and not valid:
+		if apply_super and not secondary_key_fixed:
 			return 'offset'
 		if key_name == 'ffid':
 			return 'chno'

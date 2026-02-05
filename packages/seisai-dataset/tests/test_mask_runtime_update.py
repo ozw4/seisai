@@ -72,7 +72,7 @@ def _build_ds(mask_ratio: float):
 		fbgate=fbgate,
 		plan=plan,
 		use_superwindow=False,
-		valid=True,
+		secondary_key_fixed=True,
 		verbose=False,
 	)
 	return ds, mask_op

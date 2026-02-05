@@ -69,7 +69,7 @@ def _build_ds() -> SegyGatherPipelineDataset:
 		fbgate=fbgate,
 		plan=plan,
 		use_superwindow=False,
-		valid=False,
+		secondary_key_fixed=False,
 		verbose=False,
 	)
 

@@ -1,3 +1,4 @@
+# %%
 """Thin entrypoint for paired SEG-Y inference."""
 
 from __future__ import annotations

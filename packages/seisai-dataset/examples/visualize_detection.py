@@ -301,7 +301,7 @@ if __name__ == '__main__':
 		use_superwindow=False,
 		sw_halfspan=0,
 		sw_prob=0.0,
-		valid=True,
+		secondary_key_fixed=True,
 		subset_traces=int(subset_traces),
 	)
 	detect_cfg = EventDetectConfig()
