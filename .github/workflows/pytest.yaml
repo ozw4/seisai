@@ -1,5 +1,9 @@
 name: pytest
 
+on:
+  pull_request:
+  push:
+
 permissions:
   contents: read
 
@@ -34,4 +38,6 @@ jobs:
           pip install -U pytest
 
       - name: Run tests
+        env:
+          MPLBACKEND: Agg
         run: pytest -q
