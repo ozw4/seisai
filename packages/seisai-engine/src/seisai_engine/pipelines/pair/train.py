@@ -4,10 +4,11 @@ import argparse
 from pathlib import Path
 
 import torch
+from torch.utils.data import DataLoader, Subset
+
 from seisai_engine.pipelines.common.config_io import resolve_relpath
 from seisai_engine.pipelines.common.seed import seed_all
 from seisai_engine.train_loop import train_one_epoch
-from torch.utils.data import DataLoader, Subset
 
 from .build_dataset import build_pair_dataset, build_train_transform
 from .build_model import build_model
@@ -21,9 +22,7 @@ __all__ = ['main']
 DEFAULT_CONFIG_PATH = Path('examples/pair/config_train_pair.yaml')
 
 
-def _resolve_ckpt_out(
-	*, base_dir: Path, override: str | None, fallback: str
-) -> str:
+def _resolve_ckpt_out(*, base_dir: Path, override: str | None, fallback: str) -> str:
 	if override is None:
 		return fallback
 	return resolve_relpath(base_dir, override)
@@ -33,7 +32,7 @@ def main(argv: list[str] | None = None) -> None:
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
 	parser.add_argument('--ckpt_out', default=None)
-	args = parser.parse_args(argv)
+	args, _unknown = parser.parse_known_args(argv)
 
 	cfg = load_train_config(args.config)
 	base_dir = Path(args.config).expanduser().resolve().parent
@@ -53,7 +52,7 @@ def main(argv: list[str] | None = None) -> None:
 		transform=train_transform,
 		plan=plan,
 		subset_traces=cfg.train.subset_traces,
-		valid=False,
+		secondary_key_fixed=False,
 	)
 
 	try:

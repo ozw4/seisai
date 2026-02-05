@@ -5,11 +5,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
+from seisai_utils.viz_pair import PairTriptychVisConfig, save_pair_triptych_step_png
+from torch.utils.data import DataLoader, Subset
+
 from seisai_engine.infer.runner import TiledHConfig, infer_batch_tiled_h
 from seisai_engine.pipelines.common.config_io import resolve_relpath
 from seisai_engine.pipelines.common.seed import seed_all
-from seisai_utils.viz_pair import PairTriptychVisConfig, save_pair_triptych_step_png
-from torch.utils.data import DataLoader, Subset
 
 from .build_dataset import build_infer_transform, build_pair_dataset
 from .build_model import build_model
@@ -22,9 +23,7 @@ __all__ = ['main']
 DEFAULT_CONFIG_PATH = Path('examples/pair/config_train_pair.yaml')
 
 
-def _resolve_ckpt(
-	*, base_dir: Path, override: str | None, fallback: str
-) -> str:
+def _resolve_ckpt(*, base_dir: Path, override: str | None, fallback: str) -> str:
 	if override is None:
 		return fallback
 	return resolve_relpath(base_dir, override)
@@ -35,7 +34,7 @@ def main(argv: list[str] | None = None) -> None:
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
 	parser.add_argument('--ckpt', default=None)
-	args = parser.parse_args(argv)
+	args, _unknown = parser.parse_known_args(argv)
 
 	cfg = load_infer_config(args.config)
 	base_dir = Path(args.config).expanduser().resolve().parent
@@ -68,7 +67,7 @@ def main(argv: list[str] | None = None) -> None:
 		transform=infer_transform,
 		plan=plan,
 		subset_traces=cfg.infer.subset_traces,
-		valid=True,
+		secondary_key_fixed=True,
 	)
 
 	try:
