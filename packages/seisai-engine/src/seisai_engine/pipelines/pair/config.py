@@ -1,21 +1,14 @@
-"""Shared helpers for paired SEG-Y training/inference examples.
-
-These helpers are intentionally small and fail-fast.
-"""
-
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
-import torch
-from seisai_dataset import BuildPlan, SegyGatherPairDataset
-from seisai_dataset.builder.builder import IdentitySignal, SelectStack
-from seisai_models.models.encdec2d import EncDec2D
-from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
-from seisai_utils.config import (
+from seisai_engine.pipelines.common.config_io import (
 	load_config,
+	resolve_cfg_paths,
+	resolve_relpath,
+)
+from seisai_utils.config import (
 	optional_bool,
 	optional_float,
 	optional_int,
@@ -26,6 +19,20 @@ from seisai_utils.config import (
 	require_int,
 	require_list_str,
 )
+
+__all__ = [
+	'PairPaths',
+	'PairDatasetCfg',
+	'PairTrainCfg',
+	'PairInferCfg',
+	'PairTileCfg',
+	'PairVisCfg',
+	'PairModelCfg',
+	'PairTrainConfig',
+	'PairInferConfig',
+	'load_train_config',
+	'load_infer_config',
+]
 
 
 @dataclass(frozen=True)
@@ -116,117 +123,15 @@ class PairInferConfig:
 	model: PairModelCfg
 
 
-def build_device() -> torch.device:
-	return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def _validate_primary_keys(primary_keys_list: object) -> tuple[str, ...]:
+	if not isinstance(primary_keys_list, list) or not all(
+		isinstance(x, str) for x in primary_keys_list
+	):
+		raise ValueError('dataset.primary_keys must be list[str]')
+	return tuple(primary_keys_list)
 
 
-def seed_all(seed: int) -> None:
-	torch.manual_seed(int(seed))
-	_ = np.random.default_rng(int(seed))
-
-
-def build_plan() -> BuildPlan:
-	return BuildPlan(
-		wave_ops=[
-			IdentitySignal(source_key='x_view_input', dst='x_in', copy=False),
-			IdentitySignal(source_key='x_view_target', dst='x_tg', copy=False),
-		],
-		label_ops=[],
-		input_stack=SelectStack(
-			keys=['x_in'],
-			dst='input',
-			dtype=np.float32,
-			to_torch=True,
-		),
-		target_stack=SelectStack(
-			keys=['x_tg'],
-			dst='target',
-			dtype=np.float32,
-			to_torch=True,
-		),
-	)
-
-
-def build_train_transform(time_len: int, eps: float = 1e-8) -> ViewCompose:
-	return ViewCompose(
-		[
-			RandomCropOrPad(target_len=int(time_len)),
-			PerTraceStandardize(eps=float(eps)),
-		]
-	)
-
-
-def build_infer_transform(eps: float = 1e-8) -> ViewCompose:
-	return ViewCompose([PerTraceStandardize(eps=float(eps))])
-
-
-def build_pair_dataset(
-	paths: PairPaths,
-	ds_cfg: PairDatasetCfg,
-	transform: ViewCompose,
-	plan: BuildPlan,
-	subset_traces: int,
-	valid: bool,
-) -> SegyGatherPairDataset:
-	return SegyGatherPairDataset(
-		input_segy_files=paths.input_segy_files,
-		target_segy_files=paths.target_segy_files,
-		transform=transform,
-		plan=plan,
-		subset_traces=int(subset_traces),
-		primary_keys=ds_cfg.primary_keys,
-		valid=bool(valid),
-		verbose=bool(ds_cfg.verbose),
-		max_trials=int(ds_cfg.max_trials),
-		use_header_cache=bool(ds_cfg.use_header_cache),
-	)
-
-
-def build_model(cfg: PairModelCfg) -> EncDec2D:
-	model = EncDec2D(
-		backbone=cfg.backbone,
-		in_chans=int(cfg.in_chans),
-		out_chans=int(cfg.out_chans),
-		pretrained=bool(cfg.pretrained),
-	)
-	model.use_tta = False
-	return model
-
-
-def save_checkpoint(
-	ckpt_path: str | Path,
-	model: torch.nn.Module,
-	model_cfg: PairModelCfg,
-	epoch: int,
-	global_step: int,
-	optimizer: torch.optim.Optimizer | None = None,
-) -> None:
-	ckpt = {
-		'model_state_dict': model.state_dict(),
-		'model_cfg': asdict(model_cfg),
-		'epoch': int(epoch),
-		'global_step': int(global_step),
-	}
-	if optimizer is not None:
-		ckpt['optimizer_state_dict'] = optimizer.state_dict()
-
-	out_path = Path(ckpt_path)
-	out_path.parent.mkdir(parents=True, exist_ok=True)
-	torch.save(ckpt, out_path)
-
-
-def load_checkpoint(ckpt_path: str | Path) -> dict:
-	ckpt = torch.load(Path(ckpt_path), map_location='cpu')
-	if not isinstance(ckpt, dict):
-		raise ValueError('checkpoint must be a dict')
-	if 'model_state_dict' not in ckpt:
-		raise ValueError('checkpoint missing: model_state_dict')
-	if 'model_cfg' not in ckpt:
-		raise ValueError('checkpoint missing: model_cfg')
-	return ckpt
-
-
-def _load_paths(paths: dict) -> PairPaths:
+def _load_paths(paths: dict, *, base_dir: Path) -> PairPaths:
 	input_segy_files = require_list_str(paths, 'input_segy_files')
 	target_segy_files = require_list_str(paths, 'target_segy_files')
 	if len(input_segy_files) != len(target_segy_files):
@@ -234,6 +139,7 @@ def _load_paths(paths: dict) -> PairPaths:
 			'paths.input_segy_files and paths.target_segy_files must have same length'
 		)
 	ckpt_path = optional_str(paths, 'ckpt_path', './_pair_ckpt/encdec2d_pair.pth')
+	ckpt_path = resolve_relpath(base_dir, ckpt_path)
 	return PairPaths(
 		input_segy_files=list(input_segy_files),
 		target_segy_files=list(target_segy_files),
@@ -246,11 +152,7 @@ def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
 	use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)
 	verbose = optional_bool(ds_cfg, 'verbose', default=True)
 	primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
-	if not isinstance(primary_keys_list, list) or not all(
-		isinstance(x, str) for x in primary_keys_list
-	):
-		raise ValueError('dataset.primary_keys must be list[str]')
-	primary_keys = tuple(primary_keys_list)
+	primary_keys = _validate_primary_keys(primary_keys_list)
 	return PairDatasetCfg(
 		max_trials=int(max_trials),
 		use_header_cache=bool(use_header_cache),
@@ -275,6 +177,13 @@ def _load_model_cfg(model_cfg: dict) -> PairModelCfg:
 def load_train_config(config_path: str | Path) -> PairTrainConfig:
 	cfg = load_config(str(config_path))
 
+	base_dir = Path(config_path).expanduser().resolve().parent
+	resolve_cfg_paths(
+		cfg,
+		base_dir,
+		keys=['paths.input_segy_files', 'paths.target_segy_files'],
+	)
+
 	paths = require_dict(cfg, 'paths')
 	ds_cfg = require_dict(cfg, 'dataset')
 	train_cfg = require_dict(cfg, 'train')
@@ -296,7 +205,7 @@ def load_train_config(config_path: str | Path) -> PairTrainConfig:
 		raise ValueError('train.loss_kind must be "l1" or "mse"')
 
 	return PairTrainConfig(
-		paths=_load_paths(paths),
+		paths=_load_paths(paths, base_dir=base_dir),
 		dataset=_load_dataset_cfg(ds_cfg),
 		train=PairTrainCfg(
 			batch_size=int(train_batch_size),
@@ -316,24 +225,14 @@ def load_train_config(config_path: str | Path) -> PairTrainConfig:
 
 
 def load_infer_config(config_path: str | Path) -> PairInferConfig:
-	"""Load and validate an inference configuration for paired SEG-Y examples.
-
-	Parameters
-	----------
-	config_path : str | Path
-		Path to a configuration file consumable by `seisai_utils.config.load_config`.
-
-	Returns
-	-------
-	PairInferConfig
-		A validated, strongly-typed inference configuration.
-
-	Raises
-	------
-	ValueError
-		If required configuration keys are missing or have invalid types/values.
-	"""
 	cfg = load_config(str(config_path))
+
+	base_dir = Path(config_path).expanduser().resolve().parent
+	resolve_cfg_paths(
+		cfg,
+		base_dir,
+		keys=['paths.input_segy_files', 'paths.target_segy_files'],
+	)
 
 	paths = require_dict(cfg, 'paths')
 	ds_cfg = require_dict(cfg, 'dataset')
@@ -355,6 +254,7 @@ def load_infer_config(config_path: str | Path) -> PairInferConfig:
 	use_tqdm = optional_bool(tile_cfg, 'use_tqdm', default=False)
 
 	out_dir = optional_str(vis_cfg, 'out_dir', './_pair_vis')
+	out_dir = resolve_relpath(base_dir, out_dir)
 	n = require_int(vis_cfg, 'n')
 	cmap = optional_str(vis_cfg, 'cmap', 'seismic')
 	vmin = optional_float(vis_cfg, 'vmin', -3.0)
@@ -368,7 +268,7 @@ def load_infer_config(config_path: str | Path) -> PairInferConfig:
 	dpi = optional_int(vis_cfg, 'dpi', 300)
 
 	return PairInferConfig(
-		paths=_load_paths(paths),
+		paths=_load_paths(paths, base_dir=base_dir),
 		dataset=_load_dataset_cfg(ds_cfg),
 		infer=PairInferCfg(
 			batch_size=int(infer_batch_size),
