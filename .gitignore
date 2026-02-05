@@ -47,3 +47,7 @@ debug_*/
 
 workflow/
 code_snippet/
+!tests/
+!tests/data
+!tests/data/*sgy
+!tests/data/*segy
