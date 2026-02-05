@@ -6,7 +6,7 @@ paths:
   out_dir: ./_blindtrace_out
 
 dataset:
-  primary_keys: [ffid]
+  primary_keys: [ffid,chno,cmp]
   max_trials: 2048
   use_header_cache: true
   verbose: true
@@ -71,7 +71,7 @@ vis:
   dpi: 300
 
 model:
-  backbone: resnet18
+  backbone: edgenext_small.usi_in1k #edgenext
   pretrained: true
 
 ckpt:
