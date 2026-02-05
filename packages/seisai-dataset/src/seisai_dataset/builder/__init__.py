@@ -6,6 +6,7 @@ from .builder import (
 	MakeOffsetChannel,
 	MakeTimeChannel,
 	MaskedSignal,
+	PhasePSNMap,
 	SelectStack,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
 	'MakeOffsetChannel',
 	'MakeTimeChannel',
 	'MaskedSignal',
+	'PhasePSNMap',
 	'SelectStack',
 ]
