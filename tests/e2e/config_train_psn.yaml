@@ -1,0 +1,38 @@
+paths:
+  segy_files:
+    - ../data/20200623002546.sgy
+  phase_pick_files:
+    - ../data/20200623002546_phase_picks.npz
+
+dataset:
+  max_trials: 2048
+  use_header_cache: true
+  verbose: true
+  primary_keys: [ffid]
+  include_empty_gathers: false
+  valid: false
+
+train:
+  batch_size: 4
+  epochs: 1
+  lr: 1.0e-4
+  subset_traces: 128
+  time_len: 6016
+  samples_per_epoch: 4
+  psn_sigma: 1.5
+  use_amp: true
+  max_norm: 1.0
+  num_workers: 0
+
+transform:
+  target_len: 6016
+  standardize_eps: 1.0e-8
+
+vis:
+  out_dir: ./_psn_vis
+
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 1
+  out_chans: 3
