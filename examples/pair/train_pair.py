@@ -15,11 +15,12 @@ def main(argv: list[str] | None = None) -> None:
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
 	parser.add_argument('--ckpt_out', default=None)
-	args, _unknown = parser.parse_known_args(argv)
+	args, unknown = parser.parse_known_args(argv)
 
 	pipeline_args = ['--config', str(args.config)]
 	if args.ckpt_out is not None:
 		pipeline_args += ['--ckpt_out', str(args.ckpt_out)]
+	pipeline_args += unknown
 
 	pipeline_main(argv=pipeline_args)
 
