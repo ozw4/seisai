@@ -219,14 +219,14 @@ def build_file_info(
 	- インデックスマップ({値→行インデックス配列})を安定ソートで構築
 	- mmap を開いた segyio オブジェクトを保持(caller が close() を呼ぶこと)
 	- include_centroids=True の場合、座標が読めたときのみキーごとのセントロイドを付与
-	  (座標が欠落/不一致なら警告を出して None を格納)
+	(座標が欠落/不一致なら警告を出して None を格納)
 
 	Returns (dict):
-	  path, mmap, segy_obj, dt_sec, n_traces, n_samples,
-	  ffid_values/chno_values/cmp_values,
-	  ffid_key_to_indices/chno_key_to_indices/cmp_key_to_indices,
-	  ffid_unique_keys/chno_unique_keys/cmp_unique_keys,
-	  offsets, ffid_centroids/chno_centroids(任意)
+	path, mmap, segy_obj, dt_sec, n_traces, n_samples,
+	ffid_values/chno_values/cmp_values,
+	ffid_key_to_indices/chno_key_to_indices/cmp_key_to_indices,
+	ffid_unique_keys/chno_unique_keys/cmp_unique_keys,
+	offsets, ffid_centroids/chno_centroids(任意)
 	"""
 	segy_path = str(segy_path)
 	if not Path(segy_path).exists():
@@ -287,12 +287,18 @@ def build_file_info(
 				f.attributes(segyio.TraceField.SourceGroupScalar)[:], dtype=np.float64
 			)
 			# SEG-Y の SourceGroupScalar: 負値は分母(1/|scal|)
-			scal_eff = np.where(
-				scal == 0.0, 1.0, np.where(scal > 0.0, scal, 1.0 / np.abs(scal))
-			)
+			scal_arr = np.asarray(scal, dtype=np.float64)
+			scal_eff = np.ones_like(scal_arr, dtype=np.float64)
+
+			pos = scal_arr > 0.0
+			neg = scal_arr < 0.0
+
+			scal_eff[pos] = scal_arr[pos]
+			scal_eff[neg] = 1.0 / np.abs(scal_arr[neg])
 
 			if scal_eff.size not in (1, srcx.size):
-				raise ValueError('SourceGroupScalar size mismatch')
+				msg = 'SourceGroupScalar size mismatch'
+				raise ValueError(msg)
 			if scal_eff.size == 1:
 				s = float(scal_eff.reshape(()))
 				srcx *= s

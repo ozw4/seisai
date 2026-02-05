@@ -44,6 +44,8 @@ debug_*/
 *.so
 *.o
 *.a
+*.pt
+*patch
 
 workflow/
 code_snippet/
