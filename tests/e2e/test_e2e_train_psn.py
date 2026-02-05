@@ -13,6 +13,7 @@ def _repo_root() -> Path:
 	return Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.e2e
 def _run_e2e(*, out_dir: Path) -> Path:
 	repo_root = _repo_root()
 	cfg = repo_root / 'tests' / 'e2e' / 'config_train_psn.yaml'

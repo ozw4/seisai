@@ -40,4 +40,4 @@ jobs:
       - name: Run tests
         env:
           MPLBACKEND: Agg
-        run: pytest -q
+        run: pytest -mq "not e2e"

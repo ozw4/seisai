@@ -4,3 +4,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.workspace]
 members = ["packages/*"]
+
+[pytest]
+markers = [
+  "e2e: end-to-end tests (slow, needs env)",
+]
