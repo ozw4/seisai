@@ -5,14 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from seisai_engine.infer.runner import TiledHConfig
-from seisai_engine.pipelines.common.config_io import (
-	load_config,
-	resolve_cfg_paths,
-	resolve_relpath,
-)
-from seisai_engine.pipelines.common.seed import seed_all
-from seisai_engine.train_loop import train_one_epoch
 from seisai_utils.config import (
 	optional_bool,
 	optional_float,
@@ -26,7 +18,21 @@ from seisai_utils.config import (
 )
 from torch.utils.data import DataLoader, Subset, get_worker_info
 
-from .build_dataset import build_dataset, build_fbgate, build_transform, validate_primary_keys
+from seisai_engine.infer.runner import TiledHConfig
+from seisai_engine.pipelines.common.config_io import (
+	load_config,
+	resolve_cfg_paths,
+	resolve_relpath,
+)
+from seisai_engine.pipelines.common.seed import seed_all
+from seisai_engine.train_loop import train_one_epoch
+
+from .build_dataset import (
+	build_dataset,
+	build_fbgate,
+	build_transform,
+	validate_primary_keys,
+)
 from .build_model import build_model
 from .build_plan import build_plan
 from .infer import run_infer_epoch
@@ -53,7 +59,7 @@ def _validate_mask_ratio_for_subset(
 def main(argv: list[str] | None = None) -> None:
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
-	args = parser.parse_args(argv)
+	args, _unknown = parser.parse_known_args(argv)
 
 	cfg = load_config(args.config)
 
