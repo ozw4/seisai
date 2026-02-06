@@ -1,0 +1,81 @@
+paths:
+  segy_files:
+    - ../data/20200623002546.sgy
+  fb_files:
+    - ../data/20200623002546_fb_dummy.npy
+  out_dir: ./_blindtrace_out
+
+dataset:
+  primary_keys: [ffid]
+  max_trials: 32
+  use_header_cache: true
+  verbose: false
+
+transform:
+  time_len: 6000
+  per_trace_standardize: true
+
+fbgate:
+  apply_on: "off"
+  min_pick_ratio: 0.0
+
+mask:
+  ratio: 0.5
+  mode: replace
+  noise_std: 1.0
+
+input:
+  use_offset_ch: false
+  offset_normalize: true
+  use_time_ch: false
+
+train:
+  seed: 42
+  loss_kind: l1
+  shift_max: 5
+  loss_scope: masked_only
+  time_len: 6000
+  batch_size: 1
+  num_workers: 0
+  amp: false
+  max_norm: 1.0
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  epochs: 1
+  samples_per_epoch: 4
+  subset_traces: 32
+
+infer:
+  seed: 43
+  batch_size: 1
+  num_workers: 0
+  max_batches: 1
+  subset_traces: 32
+
+tile:
+  tile_h: 16
+  overlap_h: 8
+  tiles_per_batch: 4
+  amp: false
+  use_tqdm: false
+
+vis:
+  n: 1
+  out_subdir: vis
+  cmap: seismic
+  vmin: -3
+  vmax: 3
+  transpose_for_trace_time: true
+  per_trace_norm: true
+  per_trace_eps: 1.0e-8
+  figsize: [8.0, 6.0]
+  dpi: 120
+
+model:
+  backbone: resnet18
+  pretrained: false
+
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min

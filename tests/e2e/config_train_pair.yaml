@@ -1,0 +1,58 @@
+paths:
+  input_segy_files:
+    - ../data/20200623002546.sgy
+  target_segy_files:
+    - ../data/20200623002546.sgy
+  out_dir: ./_pair_out
+
+dataset:
+  max_trials: 32
+  use_header_cache: true
+  verbose: false
+  primary_keys: [ffid]
+  secondary_key_fixed: false
+
+train:
+  batch_size: 1
+  epochs: 1
+  lr: 1.0e-4
+  subset_traces: 32
+  time_len: 6000
+  samples_per_epoch: 4
+  loss_kind: l1
+  seed: 42
+  use_amp: false
+  max_norm: 1.0
+  num_workers: 0
+
+infer:
+  batch_size: 1
+  max_batches: 1
+  subset_traces: 32
+  seed: 43
+  num_workers: 0
+
+tile:
+  tile_h: 16
+  overlap_h: 8
+  tiles_per_batch: 4
+  amp: false
+  use_tqdm: false
+
+vis:
+  out_subdir: vis
+  n: 1
+  cmap: seismic
+  vmin: -3
+  vmax: 3
+  transpose_for_trace_time: true
+  per_trace_norm: true
+  per_trace_eps: 1.0e-8
+  figsize: [8.0, 6.0]
+  dpi: 120
+
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 1
+  out_chans: 1
