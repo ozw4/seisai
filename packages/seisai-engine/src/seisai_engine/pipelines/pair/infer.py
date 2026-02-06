@@ -9,18 +9,18 @@ from seisai_utils.viz_pair import PairTriptychVisConfig, save_pair_triptych_step
 from torch.utils.data import DataLoader, Subset
 
 from seisai_engine.infer.runner import TiledHConfig, infer_batch_tiled_h
+from seisai_engine.pipelines.common import load_checkpoint
 from seisai_engine.pipelines.common.config_io import resolve_relpath
 from seisai_engine.pipelines.common.seed import seed_all
 
 from .build_dataset import build_infer_transform, build_pair_dataset
 from .build_model import build_model
 from .build_plan import build_plan
-from .checkpoint import load_checkpoint
 from .config import load_infer_config
 
 __all__ = ['main', 'run_infer_epoch']
 
-DEFAULT_CONFIG_PATH = Path('examples/pair/config_train_pair.yaml')
+DEFAULT_CONFIG_PATH = Path('examples/config_train_pair.yaml')
 
 
 def _resolve_ckpt(*, base_dir: Path, override: str | None, fallback: str) -> str:
@@ -107,12 +107,12 @@ def main(argv: list[str] | None = None) -> None:
 	seed_all(cfg.infer.seed)
 
 	ckpt = load_checkpoint(ckpt_path)
-	if not isinstance(ckpt.get('model_cfg'), dict):
-		msg = 'checkpoint model_cfg must be dict'
-		raise ValueError(msg)
-	if ckpt['model_cfg'] != asdict(cfg.model):
-		msg = 'checkpoint model_cfg does not match config model'
-		raise ValueError(msg)
+	if ckpt['pipeline'] != 'pair':
+		raise ValueError('checkpoint pipeline must be "pair"')
+	if not isinstance(ckpt.get('model_sig'), dict):
+		raise ValueError('checkpoint model_sig must be dict')
+	if ckpt['model_sig'] != asdict(cfg.model):
+		raise ValueError('checkpoint model_sig does not match config model')
 
 	model = build_model(cfg.model)
 	model.load_state_dict(ckpt['model_state_dict'], strict=True)

@@ -122,6 +122,7 @@ def main(argv: list[str] | None = None) -> None:
 	infer_cfg = require_dict(cfg, 'infer')
 	vis_cfg = require_dict(cfg, 'vis')
 	ckpt_cfg = require_dict(cfg, 'ckpt')
+	model_cfg = require_dict(cfg, 'model')
 
 	out_dir_path = resolve_out_dir(cfg, base_dir)
 
@@ -161,6 +162,13 @@ def main(argv: list[str] | None = None) -> None:
 	if infer_max_batches <= 0:
 		raise ValueError('infer.max_batches must be positive')
 
+	model_sig = {
+		'backbone': str(optional_str(model_cfg, 'backbone', 'resnet18')),
+		'pretrained': bool(optional_bool(model_cfg, 'pretrained', default=False)),
+		'in_chans': int(optional_int(model_cfg, 'in_chans', 1)),
+		'out_chans': int(optional_int(model_cfg, 'out_chans', 3)),
+	}
+
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 	seed_all(seed_train)
 
@@ -173,6 +181,7 @@ def main(argv: list[str] | None = None) -> None:
 	ckpt_dir, vis_root = prepare_output_dirs(out_dir_path, vis_subdir)
 
 	best_infer_loss: float | None = None
+	global_step = 0
 
 	try:
 		for epoch in range(int(epochs)):
@@ -215,6 +224,7 @@ def main(argv: list[str] | None = None) -> None:
 				f'epoch={epoch} loss={stats["loss"]:.6f} steps={int(stats["steps"])} '
 				f'samples={int(stats["samples"])}'
 			)
+			global_step += int(stats['steps'])
 
 			set_dataset_rng(ds_infer_full, seed_infer)
 
@@ -248,7 +258,11 @@ def main(argv: list[str] | None = None) -> None:
 				infer_loss,
 				ckpt_path,
 				{
+					'version': 1,
+					'pipeline': 'psn',
 					'epoch': int(epoch),
+					'global_step': int(global_step),
+					'model_sig': model_sig,
 					'model_state_dict': model.state_dict(),
 					'optimizer_state_dict': optimizer.state_dict(),
 					'cfg': cfg,

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 from seisai_utils.config import load_config
+from seisai_engine.pipelines.common import load_checkpoint
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -52,3 +53,17 @@ def test_e2e_train_psn_one_epoch(tmp_path: Path) -> None:
 	assert png.stat().st_size > 0
 	assert ckpt.is_file()
 	assert ckpt.stat().st_size > 0
+	ckpt_dict = load_checkpoint(ckpt)
+	assert ckpt_dict['version'] == 1
+	assert ckpt_dict['pipeline'] == 'psn'
+	assert isinstance(ckpt_dict['model_sig'], dict)
+	assert isinstance(ckpt_dict['model_state_dict'], dict)
+	assert ckpt_dict['epoch'] == 0
+	assert ckpt_dict['global_step'] > 0
+	model_sig = ckpt_dict['model_sig']
+	for key in ('backbone', 'pretrained', 'in_chans', 'out_chans'):
+		assert key in model_sig
+	assert model_sig['backbone'] == 'resnet18'
+	assert model_sig['pretrained'] is False
+	assert model_sig['in_chans'] == 1
+	assert model_sig['out_chans'] == 3

@@ -1,3 +1,4 @@
+from .checkpoint_io import load_checkpoint, save_checkpoint
 from .config_io import load_config, resolve_relpath
 from .seed import seed_all
 from .skeleton_helpers import (
@@ -15,6 +16,7 @@ from .skeleton_helpers import (
 __all__ = [
 	'ensure_fixed_infer_num_workers',
 	'epoch_vis_dir',
+	'load_checkpoint',
 	'load_config',
 	'load_cfg_with_base_dir',
 	'make_train_worker_init_fn',
@@ -23,6 +25,7 @@ __all__ = [
 	'resolve_cfg_paths',
 	'resolve_relpath',
 	'resolve_out_dir',
+	'save_checkpoint',
 	'seed_all',
 	'set_dataset_rng',
 ]

@@ -195,6 +195,12 @@ def main(argv: list[str] | None = None) -> None:
 
 	in_chans = 1 + int(bool(use_offset_ch)) + int(bool(use_time_ch))
 	out_chans = 1
+	model_sig = {
+		'backbone': str(backbone),
+		'pretrained': bool(pretrained),
+		'in_chans': int(in_chans),
+		'out_chans': int(out_chans),
+	}
 
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 	seed_all(seed_train)
@@ -284,6 +290,7 @@ def main(argv: list[str] | None = None) -> None:
 	)
 
 	best_infer_loss: float | None = None
+	global_step = 0
 
 	try:
 		for epoch in range(int(epochs)):
@@ -325,6 +332,7 @@ def main(argv: list[str] | None = None) -> None:
 				f'epoch={epoch} train_loss={stats["loss"]:.6f} '
 				f'steps={int(stats["steps"])} samples={int(stats["samples"])}'
 			)
+			global_step += int(stats['steps'])
 
 			set_dataset_rng(ds_infer_full, seed_infer)
 
@@ -362,7 +370,11 @@ def main(argv: list[str] | None = None) -> None:
 				infer_loss,
 				ckpt_path,
 				{
+					'version': 1,
+					'pipeline': 'blindtrace',
 					'epoch': int(epoch),
+					'global_step': int(global_step),
+					'model_sig': model_sig,
 					'model_state_dict': model.state_dict(),
 					'optimizer_state_dict': optimizer.state_dict(),
 					'cfg': cfg,

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Literal
 
 import numpy as np
 import segyio
 import torch
-from torch.utils.data import Dataset
-
 from seisai_transforms import (
 	PerTraceStandardize,
 	ViewCompose,
@@ -15,12 +14,12 @@ from seisai_transforms import (
 	project_offsets_view,
 	project_time_view,
 )
+from torch.utils.data import Dataset
 
 from .builder.builder import BuildPlan, InputOnlyPlan
 from .config import LoaderConfig
 from .file_info import build_file_info
 from .trace_subset_preproc import TraceSubsetLoader
-
 
 DomainName = Literal['shot', 'recv', 'cmp']
 SecondarySortKey = Literal['ffid', 'chno', 'offset']
@@ -86,6 +85,7 @@ def collate_pad_w_right(batch: Sequence[dict]) -> tuple[torch.Tensor, list[dict]
 
 	Returns:
 		(x_bchw, metas)
+
 	"""
 	if len(batch) == 0:
 		raise ValueError('empty batch')
@@ -153,19 +153,24 @@ class InferenceGatherWindowsDataset(Dataset):
 		header_cache_dir: str | None = None,
 	) -> None:
 		if len(segy_files) == 0 or len(fb_files) == 0:
-			raise ValueError('segy_files / fb_files must be non-empty')
+			msg = 'segy_files / fb_files must be non-empty'
+			raise ValueError(msg)
 		if len(segy_files) != len(fb_files):
-			raise ValueError('segy_files and fb_files must have the same length')
+			msg = 'segy_files and fb_files must have the same length'
+			raise ValueError(msg)
 
 		self.segy_files = list(segy_files)
 		self.fb_files = list(fb_files)
 		self.cfg = cfg or InferenceGatherWindowsConfig()
 		if self.cfg.win_size_traces <= 0:
-			raise ValueError('win_size_traces must be positive')
+			msg = 'win_size_traces must be positive'
+			raise ValueError(msg)
 		if self.cfg.stride_traces <= 0:
-			raise ValueError('stride_traces must be positive')
+			msg = 'stride_traces must be positive'
+			raise ValueError(msg)
 		if self.cfg.target_len <= 0:
-			raise ValueError('target_len must be positive')
+			msg = 'target_len must be positive'
+			raise ValueError(msg)
 
 		sec_default: dict[DomainName, SecondarySortKey] = {
 			'shot': 'chno',
@@ -307,17 +312,21 @@ class InferenceGatherWindowsDataset(Dataset):
 		idx_win = idxs_sorted[s:e]
 		H0 = int(idx_win.size)
 		if H0 <= 0:
-			raise RuntimeError('empty window')
+			msg = 'empty window'
+			raise RuntimeError(msg)
 
 		x = self._subsetloader.load(info['mmap'], idx_win.astype(np.int64, copy=False))
 		if not isinstance(x, np.ndarray) or x.ndim != 2:
-			raise TypeError('TraceSubsetLoader must return 2D numpy array')
+			msg = 'TraceSubsetLoader must return 2D numpy array'
+			raise TypeError(msg)
 		H = int(x.shape[0])
 		W0 = int(x.shape[1])
-		if H != int(self.cfg.win_size_traces):
-			raise ValueError(f'loaded H {H} != win_size_traces {int(self.cfg.win_size_traces)}')
+		if int(self.cfg.win_size_traces) != H:
+			msg = f'loaded H {H} != win_size_traces {int(self.cfg.win_size_traces)}'
+			raise ValueError(msg)
 		if H0 > H:
-			raise ValueError(f'window size {H0} > loaded H {H}')
+			msg = f'window size {H0} > loaded H {H}'
+			raise ValueError(msg)
 
 		trace_valid = np.zeros(H, dtype=np.bool_)
 		trace_valid[:H0] = True
@@ -374,7 +383,9 @@ class InferenceGatherWindowsDataset(Dataset):
 		meta['file_path'] = str(info['path'])
 		meta['n_total'] = int(self.n_total)
 		meta['dt_sec'] = np.float32(info['dt_sec'])
-		meta['dt_eff_sec'] = np.float32(float(info['dt_sec']) / float(meta.get('factor', 1.0)))
+		meta['dt_eff_sec'] = np.float32(
+			float(info['dt_sec']) / float(meta.get('factor', 1.0))
+		)
 		meta['offsets_view'] = project_offsets_view(off, H, meta)
 		meta['fb_idx_view'] = project_fb_idx_view(fb, H, int(W), meta)
 		meta['time_view'] = project_time_view(t_raw, H, int(W), meta)
@@ -391,7 +402,9 @@ class InferenceGatherWindowsDataset(Dataset):
 		if not isinstance(x_in, torch.Tensor):
 			raise TypeError("sample['input'] must be torch.Tensor")
 		if x_in.ndim != 3:
-			raise ValueError(f"sample['input'] must be (C,H,W), got {tuple(x_in.shape)}")
+			raise ValueError(
+				f"sample['input'] must be (C,H,W), got {tuple(x_in.shape)}"
+			)
 		if int(x_in.shape[1]) != H or int(x_in.shape[2]) != int(W):
 			raise ValueError('input shape must match (H,W) of x_view')
 

@@ -9,6 +9,7 @@ import torch
 from seisai_utils.config import require_dict, require_value
 from torch.utils.data import Subset, get_worker_info
 
+from .checkpoint_io import save_checkpoint
 from .config_io import load_config, resolve_cfg_paths as _resolve_cfg_paths, resolve_relpath
 
 __all__ = [
@@ -127,6 +128,6 @@ def maybe_save_best_min(
 ) -> float:
 	current_val = float(current)
 	if best is None or current_val < float(best):
-		torch.save(payload, ckpt_path)
+		save_checkpoint(ckpt_path, payload)
 		return current_val
 	return float(best)

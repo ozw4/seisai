@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from pathlib import Path
 
 import torch
@@ -75,7 +76,7 @@ def main(argv: list[str] | None = None) -> None:
 	infer_cfg = require_dict(cfg, 'infer')
 	tile_cfg = require_dict(cfg, 'tile')
 	vis_cfg = require_dict(cfg, 'vis')
-	model_cfg = require_dict(cfg, 'model')
+	model_cfg_dict = require_dict(cfg, 'model')
 	ckpt_cfg = require_dict(cfg, 'ckpt')
 
 	input_segy_files = require_list_str(paths, 'input_segy_files')
@@ -132,10 +133,10 @@ def main(argv: list[str] | None = None) -> None:
 	figsize = optional_tuple2_float(vis_cfg, 'figsize', (20.0, 15.0))
 	dpi = optional_int(vis_cfg, 'dpi', 300)
 
-	backbone = optional_str(model_cfg, 'backbone', 'resnet18')
-	pretrained = optional_bool(model_cfg, 'pretrained', default=False)
-	in_chans = optional_int(model_cfg, 'in_chans', 1)
-	out_chans = optional_int(model_cfg, 'out_chans', 1)
+	backbone = optional_str(model_cfg_dict, 'backbone', 'resnet18')
+	pretrained = optional_bool(model_cfg_dict, 'pretrained', default=False)
+	in_chans = optional_int(model_cfg_dict, 'in_chans', 1)
+	out_chans = optional_int(model_cfg_dict, 'out_chans', 1)
 
 	ckpt_best_only = optional_bool(ckpt_cfg, 'save_best_only', default=True)
 	ckpt_metric = optional_str(ckpt_cfg, 'metric', 'infer_loss')
@@ -202,6 +203,7 @@ def main(argv: list[str] | None = None) -> None:
 		in_chans=int(in_chans),
 		out_chans=int(out_chans),
 	)
+	model_sig = asdict(model_cfg)
 	model = build_model(model_cfg).to(device)
 
 	optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr))
@@ -228,6 +230,7 @@ def main(argv: list[str] | None = None) -> None:
 	)
 
 	best_infer_loss: float | None = None
+	global_step = 0
 
 	try:
 		for epoch in range(int(epochs)):
@@ -270,6 +273,7 @@ def main(argv: list[str] | None = None) -> None:
 				f'epoch={epoch} loss={stats["loss"]:.6f} steps={int(stats["steps"])} '
 				f'samples={int(stats["samples"])}'
 			)
+			global_step += int(stats['steps'])
 
 			set_dataset_rng(ds_infer_full, seed_infer)
 
@@ -306,7 +310,11 @@ def main(argv: list[str] | None = None) -> None:
 				infer_loss,
 				ckpt_path,
 				{
+					'version': 1,
+					'pipeline': 'pair',
 					'epoch': int(epoch),
+					'global_step': int(global_step),
+					'model_sig': model_sig,
 					'model_state_dict': model.state_dict(),
 					'optimizer_state_dict': optimizer.state_dict(),
 					'cfg': cfg,
