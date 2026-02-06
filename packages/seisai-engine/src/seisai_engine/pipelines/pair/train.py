@@ -126,7 +126,12 @@ def main(argv: list[str] | None = None) -> None:
 	)
 
 	infer_epoch_fn = (
-		lambda model, loader, device, vis_epoch_dir, vis_n, max_batches: run_infer_epoch(
+		lambda model,
+		loader,
+		device,
+		vis_epoch_dir,
+		vis_n,
+		max_batches: run_infer_epoch(
 			model=model,
 			loader=loader,
 			device=device,

@@ -11,12 +11,12 @@ from seisai_utils.viz_phase import make_title_from_batch_meta, save_psn_debug_pn
 from torch.utils.data import DataLoader
 
 from seisai_engine.pipelines.common import (
+	TrainSkeletonSpec,
 	load_cfg_with_base_dir,
 	resolve_cfg_paths,
 	resolve_out_dir,
-	seed_all,
-	TrainSkeletonSpec,
 	run_train_skeleton,
+	seed_all,
 )
 
 from .build_dataset import build_dataset
@@ -131,7 +131,12 @@ def main(argv: list[str] | None = None) -> None:
 	optimizer = torch.optim.AdamW(model.parameters(), lr=float(typed.train.lr))
 
 	infer_epoch_fn = (
-		lambda model, loader, device, vis_epoch_dir, vis_n, max_batches: _run_infer_epoch(
+		lambda model,
+		loader,
+		device,
+		vis_epoch_dir,
+		vis_n,
+		max_batches: _run_infer_epoch(
 			model=model,
 			loader=loader,
 			device=device,

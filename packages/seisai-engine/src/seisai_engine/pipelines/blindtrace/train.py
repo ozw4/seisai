@@ -10,8 +10,8 @@ from seisai_utils.config import (
 	optional_int,
 	optional_str,
 	optional_tuple2_float,
-	require_dict,
 	require_bool,
+	require_dict,
 	require_float,
 	require_int,
 	require_list_str,
@@ -19,12 +19,12 @@ from seisai_utils.config import (
 
 from seisai_engine.infer.runner import TiledHConfig
 from seisai_engine.pipelines.common import (
+	TrainSkeletonSpec,
 	load_cfg_with_base_dir,
 	resolve_cfg_paths,
 	resolve_out_dir,
-	seed_all,
-	TrainSkeletonSpec,
 	run_train_skeleton,
+	seed_all,
 )
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 
@@ -282,7 +282,12 @@ def main(argv: list[str] | None = None) -> None:
 	)
 
 	infer_epoch_fn = (
-		lambda model, loader, device, vis_epoch_dir, vis_n, max_batches: run_infer_epoch(
+		lambda model,
+		loader,
+		device,
+		vis_epoch_dir,
+		vis_n,
+		max_batches: run_infer_epoch(
 			model=model,
 			loader=loader,
 			device=device,
