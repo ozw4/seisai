@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import numpy as np
 import torch
 from seisai_utils.config import (
 	optional_bool,
@@ -16,15 +15,21 @@ from seisai_utils.config import (
 	require_int,
 	require_list_str,
 )
-from torch.utils.data import DataLoader, Subset, get_worker_info
+from torch.utils.data import DataLoader, Subset
 
 from seisai_engine.infer.runner import TiledHConfig
-from seisai_engine.pipelines.common.config_io import (
-	load_config,
+from seisai_engine.pipelines.common import (
+	ensure_fixed_infer_num_workers,
+	epoch_vis_dir,
+	load_cfg_with_base_dir,
+	make_train_worker_init_fn,
+	maybe_save_best_min,
+	prepare_output_dirs,
 	resolve_cfg_paths,
-	resolve_relpath,
+	resolve_out_dir,
+	seed_all,
+	set_dataset_rng,
 )
-from seisai_engine.pipelines.common.seed import seed_all
 from seisai_engine.train_loop import train_one_epoch
 
 from .build_dataset import (
@@ -61,9 +66,7 @@ def main(argv: list[str] | None = None) -> None:
 	parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
 	args, _unknown = parser.parse_known_args(argv)
 
-	cfg = load_config(args.config)
-
-	base_dir = Path(args.config).expanduser().resolve().parent
+	cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
 	resolve_cfg_paths(
 		cfg,
 		base_dir,
@@ -85,8 +88,7 @@ def main(argv: list[str] | None = None) -> None:
 
 	segy_files = require_list_str(paths, 'segy_files')
 	fb_files = require_list_str(paths, 'fb_files')
-	out_dir = optional_str(paths, 'out_dir', './_blindtrace_out')
-	out_dir = resolve_relpath(base_dir, out_dir)
+	out_dir_path = resolve_out_dir(cfg, base_dir)
 
 	max_trials = optional_int(ds_cfg, 'max_trials', 2048)
 	use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)
@@ -133,12 +135,7 @@ def main(argv: list[str] | None = None) -> None:
 	infer_max_batches = require_int(infer_cfg, 'max_batches')
 	infer_subset_traces = require_int(infer_cfg, 'subset_traces')
 
-	if int(infer_num_workers) != 0:
-		msg = (
-			'infer.num_workers must be 0 to keep fixed inference samples '
-			'(set infer.num_workers: 0)'
-		)
-		raise ValueError(msg)
+	ensure_fixed_infer_num_workers(infer_num_workers)
 	tile_h = require_int(tile_cfg, 'tile_h')
 	overlap_h = require_int(tile_cfg, 'overlap_h')
 	tiles_per_batch = require_int(tile_cfg, 'tiles_per_batch')
@@ -265,10 +262,7 @@ def main(argv: list[str] | None = None) -> None:
 		weight_decay=float(weight_decay),
 	)
 
-	out_dir_path = Path(out_dir)
-	out_dir_path.mkdir(parents=True, exist_ok=True)
-	ckpt_dir = out_dir_path / 'ckpt'
-	ckpt_dir.mkdir(parents=True, exist_ok=True)
+	ckpt_dir, vis_root = prepare_output_dirs(out_dir_path, vis_subdir)
 
 	tiled_cfg = TiledHConfig(
 		tile_h=int(tile_h),
@@ -296,25 +290,10 @@ def main(argv: list[str] | None = None) -> None:
 			seed_epoch = int(seed_train) + int(epoch)
 
 			if int(train_num_workers) == 0:
-				ds_train_full._rng = np.random.default_rng(seed_epoch)
+				set_dataset_rng(ds_train_full, seed_epoch)
 				train_worker_init_fn = None
 			else:
-
-				def _train_worker_init_fn(worker_id: int) -> None:
-					info = get_worker_info()
-					if info is None:
-						msg = 'get_worker_info() returned None in worker'
-						raise RuntimeError(msg)
-
-					ds = info.dataset
-					base = ds.dataset if isinstance(ds, Subset) else ds
-					seed_worker = int(seed_epoch) + int(worker_id) * 1000
-
-					base._rng = np.random.default_rng(seed_worker)
-					np.random.seed(seed_worker)
-					torch.manual_seed(seed_worker)
-
-				train_worker_init_fn = _train_worker_init_fn
+				train_worker_init_fn = make_train_worker_init_fn(seed_epoch)
 
 			train_ds = Subset(ds_train_full, range(int(samples_per_epoch)))
 			train_loader = DataLoader(
@@ -347,7 +326,7 @@ def main(argv: list[str] | None = None) -> None:
 				f'steps={int(stats["steps"])} samples={int(stats["samples"])}'
 			)
 
-			ds_infer_full._rng = np.random.default_rng(int(seed_infer))
+			set_dataset_rng(ds_infer_full, seed_infer)
 
 			infer_ds = Subset(
 				ds_infer_full, range(int(infer_batch_size * infer_max_batches))
@@ -360,8 +339,7 @@ def main(argv: list[str] | None = None) -> None:
 				pin_memory=(device.type == 'cuda'),
 			)
 
-			vis_epoch_dir = out_dir_path / str(vis_subdir) / f'epoch_{epoch:04d}'
-			vis_epoch_dir.mkdir(parents=True, exist_ok=True)
+			vis_epoch_dir = epoch_vis_dir(vis_root, epoch)
 
 			model.eval()
 
@@ -378,19 +356,18 @@ def main(argv: list[str] | None = None) -> None:
 			)
 			print(f'epoch={epoch} infer_loss={infer_loss:.6f}')
 
-			is_best = best_infer_loss is None or infer_loss < best_infer_loss
-			if is_best:
-				best_infer_loss = float(infer_loss)
-				ckpt_path = ckpt_dir / 'best.pt'
-				torch.save(
-					{
-						'epoch': int(epoch),
-						'model_state_dict': model.state_dict(),
-						'optimizer_state_dict': optimizer.state_dict(),
-						'cfg': cfg,
-					},
-					ckpt_path,
-				)
+			ckpt_path = ckpt_dir / 'best.pt'
+			best_infer_loss = maybe_save_best_min(
+				best_infer_loss,
+				infer_loss,
+				ckpt_path,
+				{
+					'epoch': int(epoch),
+					'model_state_dict': model.state_dict(),
+					'optimizer_state_dict': optimizer.state_dict(),
+					'cfg': cfg,
+				},
+			)
 	finally:
 		ds_train_full.close()
 		ds_infer_full.close()

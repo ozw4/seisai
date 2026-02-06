@@ -51,7 +51,7 @@ def _run_e2e(*, out_dir: Path) -> tuple[Path, Path]:
 
 	m.main(argv=['--config', str(cfg_tmp)])
 
-	png = out_dir / 'vis' / 'epoch_0000' / 'step_0000.png'
+	png = out_dir / 'vis' / 'epoch_0000' / 'pair_triptych_step0000.png'
 	ckpt = out_dir / 'ckpt' / 'best.pt'
 	return png, ckpt
 
