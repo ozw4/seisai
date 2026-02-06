@@ -18,7 +18,7 @@ from .build_plan import build_plan
 from .checkpoint import load_checkpoint
 from .config import load_infer_config
 
-__all__ = ['main']
+__all__ = ['main', 'run_infer_epoch']
 
 DEFAULT_CONFIG_PATH = Path('examples/pair/config_train_pair.yaml')
 
@@ -27,6 +27,66 @@ def _resolve_ckpt(*, base_dir: Path, override: str | None, fallback: str) -> str
 	if override is None:
 		return fallback
 	return resolve_relpath(base_dir, override)
+
+
+def run_infer_epoch(
+	*,
+	model: torch.nn.Module,
+	loader: DataLoader,
+	device: torch.device,
+	criterion,
+	tiled_cfg: TiledHConfig,
+	vis_cfg: PairTriptychVisConfig,
+	vis_out_dir: str,
+	vis_n: int,
+	max_batches: int,
+) -> float:
+	non_blocking = bool(device.type == 'cuda')
+	infer_loss_sum = 0.0
+	infer_samples = 0
+
+	Path(vis_out_dir).mkdir(parents=True, exist_ok=True)
+
+	with torch.no_grad():
+		for step, batch in enumerate(loader):
+			if step >= int(max_batches):
+				break
+
+			batch_dev = {
+				k: (
+					v.to(device=device, non_blocking=non_blocking)
+					if torch.is_tensor(v)
+					else v
+				)
+				for k, v in batch.items()
+			}
+			x_in = batch_dev['input']
+			x_tg = batch_dev['target']
+
+			x_pr = infer_batch_tiled_h(model, x_in, cfg=tiled_cfg)
+			loss = criterion(x_pr, x_tg, batch_dev)
+
+			bsize = int(x_in.shape[0])
+			infer_loss_sum += float(loss.detach().item()) * bsize
+			infer_samples += bsize
+
+			if step < int(vis_n):
+				save_pair_triptych_step_png(
+					vis_out_dir,
+					step=step,
+					x_in_bchw=x_in.detach().cpu(),
+					x_tg_bchw=x_tg.detach().cpu(),
+					x_pr_bchw=x_pr.detach().cpu(),
+					cfg=vis_cfg,
+					batch=batch,
+					prefix='step_',
+				)
+
+	if infer_samples <= 0:
+		msg = 'no inference samples were processed'
+		raise RuntimeError(msg)
+
+	return infer_loss_sum / float(infer_samples)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -38,8 +98,9 @@ def main(argv: list[str] | None = None) -> None:
 
 	cfg = load_infer_config(args.config)
 	base_dir = Path(args.config).expanduser().resolve().parent
+	default_ckpt = str(Path(cfg.paths.out_dir) / 'ckpt' / 'best.pt')
 	ckpt_path = _resolve_ckpt(
-		base_dir=base_dir, override=args.ckpt, fallback=cfg.paths.ckpt_path
+		base_dir=base_dir, override=args.ckpt, fallback=default_ckpt
 	)
 
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -82,7 +143,8 @@ def main(argv: list[str] | None = None) -> None:
 			pin_memory=(device.type == 'cuda'),
 		)
 
-		Path(cfg.vis.out_dir).mkdir(parents=True, exist_ok=True)
+		vis_out_dir = Path(cfg.paths.out_dir) / cfg.vis.out_subdir
+		vis_out_dir.mkdir(parents=True, exist_ok=True)
 
 		tiled_cfg = TiledHConfig(
 			tile_h=cfg.tile.tile_h,
@@ -114,7 +176,7 @@ def main(argv: list[str] | None = None) -> None:
 
 				if step < cfg.vis.n:
 					save_pair_triptych_step_png(
-						cfg.vis.out_dir,
+						str(vis_out_dir),
 						step=step,
 						x_in_bchw=x_in.detach().cpu(),
 						x_tg_bchw=x_tg.detach().cpu(),
@@ -125,7 +187,7 @@ def main(argv: list[str] | None = None) -> None:
 	finally:
 		ds_infer_full.close()
 
-	print(f'completed inference. outputs: {cfg.vis.out_dir}')
+	print(f'completed inference. outputs: {vis_out_dir}')
 
 
 if __name__ == '__main__':

@@ -65,3 +65,8 @@ model:
   pretrained: true
   in_chans: 1
   out_chans: 1
+
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min
