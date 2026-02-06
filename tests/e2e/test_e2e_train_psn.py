@@ -39,7 +39,7 @@ def _run_e2e(*, out_dir: Path) -> Path:
 
 	m.main(argv=['--config', str(cfg_tmp)])
 
-	return out_dir / 'vis' / 'epoch_0000' / 'step_0000.png'
+	return out_dir / '_psn_vis' / 'psn_debug_epoch0000.png'
 
 
 @pytest.mark.e2e

@@ -27,6 +27,7 @@ train:
   num_workers: 0
 
 transform:
+  target_len: 6016
   standardize_eps: 1.0e-8
 
 vis:
