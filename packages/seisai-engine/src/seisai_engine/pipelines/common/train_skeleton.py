@@ -53,27 +53,33 @@ class TrainSkeletonSpec:
 
 
 def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
+	if not callable(getattr(spec.ds_train_full, 'close', None)):
+		raise TypeError('ds_train_full must provide a callable close()')
+	if not callable(getattr(spec.ds_infer_full, 'close', None)):
+		raise TypeError('ds_infer_full must provide a callable close()')
+
 	ckpt_dir, vis_root = prepare_output_dirs(spec.out_dir, spec.vis_subdir)
+	ensure_fixed_infer_num_workers(spec.infer_num_workers)
 
 	best_infer_loss: float | None = None
 	global_step = 0
 
 	try:
-		for epoch in range(int(spec.epochs)):
-			seed_epoch = int(spec.seed_train) + int(epoch)
+		for epoch in range(spec.epochs):
+			seed_epoch = spec.seed_train + epoch
 
-			if int(spec.train_num_workers) == 0:
+			if spec.train_num_workers == 0:
 				set_dataset_rng(spec.ds_train_full, seed_epoch)
 				train_worker_init_fn = None
 			else:
 				train_worker_init_fn = make_train_worker_init_fn(seed_epoch)
 
-			train_ds = Subset(spec.ds_train_full, range(int(spec.samples_per_epoch)))
+			train_ds = Subset(spec.ds_train_full, range(spec.samples_per_epoch))
 			train_loader = DataLoader(
 				train_ds,
-				batch_size=int(spec.train_batch_size),
+				batch_size=spec.train_batch_size,
 				shuffle=False,
-				num_workers=int(spec.train_num_workers),
+				num_workers=spec.train_num_workers,
 				pin_memory=(spec.device.type == 'cuda'),
 				worker_init_fn=train_worker_init_fn,
 			)
@@ -87,12 +93,12 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
 				device=spec.device,
 				lr_scheduler=None,
 				gradient_accumulation_steps=1,
-				max_norm=float(spec.max_norm),
-				use_amp=bool(spec.use_amp_train),
+				max_norm=spec.max_norm,
+				use_amp=spec.use_amp_train,
 				scaler=None,
 				ema=None,
 				step_offset=0,
-				print_freq=int(spec.print_freq),
+				print_freq=spec.print_freq,
 				on_step=None,
 			)
 			print(
@@ -102,15 +108,14 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
 			global_step += int(stats['steps'])
 
 			set_dataset_rng(spec.ds_infer_full, spec.seed_infer)
-			ensure_fixed_infer_num_workers(spec.infer_num_workers)
 
 			infer_ds = Subset(
 				spec.ds_infer_full,
-				range(int(spec.infer_batch_size * spec.infer_max_batches)),
+				range(spec.infer_batch_size * spec.infer_max_batches),
 			)
 			infer_loader = DataLoader(
 				infer_ds,
-				batch_size=int(spec.infer_batch_size),
+				batch_size=spec.infer_batch_size,
 				shuffle=False,
 				num_workers=0,
 				pin_memory=(spec.device.type == 'cuda'),
@@ -124,8 +129,8 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
 				infer_loader,
 				spec.device,
 				vis_epoch_dir,
-				int(spec.vis_n),
-				int(spec.infer_max_batches),
+				spec.vis_n,
+				spec.infer_max_batches,
 			)
 			print(f'epoch={epoch} infer_loss={infer_loss:.6f}')
 
