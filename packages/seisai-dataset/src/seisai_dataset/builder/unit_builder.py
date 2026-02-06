@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+from seisai_transforms.masking import MaskGenerator
+
 # 既存の operator / stack / plan は流用
 from .builder import (
 	FBGaussMap,
@@ -40,15 +42,16 @@ class RegItem:
 	factory: Callable[[dict[str, Any]], tuple[Callable, str]]
 
 
-def _need(ctx: dict[str, Any], name: str):
-	if name not in ctx or ctx[name] is None:
-		raise ValueError(f"ctx['{name}'] is required for this tag.")
-	return ctx[name]
+def _require_masker(ctx: dict[str, Any]) -> MaskGenerator:
+	masker = ctx.get('masker')
+	if masker is None:
+		_raise_missing_masker()
+	return masker
 
 
 def make_registry(ctx: dict[str, Any] | None = None) -> dict[str, RegItem]:
 	"""タグ→レシピのレジストリ。ctx には依存物を入れる(例: masker, fb_sigma, offset_normalize)。"""
-	{} if ctx is None else dict(ctx)
+	ctx = {} if ctx is None else dict(ctx)
 	reg: dict[str, RegItem] = {}
 
 	# 波形系
@@ -60,7 +63,7 @@ def make_registry(ctx: dict[str, Any] | None = None) -> dict[str, RegItem]:
 	)
 	reg['masked'] = RegItem(
 		factory=lambda c: (
-			MaskedSignal(_need(c, 'masker'), src='x_view', dst='x_masked'),
+			MaskedSignal(_require_masker(c), src='x_view', dst='x_masked'),
 			'x_masked',
 		)
 	)
@@ -94,6 +97,10 @@ def make_registry(ctx: dict[str, Any] | None = None) -> dict[str, RegItem]:
 	)
 
 	return reg
+
+
+def _raise_missing_masker() -> None:
+	raise ValueError("unit 'masked' requires ctx['masker'] (MaskGenerator)")
 
 
 # ---------------- ビルダー本体 ----------------
