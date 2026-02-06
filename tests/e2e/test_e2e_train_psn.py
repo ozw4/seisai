@@ -4,6 +4,8 @@ import warnings
 from pathlib import Path
 
 import pytest
+import yaml
+from seisai_utils.config import load_config
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -22,14 +24,27 @@ def _run_e2e(*, out_dir: Path) -> Path:
 
 	import examples.example_train_psn as m
 
-	m.main(argv=['--config', str(cfg), '--vis_out_dir', str(out_dir)])
+	cfg_data = load_config(cfg)
+	base_dir = cfg.parent
+	cfg_data['paths']['segy_files'] = [
+		str((base_dir / p).resolve()) for p in cfg_data['paths']['segy_files']
+	]
+	cfg_data['paths']['phase_pick_files'] = [
+		str((base_dir / p).resolve()) for p in cfg_data['paths']['phase_pick_files']
+	]
+	cfg_data['paths']['out_dir'] = str(out_dir)
+	out_dir.mkdir(parents=True, exist_ok=True)
+	cfg_tmp = out_dir / 'config_train_psn.yaml'
+	cfg_tmp.write_text(yaml.safe_dump(cfg_data, sort_keys=False))
 
-	return out_dir / 'psn_debug_epoch0000.png'
+	m.main(argv=['--config', str(cfg_tmp)])
+
+	return out_dir / 'vis' / 'epoch_0000' / 'step_0000.png'
 
 
 @pytest.mark.integration
 def test_e2e_train_psn_one_epoch(tmp_path: Path) -> None:
-	out_dir = tmp_path / '_psn_vis'
+	out_dir = tmp_path / '_psn_out'
 	png = _run_e2e(out_dir=out_dir)
 	assert png.is_file()
 	assert png.stat().st_size > 0

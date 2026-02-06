@@ -34,6 +34,7 @@ train:
   loss_kind: shift_robust_mse
   shift_max: 5
   loss_scope: masked_only # masked_only | all
+  time_len: 5024
   batch_size: 8
   num_workers: 0
   amp: true

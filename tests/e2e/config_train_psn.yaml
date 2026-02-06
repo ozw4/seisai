@@ -3,6 +3,7 @@ paths:
     - ../data/20200623002546.sgy
   phase_pick_files:
     - ../data/20200623002546_phase_picks.npz
+  out_dir: ./_psn_out
 
 dataset:
   max_trials: 2048
@@ -10,7 +11,7 @@ dataset:
   verbose: true
   primary_keys: [ffid]
   include_empty_gathers: false
-  valid: false
+  secondary_key_fixed: false
 
 train:
   batch_size: 4
@@ -20,16 +21,24 @@ train:
   time_len: 6016
   samples_per_epoch: 4
   psn_sigma: 1.5
+  seed: 42
   use_amp: true
   max_norm: 1.0
   num_workers: 0
 
 transform:
-  target_len: 6016
   standardize_eps: 1.0e-8
 
 vis:
-  out_dir: ./_psn_vis
+  out_subdir: vis
+  n: 1
+
+infer:
+  batch_size: 1
+  max_batches: 2
+  subset_traces: 128
+  seed: 43
+  num_workers: 0
 
 model:
   backbone: resnet18
