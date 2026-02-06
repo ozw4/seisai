@@ -10,7 +10,7 @@ from seisai_utils.config import require_dict, require_value
 from torch.utils.data import Subset, get_worker_info
 
 from .checkpoint_io import save_checkpoint
-from .config_io import load_config, resolve_cfg_paths as _resolve_cfg_paths, resolve_relpath
+from .config_io import load_config, resolve_cfg_paths, resolve_relpath
 
 __all__ = [
 	'load_cfg_with_base_dir',
@@ -38,10 +38,6 @@ def load_cfg_with_base_dir(cfg_path: Path) -> tuple[dict, Path]:
 
 	base_dir = cfg_path.parent
 	return cfg, base_dir
-
-
-def resolve_cfg_paths(cfg: dict, base_dir: Path, keys: list[str]) -> None:
-	_resolve_cfg_paths(cfg, base_dir, keys=keys)
 
 
 def resolve_out_dir(cfg: dict, base_dir: Path) -> Path:

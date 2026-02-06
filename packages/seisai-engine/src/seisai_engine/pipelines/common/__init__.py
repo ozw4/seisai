@@ -1,6 +1,7 @@
 from .checkpoint_io import load_checkpoint, save_checkpoint
-from .config_io import load_config, resolve_relpath
+from .config_io import load_config, resolve_cfg_paths, resolve_relpath
 from .seed import seed_all
+from .validate_files import validate_files_exist
 from .skeleton_helpers import (
 	ensure_fixed_infer_num_workers,
 	epoch_vis_dir,
@@ -8,7 +9,6 @@ from .skeleton_helpers import (
 	make_train_worker_init_fn,
 	maybe_save_best_min,
 	prepare_output_dirs,
-	resolve_cfg_paths,
 	resolve_out_dir,
 	set_dataset_rng,
 )
@@ -28,4 +28,5 @@ __all__ = [
 	'save_checkpoint',
 	'seed_all',
 	'set_dataset_rng',
+	'validate_files_exist',
 ]

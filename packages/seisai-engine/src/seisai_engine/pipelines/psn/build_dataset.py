@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from seisai_dataset import (
 	FirstBreakGate,
 	FirstBreakGateConfig,
@@ -17,6 +15,8 @@ from seisai_utils.config import (
 	require_int,
 	require_list_str,
 )
+
+from seisai_engine.pipelines.common.validate_files import validate_files_exist
 
 from .build_plan import build_plan
 
@@ -79,9 +79,7 @@ def build_dataset(cfg: dict) -> SegyGatherPhasePipelineDataset:
 		raise ValueError(
 			'paths.segy_files and paths.phase_pick_files must have same length'
 		)
-	for p in list(segy_files) + list(phase_pick_files):
-		if not Path(p).is_file():
-			raise FileNotFoundError(f'file not found: {p}')
+	validate_files_exist(list(segy_files) + list(phase_pick_files))
 
 	max_trials = optional_int(ds_cfg, 'max_trials', 2048)
 	use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)

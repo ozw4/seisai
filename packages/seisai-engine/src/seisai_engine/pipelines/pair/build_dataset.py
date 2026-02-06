@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from seisai_dataset import BuildPlan, SegyGatherPairDataset
 from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
+
+from seisai_engine.pipelines.common.validate_files import validate_files_exist
 
 from .config import PairDatasetCfg, PairPaths
 
@@ -27,12 +27,6 @@ def build_infer_transform(eps: float = 1e-8) -> ViewCompose:
 	return ViewCompose([PerTraceStandardize(eps=float(eps))])
 
 
-def _validate_files(paths: PairPaths) -> None:
-	for p in list(paths.input_segy_files) + list(paths.target_segy_files):
-		if not Path(p).is_file():
-			raise FileNotFoundError(f'file not found: {p}')
-
-
 def build_pair_dataset(
 	paths: PairPaths,
 	ds_cfg: PairDatasetCfg,
@@ -41,7 +35,7 @@ def build_pair_dataset(
 	subset_traces: int,
 	secondary_key_fixed: bool,
 ) -> SegyGatherPairDataset:
-	_validate_files(paths)
+	validate_files_exist(list(paths.input_segy_files) + list(paths.target_segy_files))
 
 	return SegyGatherPairDataset(
 		input_segy_files=paths.input_segy_files,

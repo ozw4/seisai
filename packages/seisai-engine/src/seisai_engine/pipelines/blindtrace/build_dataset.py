@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from seisai_dataset import (
 	FirstBreakGate,
 	FirstBreakGateConfig,
 	SegyGatherPipelineDataset,
 )
 from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
+
+from seisai_engine.pipelines.common.validate_files import validate_files_exist
 
 __all__ = [
 	'build_transform',
@@ -51,12 +51,6 @@ def validate_primary_keys(primary_keys_list: object) -> tuple[str, ...]:
 	return tuple(primary_keys_list)
 
 
-def _validate_files(segy_files: list[str], fb_files: list[str]) -> None:
-	for p in list(segy_files) + list(fb_files):
-		if not Path(p).is_file():
-			raise FileNotFoundError(f'file not found: {p}')
-
-
 def build_dataset(
 	*,
 	segy_files: list[str],
@@ -71,7 +65,7 @@ def build_dataset(
 	max_trials: int,
 	use_header_cache: bool,
 ) -> SegyGatherPipelineDataset:
-	_validate_files(segy_files, fb_files)
+	validate_files_exist(list(segy_files) + list(fb_files))
 	return SegyGatherPipelineDataset(
 		segy_files=segy_files,
 		fb_files=fb_files,
