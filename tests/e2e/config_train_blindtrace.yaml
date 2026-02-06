@@ -37,7 +37,7 @@ train:
   time_len: 6000
   batch_size: 1
   num_workers: 0
-  amp: false
+  use_amp: false
   max_norm: 1.0
   lr: 1.0e-4
   weight_decay: 1.0e-4

@@ -11,27 +11,22 @@ from seisai_utils.config import (
 	optional_str,
 	optional_tuple2_float,
 	require_dict,
+	require_bool,
 	require_float,
 	require_int,
 	require_list_str,
 )
-from torch.utils.data import DataLoader, Subset
 
 from seisai_engine.infer.runner import TiledHConfig
 from seisai_engine.pipelines.common import (
-	ensure_fixed_infer_num_workers,
-	epoch_vis_dir,
 	load_cfg_with_base_dir,
-	make_train_worker_init_fn,
-	maybe_save_best_min,
-	prepare_output_dirs,
 	resolve_cfg_paths,
 	resolve_out_dir,
 	seed_all,
-	set_dataset_rng,
+	TrainSkeletonSpec,
+	run_train_skeleton,
 )
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
-from seisai_engine.train_loop import train_one_epoch
 
 from .build_dataset import (
 	build_dataset,
@@ -121,7 +116,7 @@ def main(argv: list[str] | None = None) -> None:
 	shift_max = optional_int(train_cfg, 'shift_max', 8)
 	train_batch_size = require_int(train_cfg, 'batch_size')
 	train_num_workers = optional_int(train_cfg, 'num_workers', 0)
-	train_amp = optional_bool(train_cfg, 'amp', default=True)
+	train_use_amp = require_bool(train_cfg, 'use_amp')
 	max_norm = optional_float(train_cfg, 'max_norm', 1.0)
 	lr = require_float(train_cfg, 'lr')
 	weight_decay = require_float(train_cfg, 'weight_decay')
@@ -135,7 +130,6 @@ def main(argv: list[str] | None = None) -> None:
 	infer_max_batches = require_int(infer_cfg, 'max_batches')
 	infer_subset_traces = require_int(infer_cfg, 'subset_traces')
 
-	ensure_fixed_infer_num_workers(infer_num_workers)
 	tile_h = require_int(tile_cfg, 'tile_h')
 	overlap_h = require_int(tile_cfg, 'overlap_h')
 	tiles_per_batch = require_int(tile_cfg, 'tiles_per_batch')
@@ -268,8 +262,6 @@ def main(argv: list[str] | None = None) -> None:
 		weight_decay=float(weight_decay),
 	)
 
-	ckpt_dir, vis_root = prepare_output_dirs(out_dir_path, vis_subdir)
-
 	tiled_cfg = TiledHConfig(
 		tile_h=int(tile_h),
 		overlap_h=int(overlap_h),
@@ -289,100 +281,49 @@ def main(argv: list[str] | None = None) -> None:
 		dpi=int(dpi),
 	)
 
-	best_infer_loss: float | None = None
-	global_step = 0
+	infer_epoch_fn = (
+		lambda model, loader, device, vis_epoch_dir, vis_n, max_batches: run_infer_epoch(
+			model=model,
+			loader=loader,
+			device=device,
+			criterion=criterion,
+			tiled_cfg=tiled_cfg,
+			vis_cfg=triptych_cfg,
+			vis_out_dir=str(vis_epoch_dir),
+			vis_n=vis_n,
+			max_batches=max_batches,
+		)
+	)
 
-	try:
-		for epoch in range(int(epochs)):
-			seed_epoch = int(seed_train) + int(epoch)
+	spec = TrainSkeletonSpec(
+		pipeline='blindtrace',
+		cfg=cfg,
+		out_dir=out_dir_path,
+		vis_subdir=str(vis_subdir),
+		model_sig=model_sig,
+		model=model,
+		optimizer=optimizer,
+		criterion=criterion,
+		ds_train_full=ds_train_full,
+		ds_infer_full=ds_infer_full,
+		device=device,
+		seed_train=int(seed_train),
+		seed_infer=int(seed_infer),
+		epochs=int(epochs),
+		train_batch_size=int(train_batch_size),
+		train_num_workers=int(train_num_workers),
+		samples_per_epoch=int(samples_per_epoch),
+		max_norm=float(max_norm),
+		use_amp_train=bool(train_use_amp),
+		infer_batch_size=int(infer_batch_size),
+		infer_num_workers=int(infer_num_workers),
+		infer_max_batches=int(infer_max_batches),
+		vis_n=int(vis_n),
+		infer_epoch_fn=infer_epoch_fn,
+		print_freq=10,
+	)
 
-			if int(train_num_workers) == 0:
-				set_dataset_rng(ds_train_full, seed_epoch)
-				train_worker_init_fn = None
-			else:
-				train_worker_init_fn = make_train_worker_init_fn(seed_epoch)
-
-			train_ds = Subset(ds_train_full, range(int(samples_per_epoch)))
-			train_loader = DataLoader(
-				train_ds,
-				batch_size=int(train_batch_size),
-				shuffle=False,
-				num_workers=int(train_num_workers),
-				pin_memory=(device.type == 'cuda'),
-				worker_init_fn=train_worker_init_fn,
-			)
-
-			stats = train_one_epoch(
-				model,
-				train_loader,
-				optimizer,
-				criterion,
-				device=device,
-				lr_scheduler=None,
-				gradient_accumulation_steps=1,
-				max_norm=float(max_norm),
-				use_amp=bool(train_amp),
-				scaler=None,
-				ema=None,
-				step_offset=0,
-				print_freq=10,
-				on_step=None,
-			)
-			print(
-				f'epoch={epoch} train_loss={stats["loss"]:.6f} '
-				f'steps={int(stats["steps"])} samples={int(stats["samples"])}'
-			)
-			global_step += int(stats['steps'])
-
-			set_dataset_rng(ds_infer_full, seed_infer)
-
-			infer_ds = Subset(
-				ds_infer_full, range(int(infer_batch_size * infer_max_batches))
-			)
-			infer_loader = DataLoader(
-				infer_ds,
-				batch_size=int(infer_batch_size),
-				shuffle=False,
-				num_workers=0,
-				pin_memory=(device.type == 'cuda'),
-			)
-
-			vis_epoch_dir = epoch_vis_dir(vis_root, epoch)
-
-			model.eval()
-
-			infer_loss = run_infer_epoch(
-				model=model,
-				loader=infer_loader,
-				device=device,
-				criterion=criterion,
-				tiled_cfg=tiled_cfg,
-				vis_cfg=triptych_cfg,
-				vis_out_dir=str(vis_epoch_dir),
-				vis_n=int(vis_n),
-				max_batches=int(infer_max_batches),
-			)
-			print(f'epoch={epoch} infer_loss={infer_loss:.6f}')
-
-			ckpt_path = ckpt_dir / 'best.pt'
-			best_infer_loss = maybe_save_best_min(
-				best_infer_loss,
-				infer_loss,
-				ckpt_path,
-				{
-					'version': 1,
-					'pipeline': 'blindtrace',
-					'epoch': int(epoch),
-					'global_step': int(global_step),
-					'model_sig': model_sig,
-					'model_state_dict': model.state_dict(),
-					'optimizer_state_dict': optimizer.state_dict(),
-					'cfg': cfg,
-				},
-			)
-	finally:
-		ds_train_full.close()
-		ds_infer_full.close()
+	run_train_skeleton(spec)
 
 
 if __name__ == '__main__':

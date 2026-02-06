@@ -1,5 +1,13 @@
 from .checkpoint_io import load_checkpoint, save_checkpoint
+from .config_loaders import load_common_train_config
 from .config_io import load_config, resolve_cfg_paths, resolve_relpath
+from .config_schema import (
+	CommonTrainConfig,
+	InferLoopConfig,
+	OutputConfig,
+	SeedsConfig,
+	TrainLoopConfig,
+)
 from .seed import seed_all
 from .train_skeleton import InferEpochFn, TrainSkeletonSpec, run_train_skeleton
 from .validate_files import validate_files_exist
@@ -19,6 +27,7 @@ __all__ = [
 	'ensure_fixed_infer_num_workers',
 	'epoch_vis_dir',
 	'load_checkpoint',
+	'load_common_train_config',
 	'load_config',
 	'load_cfg_with_base_dir',
 	'make_train_worker_init_fn',
@@ -30,6 +39,11 @@ __all__ = [
 	'save_checkpoint',
 	'seed_all',
 	'set_dataset_rng',
+	'CommonTrainConfig',
+	'InferLoopConfig',
+	'OutputConfig',
+	'SeedsConfig',
+	'TrainLoopConfig',
 	'InferEpochFn',
 	'TrainSkeletonSpec',
 	'run_train_skeleton',
