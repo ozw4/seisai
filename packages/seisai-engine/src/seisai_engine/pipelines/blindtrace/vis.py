@@ -48,4 +48,5 @@ def save_triptych_step(
 		cfg=cfg,
 		batch=batch,
 		c=c,
+		prefix='step_',
 	)

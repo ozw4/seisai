@@ -39,6 +39,11 @@ infer:
   seed: 43
   num_workers: 0
 
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min
+
 model:
   backbone: resnet18
   pretrained: false

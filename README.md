@@ -241,7 +241,7 @@ python packages/seisai-dataset/examples/phase_dataset_quick_check.py
 
 このリポジトリには **YAML 設定で学習/可視化まで回すサンプル**が入っています。
 
-- `examples/example_train_psn.py` : P/S/Noise (3-class) 学習 + デバッグ PNG 出力
+- `examples/example_train_psn.py` : P/S/Noise (3-class) 学習 + 推論 + 可視化
 - `examples/example_train_pair.py` : paired SEG-Y 学習 + tiled-h 推論 + triptych 可視化
 - `examples/example_train_fbp.py` : first-break 系の学習例
 - `examples/examples_train_blindtrace.py` : mask/blindtrace 系の学習例
@@ -258,14 +258,14 @@ python examples/example_train_pair.py --config examples/config_train_pair.yaml
 
 挙動メモ:
 - YAML は常に読み込みます。
-- `examples/example_train_psn.py` は YAML 内の相対パスを「YAML ファイルの場所」基準で解決します。
-  - それ以外のスクリプトは現状、パスはそのまま解釈するため、実行時の cwd に依存します。
-- `examples/example_train_psn.py` は `--vis_out_dir` で出力先を上書きできます (e2e テストで利用)。
+- 3本とも YAML 内の相対パスは「YAML ファイルの場所」基準で解決します。
+- 出力は `paths.out_dir` 起点で、`ckpt/best.pt` と `vis/<epoch>/step_<step>.png` が作られます。
+- 可視化のルートは `vis.out_subdir` で指定します（例: `vis`）。
 
 同梱データでの最小実行 (1 epoch / PNG 出力):
 
 ```bash
-python examples/example_train_psn.py --config tests/e2e/config_train_psn.yaml --vis_out_dir ./_psn_vis
+python examples/example_train_psn.py --config tests/e2e/config_train_psn.yaml
 ```
 
 ### 3) パッケージ内の小さな例
