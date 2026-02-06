@@ -1,6 +1,7 @@
 from .checkpoint_io import load_checkpoint, save_checkpoint
 from .config_io import load_config, resolve_cfg_paths, resolve_relpath
 from .seed import seed_all
+from .train_skeleton import InferEpochFn, TrainSkeletonSpec, run_train_skeleton
 from .validate_files import validate_files_exist
 from .validate_primary_keys import validate_primary_keys
 from .skeleton_helpers import (
@@ -29,6 +30,9 @@ __all__ = [
 	'save_checkpoint',
 	'seed_all',
 	'set_dataset_rng',
+	'InferEpochFn',
+	'TrainSkeletonSpec',
+	'run_train_skeleton',
 	'validate_files_exist',
 	'validate_primary_keys',
 ]
