@@ -2,6 +2,7 @@ from .checkpoint_io import load_checkpoint, save_checkpoint
 from .config_io import load_config, resolve_cfg_paths, resolve_relpath
 from .seed import seed_all
 from .validate_files import validate_files_exist
+from .validate_primary_keys import validate_primary_keys
 from .skeleton_helpers import (
 	ensure_fixed_infer_num_workers,
 	epoch_vis_dir,
@@ -29,4 +30,5 @@ __all__ = [
 	'seed_all',
 	'set_dataset_rng',
 	'validate_files_exist',
+	'validate_primary_keys',
 ]

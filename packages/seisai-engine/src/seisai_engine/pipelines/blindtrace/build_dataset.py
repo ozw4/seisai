@@ -13,7 +13,6 @@ __all__ = [
 	'build_transform',
 	'build_fbgate',
 	'build_dataset',
-	'validate_primary_keys',
 ]
 
 
@@ -40,15 +39,6 @@ def build_fbgate(
 		verbose=bool(verbose),
 	)
 	return FirstBreakGate(cfg)
-
-
-def validate_primary_keys(primary_keys_list: object) -> tuple[str, ...]:
-	if not isinstance(primary_keys_list, list) or not all(
-		isinstance(x, str) for x in primary_keys_list
-	):
-		msg = 'dataset.primary_keys must be list[str]'
-		raise ValueError(msg)
-	return tuple(primary_keys_list)
 
 
 def build_dataset(

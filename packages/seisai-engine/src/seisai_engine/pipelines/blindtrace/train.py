@@ -30,13 +30,13 @@ from seisai_engine.pipelines.common import (
 	seed_all,
 	set_dataset_rng,
 )
+from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 from seisai_engine.train_loop import train_one_epoch
 
 from .build_dataset import (
 	build_dataset,
 	build_fbgate,
 	build_transform,
-	validate_primary_keys,
 )
 from .build_model import build_model
 from .build_plan import build_plan

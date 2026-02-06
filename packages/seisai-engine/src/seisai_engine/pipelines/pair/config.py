@@ -8,6 +8,7 @@ from seisai_engine.pipelines.common.config_io import (
 	resolve_cfg_paths,
 	resolve_relpath,
 )
+from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 from seisai_utils.config import (
 	optional_bool,
 	optional_float,
@@ -137,14 +138,6 @@ class PairInferConfig:
 	model: PairModelCfg
 
 
-def _validate_primary_keys(primary_keys_list: object) -> tuple[str, ...]:
-	if not isinstance(primary_keys_list, list) or not all(
-		isinstance(x, str) for x in primary_keys_list
-	):
-		raise ValueError('dataset.primary_keys must be list[str]')
-	return tuple(primary_keys_list)
-
-
 def _load_paths(paths: dict, *, base_dir: Path) -> PairPaths:
 	input_segy_files = require_list_str(paths, 'input_segy_files')
 	target_segy_files = require_list_str(paths, 'target_segy_files')
@@ -171,7 +164,7 @@ def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
 	use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)
 	verbose = optional_bool(ds_cfg, 'verbose', default=True)
 	primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
-	primary_keys = _validate_primary_keys(primary_keys_list)
+	primary_keys = validate_primary_keys(primary_keys_list)
 	return PairDatasetCfg(
 		max_trials=int(max_trials),
 		use_header_cache=bool(use_header_cache),

@@ -32,6 +32,7 @@ from seisai_engine.pipelines.common import (
 	seed_all,
 	set_dataset_rng,
 )
+from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 from seisai_engine.train_loop import train_one_epoch
 
 from .build_dataset import (
@@ -48,14 +49,6 @@ from .loss import build_criterion
 __all__ = ['main']
 
 DEFAULT_CONFIG_PATH = Path('examples/config_train_pair.yaml')
-
-
-def _validate_primary_keys(primary_keys_list: object) -> tuple[str, ...]:
-	if not isinstance(primary_keys_list, list) or not all(
-		isinstance(x, str) for x in primary_keys_list
-	):
-		raise ValueError('dataset.primary_keys must be list[str]')
-	return tuple(primary_keys_list)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -92,7 +85,7 @@ def main(argv: list[str] | None = None) -> None:
 	verbose: bool = optional_bool(ds_cfg, 'verbose', default=True)
 	secondary_key_fixed = optional_bool(ds_cfg, 'secondary_key_fixed', default=False)
 	primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
-	primary_keys = _validate_primary_keys(primary_keys_list)
+	primary_keys = validate_primary_keys(primary_keys_list)
 
 	train_batch_size = require_int(train_cfg, 'batch_size')
 	epochs = require_int(train_cfg, 'epochs')

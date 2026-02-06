@@ -17,18 +17,11 @@ from seisai_utils.config import (
 )
 
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
+from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 
 from .build_plan import build_plan
 
 __all__ = ['build_dataset']
-
-
-def _validate_primary_keys(primary_keys_list: object) -> tuple[str, ...]:
-	if not isinstance(primary_keys_list, list) or not all(
-		isinstance(x, str) for x in primary_keys_list
-	):
-		raise ValueError('dataset.primary_keys must be list[str]')
-	return tuple(primary_keys_list)
 
 
 def _build_fbgate(fbgate_cfg: dict | None) -> FirstBreakGate:
@@ -91,7 +84,7 @@ def build_dataset(cfg: dict) -> SegyGatherPhasePipelineDataset:
 		ds_cfg, 'secondary_key_fixed', default=False
 	)
 	primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
-	primary_keys = _validate_primary_keys(primary_keys_list)
+	primary_keys = validate_primary_keys(primary_keys_list)
 
 	subset_traces = require_int(train_cfg, 'subset_traces')
 	psn_sigma = optional_float(train_cfg, 'psn_sigma', 1.5)
