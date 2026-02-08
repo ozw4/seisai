@@ -110,7 +110,6 @@ class SegyGatherPairDataset(Dataset):
 			target_n_traces = int(target_obj.tracecount)
 			target_dt_us = int(cast('int', target_obj.bin[segyio.BinField.Interval]))
 			target_dt_sec = target_dt_us * 1e-6
-			target_dt_sec = target_dt_us * 1e-6
 
 			if input_info.n_samples != target_n_samples:
 				if input_info.segy_obj is not None:
