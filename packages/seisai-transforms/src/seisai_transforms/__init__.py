@@ -2,6 +2,7 @@
 # Keep it minimal & explicit.
 
 from .augment import (
+	DeterministicCropOrPad,
 	PerTraceStandardize,
 	RandomCropOrPad,
 	RandomFreqFilter,

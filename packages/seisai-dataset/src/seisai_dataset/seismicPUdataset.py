@@ -22,6 +22,27 @@ class WindowItem:
 
 
 def parse_p_arrivals_local(csv_path: str) -> list[datetime]:
+	"""Parse P-wave arrival timestamps from a CSV column named ``P_arrival_time_local``.
+
+	The function reads a CSV file and extracts values from the
+	``P_arrival_time_local`` column. Each value must be an ISO-8601 datetime string
+	parsable by :meth:`datetime.datetime.fromisoformat` and must include timezone
+	information (i.e., be timezone-aware).
+
+	Args:
+	    csv_path: Path to the CSV file containing a ``P_arrival_time_local`` column.
+
+	Returns:
+	    A list of timezone-aware :class:`datetime.datetime` objects, in the same
+	    order as the CSV rows.
+
+	Raises:
+	    FileNotFoundError: If ``csv_path`` does not exist or is not a file.
+	    KeyError: If the CSV header does not contain ``P_arrival_time_local``.
+	    ValueError: If any parsed datetime is timezone-naive (missing tzinfo) or if
+	        a value is not a valid ISO-8601 datetime string.
+
+	"""
 	if not os.path.isfile(csv_path):
 		raise FileNotFoundError(f'csv not found: {csv_path}')
 	arrivals: list[datetime] = []
@@ -177,26 +198,22 @@ class SeismicPUWindowDataset(Dataset):
 				self.root_dir, day0, self.fs, self.pad_seconds, self.filename_template
 			)
 			if not os.path.isfile(npy_path):
-				raise FileNotFoundError(
-					f'npy not found for {day0.strftime("%Y-%m-%d")}: {npy_path}'
-				)
+				msg = f'npy not found for {day0.strftime("%Y-%m-%d")}: {npy_path}'
+				raise FileNotFoundError(msg)
 
 			hdr = np.load(npy_path, mmap_mode='r')
 			if hdr.ndim != 2:
-				raise ValueError(
-					f'npy must be 2D (C, N). Got {hdr.shape} at {npy_path}'
-				)
+				msg = f'npy must be 2D (C, N). Got {hdr.shape} at {npy_path}'
+				raise ValueError(msg)
 			expected_n = (86400 + 2 * self.pad_seconds) * self.fs
 			if self.validate_shape and hdr.shape[1] != expected_n:
-				raise ValueError(
-					f'unexpected N at {npy_path}: {hdr.shape[1]} vs {expected_n}'
-				)
+				msg = f'unexpected N at {npy_path}: {hdr.shape[1]} vs {expected_n}'
+				raise ValueError(msg)
 			if self.channel_indices is not None:
 				for c in self.channel_indices:
 					if c < 0 or c >= hdr.shape[0]:
-						raise IndexError(
-							f'channel index {c} out of range [0, {hdr.shape[0] - 1}]'
-						)
+						msg = f'channel index {c} out of range [0, {hdr.shape[0] - 1}]'
+						raise IndexError(msg)
 
 			pos_times_day: list[datetime] = []
 			for e in self.arrivals:
@@ -206,9 +223,10 @@ class SeismicPUWindowDataset(Dataset):
 
 			for e in pos_times_day:
 				s = e - timedelta(seconds=self.pre_event_sec)
-				start_index = int(round((s - t0).total_seconds() * self.fs))
+				start_index = round((s - t0).total_seconds() * self.fs)
 				if start_index < 0 or (start_index + self.win_samples) > expected_n:
-					raise ValueError('positive window out of bounds')
+					msg = 'positive window out of bounds'
+					raise ValueError(msg)
 				items.append(
 					WindowItem(
 						npy_path=npy_path,
@@ -246,9 +264,10 @@ class SeismicPUWindowDataset(Dataset):
 							acc += L
 
 			for s in neg_starts:
-				start_index = int(round((s - t0).total_seconds() * self.fs))
+				start_index = round((s - t0).total_seconds() * self.fs)
 				if start_index < 0 or (start_index + self.win_samples) > expected_n:
-					raise ValueError('negative window out of bounds')
+					msg = 'negative window out of bounds'
+					raise ValueError(msg)
 				items.append(
 					WindowItem(
 						npy_path=npy_path,
@@ -260,15 +279,49 @@ class SeismicPUWindowDataset(Dataset):
 				)
 
 		if len(items) == 0:
-			raise ValueError('no windows collected')
+			msg = 'no windows collected'
+			raise ValueError(msg)
 		self.items: list[WindowItem] = items
 
 	def __len__(self) -> int:
 		return len(self.items)
 
 	def __getitem__(self, idx: int):
+		"""Retrieve a single windowed sample from the dataset.
+
+		This method loads a multi-channel NumPy array from disk (optionally using a
+		subset of channels), slices a fixed-length time window starting at the item's
+		`start_index`, converts the slice to a contiguous `torch.float32` tensor, and
+		returns it together with the integer class label and associated metadata.
+
+		Args:
+		    idx (int): Index of the item to retrieve. Must satisfy
+		        `0 <= idx < len(self.items)`.
+
+		Returns:
+		    tuple[torch.Tensor, torch.Tensor, dict[str, object]]: A 3-tuple of:
+		        - x_t: Input tensor of shape (C, win_samples) and dtype float32.
+		        `C` is either the full channel count or `len(self.channel_indices)`
+		        if channel selection is enabled.
+		        - y_t: Label tensor of shape (1,) and dtype int64 containing `it.label`.
+		        - meta: Metadata dictionary with keys:
+		            * 'start_time_iso': ISO-8601 start time for the window.
+		            * 'npy_path': Path to the `.npy` file backing the sample.
+		            * 'start_index': Starting sample index for the window.
+		            * 'fs': Sampling frequency (Hz).
+		            * 'win_sec': Window duration (seconds).
+		            * 'pad_seconds': Padding duration (seconds), if applicable.
+		            * 'p_offset_samples': P-arrival offset in samples (may be None).
+
+		Raises:
+		    IndexError: If `idx` is out of range.
+		    ValueError: If the sliced window length does not equal `self.win_samples`
+		        (e.g., window extends beyond the available data).
+
+		"""
 		if idx < 0 or idx >= len(self.items):
-			raise IndexError('index out of range')
+			msg = 'index out of range'
+			raise IndexError(msg)
 		it = self.items[idx]
 		arr = np.load(it.npy_path, mmap_mode='r')  # (C, N)
 		if self.channel_indices is None:
@@ -278,9 +331,8 @@ class SeismicPUWindowDataset(Dataset):
 				self.channel_indices, it.start_index : it.start_index + self.win_samples
 			]
 		if x.shape[1] != self.win_samples:
-			raise ValueError(
-				f'slice length {x.shape[1]} != win_samples {self.win_samples}'
-			)
+			msg = f'slice length {x.shape[1]} != win_samples {self.win_samples}'
+			raise ValueError(msg)
 		x_t = torch.from_numpy(np.ascontiguousarray(x)).float()
 		y_t = torch.tensor([it.label], dtype=torch.int64)
 		meta: dict[str, object] = {

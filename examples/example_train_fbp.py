@@ -25,7 +25,7 @@ from seisai_dataset.infer_window_dataset import (
 	collate_pad_w_right,
 )
 from seisai_engine.infer.runner import TiledWConfig, infer_batch_tiled_w
-from seisai_engine.loss.fbsegKLLoss import FbSegKLLossView
+from seisai_engine.loss.fbseg_kl_loss import FbSegKLLossView
 from seisai_engine.train_loop import train_one_epoch
 from seisai_models.models.encdec2d import EncDec2D
 from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
