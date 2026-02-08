@@ -3,7 +3,7 @@ from seisai_transforms.augment import RandomFreqFilter
 from seisai_transforms.config import FreqAugConfig
 
 
-def test_freq_aug_noop_when_prob_zero():
+def test_freq_aug_noop_when_prob_zero() -> None:
     H, W = 8, 64
     x = np.random.randn(H, W).astype(np.float32)
     aug = RandomFreqFilter(FreqAugConfig(prob=0.0))

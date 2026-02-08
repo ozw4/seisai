@@ -327,7 +327,8 @@ def test_segy_gather_pair_dataset_pair_consistency_headers_shape_dtype_and_sync_
     out = ds[0]
 
     # ---- shape/dtype contract
-    assert 'input' in out and 'target' in out
+    assert 'input' in out
+    assert 'target' in out
     assert isinstance(out['input'], torch.Tensor)
     assert isinstance(out['target'], torch.Tensor)
     assert out['input'].dtype == torch.float32
@@ -336,7 +337,8 @@ def test_segy_gather_pair_dataset_pair_consistency_headers_shape_dtype_and_sync_
     x_in = as_chw(out['input'])
     x_tg = as_chw(out['target'])
 
-    assert x_in.ndim == 3 and x_tg.ndim == 3
+    assert x_in.ndim == 3
+    assert x_tg.ndim == 3
     assert x_in.shape == x_tg.shape
     assert x_in.shape[0] == 1
     assert x_in.shape[1] == subset_traces

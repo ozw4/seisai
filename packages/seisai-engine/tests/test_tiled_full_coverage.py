@@ -41,7 +41,7 @@ from seisai_engine.predict import infer_tiled_chw  # noqa: E402
 
 
 class OnesModel(torch.nn.Module):
-    def __init__(self, out_chans: int):
+    def __init__(self, out_chans: int) -> None:
         super().__init__()
         self.out_chans = int(out_chans)
         self.use_tta = False
@@ -49,7 +49,7 @@ class OnesModel(torch.nn.Module):
         self._dummy = torch.nn.Parameter(torch.zeros(1))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        n, c, h, w = x.shape
+        n, _c, h, w = x.shape
         return torch.ones((n, self.out_chans, h, w), device=x.device, dtype=x.dtype)
 
 
@@ -67,19 +67,24 @@ for h, w in SIZES:
                 CASES.append((h, w, tile, overlap_hw, amp))
 
 
-@pytest.mark.parametrize('h,w,tile,overlap_hw,amp', CASES)
+@pytest.mark.parametrize(('h', 'w', 'tile', 'overlap_hw', 'amp'), CASES)
 def test_tiled_full_coverage_ones(
     h: int, w: int, tile: tuple[int, int], overlap_hw: tuple[int, int], amp: bool
 ) -> None:
     th, tw = tile
     oh, ow = overlap_hw
 
-    assert th > 0 and tw > 0
-    assert 0 <= oh < th and 0 <= ow < tw
-    assert h > 0 and w > 0
-    assert IN_CHANS > 0 and OUT_CHANS > 0
+    assert th > 0
+    assert tw > 0
+    assert 0 <= oh < th
+    assert 0 <= ow < tw
+    assert h > 0
+    assert w > 0
+    assert IN_CHANS > 0
+    assert OUT_CHANS > 0
     # _run_tiled と同じ前提をテスト側でも明示しておく
-    assert th <= h and tw <= w
+    assert th <= h
+    assert tw <= w
 
     if DEVICE == 'cuda':
         assert torch.cuda.is_available(), 'CUDA requested but not available'

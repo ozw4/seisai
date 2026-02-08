@@ -281,24 +281,18 @@ def main(argv: list[str] | None = None) -> None:
         dpi=int(dpi),
     )
 
-    infer_epoch_fn = (
-        lambda model,
-        loader,
-        device,
-        vis_epoch_dir,
-        vis_n,
-        max_batches: run_infer_epoch(
-            model=model,
-            loader=loader,
-            device=device,
-            criterion=criterion,
-            tiled_cfg=tiled_cfg,
-            vis_cfg=triptych_cfg,
-            vis_out_dir=str(vis_epoch_dir),
-            vis_n=vis_n,
-            max_batches=max_batches,
-        )
-    )
+    def infer_epoch_fn(model, loader, device, vis_epoch_dir, vis_n, max_batches):
+        return (run_infer_epoch(
+                model=model,
+                loader=loader,
+                device=device,
+                criterion=criterion,
+                tiled_cfg=tiled_cfg,
+                vis_cfg=triptych_cfg,
+                vis_out_dir=str(vis_epoch_dir),
+                vis_n=vis_n,
+                max_batches=max_batches,
+            ))
 
     spec = TrainSkeletonSpec(
         pipeline='blindtrace',

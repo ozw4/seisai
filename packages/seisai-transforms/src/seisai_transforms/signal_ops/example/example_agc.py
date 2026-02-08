@@ -18,7 +18,7 @@ def make_composite_wave(
     W: int, fs: int, rng: np.random.Generator
 ) -> tuple[np.ndarray, np.ndarray]:
     """合成波形(1D)を生成：低周波+高周波+トレンド+振幅変化+スパイク+ノイズ
-    返り値: t(s), x
+    返り値: t(s), x.
     """
     t = np.arange(W) / float(fs)
     s_low = 0.8 * np.sin(2 * np.pi * 3.0 * t)
@@ -38,7 +38,7 @@ def make_composite_wave(
     return t, x.astype(np.float32, copy=False)
 
 
-def main():
+def main() -> None:
     fs = 1000  # Hz
     dur = 6.0  # sec
     W = int(fs * dur)
@@ -58,7 +58,7 @@ def main():
     )
 
     # --- Robust AGC(MAD/IQRベース, 推奨: MAD, gamma=0.75)---
-    y_rob, meta = robust_agc_np(
+    y_rob, _meta = robust_agc_np(
         x,
         win=600,
         hop=None,  # win//4
@@ -72,7 +72,7 @@ def main():
     )
 
     # --- 可視化 ---
-    fig, axs = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
+    _fig, axs = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
     axs[0].plot(t, x)
     axs[0].set_title('Original')
     axs[0].set_ylabel('Amplitude')
@@ -91,7 +91,7 @@ def main():
 
     # --- 参考: AGCのゲイン可視化(dB) ---
     # Robust AGCは μ 引き算+σ^γ で正規化するため、純粋な“ゲイン”は定義しない。
-    fig2, ax2 = plt.subplots(1, 1, figsize=(12, 3), sharex=True)
+    _fig2, ax2 = plt.subplots(1, 1, figsize=(12, 3), sharex=True)
     gain_db = 20.0 * np.log10(np.maximum(g_agc, 1e-12))
     ax2.plot(t, gain_db)
     ax2.set_title('AGC Gain (dB)')

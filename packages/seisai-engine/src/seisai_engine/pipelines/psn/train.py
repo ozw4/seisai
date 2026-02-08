@@ -4,11 +4,11 @@ import argparse
 import copy
 from dataclasses import asdict
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 from seisai_utils.config import require_dict
 from seisai_utils.viz_phase import make_title_from_batch_meta, save_psn_debug_png
-from torch.utils.data import DataLoader
 
 from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
@@ -23,6 +23,9 @@ from .build_dataset import build_dataset
 from .build_model import build_model
 from .config import load_psn_train_config
 from .loss import criterion
+
+if TYPE_CHECKING:
+    from torch.utils.data import DataLoader
 
 __all__ = ['main']
 
@@ -134,21 +137,15 @@ def main(argv: list[str] | None = None) -> None:
     model = build_model(cfg).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(typed.train.lr))
 
-    infer_epoch_fn = (
-        lambda model,
-        loader,
-        device,
-        vis_epoch_dir,
-        vis_n,
-        max_batches: _run_infer_epoch(
-            model=model,
-            loader=loader,
-            device=device,
-            vis_out_dir=str(vis_epoch_dir),
-            vis_n=vis_n,
-            max_batches=max_batches,
-        )
-    )
+    def infer_epoch_fn(model, loader, device, vis_epoch_dir, vis_n, max_batches):
+        return (_run_infer_epoch(
+                model=model,
+                loader=loader,
+                device=device,
+                vis_out_dir=str(vis_epoch_dir),
+                vis_n=vis_n,
+                max_batches=max_batches,
+            ))
 
     spec = TrainSkeletonSpec(
         pipeline='psn',

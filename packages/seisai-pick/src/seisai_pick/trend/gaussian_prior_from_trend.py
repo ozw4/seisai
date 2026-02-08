@@ -11,7 +11,7 @@ def gaussian_prior_from_trend(
     covered_mask: torch.Tensor | None = None,  # (B,H)
 ) -> torch.Tensor:
     """Per-trace Gaussian prior over W bins centered at t_trend, normalized per (B,H,*).
-    ガウスは秒ではなくビンindex基準。mu_bin = t_trend_sec / dt_sec, sigma_bin = (sigma_ms/1000) / dt_sec。
+    ガウスは秒ではなくビンindex基準。mu_bin = t_trend_sec / dt_sec, sigma_bin = (sigma_ms/1000) / dt_sec。.
     """
     if sigma_ms <= 0.0:
         msg = 'sigma_ms must be positive'

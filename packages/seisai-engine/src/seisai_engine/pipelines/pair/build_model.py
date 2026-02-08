@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from seisai_models.models.encdec2d import EncDec2D
 
-from .config import PairModelCfg
+if TYPE_CHECKING:
+    from .config import PairModelCfg
 
 __all__ = ['build_model']
 

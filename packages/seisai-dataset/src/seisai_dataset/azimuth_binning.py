@@ -32,8 +32,7 @@ def _to_rad(a: np.ndarray, degrees: bool) -> np.ndarray:
     if degrees:
         x = np.deg2rad(x)
     # [0, 2π) 正規化
-    x = np.mod(x, 2.0 * np.pi)
-    return x
+    return np.mod(x, 2.0 * np.pi)
 
 
 def _max_gap_rotation(a_rad: np.ndarray) -> tuple[np.ndarray, float]:
@@ -68,8 +67,7 @@ def _circ_smooth(h: np.ndarray, cfg: AzimuthBinConfig) -> np.ndarray:
         d = np.minimum(np.abs(x - c), n - np.abs(x - c))
         ker = np.exp(-0.5 * (d / float(cfg.gauss_sigma_bins)) ** 2)
         ker = ker / ker.sum()
-    H = np.fft.ifft(np.fft.fft(h) * np.fft.fft(ker)).real
-    return H
+    return np.fft.ifft(np.fft.fft(h) * np.fft.fft(ker)).real
 
 
 def _find_valleys(
@@ -123,8 +121,7 @@ def _find_valleys(
         # 半径 min_sep_bins を使用不可に
         for d in range(-min_sep_bins, min_sep_bins + 1):
             used[(i + d) % n] = True
-    sel = np.sort(np.asarray(sel, dtype=np.int64))
-    return sel
+    return np.sort(np.asarray(sel, dtype=np.int64))
 
 
 def _labels_from_cuts(a_bin: np.ndarray, cuts: np.ndarray) -> np.ndarray:
@@ -136,7 +133,7 @@ def _labels_from_cuts(a_bin: np.ndarray, cuts: np.ndarray) -> np.ndarray:
     # まず各サンプルがどの cut より右にあるかを数えてラベル化
     # 例: cuts=[10, 50, 300] → ラベルは {0,1,2}(最後の境界〜先頭も1区間)
     labels = np.zeros_like(a_bin, dtype=np.int64)
-    for k, c in enumerate(cuts_sorted):
+    for _k, c in enumerate(cuts_sorted):
         labels += (a_bin >= c).astype(np.int64)
     labels %= cuts_sorted.size  # 循環
     return labels
@@ -147,7 +144,7 @@ def bin_azimuth_dynamic(
     cfg: AzimuthBinConfig = AzimuthBinConfig(),
 ) -> dict:
     """ヒストグラム+円周平滑で“谷”を境界に方位ビンを自動生成。
-    失敗時(谷が無い・制約未満)は CDF 等分でフォールバック(要警告)。
+    失敗時(谷が無い・制約未満)は CDF 等分でフォールバック(要警告)。.
 
     Returns:
       {

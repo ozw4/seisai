@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,37 +76,47 @@ def validate_csr(
     """
     ip = np.asarray(indptr)
     if ip.ndim != 1:
-        raise ValueError(f'{name}: indptr must be 1D, got shape={ip.shape}')
+        msg = f'{name}: indptr must be 1D, got shape={ip.shape}'
+        raise ValueError(msg)
     if ip.size == 0:
-        raise ValueError(f'{name}: indptr must be non-empty')
+        msg = f'{name}: indptr must be non-empty'
+        raise ValueError(msg)
     if not np.issubdtype(ip.dtype, np.integer):
-        raise ValueError(f'{name}: indptr must be integer dtype, got {ip.dtype}')
+        msg = f'{name}: indptr must be integer dtype, got {ip.dtype}'
+        raise ValueError(msg)
 
     if n_traces is None:
         n_traces = int(ip.size) - 1
     else:
         n_traces = int(n_traces)
         if n_traces < 0:
-            raise ValueError(f'{name}: n_traces must be >= 0, got {n_traces}')
+            msg = f'{name}: n_traces must be >= 0, got {n_traces}'
+            raise ValueError(msg)
 
     if int(ip.size) != n_traces + 1:
+        msg = f'{name}: indptr length must be n_traces+1={n_traces + 1}, got {ip.size}'
         raise ValueError(
-            f'{name}: indptr length must be n_traces+1={n_traces + 1}, got {ip.size}'
+            msg
         )
 
     if int(ip[0]) != 0:
-        raise ValueError(f'{name}: indptr[0] must be 0, got {int(ip[0])}')
+        msg = f'{name}: indptr[0] must be 0, got {int(ip[0])}'
+        raise ValueError(msg)
     if np.any(ip[1:] < ip[:-1]):
-        raise ValueError(f'{name}: indptr must be monotonic non-decreasing')
+        msg = f'{name}: indptr must be monotonic non-decreasing'
+        raise ValueError(msg)
 
     d = np.asarray(data)
     if d.ndim != 1:
-        raise ValueError(f'{name}: data must be 1D, got shape={d.shape}')
+        msg = f'{name}: data must be 1D, got shape={d.shape}'
+        raise ValueError(msg)
     if not np.issubdtype(d.dtype, np.integer):
-        raise ValueError(f'{name}: data must be integer dtype, got {d.dtype}')
+        msg = f'{name}: data must be integer dtype, got {d.dtype}'
+        raise ValueError(msg)
     if int(ip[-1]) != int(d.size):
+        msg = f'{name}: indptr[-1] must equal len(data)={d.size}, got {int(ip[-1])}'
         raise ValueError(
-            f'{name}: indptr[-1] must equal len(data)={d.size}, got {int(ip[-1])}'
+            msg
         )
 
     return n_traces
@@ -128,7 +141,8 @@ def load_phase_pick_csr_npz(path: str | Path) -> PhasePickCSR:
         required = ('p_indptr', 'p_data', 's_indptr', 's_data')
         missing = [k for k in required if k not in z.files]
         if missing:
-            raise ValueError(f'missing key(s) in npz: {missing}')
+            msg = f'missing key(s) in npz: {missing}'
+            raise ValueError(msg)
 
         p_indptr = np.asarray(z['p_indptr'])
         p_data = np.asarray(z['p_data'])
@@ -171,16 +185,19 @@ def subset_csr(
 
     ii_in = np.asarray(indices)
     if not np.issubdtype(ii_in.dtype, np.integer):
-        raise ValueError(f'{name}: indices must be integer dtype, got {ii_in.dtype}')
+        msg = f'{name}: indices must be integer dtype, got {ii_in.dtype}'
+        raise ValueError(msg)
     ii = ii_in.astype(np.int64, copy=False)
     if ii.ndim != 1:
-        raise ValueError(f'{name}: indices must be 1D, got shape={ii.shape}')
+        msg = f'{name}: indices must be 1D, got shape={ii.shape}'
+        raise ValueError(msg)
     if ii.size == 0:
         return np.zeros(1, dtype=np.int64), np.zeros(0, dtype=np.int64)
 
     if int(ii.min()) < 0 or int(ii.max()) >= n_traces:
+        msg = f'{name}: indices out of range [0,{n_traces}), got min={int(ii.min())}, max={int(ii.max())}'
         raise ValueError(
-            f'{name}: indices out of range [0,{n_traces}), got min={int(ii.min())}, max={int(ii.max())}'
+            msg
         )
 
     starts = ip[ii]
@@ -215,7 +232,8 @@ def pad_csr(
     d = d_in.astype(np.int64, copy=False)
     n_traces = int(n_traces)
     if n_traces < n0:
-        raise ValueError(f'{name}: cannot pad to smaller n_traces={n_traces} < {n0}')
+        msg = f'{name}: cannot pad to smaller n_traces={n_traces} < {n0}'
+        raise ValueError(msg)
     pad = n_traces - n0
     if pad == 0:
         return ip, d
@@ -259,9 +277,11 @@ def invalidate_s_by_first(
     """Invalidate S picks per trace if s_first < p_first by emptying that S slice."""
     pf_in = np.asarray(p_first)
     if pf_in.ndim != 1:
-        raise ValueError(f'p_first must be 1D, got shape={pf_in.shape}')
+        msg = f'p_first must be 1D, got shape={pf_in.shape}'
+        raise ValueError(msg)
     if not np.issubdtype(pf_in.dtype, np.integer):
-        raise ValueError(f'p_first must be integer dtype, got {pf_in.dtype}')
+        msg = f'p_first must be integer dtype, got {pf_in.dtype}'
+        raise ValueError(msg)
     pf = pf_in.astype(np.int64, copy=False)
 
     sip_in = np.asarray(s_indptr)
@@ -276,9 +296,11 @@ def invalidate_s_by_first(
     else:
         sf_in = np.asarray(s_first)
         if sf_in.ndim != 1 or int(sf_in.size) != H:
-            raise ValueError(f's_first must have shape ({H},), got {sf_in.shape}')
+            msg = f's_first must have shape ({H},), got {sf_in.shape}'
+            raise ValueError(msg)
         if not np.issubdtype(sf_in.dtype, np.integer):
-            raise ValueError(f's_first must be integer dtype, got {sf_in.dtype}')
+            msg = f's_first must be integer dtype, got {sf_in.dtype}'
+            raise ValueError(msg)
         sf = sf_in.astype(np.int64, copy=False)
 
     # NOTE: s_first==0 means "no valid S picks"; if p_first>0, we still empty the S slice
@@ -330,14 +352,17 @@ def subset_pad_first_invalidate(
 
     ii_in = np.asarray(indices)
     if ii_in.ndim != 1:
-        raise ValueError(f'indices must be 1D, got shape={ii_in.shape}')
+        msg = f'indices must be 1D, got shape={ii_in.shape}'
+        raise ValueError(msg)
     if not np.issubdtype(ii_in.dtype, np.integer):
-        raise ValueError(f'indices must be integer dtype, got {ii_in.dtype}')
+        msg = f'indices must be integer dtype, got {ii_in.dtype}'
+        raise ValueError(msg)
     ii = ii_in.astype(np.int64, copy=False)
     H0 = int(ii.size)
     H = int(subset_traces)
     if H < H0:
-        raise ValueError(f'subset_traces={H} must be >= len(indices)={H0}')
+        msg = f'subset_traces={H} must be >= len(indices)={H0}'
+        raise ValueError(msg)
 
     p_ip, p_d = subset_csr(indptr=p_indptr, data=p_data, indices=ii, name='p')
     s_ip, s_d = subset_csr(indptr=s_indptr, data=s_data, indices=ii, name='s')

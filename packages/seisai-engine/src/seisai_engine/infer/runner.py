@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 
 from seisai_engine.predict import PostTileTransform, TileTransform, _run_tiled
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 
 @dataclass(frozen=True)
 class TiledWConfig:
-    """W 方向タイル推論の設定。
+    """W 方向タイル推論の設定。.
 
     想定:
     - 入力は (B,C,H,W)
@@ -32,7 +34,7 @@ class TiledWConfig:
 
 @dataclass(frozen=True)
 class TiledHConfig:
-    """H 方向タイル推論の設定。
+    """H 方向タイル推論の設定。.
 
     想定:
     - 入力は (B,C,H,W)
@@ -87,7 +89,8 @@ def _validate_model_for_infer(model: torch.nn.Module) -> None:
         raise ValueError(msg)
     c_out = int(model.out_chans)
     if c_out != 1:
-        raise ValueError(f'model.out_chans must be 1 for this runner, got {c_out}')
+        msg = f'model.out_chans must be 1 for this runner, got {c_out}'
+        raise ValueError(msg)
 
 
 @torch.no_grad()
@@ -99,7 +102,7 @@ def infer_batch_tiled_w(
     tile_transform: TileTransform | None = None,
     post_tile_transform: PostTileTransform | None = None,
 ) -> torch.Tensor:
-    """1バッチ分の W 方向タイル推論。
+    """1バッチ分の W 方向タイル推論。.
 
     Args:
             model: out_chans==1 を前提
@@ -114,15 +117,18 @@ def infer_batch_tiled_w(
     _validate_model_for_infer(model)
 
     if not isinstance(x_bchw, torch.Tensor) or x_bchw.ndim != 4:
+        msg = f'x_bchw must be torch.Tensor with shape (B,C,H,W), got {type(x_bchw)} {getattr(x_bchw, "shape", None)}'
         raise ValueError(
-            f'x_bchw must be torch.Tensor with shape (B,C,H,W), got {type(x_bchw)} {getattr(x_bchw, "shape", None)}'
+            msg
         )
 
     b, _c, h, w = x_bchw.shape
     if b <= 0 or h <= 0 or w <= 0:
-        raise ValueError(f'invalid input shape: {tuple(x_bchw.shape)}')
+        msg = f'invalid input shape: {tuple(x_bchw.shape)}'
+        raise ValueError(msg)
     if w < cfg.tile_w:
-        raise ValueError(f'W ({w}) must be >= tile_w ({cfg.tile_w})')
+        msg = f'W ({w}) must be >= tile_w ({cfg.tile_w})'
+        raise ValueError(msg)
 
     return _run_tiled(
         model,
@@ -146,7 +152,7 @@ def infer_batch_tiled_h(
     tile_transform: TileTransform | None = None,
     post_tile_transform: PostTileTransform | None = None,
 ) -> torch.Tensor:
-    """1バッチ分の H 方向タイル推論。
+    """1バッチ分の H 方向タイル推論。.
 
     Args:
             model: out_chans==1 を前提
@@ -161,15 +167,18 @@ def infer_batch_tiled_h(
     _validate_model_for_infer(model)
 
     if not isinstance(x_bchw, torch.Tensor) or x_bchw.ndim != 4:
+        msg = f'x_bchw must be torch.Tensor with shape (B,C,H,W), got {type(x_bchw)} {getattr(x_bchw, "shape", None)}'
         raise ValueError(
-            f'x_bchw must be torch.Tensor with shape (B,C,H,W), got {type(x_bchw)} {getattr(x_bchw, "shape", None)}'
+            msg
         )
 
     b, _c, h, w = x_bchw.shape
     if b <= 0 or h <= 0 or w <= 0:
-        raise ValueError(f'invalid input shape: {tuple(x_bchw.shape)}')
+        msg = f'invalid input shape: {tuple(x_bchw.shape)}'
+        raise ValueError(msg)
     if h < cfg.tile_h:
-        raise ValueError(f'H ({h}) must be >= tile_h ({cfg.tile_h})')
+        msg = f'H ({h}) must be >= tile_h ({cfg.tile_h})'
+        raise ValueError(msg)
 
     return _run_tiled(
         model,
@@ -196,7 +205,7 @@ def iter_infer_loader_tiled_w(
     tile_transform: TileTransform | None = None,
     post_tile_transform: PostTileTransform | None = None,
 ) -> Iterator[tuple[torch.Tensor, list[dict[str, Any]]]]:
-    """DataLoader を回して推論し、(logits, metas) を逐次返す。
+    """DataLoader を回して推論し、(logits, metas) を逐次返す。.
 
     loader は (x_bchw, metas) を返す想定:
     - x_bchw: torch.Tensor (B,C,H,W)
@@ -223,15 +232,17 @@ def iter_infer_loader_tiled_w(
         x_bchw, metas = batch
 
         if not isinstance(x_bchw, torch.Tensor) or x_bchw.ndim != 4:
+            msg = f'x_bchw must be torch.Tensor (B,C,H,W), got {type(x_bchw)} {getattr(x_bchw, "shape", None)}'
             raise ValueError(
-                f'x_bchw must be torch.Tensor (B,C,H,W), got {type(x_bchw)} {getattr(x_bchw, "shape", None)}'
+                msg
             )
         if not isinstance(metas, list):
             msg = 'metas must be a list[dict]'
             raise ValueError(msg)
         if len(metas) != int(x_bchw.shape[0]):
+            msg = f'len(metas) must equal batch size B={int(x_bchw.shape[0])}, got {len(metas)}'
             raise ValueError(
-                f'len(metas) must equal batch size B={int(x_bchw.shape[0])}, got {len(metas)}'
+                msg
             )
 
         non_blocking = bool(device.type == 'cuda')
@@ -263,7 +274,7 @@ def iter_infer_loader_tiled_h(
     tile_transform: TileTransform | None = None,
     post_tile_transform: PostTileTransform | None = None,
 ) -> Iterator[tuple[torch.Tensor, list[dict[str, Any]]]]:
-    """DataLoader を回して推論し、(logits, metas) を逐次返す。
+    """DataLoader を回して推論し、(logits, metas) を逐次返す。.
 
     loader は (x_bchw, metas) を返す想定:
     - x_bchw: torch.Tensor (B,C,H,W)
@@ -290,15 +301,17 @@ def iter_infer_loader_tiled_h(
         x_bchw, metas = batch
 
         if not isinstance(x_bchw, torch.Tensor) or x_bchw.ndim != 4:
+            msg = f'x_bchw must be torch.Tensor (B,C,H,W), got {type(x_bchw)} {getattr(x_bchw, "shape", None)}'
             raise ValueError(
-                f'x_bchw must be torch.Tensor (B,C,H,W), got {type(x_bchw)} {getattr(x_bchw, "shape", None)}'
+                msg
             )
         if not isinstance(metas, list):
             msg = 'metas must be a list[dict]'
             raise ValueError(msg)
         if len(metas) != int(x_bchw.shape[0]):
+            msg = f'len(metas) must equal batch size B={int(x_bchw.shape[0])}, got {len(metas)}'
             raise ValueError(
-                f'len(metas) must equal batch size B={int(x_bchw.shape[0])}, got {len(metas)}'
+                msg
             )
 
         non_blocking = bool(device.type == 'cuda')
@@ -330,7 +343,7 @@ def run_infer_loader_tiled_w(
     tile_transform: TileTransform | None = None,
     post_tile_transform: PostTileTransform | None = None,
 ) -> list[tuple[torch.Tensor, list[dict[str, Any]]]]:
-    """iter_infer_loader_tiled_w の収集版(小規模デモ用)。"""
+    """iter_infer_loader_tiled_w の収集版(小規模デモ用)。."""
     return list(
         iter_infer_loader_tiled_w(
             model,
@@ -357,7 +370,7 @@ def run_infer_loader_tiled_h(
     tile_transform: TileTransform | None = None,
     post_tile_transform: PostTileTransform | None = None,
 ) -> list[tuple[torch.Tensor, list[dict[str, Any]]]]:
-    """iter_infer_loader_tiled_h の収集版(小規模デモ用)。"""
+    """iter_infer_loader_tiled_h の収集版(小規模デモ用)。."""
     return list(
         iter_infer_loader_tiled_h(
             model,

@@ -44,29 +44,36 @@ def save_psn_debug_png(
     tg_np = to_numpy_bchw(target_b3hw, name='target_b3hw')
 
     if not isinstance(logits_b3hw, torch.Tensor) or int(logits_b3hw.ndim) != 4:
+        msg = f'logits_b3hw must be torch.Tensor (B,3,H,W), got {type(logits_b3hw).__name__} {getattr(logits_b3hw, "shape", None)}'
         raise ValueError(
-            f'logits_b3hw must be torch.Tensor (B,3,H,W), got {type(logits_b3hw).__name__} {getattr(logits_b3hw, "shape", None)}'
+            msg
         )
     if int(logits_b3hw.shape[1]) != 3:
+        msg = f'logits_b3hw must have C==3, got shape={tuple(logits_b3hw.shape)}'
         raise ValueError(
-            f'logits_b3hw must have C==3, got shape={tuple(logits_b3hw.shape)}'
+            msg
         )
 
     B, Cx, H, W = x_np.shape
     if B <= 0 or H <= 0 or W <= 0:
-        raise ValueError(f'invalid x_bchw shape: {tuple(x_np.shape)}')
+        msg = f'invalid x_bchw shape: {tuple(x_np.shape)}'
+        raise ValueError(msg)
     if Cx <= 0:
-        raise ValueError(f'x_bchw must have C>=1, got shape={tuple(x_np.shape)}')
+        msg = f'x_bchw must have C>=1, got shape={tuple(x_np.shape)}'
+        raise ValueError(msg)
     if tuple(tg_np.shape) != (B, 3, H, W):
+        msg = f'target_b3hw shape mismatch: got {tuple(tg_np.shape)} expected {(B, 3, H, W)}'
         raise ValueError(
-            f'target_b3hw shape mismatch: got {tuple(tg_np.shape)} expected {(B, 3, H, W)}'
+            msg
         )
     if tuple(logits_b3hw.shape) != (B, 3, H, W):
+        msg = f'logits_b3hw shape mismatch: got {tuple(logits_b3hw.shape)} expected {(B, 3, H, W)}'
         raise ValueError(
-            f'logits_b3hw shape mismatch: got {tuple(logits_b3hw.shape)} expected {(B, 3, H, W)}'
+            msg
         )
     if not (0 <= int(b) < int(B)):
-        raise ValueError(f'b out of range: b={b} for B={B}')
+        msg = f'b out of range: b={b} for B={B}'
+        raise ValueError(msg)
 
     pred = torch.softmax(logits_b3hw.detach().float(), dim=1)
     pr_np = to_numpy_bchw(pred, name='pred_b3hw')
@@ -168,9 +175,8 @@ def _pick_str(v: Any, *, b: int) -> str | None:
         return v
     if isinstance(v, Path):
         return str(v)
-    if isinstance(v, (list, tuple)):
-        if 0 <= int(b) < len(v):
-            return _pick_str(v[int(b)], b=b)
+    if isinstance(v, (list, tuple)) and 0 <= int(b) < len(v):
+        return _pick_str(v[int(b)], b=b)
     return None
 
 

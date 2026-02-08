@@ -8,7 +8,7 @@ def compute_local_event_probabilities(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Step1:
     H×T の初動確率 p_ht から、時間窓 ±half_window 内で少なくとも1回イベントが起こる
-    局所イベント確率 q_ht と、チャンネル平均スコア S_t を計算する。
+    局所イベント確率 q_ht と、チャンネル平均スコア S_t を計算する。.
 
     パラメータ
     ----------
@@ -65,7 +65,7 @@ def smooth_1d(
     x: np.ndarray,
     window: int,
 ) -> np.ndarray:
-    """1次元配列の移動平均による平滑化。
+    """1次元配列の移動平均による平滑化。.
 
     パラメータ
     ----------
@@ -88,8 +88,7 @@ def smooth_1d(
 
     x = np.asarray(x, dtype=np.float64)
     kernel = np.ones(window, dtype=np.float64) / float(window)
-    y = np.convolve(x, kernel, mode='same')
-    return y
+    return np.convolve(x, kernel, mode='same')
 
 
 def detect_event_peaks(
@@ -99,7 +98,7 @@ def detect_event_peaks(
     smooth_window: int = 1,
 ) -> np.ndarray:
     """Step2:
-    1D スコア列 S_t からイベント候補ピークの時刻インデックスを抽出する。
+    1D スコア列 S_t からイベント候補ピークの時刻インデックスを抽出する。.
 
     パラメータ
     ----------
@@ -159,8 +158,7 @@ def detect_event_peaks(
         if not too_close:
             selected.append(int(idx))
 
-    selected = np.array(sorted(selected), dtype=np.int64)
-    return selected
+    return np.array(sorted(selected), dtype=np.int64)
 
 
 def compute_window_event_probabilities(
@@ -172,7 +170,7 @@ def compute_window_event_probabilities(
     """Step3 (前半):
     各イベント候補ピーク k(時刻 peak_indices[k])に対して、
     [t - win_left, t + win_right] の窓内で少なくとも 1 回イベントが
-    起こるトレースごとの確率 q_hk を計算する。
+    起こるトレースごとの確率 q_hk を計算する。.
 
     パラメータ
     ----------
@@ -225,8 +223,7 @@ def compute_window_event_probabilities(
         m_h = cs[:, end] - cs[:, start]  # (H,)
         q_hk[:, k] = 1.0 - np.exp(-m_h)
 
-    q_hk = np.clip(q_hk, 0.0, 1.0)
-    return q_hk
+    return np.clip(q_hk, 0.0, 1.0)
 
 
 def compute_event_scores(
@@ -234,7 +231,7 @@ def compute_event_scores(
     weights_h: np.ndarray | None = None,
 ) -> np.ndarray:
     """Step3 (後半):
-    トレースごとの局所イベント確率 q_hk からイベント全体の確信度 Score_k を計算する。
+    トレースごとの局所イベント確率 q_hk からイベント全体の確信度 Score_k を計算する。.
 
     パラメータ
     ----------
@@ -252,7 +249,7 @@ def compute_event_scores(
         一様重みの場合は「イベントが見えているトレース割合の期待値」に相当。
     """
     validate_numpy(q_hk, allowed_ndims=(2,), name='q_hk')
-    H, K = q_hk.shape
+    H, _K = q_hk.shape
 
     q_hk = np.asarray(q_hk, dtype=np.float64)
     if weights_h is None:
@@ -270,8 +267,7 @@ def compute_event_scores(
         weights = weights / s
 
     score_k = weights @ q_hk
-    score_k = np.clip(score_k, 0.0, 1.0)
-    return score_k
+    return np.clip(score_k, 0.0, 1.0)
 
 
 def detect_events_from_probabilities(
@@ -286,7 +282,7 @@ def detect_events_from_probabilities(
     weights_h: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """パイプライン全体:
-    Step1〜3 の関数を組み合わせて、H×T の初動確率からイベント候補とスコアを検出する。
+    Step1〜3 の関数を組み合わせて、H×T の初動確率からイベント候補とスコアを検出する。.
 
     パラメータ
     ----------

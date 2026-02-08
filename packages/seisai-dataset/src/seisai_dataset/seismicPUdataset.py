@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import csv
 import os
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 @dataclass(frozen=True)
@@ -44,19 +47,22 @@ def parse_p_arrivals_local(csv_path: str) -> list[datetime]:
 
     """
     if not os.path.isfile(csv_path):
-        raise FileNotFoundError(f'csv not found: {csv_path}')
+        msg = f'csv not found: {csv_path}'
+        raise FileNotFoundError(msg)
     arrivals: list[datetime] = []
     with open(csv_path, newline='') as f:
         reader = csv.DictReader(f)
         if 'P_arrival_time_local' not in reader.fieldnames:
+            msg = f"CSV must contain 'P_arrival_time_local'. Found: {reader.fieldnames}"
             raise KeyError(
-                f"CSV must contain 'P_arrival_time_local'. Found: {reader.fieldnames}"
+                msg
             )
         for row in reader:
             s = row['P_arrival_time_local'].strip()
             dt = datetime.fromisoformat(s)
             if dt.tzinfo is None:
-                raise ValueError(f'P_arrival_time_local must be timezone-aware: {s}')
+                msg = f'P_arrival_time_local must be timezone-aware: {s}'
+                raise ValueError(msg)
             arrivals.append(dt)
     return arrivals
 
@@ -66,7 +72,7 @@ def format_day_path(
 ) -> str:
     """filename_template supports tokens:
       {YYYYMMDD}, {fs}, {pad}
-    Default matches 'JST_20200211_100Hz_pad30s.npy'
+    Default matches 'JST_20200211_100Hz_pad30s.npy'.
     """
     ymd = day_jst.strftime('%Y%m%d')
     fname = filename_template.format(YYYYMMDD=ymd, fs=fs, pad=pad_seconds)
@@ -206,14 +212,14 @@ class SeismicPUWindowDataset(Dataset):
         filename_template: str = 'JST_{YYYYMMDD}_{fs}Hz_pad{pad}s.npy',
         seed: int = 42,
         validate_shape: bool = True,
-    ):
+    ) -> None:
         self.root_dir = os.fspath(root_dir)
         self.csv_path = os.fspath(csv_path)
         self.win_sec = float(win_sec)
         self.fs = int(fs)
-        self.win_samples = int(round(self.win_sec * self.fs))
+        self.win_samples = round(self.win_sec * self.fs)
         self.pre_event_sec = float(pre_event_sec)
-        self.pre_event_samples = int(round(self.pre_event_sec * self.fs))
+        self.pre_event_samples = round(self.pre_event_sec * self.fs)
         self.neg_per_pos = int(neg_per_pos)
         self.neg_margin_sec = float(neg_margin_sec)
         self.channel_indices = channel_indices
@@ -298,7 +304,7 @@ class SeismicPUWindowDataset(Dataset):
                     for _ in range(n_neg_target):
                         u = rng.random() * total
                         acc = 0.0
-                        for (a, b), L in zip(allowed_ranges, lengths, strict=False):
+                        for (a, _b), L in zip(allowed_ranges, lengths, strict=False):
                             if acc + L >= u:
                                 offset = u - acc
                                 s_time = a + timedelta(seconds=offset)

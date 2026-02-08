@@ -14,7 +14,7 @@ def standardize_per_trace_np(x: np.ndarray, eps: float = 1e-10) -> np.ndarray:
 
 def standardize_per_trace_torch(x: Tensor, eps: float = 1e-10) -> Tensor:
     """標準化(W軸で平均0・分散1)
-    (W,) / (H,W) / (C,H,W) / (B,C,H,W) を受け付け、W は最後の軸と仮定。
+    (W,) / (H,W) / (C,H,W) / (B,C,H,W) を受け付け、W は最後の軸と仮定。.
     """
     validate_array(x, allowed_ndims=(1, 2, 3, 4), name='x', backend='torch')
     xf: Tensor = x.to(dtype=torch.float32)

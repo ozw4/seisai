@@ -70,7 +70,8 @@ def test_compute_ps_metrics_from_batch_smoke_and_empty_valid() -> None:
     }
 
     m = compute_ps_metrics_from_batch(logits, batch, thresholds=(5, 10, 20))
-    assert 'p_mean' in m and 's_mean' in m
+    assert 'p_mean' in m
+    assert 's_mean' in m
     assert m['p_mean'] == 0.0
     assert m['s_mean'] == 0.0
 

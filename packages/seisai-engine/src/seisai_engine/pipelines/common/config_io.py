@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from seisai_utils.config import load_config as _load_config
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 __all__ = [
     'load_config',
@@ -30,10 +32,7 @@ def resolve_relpath(base_dir: str | Path, p: str) -> str:
 
 
 def _split_key_path(key_path: str | Sequence[str]) -> list[str]:
-    if isinstance(key_path, str):
-        parts = key_path.split('.')
-    else:
-        parts = list(key_path)
+    parts = key_path.split('.') if isinstance(key_path, str) else list(key_path)
     if not parts or not all(isinstance(p, str) and p for p in parts):
         msg = 'key_path must be non-empty str or sequence[str]'
         raise ValueError(msg)
@@ -70,14 +69,18 @@ def resolve_cfg_paths(
         cur: Any = cfg
         for key in parts[:-1]:
             if not isinstance(cur, dict):
-                raise TypeError(f'config[{key}] must be dict')
+                msg = f'config[{key}] must be dict'
+                raise TypeError(msg)
             if key not in cur:
-                raise KeyError(f'config missing key: {".".join(parts)}')
+                msg = f'config missing key: {".".join(parts)}'
+                raise KeyError(msg)
             cur = cur[key]
         if not isinstance(cur, dict):
-            raise TypeError(f'config parent must be dict for {".".join(parts)}')
+            msg = f'config parent must be dict for {".".join(parts)}'
+            raise TypeError(msg)
         last = parts[-1]
         if last not in cur:
-            raise KeyError(f'config missing key: {".".join(parts)}')
+            msg = f'config missing key: {".".join(parts)}'
+            raise KeyError(msg)
         cur[last] = _resolve_value(base_dir, cur[last])
     return cfg

@@ -9,10 +9,10 @@ class PixelwiseLoss:
     IF: loss = PixelwiseLoss(criterion)(pred, batch, reduction='mean')
       - pred: (B,C,H,W)
       - batch['target']: (B,C,H,W)
-      - 任意: batch['mask_bool']: (B,H) もしくは (B,C,H,W) の bool(True=採用)
+      - 任意: batch['mask_bool']: (B,H) もしくは (B,C,H,W) の bool(True=採用).
     """
 
-    def __init__(self, criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]):
+    def __init__(self, criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]) -> None:
         self.criterion = criterion
 
     def __call__(
@@ -88,10 +88,9 @@ def huber_map(
     diff = pred - target
     abs_diff = diff.abs()
     squared_loss = 0.5 * diff**2
-    huber_loss = torch.where(
+    return torch.where(
         abs_diff <= delta, squared_loss, delta * (abs_diff - 0.5 * delta)
     )
-    return huber_loss
 
 
 def build_criterion(
@@ -102,7 +101,8 @@ def build_criterion(
     elif kind == 'mse':
         map_fn = l2_map
     elif kind == 'huber':
-        map_fn = lambda p, t: huber_map(p, t, delta=huber_delta)
+        def map_fn(p, t):
+            return huber_map(p, t, delta=huber_delta)
     else:
         raise ValueError(kind)
 

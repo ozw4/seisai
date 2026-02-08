@@ -5,7 +5,7 @@ from torch import nn
 
 
 class ModelEMA(nn.Module):
-    def __init__(self, model, decay=0.99, device=None):
+    def __init__(self, model, decay=0.99, device=None) -> None:
         super().__init__()
         self.module = deepcopy(model)
         self.module.eval()
@@ -14,7 +14,7 @@ class ModelEMA(nn.Module):
         if self.device is not None:
             self.module.to(device=device)
 
-    def _update(self, model, update_fn):
+    def _update(self, model, update_fn) -> None:
         with torch.no_grad():
             for ema_v, model_v in zip(
                 self.module.state_dict().values(),
@@ -25,17 +25,17 @@ class ModelEMA(nn.Module):
                     model_v = model_v.to(device=self.device)
                 ema_v.copy_(update_fn(ema_v, model_v))
 
-    def update(self, model):
+    def update(self, model) -> None:
         self._update(
             model, update_fn=lambda e, m: self.decay * e + (1.0 - self.decay) * m
         )
 
-    def set(self, model):
+    def set(self, model) -> None:
         self._update(model, update_fn=lambda e, m: m)
 
 
 class EnsembleModel(nn.Module):
-    def __init__(self, models):
+    def __init__(self, models) -> None:
         super().__init__()
         self.models = nn.ModuleList(models).eval()
 

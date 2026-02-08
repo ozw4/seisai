@@ -38,10 +38,11 @@ def _plot_gather_with_series(
 ) -> None:
     """- 表示前に per-trace z-score 標準化(standardize_per_trace)を適用
     - x軸は [ms]。imshow の extent も ms に合わせる
-    - 表示クリップは vmin=-3, vmax=+3
+    - 表示クリップは vmin=-3, vmax=+3.
     """
     if x.ndim != 2:
-        raise ValueError(f'x must be (H,T), got {x.shape}')
+        msg = f'x must be (H,T), got {x.shape}'
+        raise ValueError(msg)
     H, T = x.shape
     if dt_sec <= 0.0:
         msg = 'dt_sec must be > 0'
@@ -174,7 +175,7 @@ def collect_examples(
     seed: int = 0,
 ):
     """A棄却(reject_A)/B棄却(reject_B)/ノイズ(noise)の各クラスで want_per_class 件収集。
-    未達の場合は RuntimeError に不足カテゴリと観測内訳を含めて失敗させる。
+    未達の場合は RuntimeError に不足カテゴリと観測内訳を含めて失敗させる。.
     """
     if want_per_class < 1:
         msg = 'want_per_class must be >= 1'
@@ -288,7 +289,8 @@ if __name__ == '__main__':
     ]
     for p in segy_files:
         if not Path(p).exists():
-            raise FileNotFoundError(f'SEGY not found: {p}')
+            msg = f'SEGY not found: {p}'
+            raise FileNotFoundError(msg)
 
     target_len = 2048
     subset_traces = 128

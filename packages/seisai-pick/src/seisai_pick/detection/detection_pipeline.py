@@ -15,7 +15,7 @@ def run_event_detection_pipeline(
     time_support_fn: TimeSupportFn,
     peak_detector_fn: PeakDetectorFn,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Step1+Step2 だけで完結するシンプルなイベント検出パイプライン。
+    """Step1+Step2 だけで完結するシンプルなイベント検出パイプライン。.
 
     入力:
     ------

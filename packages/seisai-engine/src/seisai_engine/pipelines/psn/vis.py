@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 from seisai_utils.viz_phase import make_title_from_batch_meta, save_psn_debug_png
-from torch.utils.data import DataLoader
 
 from seisai_engine.loss.soft_label_ce import (
     build_pixel_mask_from_batch,
@@ -14,6 +14,9 @@ from seisai_engine.loss.soft_label_ce import (
 from seisai_engine.metrics.phase_pick_metrics import compute_ps_metrics_from_batch
 
 from .loss import criterion
+
+if TYPE_CHECKING:
+    from torch.utils.data import DataLoader
 
 __all__ = ['run_epoch_debug']
 
@@ -36,8 +39,9 @@ def run_epoch_debug(
         msg = "batch['input']/batch['target'] must be torch.Tensor"
         raise TypeError(msg)
     if x.ndim != 4 or y.ndim != 4:
+        msg = f'expected input/target batched tensors: input={tuple(x.shape)} target={tuple(y.shape)}'
         raise ValueError(
-            f'expected input/target batched tensors: input={tuple(x.shape)} target={tuple(y.shape)}'
+            msg
         )
 
     x_dev = x.to(device=device, non_blocking=(device.type == 'cuda'))

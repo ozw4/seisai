@@ -25,7 +25,7 @@ def fake_info():
     }
 
 
-def test_sampler_semantics_without_superwindow():
+def test_sampler_semantics_without_superwindow() -> None:
     info = fake_info()
     cfg = TraceSubsetSamplerConfig(
         primary_keys=('ffid',),

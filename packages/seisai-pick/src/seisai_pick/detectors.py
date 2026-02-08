@@ -5,11 +5,11 @@ from .stalta import stalta_1d
 
 
 def _ms_to_samples(dt_sec: float, ms: float) -> int:
-    """Ms をサンプル数へ変換(最低1)。"""
+    """Ms をサンプル数へ変換(最低1)。."""
     if dt_sec <= 0.0:
         msg = 'dt_sec must be > 0'
         raise ValueError(msg)
-    n = int(round(ms / (dt_sec * 1e3)))
+    n = round(ms / (dt_sec * 1e3))
     return max(n, 1)
 
 
@@ -25,7 +25,7 @@ def _picks_hist_from_R(
     """STALTA時系列 R から「初動run開始」を複数抽出し、hist[t] をインクリメントして貯める。
     - 連続 on 長が min_on_len に達した時点の run開始インデックスを pick とする
     - pick 直後は refr_len サンプル分スキップ(リフラクトリ)
-    - ヒステリシス: on条件は R>=thr_on、offリセットは R<=thr_off(thr_on>=thr_off を仮定)
+    - ヒステリシス: on条件は R>=thr_on、offリセットは R<=thr_off(thr_on>=thr_off を仮定).
     """
     T = R.size
     if T == 0:
@@ -68,7 +68,7 @@ def _stalta_pick_hist(
     min_on_len: int,
     refr_len: int,
 ) -> np.ndarray:
-    """(H,T) の各トレースに対して STALTA→初動run抽出→ヒスト加算を行い、hist[T] を返す。"""
+    """(H,T) の各トレースに対して STALTA→初動run抽出→ヒスト加算を行い、hist[T] を返す。."""
     H, T = x_ht.shape
     hist = np.zeros(T, dtype=np.int32)
     for h in range(H):
@@ -80,7 +80,7 @@ def _stalta_pick_hist(
 @njit(cache=True, fastmath=True)
 def _sliding_sum_same(hist: np.ndarray, win: int) -> np.ndarray:
     """非巡回・端部寄せの移動和(長さwin)。中心寄せではなく「可能な限り左寄せ」する。
-    例: t を中心にせず、区間 [t, t+win) を優先的に取る(端で範囲補正)。
+    例: t を中心にせず、区間 [t, t+win) を優先的に取る(端で範囲補正)。.
     """
     T = hist.size
     win = max(win, 1)
@@ -116,14 +116,15 @@ def detect_event_pick_cluster(
     eps: float = 1e-12,
 ) -> tuple[bool, np.ndarray, np.ndarray]:
     """リフラクトリ付き「初動候補クラスタ」方式。
-    戻り値: (is_event, pick_hist[T], cluster_counts[T])
+    戻り値: (is_event, pick_hist[T], cluster_counts[T]).
 
     - pick_hist[t]: 各トレースで抽出された初動run開始のヒスト(同一tに複数あれば合算)
     - cluster_counts[t]: 窓long=win_msの移動和(時刻t近傍のクラスタ本数)
     - is_event: max(cluster_counts) >= min_traces
     """
     if x_ht.ndim != 2:
-        raise ValueError(f'x_ht must be (H,T), got {x_ht.shape}')
+        msg = f'x_ht must be (H,T), got {x_ht.shape}'
+        raise ValueError(msg)
     if dt_sec <= 0.0:
         msg = 'dt_sec must be > 0'
         raise ValueError(msg)
@@ -157,7 +158,7 @@ def detect_event_pick_cluster(
 def _stalta_majority_counts(
     x_ht: np.ndarray, ns: int, nl: int, eps: float, thr: float
 ) -> np.ndarray:
-    """各トレースで STALTA→thr 判定。時刻 t ごとの合格本数 (T,) を返す。x_ht: (H,T)"""
+    """各トレースで STALTA→thr 判定。時刻 t ごとの合格本数 (T,) を返す。x_ht: (H,T)."""
     H, T = x_ht.shape
     counts = np.zeros(T, dtype=np.int32)
     for h in range(H):
@@ -170,7 +171,7 @@ def _stalta_majority_counts(
 
 @njit(cache=True, fastmath=True)
 def _has_run_geq(counts: np.ndarray, min_count: int, min_len: int) -> bool:
-    """counts[t] >= min_count が min_len サンプル以上 連続 なら True"""
+    """counts[t] >= min_count が min_len サンプル以上 連続 なら True."""
     run = 0
     T = counts.size
     for t in range(T):
@@ -195,7 +196,7 @@ def detect_event_stalta_majority(
     eps: float = 1e-12,
 ) -> tuple[bool, np.ndarray]:
     """STALTA + 多数決 + 連続長 でイベント有無を返す。
-    戻り値: (is_event, counts[T])  ※counts[t]はその時刻の「閾値以上トレース本数」
+    戻り値: (is_event, counts[T])  ※counts[t]はその時刻の「閾値以上トレース本数」.
 
     前提:
     - x_htは (H,T) の実数配列(float32/float64)
@@ -204,7 +205,8 @@ def detect_event_stalta_majority(
     - thr > 0, min_traces >= 1
     """
     if x_ht.ndim != 2:
-        raise ValueError(f'x_ht must be (H,T), got {x_ht.shape}')
+        msg = f'x_ht must be (H,T), got {x_ht.shape}'
+        raise ValueError(msg)
     if dt_sec <= 0.0:
         msg = 'dt_sec must be > 0'
         raise ValueError(msg)

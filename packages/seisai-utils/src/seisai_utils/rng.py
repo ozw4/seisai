@@ -22,7 +22,7 @@ def get_np_rng() -> np.random.Generator:
 
 
 def set_seed(seed: int = 42) -> None:
-    """全ライブラリの乱数シードを固定して再現性を担保する。"""
+    """全ライブラリの乱数シードを固定して再現性を担保する。."""
     os.environ['PYTHONHASHSEED'] = str(seed)
     random.seed(seed)
 
@@ -35,7 +35,7 @@ def set_seed(seed: int = 42) -> None:
 
 
 def worker_init_fn(worker_id: int) -> None:
-    """DataLoaderの各workerで乱数を初期化する。"""
+    """DataLoaderの各workerで乱数を初期化する。."""
     worker_seed = (torch.initial_seed() + worker_id) % 2**32
     random.seed(worker_seed)
 

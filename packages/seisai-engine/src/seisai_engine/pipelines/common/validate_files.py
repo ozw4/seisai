@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 __all__ = ['validate_files_exist']
 
@@ -19,4 +22,5 @@ def validate_files_exist(files: Iterable[str | Path]) -> None:
         if not path.exists():
             raise FileNotFoundError(path)
         if not path.is_file():
-            raise ValueError(f'expected file: {path}')
+            msg = f'expected file: {path}'
+            raise ValueError(msg)

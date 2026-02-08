@@ -197,40 +197,50 @@ def project_pick_csr_view(
     H = int(H)
     W = int(W)
     if W <= 0:
-        raise ValueError(f'W must be > 0, got {W}')
+        msg = f'W must be > 0, got {W}'
+        raise ValueError(msg)
 
     ip_in = np.asarray(indptr)
     if ip_in.ndim != 1:
-        raise ValueError(f'indptr must be 1D, got shape={ip_in.shape}')
+        msg = f'indptr must be 1D, got shape={ip_in.shape}'
+        raise ValueError(msg)
     if not np.issubdtype(ip_in.dtype, np.integer):
-        raise ValueError(f'indptr must be integer dtype, got {ip_in.dtype}')
+        msg = f'indptr must be integer dtype, got {ip_in.dtype}'
+        raise ValueError(msg)
     if int(ip_in.size) != H + 1:
-        raise ValueError(f'indptr length {ip_in.size} != H+1 {H + 1}')
+        msg = f'indptr length {ip_in.size} != H+1 {H + 1}'
+        raise ValueError(msg)
     if H == 0:
         if int(ip_in.size) != 1:
-            raise ValueError(f'indptr length {ip_in.size} != H+1 {H + 1}')
+            msg = f'indptr length {ip_in.size} != H+1 {H + 1}'
+            raise ValueError(msg)
         d_in = np.asarray(data)
         if d_in.ndim != 1:
-            raise ValueError(f'data must be 1D, got shape={d_in.shape}')
+            msg = f'data must be 1D, got shape={d_in.shape}'
+            raise ValueError(msg)
         if int(d_in.size) != 0:
             msg = 'data must be empty when H==0'
             raise ValueError(msg)
         return np.zeros(1, dtype=np.int64), np.zeros(0, dtype=np.int64)
 
     if int(ip_in[0]) != 0:
-        raise ValueError(f'indptr[0] must be 0, got {int(ip_in[0])}')
+        msg = f'indptr[0] must be 0, got {int(ip_in[0])}'
+        raise ValueError(msg)
     if np.any(ip_in[1:] < ip_in[:-1]):
         msg = 'indptr must be monotonic non-decreasing'
         raise ValueError(msg)
 
     d_in = np.asarray(data)
     if d_in.ndim != 1:
-        raise ValueError(f'data must be 1D, got shape={d_in.shape}')
+        msg = f'data must be 1D, got shape={d_in.shape}'
+        raise ValueError(msg)
     if not np.issubdtype(d_in.dtype, np.integer):
-        raise ValueError(f'data must be integer dtype, got {d_in.dtype}')
+        msg = f'data must be integer dtype, got {d_in.dtype}'
+        raise ValueError(msg)
     if int(ip_in[-1]) != int(d_in.size):
+        msg = f'indptr[-1] must equal len(data)={d_in.size}, got {int(ip_in[-1])}'
         raise ValueError(
-            f'indptr[-1] must equal len(data)={d_in.size}, got {int(ip_in[-1])}'
+            msg
         )
 
     ip = ip_in.astype(np.int64, copy=False)

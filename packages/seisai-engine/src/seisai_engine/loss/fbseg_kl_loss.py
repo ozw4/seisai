@@ -12,7 +12,7 @@ Reduction = Literal['mean', 'sum', 'none']
 class FbSegKLLossView:
     """First-break セグメンテーション用 KL 損失。
     - 任意チャネル C に対応(各チャネルで W 方向に正規化して KL を計算し、C 次元で平均)
-    - meta['fb_idx_view']>0 の (B,H) トレースのみで集約
+    - meta['fb_idx_view']>0 の (B,H) トレースのみで集約.
 
     IF:
       loss = FbSegKLLossView(tau=1.0, eps=0.0)(pred, batch, reduction='mean')
@@ -27,7 +27,7 @@ class FbSegKLLossView:
 
     """
 
-    def __init__(self, tau: float = 1.0, eps: float = 0.0):
+    def __init__(self, tau: float = 1.0, eps: float = 0.0) -> None:
         if tau <= 0.0:
             msg = 'tau must be > 0.0'
             raise ValueError(msg)

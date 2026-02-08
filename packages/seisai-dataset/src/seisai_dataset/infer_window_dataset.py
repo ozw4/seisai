@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+import contextlib
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, NoReturn
 
 import numpy as np
 import segyio
@@ -21,13 +21,16 @@ from .config import LoaderConfig
 from .file_info import build_file_info
 from .trace_subset_preproc import TraceSubsetLoader
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 DomainName = Literal['shot', 'recv', 'cmp']
 SecondarySortKey = Literal['ffid', 'chno', 'offset']
 
 
 @dataclass(frozen=True)
 class InferenceGatherWindowsConfig:
-    """推論用: gather を決定論で window 列挙する設定。
+    """推論用: gather を決定論で window 列挙する設定。.
 
     メモ:
     - W 方向は crop しない(不足時のみ右 0pad)。長い W は engine 側が tiled 推論で全域予測。
@@ -43,17 +46,17 @@ class InferenceGatherWindowsConfig:
 
 
 class _NoRandRNG:
-    """推論で RNG が呼ばれたら即失敗させるためのダミー RNG。"""
+    """推論で RNG が呼ばれたら即失敗させるためのダミー RNG。."""
 
-    def random(self, *args, **kwargs):
+    def random(self, *args, **kwargs) -> NoReturn:
         msg = 'random() is not allowed in inference'
         raise RuntimeError(msg)
 
-    def uniform(self, *args, **kwargs):
+    def uniform(self, *args, **kwargs) -> NoReturn:
         msg = 'uniform() is not allowed in inference'
         raise RuntimeError(msg)
 
-    def integers(self, *args, **kwargs):
+    def integers(self, *args, **kwargs) -> NoReturn:
         msg = 'integers() is not allowed in inference'
         raise RuntimeError(msg)
 
@@ -84,7 +87,7 @@ def _stable_lexsort_indices(
 
 
 def collate_pad_w_right(batch: Sequence[dict]) -> tuple[torch.Tensor, list[dict]]:
-    """可変 W を右 0pad して (B,C,H,Wmax) にまとめる collate。
+    """可変 W を右 0pad して (B,C,H,Wmax) にまとめる collate。.
 
     Returns:
             (x_bchw, metas)
@@ -103,7 +106,8 @@ def collate_pad_w_right(batch: Sequence[dict]) -> tuple[torch.Tensor, list[dict]
     Wmax = max(int(x.shape[2]) for x in xs)
     for x in xs:
         if x.ndim != 3:
-            raise ValueError(f'input must be (C,H,W), got {tuple(x.shape)}')
+            msg = f'input must be (C,H,W), got {tuple(x.shape)}'
+            raise ValueError(msg)
         if int(x.shape[0]) != C or int(x.shape[1]) != H:
             msg = 'all inputs must share (C,H) for padding collate'
             raise ValueError(msg)
@@ -118,7 +122,7 @@ def collate_pad_w_right(batch: Sequence[dict]) -> tuple[torch.Tensor, list[dict]
 
 
 class InferenceGatherWindowsDataset(Dataset):
-    """推論用 gather window dataset。
+    """推論用 gather window dataset。.
 
     返す dict 契約:
     - 'input': torch.Tensor (C,H,W)
@@ -228,8 +232,9 @@ class InferenceGatherWindowsDataset(Dataset):
             )
             fb = np.load(fb_path)
             if int(fb.shape[0]) != int(info['n_traces']):
+                msg = f'fb length {int(fb.shape[0])} != n_traces {int(info["n_traces"])} for {segy_path}'
                 raise ValueError(
-                    f'fb length {int(fb.shape[0])} != n_traces {int(info["n_traces"])} for {segy_path}'
+                    msg
                 )
             info['fb'] = fb
             self.file_infos.append(info)
@@ -255,10 +260,8 @@ class InferenceGatherWindowsDataset(Dataset):
         self.items.clear()
 
     def __del__(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
     def _build_items(self) -> None:
         win = int(self.cfg.win_size_traces)
@@ -361,7 +364,8 @@ class InferenceGatherWindowsDataset(Dataset):
             raise ValueError(msg)
         Hv, W = x_view.shape
         if int(Hv) != H:
-            raise ValueError(f'transform must keep H: got {int(Hv)}, expected {H}')
+            msg = f'transform must keep H: got {int(Hv)}, expected {H}'
+            raise ValueError(msg)
         if int(W) < W0:
             msg = 'transform must not crop time axis in inference'
             raise ValueError(msg)
@@ -413,8 +417,9 @@ class InferenceGatherWindowsDataset(Dataset):
             msg = "sample['input'] must be torch.Tensor"
             raise TypeError(msg)
         if x_in.ndim != 3:
+            msg = f"sample['input'] must be (C,H,W), got {tuple(x_in.shape)}"
             raise ValueError(
-                f"sample['input'] must be (C,H,W), got {tuple(x_in.shape)}"
+                msg
             )
         if int(x_in.shape[1]) != H or int(x_in.shape[2]) != int(W):
             msg = 'input shape must match (H,W) of x_view'

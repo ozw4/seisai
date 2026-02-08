@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import random
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -12,6 +11,9 @@ from torch.utils.data import Subset, get_worker_info
 
 from .checkpoint_io import save_checkpoint
 from .config_io import load_config, resolve_cfg_paths, resolve_relpath
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = [
     'ensure_fixed_infer_num_workers',
@@ -29,11 +31,13 @@ __all__ = [
 def load_cfg_with_base_dir(cfg_path: Path) -> tuple[dict, Path]:
     cfg_path = Path(cfg_path).expanduser().resolve()
     if not cfg_path.is_file():
-        raise FileNotFoundError(f'config not found: {cfg_path}')
+        msg = f'config not found: {cfg_path}'
+        raise FileNotFoundError(msg)
 
     cfg = load_config(str(cfg_path))
     if cfg is None:
-        raise ValueError(f'config is empty or failed to load: {cfg_path}')
+        msg = f'config is empty or failed to load: {cfg_path}'
+        raise ValueError(msg)
     if not isinstance(cfg, dict):
         msg = 'config must be dict'
         raise TypeError(msg)
@@ -77,7 +81,8 @@ def _unwrap_subset(ds: Any) -> Any:
 def set_dataset_rng(ds_or_subset: Any, seed: int) -> None:
     base = _unwrap_subset(ds_or_subset)
     if not hasattr(base, '_rng'):
-        raise AttributeError(f'dataset {type(base).__name__} has no _rng attribute')
+        msg = f'dataset {type(base).__name__} has no _rng attribute'
+        raise AttributeError(msg)
     base._rng = np.random.default_rng(int(seed))
 
 

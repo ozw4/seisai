@@ -24,7 +24,8 @@ def validate_primary_keys(primary_keys: object) -> tuple[str, ...]:
             msg = 'dataset.primary_keys must not contain empty values'
             raise ValueError(msg)
         if stripped in seen:
-            raise ValueError(f'dataset.primary_keys has duplicate: {stripped}')
+            msg = f'dataset.primary_keys has duplicate: {stripped}'
+            raise ValueError(msg)
         seen.add(stripped)
         normalized.append(stripped)
 

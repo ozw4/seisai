@@ -88,7 +88,7 @@ def _maybe_visualize(
     plt.show()
 
 
-def test_alignment_time_only(viz_show=False):
+def test_alignment_time_only(viz_show=False) -> None:
     np.random.seed(0)
     H, W = 32, 256
     x, fb = _make_pulse_stack(H, W, sigma_samples=4.0, seed=42)
@@ -105,7 +105,7 @@ def test_alignment_time_only(viz_show=False):
     assert x_view.shape == (H, L)
 
     H, W = x_view.shape
-    W0 = x.shape[1]
+    x.shape[1]
 
     meta['fb_idx_view'] = project_fb_idx_view(fb, H, W, meta)
     t_peak_amp = _argmax_per_row(np.abs(x_view))
@@ -133,7 +133,7 @@ def test_alignment_time_only(viz_show=False):
     assert np.allclose(area, 1.0, atol=1e-5)
 
 
-def test_alignment_h_and_t(viz_show=False):
+def test_alignment_h_and_t(viz_show=False) -> None:
     H, W = 24, 192
     x, fb = _make_pulse_stack(H, W, sigma_samples=3.0, seed=7)
     dt_sec = 0.004

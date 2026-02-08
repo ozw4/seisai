@@ -11,7 +11,7 @@ from seisai_dataset.phase_pick_io import (
 )
 
 
-def test_validate_csr_rejects_invalid_inputs():
+def test_validate_csr_rejects_invalid_inputs() -> None:
     # indptr must be 1D
     with pytest.raises(ValueError):
         validate_csr(indptr=np.array([[0, 1]]), data=np.array([1], dtype=np.int64))
@@ -52,7 +52,7 @@ def test_validate_csr_rejects_invalid_inputs():
         )
 
 
-def test_subset_returns_expected_csr_and_first():
+def test_subset_returns_expected_csr_and_first() -> None:
     # 4 traces (rows)
     p_indptr = np.array([0, 2, 2, 3, 5], dtype=np.int64)
     p_data = np.array([10, 5, 2, 0, 7], dtype=np.int64)  # includes invalid 0
@@ -77,7 +77,7 @@ def test_subset_returns_expected_csr_and_first():
     np.testing.assert_array_equal(s_first, np.array([6, 12, 0], dtype=np.int64))
 
 
-def test_pad_adds_empty_traces_and_first_becomes_zero():
+def test_pad_adds_empty_traces_and_first_becomes_zero() -> None:
     p_ip = np.array([0, 2, 4, 5], dtype=np.int64)
     p_d = np.array([0, 7, 10, 5, 2], dtype=np.int64)
 
@@ -99,7 +99,7 @@ def test_pad_adds_empty_traces_and_first_becomes_zero():
     np.testing.assert_array_equal(s_first, np.array([6, 12, 0, 0, 0], dtype=np.int64))
 
 
-def test_s_first_lt_p_first_invalidates_s_slice_and_first():
+def test_s_first_lt_p_first_invalidates_s_slice_and_first() -> None:
     # H=2
     p_ip = np.array([0, 1, 2], dtype=np.int64)
     p_d = np.array([10, 5], dtype=np.int64)
@@ -122,14 +122,14 @@ def test_s_first_lt_p_first_invalidates_s_slice_and_first():
     np.testing.assert_array_equal(s_first2, np.array([0, 9], dtype=np.int64))
 
 
-def test_non_positive_picks_are_invalid_for_first():
+def test_non_positive_picks_are_invalid_for_first() -> None:
     indptr = np.array([0, 3, 3], dtype=np.int64)  # H=2
     data = np.array([-3, 0, -1], dtype=np.int64)
     first = csr_first_positive(indptr=indptr, data=data)
     np.testing.assert_array_equal(first, np.array([0, 0], dtype=np.int64))
 
 
-def test_helpers_reject_non_integer_dtype_inputs():
+def test_helpers_reject_non_integer_dtype_inputs() -> None:
     # subset_csr: float inputs must not be silently cast
     with pytest.raises(ValueError):
         subset_csr(
@@ -167,7 +167,7 @@ def test_helpers_reject_non_integer_dtype_inputs():
         )
 
 
-def test_load_phase_pick_csr_npz_missing_keys_dtype_and_validate(tmp_path):
+def test_load_phase_pick_csr_npz_missing_keys_dtype_and_validate(tmp_path) -> None:
     # missing key(s)
     path_missing = tmp_path / 'missing_keys.npz'
     np.savez(
@@ -207,7 +207,7 @@ def test_load_phase_pick_csr_npz_missing_keys_dtype_and_validate(tmp_path):
         _ = load_phase_pick_csr_npz(path_bad)
 
 
-def test_subset_pad_first_invalidate_end_to_end():
+def test_subset_pad_first_invalidate_end_to_end() -> None:
     # 4 traces total
     # P picks:
     # t0: [10]

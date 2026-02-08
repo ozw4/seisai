@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from contextlib import nullcontext
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from seisai_utils.logging import MetricLogger
 from torch import nn
-from torch.utils.data import DataLoader
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from torch.utils.data import DataLoader
 
 __all__ = ['after_step', 'setup_amp', 'train_one_epoch', 'train_step']
 

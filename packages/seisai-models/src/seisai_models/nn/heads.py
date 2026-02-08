@@ -6,7 +6,7 @@ from torch import nn
 
 
 class SegmentationHead2d(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3):
+    def __init__(self, in_channels, out_channels, kernel_size=3) -> None:
         super().__init__()
         self.conv = nn.Conv2d(
             in_channels, out_channels, kernel_size=kernel_size, padding=kernel_size // 2
@@ -21,7 +21,7 @@ class SegClsHead2d(nn.Module):
     入力:  x (B, C_in, H, W)
     出力:  y (B, num_classes, H_out, W_out)
       - 二値: num_classes=1 + activation='sigmoid'
-      - 多クラス: num_classes>=2 + activation='softmax' もしくはロジット返却
+      - 多クラス: num_classes>=2 + activation='softmax' もしくはロジット返却.
     """
 
     def __init__(
@@ -62,8 +62,9 @@ class SegClsHead2d(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() != 4:
+            msg = f'x は (B,C,H,W) である必要があります: got {tuple(x.shape)}'
             raise ValueError(
-                f'x は (B,C,H,W) である必要があります: got {tuple(x.shape)}'
+                msg
             )
         h = self.proj(x)
         h = self.bn(h)

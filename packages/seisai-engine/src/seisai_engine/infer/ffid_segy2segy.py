@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -10,6 +9,10 @@ from seisai_dataset.ffid_gather_iter import FFIDGatherIterator, SortWithinGather
 from seisai_utils.segy_write import write_segy_like_input
 
 from seisai_engine.predict import _run_tiled
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -46,15 +49,17 @@ def _infer_hw_denorm_like_input(
     cfg: Tiled2DConfig,
     eps_std: float,
 ) -> np.ndarray:
-    """x_hw(=元スケール) -> per-trace標準化 -> tiled推論 -> denormして元スケールで返す。"""
+    """x_hw(=元スケール) -> per-trace標準化 -> tiled推論 -> denormして元スケールで返す。."""
     if x_hw.ndim != 2:
-        raise ValueError(f'x_hw must be (H,W), got {x_hw.shape}')
+        msg = f'x_hw must be (H,W), got {x_hw.shape}'
+        raise ValueError(msg)
 
     x = np.asarray(x_hw, dtype=np.float32)
     h = int(x.shape[0])
     w = int(x.shape[1])
     if h <= 0 or w <= 0:
-        raise ValueError(f'invalid x_hw shape: {x.shape}')
+        msg = f'invalid x_hw shape: {x.shape}'
+        raise ValueError(msg)
 
     m = x.mean(axis=1, keepdims=True)
     s = x.std(axis=1, keepdims=True) + float(eps_std)
@@ -69,14 +74,8 @@ def _infer_hw_denorm_like_input(
 
     ov_h = int(cfg.overlap_h)
     ov_w = int(cfg.overlap_w)
-    if tile_h == 1:
-        ov_h = 0
-    else:
-        ov_h = min(ov_h, tile_h - 1)
-    if tile_w == 1:
-        ov_w = 0
-    else:
-        ov_w = min(ov_w, tile_w - 1)
+    ov_h = 0 if tile_h == 1 else min(ov_h, tile_h - 1)
+    ov_w = 0 if tile_w == 1 else min(ov_w, tile_w - 1)
 
     y = _run_tiled(
         model,
@@ -106,7 +105,7 @@ def run_ffid_gather_infer_and_write_segy(
     eps_std: float = 1e-8,
     device: torch.device | None = None,
 ) -> list[Path]:
-    """FFID gather 単位で推論して、入力SEGYと同じサイズ/ヘッダ維持でSEGY出力する。
+    """FFID gather 単位で推論して、入力SEGYと同じサイズ/ヘッダ維持でSEGY出力する。.
 
     - FFIDごとに gather(H,W) を作る(H=trace数, W=全サンプル)
     - per-trace mean/std で標準化して推論
@@ -148,8 +147,9 @@ def run_ffid_gather_infer_and_write_segy(
             n_traces = int(info['n_traces'])
             n_samples = int(info['n_samples'])
             if n_traces <= 0 or n_samples <= 0:
+                msg = f'invalid segy shape: n_traces={n_traces}, n_samples={n_samples} ({src_path})'
                 raise ValueError(
-                    f'invalid segy shape: n_traces={n_traces}, n_samples={n_samples} ({src_path})'
+                    msg
                 )
 
             out_hw = np.zeros((n_traces, n_samples), dtype=np.float32)
@@ -163,8 +163,9 @@ def run_ffid_gather_infer_and_write_segy(
                     msg = 'trace_indices out of range'
                     raise ValueError(msg)
                 if int(g.x_hw.shape[1]) != n_samples:
+                    msg = f'gather W mismatch: got {int(g.x_hw.shape[1])}, want {n_samples} ({src_path})'
                     raise ValueError(
-                        f'gather W mismatch: got {int(g.x_hw.shape[1])}, want {n_samples} ({src_path})'
+                        msg
                     )
 
                 y_hw = _infer_hw_denorm_like_input(
@@ -180,8 +181,9 @@ def run_ffid_gather_infer_and_write_segy(
 
             if not bool(seen.all()):
                 miss = int((~seen).sum())
+                msg = f'some traces were not filled (miss={miss}) in {src_path}'
                 raise ValueError(
-                    f'some traces were not filled (miss={miss}) in {src_path}'
+                    msg
                 )
 
             dst = write_segy_like_input(

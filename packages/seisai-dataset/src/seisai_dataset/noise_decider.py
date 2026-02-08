@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-import numpy as np
 from seisai_pick.detectors import (
     detect_event_pick_cluster,
     detect_event_stalta_majority,
 )
 from seisai_transforms.signal_ops.analytic.envelop import compute_envelope
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 # ---- 設定 ----
@@ -17,7 +19,7 @@ from seisai_transforms.signal_ops.analytic.envelop import compute_envelope
 class EventDetectConfig:
     """包絡→STALTA を用いたイベント検出設定。
     - A方式: 多数決 + 連続長
-    - B方式: 初動候補クラスタ(ヒステリシス + リフラクトリ)
+    - B方式: 初動候補クラスタ(ヒステリシス + リフラクトリ).
     """
 
     # Preprocess
@@ -47,7 +49,7 @@ DecisionReason = Literal['noise', 'reject_A', 'reject_B']
 
 @dataclass(frozen=True)
 class NoiseDecision:
-    """判定結果 + デバッグ用の時系列(可視化に使える)"""
+    """判定結果 + デバッグ用の時系列(可視化に使える)."""
 
     is_noise: bool
     reason: DecisionReason
@@ -62,7 +64,7 @@ def decide_noise(
     dt_sec: float,  # サンプリング間隔 [s]
     cfg: EventDetectConfig,
 ) -> NoiseDecision:
-    """(H,T) 窓に対し、B→A の順でイベントを検出し、ノイズのみ True を返す。
+    """(H,T) 窓に対し、B→A の順でイベントを検出し、ノイズのみ True を返す。.
 
     返却:
     NoiseDecision(
@@ -72,7 +74,8 @@ def decide_noise(
     )
     """
     if x.ndim != 2:
-        raise ValueError(f'x must be 2D (H,T), got {x.shape}')
+        msg = f'x must be 2D (H,T), got {x.shape}'
+        raise ValueError(msg)
     if not (dt_sec > 0.0):
         msg = 'dt_sec must be > 0'
         raise ValueError(msg)

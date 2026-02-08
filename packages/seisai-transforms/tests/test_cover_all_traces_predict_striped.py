@@ -17,7 +17,7 @@ class ProbeIdentity(nn.Module):
     「マスク(=全ゼロ行)」として出現した回数を seen[b,h] に累積する。
     """
 
-    def __init__(self, B: int, H: int):
+    def __init__(self, B: int, H: int) -> None:
         super().__init__()
         self.B = int(B)
         self.H = int(H)
@@ -25,7 +25,8 @@ class ProbeIdentity(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (N,1,H,W)  ※N = B * (#並列パス)
-        assert x.dim() == 4 and x.size(2) == self.H
+        assert x.dim() == 4
+        assert x.size(2) == self.H
         N = x.size(0)
         # 行が完全に 0 か判定(noise_std=0 & replace 前提)
         row_zero = x[:, 0].abs().sum(dim=-1) == 0  # (N,H) bool
@@ -38,7 +39,7 @@ class ProbeIdentity(nn.Module):
         return x  # 恒等
 
 
-def _run_one_case(H, W, band_width, mask_ratio, offsets, B=2, device='cpu'):
+def _run_one_case(H, W, band_width, mask_ratio, offsets, B=2, device='cpu') -> None:
     # 入力を非ゼロにしておく(0埋めマスク検出の前提)
     torch.manual_seed(0)
     x = torch.randn(B, 1, H, W, device=device) + 1.0
@@ -63,23 +64,26 @@ def _run_one_case(H, W, band_width, mask_ratio, offsets, B=2, device='cpu'):
     if not ok:
         # 失敗時はどの行が欠落かを簡易表示
         miss = (model.seen != expected).nonzero(as_tuple=False)
-        raise AssertionError(
+        msg = (
             f'coverage failed: H={H},W={W},band_width={band_width},ratio={mask_ratio},offsets={offsets}; '
             f'mismatch rows: {miss.tolist()}'
         )
+        raise AssertionError(
+            msg
+        )
 
 
-def test_complete_coverage():
+def test_complete_coverage() -> None:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     cases = [
         # band_width=1(従来相当)
-        dict(H=17, W=64, band_width=1, mask_ratio=0.5, offsets=(0,)),
-        dict(H=33, W=40, band_width=1, mask_ratio=0.3, offsets=(0, 1, 2)),
+        {'H': 17, 'W': 64, 'band_width': 1, 'mask_ratio': 0.5, 'offsets': (0,)},
+        {'H': 33, 'W': 40, 'band_width': 1, 'mask_ratio': 0.3, 'offsets': (0, 1, 2)},
         # 幅付きバンド
-        dict(H=64, W=128, band_width=4, mask_ratio=0.25, offsets=(0,)),
-        dict(H=37, W=96, band_width=5, mask_ratio=0.4, offsets=(0, 1)),
-        dict(H=13, W=80, band_width=5, mask_ratio=1.0, offsets=(0,)),  # 全行一括
-        dict(H=48, W=72, band_width=7, mask_ratio=0.6, offsets=(0, 1, 2, 3)),
+        {'H': 64, 'W': 128, 'band_width': 4, 'mask_ratio': 0.25, 'offsets': (0,)},
+        {'H': 37, 'W': 96, 'band_width': 5, 'mask_ratio': 0.4, 'offsets': (0, 1)},
+        {'H': 13, 'W': 80, 'band_width': 5, 'mask_ratio': 1.0, 'offsets': (0,)},  # 全行一括
+        {'H': 48, 'W': 72, 'band_width': 7, 'mask_ratio': 0.6, 'offsets': (0, 1, 2, 3)},
     ]
     for cfg in cases:
         _run_one_case(**cfg, device=device)

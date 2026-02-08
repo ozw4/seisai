@@ -47,14 +47,13 @@ def gaussian_pulse1d_np(
 
     xs = np.arange(W, dtype=np.float64)
     z = -0.5 * ((xs - m[..., None]) / s[..., None]) ** 2
-    g = np.exp(z).astype(np.float32, copy=False)
-    return g
+    return np.exp(z).astype(np.float32, copy=False)
 
 
 def gaussian_probs1d_np(
     mu: np.ndarray, sigma_bins: np.ndarray | float, W: int
 ) -> np.ndarray:
-    """mu: (...), sigma_bins: broadcastable to mu, return shape (..., W), sum=1 along last axis"""
+    """mu: (...), sigma_bins: broadcastable to mu, return shape (..., W), sum=1 along last axis."""
     if W <= 0:
         msg = 'W must be positive'
         raise ValueError(msg)
@@ -80,7 +79,7 @@ def gaussian_probs1d_np(
 def gaussian_probs1d_torch(
     mu: torch.Tensor, sigma_bins: torch.Tensor | float, W: int
 ) -> torch.Tensor:
-    """mu: (...), sigma_bins: broadcastable to mu, return shape (..., W), sum=1 along last axis"""
+    """mu: (...), sigma_bins: broadcastable to mu, return shape (..., W), sum=1 along last axis."""
     if W <= 0:
         msg = 'W must be positive'
         raise ValueError(msg)

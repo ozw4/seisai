@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import numpy as np
 from seisai_utils.validator import validate_array
 from tqdm import tqdm
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ===== helpers =====
 
@@ -16,7 +19,7 @@ def _percentile(a: np.ndarray, q: float, axis: int, keepdims: bool) -> np.ndarra
 
 
 def _robust_loc_scale(seg_nw: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray]:
-    """seg_nw: (N, Wseg)
+    """seg_nw: (N, Wseg).
 
     Returns:
       mu_n:   (N,)
@@ -43,7 +46,9 @@ def _robust_loc_scale(seg_nw: np.ndarray, method: str) -> tuple[np.ndarray, np.n
 def _build_anchors(
     W: int, win: int, hop: int, causal: bool
 ) -> tuple[np.ndarray, Callable[[int], tuple[int, int]]]:
-    assert int(W) > 0 and int(win) > 0 and int(hop) > 0
+    assert int(W) > 0
+    assert int(win) > 0
+    assert int(hop) > 0
     W = int(W)
     win = int(win)
     hop = int(hop)

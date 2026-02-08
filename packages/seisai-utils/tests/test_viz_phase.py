@@ -1,6 +1,6 @@
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use('Agg')
+mpl.use('Agg')
 
 import torch
 from seisai_utils.viz_phase import (

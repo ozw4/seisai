@@ -6,7 +6,7 @@ from seisai_utils.validator import validate_numpy
 @njit(cache=True, fastmath=True)
 def _sliding_sum_same(hist: np.ndarray, win: int) -> np.ndarray:
     """1 次元ヒストグラム `hist` に対して，長さ `win` のスライディング窓で
-    各時刻を中心とした窓内和を計算する。
+    各時刻を中心とした窓内和を計算する。.
 
     端点付近では窓が配列の範囲外にはみ出さないように開始位置を調整する。
     `win` が 1 未満の場合は 1 とみなして計算する。
@@ -53,7 +53,7 @@ def _picks_hist(
     hist: np.ndarray,
 ) -> None:
     """閾値ヒステリシスとリフラクトリ期間付きのピーク検出を行い，
-    検出開始位置ごとに `hist` をインクリメントする。
+    検出開始位置ごとに `hist` をインクリメントする。.
 
     `R[t]` が `thr_on` 以上の状態が `min_on_len` サンプル以上続いた場合，
     その区間の先頭インデックス `t0` に対して `hist[t0]` を 1 増やす。
@@ -116,7 +116,7 @@ def _majority_counts_from_feature(
     thr: float,
 ) -> np.ndarray:
     """特徴量行列 `feat_ht` に対して，閾値 `thr` 以上のチャネル数を
-    各時刻ごとにカウントする。
+    各時刻ごとにカウントする。.
 
     Parameters
     ----------
@@ -149,7 +149,7 @@ def compute_time_support_from_pick_cluster(
     refr_len: int,
     win_len: int,
 ) -> np.ndarray:
-    """ピックのクラスタリングに基づいて，時刻 t 近傍でイベントを支持しているチャネルの“割合” S_t (0〜1 スケール) を計算する。
+    """ピックのクラスタリングに基づいて，時刻 t 近傍でイベントを支持しているチャネルの“割合” S_t (0〜1 スケール) を計算する。.
 
     入力特徴量行列 `feat_ht` の各チャネルに対して `_picks_hist` によるピーク検出を行い，
     ピーク開始位置のヒストグラムを作成する。その後，長さ `win_len` の窓で
@@ -214,8 +214,7 @@ def compute_time_support_from_pick_cluster(
 
     cluster = _sliding_sum_same(hist, int(win_len)).astype(np.float64)
     # チャネル数で割ってスケールを「1 チャネルあたりの平均ピック数」に揃える
-    S_t = cluster / float(H)
-    return S_t
+    return cluster / float(H)
 
 
 def compute_time_support_from_majority(
@@ -223,7 +222,7 @@ def compute_time_support_from_majority(
     *,
     thr: float,
 ) -> np.ndarray:
-    """多数決に基づいて時刻 t 近傍でイベントを支持しているチャネルの“割合” S_t (0〜1 スケール) を計算する。
+    """多数決に基づいて時刻 t 近傍でイベントを支持しているチャネルの“割合” S_t (0〜1 スケール) を計算する。.
 
     特徴量行列 `feat_ht` の各時刻 t について，値が `thr` 以上のチャネル数を
     `_majority_counts_from_feature` でカウントし，チャネル数 H で割ることで
@@ -261,8 +260,7 @@ def compute_time_support_from_majority(
         float(thr),
     ).astype(np.float64)
 
-    S_t = counts / float(H)
-    return S_t
+    return counts / float(H)
 
 
 def compute_time_support_from_probabilities(
@@ -272,7 +270,7 @@ def compute_time_support_from_probabilities(
 ) -> np.ndarray:
     """Step1:
     H×T の初動確率 p_ht から，時間方向の窓平均スコアに基づく
-    time support S_t を計算する。
+    time support S_t を計算する。.
 
     - 各トレース h・各時刻 t について，
       窓 [t-half_window, t+half_window] の平均値を m_ht[h,t] とする。

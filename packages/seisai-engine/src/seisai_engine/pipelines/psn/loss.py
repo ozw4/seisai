@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
 
 from seisai_engine.loss.soft_label_ce import (
     build_pixel_mask_from_batch,
     soft_label_ce_masked_mean,
 )
+
+if TYPE_CHECKING:
+    import torch
 
 __all__ = ['criterion']
 

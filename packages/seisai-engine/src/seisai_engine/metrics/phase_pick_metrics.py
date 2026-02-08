@@ -48,12 +48,14 @@ def masked_abs_error_1d(
         msg = 'valid_bh must be torch.Tensor with shape (B,H)'
         raise ValueError(msg)
     if valid_bh.dtype is not torch.bool:
-        raise TypeError(f'valid_bh must be bool tensor, got dtype={valid_bh.dtype}')
+        msg = f'valid_bh must be bool tensor, got dtype={valid_bh.dtype}'
+        raise TypeError(msg)
     if tuple(pred_idx_bh.shape) != tuple(gt_idx_bh.shape) or tuple(
         pred_idx_bh.shape
     ) != tuple(valid_bh.shape):
+        msg = f'shape mismatch: pred={tuple(pred_idx_bh.shape)} gt={tuple(gt_idx_bh.shape)} valid={tuple(valid_bh.shape)}'
         raise ValueError(
-            f'shape mismatch: pred={tuple(pred_idx_bh.shape)} gt={tuple(gt_idx_bh.shape)} valid={tuple(valid_bh.shape)}'
+            msg
         )
 
     pred = pred_idx_bh.to(dtype=torch.int64)
@@ -83,7 +85,8 @@ def summarize_abs_error(
     if not isinstance(err_1d, torch.Tensor):
         err_1d = torch.as_tensor(err_1d)
     if int(err_1d.ndim) != 1:
-        raise ValueError(f'err_1d must be 1D, got shape={tuple(err_1d.shape)}')
+        msg = f'err_1d must be 1D, got shape={tuple(err_1d.shape)}'
+        raise ValueError(msg)
 
     n = int(err_1d.numel())
     if n == 0:
@@ -104,12 +107,10 @@ def summarize_abs_error(
 
 
 def _as_tensor_bh(x: Any, *, name: str, device: torch.device) -> torch.Tensor:
-    if isinstance(x, torch.Tensor):
-        t = x
-    else:
-        t = torch.as_tensor(x)
+    t = x if isinstance(x, torch.Tensor) else torch.as_tensor(x)
     if int(t.ndim) != 2:
-        raise ValueError(f'{name} must be (B,H), got shape={tuple(t.shape)}')
+        msg = f'{name} must be (B,H), got shape={tuple(t.shape)}'
+        raise ValueError(msg)
     return t.to(device=device, non_blocking=True)
 
 
@@ -136,8 +137,9 @@ def compute_ps_metrics_from_batch(
         msg = 'logits must be torch.Tensor with shape (B,C,H,W)'
         raise ValueError(msg)
     if int(logits.shape[1]) < 2:
+        msg = f'logits must have at least 2 channels for P/S, got C={int(logits.shape[1])}'
         raise ValueError(
-            f'logits must have at least 2 channels for P/S, got C={int(logits.shape[1])}'
+            msg
         )
     if not isinstance(batch, Mapping):
         msg = 'batch must be a Mapping[str, Any]'

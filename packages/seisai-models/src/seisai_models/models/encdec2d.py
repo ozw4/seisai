@@ -8,7 +8,7 @@ from torch import nn
 
 
 class EncDec2D(nn.Module):
-    """timm バックボーン + U-Net デコーダの汎用ネットワーク。
+    """timm バックボーン + U-Net デコーダの汎用ネットワーク。.
 
     timm バックボーンの前に Conv+BN+ReLU の前段ステージを任意段数挿入できる。
     SAME などの動的パディングはモデル外(データローダ側)で行うこと。
@@ -37,7 +37,7 @@ class EncDec2D(nn.Module):
         upsample_mode: str = 'bilinear',
         attention_type: str = 'scse',
         intermediate_conv: bool = True,
-    ):
+    ) -> None:
         super().__init__()
         self.in_chans = in_chans
         self.out_chans = out_chans
@@ -141,12 +141,11 @@ class EncDec2D(nn.Module):
         top = feats[0]
         for b in self.extra_down:
             top = b(top)
-            feats = [top] + feats
+            feats = [top, *feats]
 
         # ★pre_down 出力を浅い側(末尾)に積む
-        feats = feats + pre_feats[::-1]
+        return feats + pre_feats[::-1]
 
-        return feats
 
     @torch.inference_mode()
     def _proc_flip(self, x_in):
@@ -156,12 +155,11 @@ class EncDec2D(nn.Module):
 
         dec = self.decoder(feats)
         y = self.seg_head(dec[-1])
-        y = torch.flip(y, dims=[-2])
-        return y
+        return torch.flip(y, dims=[-2])
 
     def forward(self, x):
         """入力: x=(B,C,H,W)
-        出力: y=(B,out_chans,H,W)  ※入力サイズに合わせて補間して返す
+        出力: y=(B,out_chans,H,W)  ※入力サイズに合わせて補間して返す.
         """
         H, W = x.shape[-2:]
         feats = self._encode(x)

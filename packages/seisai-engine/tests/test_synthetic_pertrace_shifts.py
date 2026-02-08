@@ -24,7 +24,8 @@ def make_synthetic_stack(
     - pred: 各トレース(b,h)毎に W 方向へランダムシフト([-S, S])+ 微小ノイズ
     - shifts: (B,H) の整数シフト量(pred = roll(gt, shifts))
     """
-    assert max_true_shift >= 0 and W - max_true_shift > 0
+    assert max_true_shift >= 0
+    assert W - max_true_shift > 0
     g = torch.Generator().manual_seed(seed)
     gt = torch.randn(B, C, H, W, dtype=torch.float32, generator=g)
 
@@ -49,7 +50,7 @@ def make_synthetic_stack(
     return pred, gt, shifts
 
 
-def test_shift_robust_near_zero_on_pertrace_random_shifts():
+def test_shift_robust_near_zero_on_pertrace_random_shifts() -> None:
     B, C, H, W, S_true = 2, 3, 40, 256, 4
     pred, gt, _ = make_synthetic_stack(
         B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=123
@@ -65,7 +66,7 @@ def test_shift_robust_near_zero_on_pertrace_random_shifts():
     assert math.isclose(out_mean.item(), 0.0, rel_tol=0, abs_tol=1e-6)
 
 
-def test_shift_robust_vs_plain_mse_on_shifted_predictions():
+def test_shift_robust_vs_plain_mse_on_shifted_predictions() -> None:
     B, C, H, W, S_true = 1, 2, 30, 128, 3
     pred, gt, _ = make_synthetic_stack(
         B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=7
@@ -81,7 +82,7 @@ def test_shift_robust_vs_plain_mse_on_shifted_predictions():
     assert math.isclose(robust.item(), 0.0, rel_tol=0, abs_tol=1e-6)
 
 
-def test_shift_robust_insufficient_max_shift_yields_positive_loss():
+def test_shift_robust_insufficient_max_shift_yields_positive_loss() -> None:
     B, C, H, W, S_true = 1, 2, 20, 128, 5
     pred, gt, _ = make_synthetic_stack(
         B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=99
@@ -94,7 +95,7 @@ def test_shift_robust_insufficient_max_shift_yields_positive_loss():
     assert per_trace.mean().item() > 0.0
 
 
-def test_ShiftRobustPerTraceMSE_with_trace_mask_preselection():
+def test_ShiftRobustPerTraceMSE_with_trace_mask_preselection() -> None:
     B, C, H, W, S_true = 2, 2, 30, 128, 3
     pred, gt, _ = make_synthetic_stack(
         B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=2024
@@ -116,7 +117,7 @@ def test_ShiftRobustPerTraceMSE_with_trace_mask_preselection():
     assert torch.allclose(loss_cls, loss_ref, atol=1e-6, rtol=0)
 
 
-def test_ShiftRobustPerTraceMSE_with_pixel_mask_uniform_W():
+def test_ShiftRobustPerTraceMSE_with_pixel_mask_uniform_W() -> None:
     B, C, H, W, S_true = 2, 2, 24, 96, 4
     pred, gt, _ = make_synthetic_stack(
         B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=777
@@ -139,7 +140,7 @@ def test_ShiftRobustPerTraceMSE_with_pixel_mask_uniform_W():
     assert torch.allclose(loss_cls, loss_ref, atol=1e-6, rtol=0)
 
 
-def test_noise_tolerance_small_noise_yields_small_loss():
+def test_noise_tolerance_small_noise_yields_small_loss() -> None:
     B, C, H, W, S_true = 1, 2, 40, 256, 5
     pred, gt, _ = make_synthetic_stack(
         B, C, H, W, max_true_shift=S_true, noise_std=0.01, seed=314
@@ -150,7 +151,7 @@ def test_noise_tolerance_small_noise_yields_small_loss():
     assert loss.item() < 1e-3
 
 
-def test_loss_nonincreasing_as_allowed_shift_increases():
+def test_loss_nonincreasing_as_allowed_shift_increases() -> None:
     """許容シフト max_shift を増やすほど損失(mean)は非増加(単調減少または等しい)。"""
     B, C, H, W, S_true = 1, 2, 40, 256, 5
     pred, gt, _ = make_synthetic_stack(
@@ -166,7 +167,7 @@ def test_loss_nonincreasing_as_allowed_shift_increases():
         assert losses[i] <= losses[i - 1] + 1e-9, f'non-monotonic at i={i}: {losses}'
 
 
-def test_sum_loss_increases_when_more_traces_are_selected():
+def test_sum_loss_increases_when_more_traces_are_selected() -> None:
     """True=採用の trace マスクで、選択本数を増やすほど sum 損失は非減少(単調増加または等しい)。"""
     B, C, H, W, S_true = 1, 2, 30, 128, 4
     pred, gt, _ = make_synthetic_stack(

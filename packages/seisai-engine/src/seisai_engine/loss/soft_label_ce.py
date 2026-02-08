@@ -39,8 +39,9 @@ def soft_label_ce_map(
     if class_dim < 0:
         class_dim += int(logits.ndim)
     if not (0 <= class_dim < int(logits.ndim)):
+        msg = f'class_dim out of range: {class_dim} for ndim={int(logits.ndim)}'
         raise ValueError(
-            f'class_dim out of range: {class_dim} for ndim={int(logits.ndim)}'
+            msg
         )
 
     if target.dtype != logits.dtype:
@@ -60,11 +61,14 @@ def _require_bool_tensor(
 ) -> torch.Tensor:
     t = v if isinstance(v, torch.Tensor) else torch.as_tensor(v)
     if not isinstance(t, torch.Tensor):
-        raise TypeError(f'{name} must be a torch.Tensor')
+        msg = f'{name} must be a torch.Tensor'
+        raise TypeError(msg)
     if t.dtype is not torch.bool:
-        raise TypeError(f'{name} must be bool tensor, got dtype={t.dtype}')
+        msg = f'{name} must be bool tensor, got dtype={t.dtype}'
+        raise TypeError(msg)
     if ndim is not None and int(t.ndim) != int(ndim):
-        raise ValueError(f'{name} must be {ndim}D, got shape={tuple(t.shape)}')
+        msg = f'{name} must be {ndim}D, got shape={tuple(t.shape)}'
+        raise ValueError(msg)
     return t
 
 
@@ -113,8 +117,9 @@ def build_pixel_mask_from_batch(
         if ref_b is None:
             ref_b, ref_h = int(lv_bh.shape[0]), int(lv_bh.shape[1])
         elif tuple(lv_bh.shape) != (ref_b, ref_h):
+            msg = f'label_valid shape mismatch: {tuple(lv_bh.shape)} vs ({ref_b},{ref_h})'
             raise ValueError(
-                f'label_valid shape mismatch: {tuple(lv_bh.shape)} vs ({ref_b},{ref_h})'
+                msg
             )
 
     # Infer (B,H,W) reference from target/input if present.
@@ -133,8 +138,9 @@ def build_pixel_mask_from_batch(
         if ref_b is None:
             ref_b, ref_h = b_from_batch, h_from_batch
         elif ref_b != b_from_batch or ref_h != h_from_batch:
+            msg = f'batch {key} shape mismatch vs masks: B/H=({b_from_batch},{h_from_batch}) vs ({ref_b},{ref_h})'
             raise ValueError(
-                f'batch {key} shape mismatch vs masks: B/H=({b_from_batch},{h_from_batch}) vs ({ref_b},{ref_h})'
+                msg
             )
 
     # Optional mask_bool
@@ -145,8 +151,9 @@ def build_pixel_mask_from_batch(
         if int(mb_t.ndim) == 4:
             # Explicitly allow (B,1,H,W) only.
             if int(mb_t.shape[1]) != 1:
+                msg = f'{mask_bool_key} 4D must be (B,1,H,W); got shape={tuple(mb_t.shape)}'
                 raise ValueError(
-                    f'{mask_bool_key} 4D must be (B,1,H,W); got shape={tuple(mb_t.shape)}'
+                    msg
                 )
             mb_t = mb_t[:, 0]
         if int(mb_t.ndim) == 3:
@@ -160,24 +167,28 @@ def build_pixel_mask_from_batch(
             elif int(mb_bhw.shape[0]) != int(ref_b) or int(mb_bhw.shape[1]) != int(
                 ref_h
             ):
+                msg = f'{mask_bool_key} shape mismatch: {tuple(mb_bhw.shape)} vs ({ref_b},{ref_h},W)'
                 raise ValueError(
-                    f'{mask_bool_key} shape mismatch: {tuple(mb_bhw.shape)} vs ({ref_b},{ref_h},W)'
+                    msg
                 )
         elif int(mb_t.ndim) == 2:
             if ref_b is None:
+                msg = f'{mask_bool_key} is 2D but cannot infer H/W without trace_valid/label_valid or target/input'
                 raise ValueError(
-                    f'{mask_bool_key} is 2D but cannot infer H/W without trace_valid/label_valid or target/input'
+                    msg
                 )
             if int(mb_t.shape[0]) != int(ref_b):
+                msg = f'{mask_bool_key} batch size mismatch: {tuple(mb_t.shape)} vs B={ref_b}'
                 raise ValueError(
-                    f'{mask_bool_key} batch size mismatch: {tuple(mb_t.shape)} vs B={ref_b}'
+                    msg
                 )
             # Disambiguate (B,H) vs (B,W) using known H/W.
             if ref_h is not None and int(mb_t.shape[1]) == int(ref_h):
                 # (B,H) -> (B,H,W)
                 if w_from_batch is None:
+                    msg = f'{mask_bool_key} is (B,H) but W is unknown; provide batch[target]/batch[input] or (B,H,W) mask'
                     raise ValueError(
-                        f'{mask_bool_key} is (B,H) but W is unknown; provide batch[target]/batch[input] or (B,H,W) mask'
+                        msg
                     )
                 mb_bhw = mb_t[:, :, None].expand(
                     int(ref_b), int(ref_h), int(w_from_batch)
@@ -191,12 +202,14 @@ def build_pixel_mask_from_batch(
                     int(ref_b), int(ref_h), int(w_from_batch)
                 )
             else:
+                msg = f'{mask_bool_key} 2D must be (B,H) or (B,W); got shape={tuple(mb_t.shape)} with H={ref_h} W={w_from_batch}'
                 raise ValueError(
-                    f'{mask_bool_key} 2D must be (B,H) or (B,W); got shape={tuple(mb_t.shape)} with H={ref_h} W={w_from_batch}'
+                    msg
                 )
         else:
+            msg = f'{mask_bool_key} must be (B,H,W) or (B,H) or (B,W); got shape={tuple(mb_t.shape)}'
             raise ValueError(
-                f'{mask_bool_key} must be (B,H,W) or (B,H) or (B,W); got shape={tuple(mb_t.shape)}'
+                msg
             )
 
     if ref_b is None or ref_h is None:
@@ -239,8 +252,9 @@ def build_pixel_mask_from_batch(
         )
     if mb_bhw is not None:
         if tuple(mb_bhw.shape) != (int(ref_b), int(ref_h), int(W)):
+            msg = f'{mask_bool_key} resolved shape mismatch: {tuple(mb_bhw.shape)} vs ({ref_b},{ref_h},{W})'
             raise ValueError(
-                f'{mask_bool_key} resolved shape mismatch: {tuple(mb_bhw.shape)} vs ({ref_b},{ref_h},{W})'
+                msg
             )
         pixel_mask &= mb_bhw.to(device=device)
 
@@ -277,16 +291,19 @@ def soft_label_ce_masked_mean(
     if not isinstance(pixel_mask, torch.Tensor):
         pixel_mask = torch.as_tensor(pixel_mask)
     if pixel_mask.dtype is not torch.bool:
-        raise TypeError(f'pixel_mask must be bool tensor, got dtype={pixel_mask.dtype}')
+        msg = f'pixel_mask must be bool tensor, got dtype={pixel_mask.dtype}'
+        raise TypeError(msg)
     if int(pixel_mask.ndim) != 3:
+        msg = f'pixel_mask must be (B,H,W), got shape={tuple(pixel_mask.shape)}'
         raise ValueError(
-            f'pixel_mask must be (B,H,W), got shape={tuple(pixel_mask.shape)}'
+            msg
         )
 
     B, _C, H, W = logits.shape
     if tuple(pixel_mask.shape) != (int(B), int(H), int(W)):
+        msg = f'pixel_mask shape mismatch: mask={tuple(pixel_mask.shape)} vs expected={(int(B), int(H), int(W))}'
         raise ValueError(
-            f'pixel_mask shape mismatch: mask={tuple(pixel_mask.shape)} vs expected={(int(B), int(H), int(W))}'
+            msg
         )
 
     if target.dtype != logits.dtype:

@@ -83,7 +83,7 @@ def _masked_traces(mask_bool: np.ndarray) -> int:
     return int(m[:, 0].sum())
 
 
-def test_mask_ratio_runtime_update_changes_mask_count():
+def test_mask_ratio_runtime_update_changes_mask_count() -> None:
     ds, mask_op = _build_ds(mask_ratio=0.0)
 
     a = ds[None]
@@ -95,23 +95,23 @@ def test_mask_ratio_runtime_update_changes_mask_count():
     )
 
     b = ds[None]
-    assert _masked_traces(b['mask_bool']) == int(round(0.5 * H))
+    assert _masked_traces(b['mask_bool']) == round(0.5 * H)
 
     ds.close()
 
 
-def test_mask_mode_and_noise_runtime_update_effect():
+def test_mask_mode_and_noise_runtime_update_effect() -> None:
     ds, mask_op = _build_ds(mask_ratio=0.5)
 
     x1 = ds[None]
     H = int(x1['input'].shape[1])
-    assert _masked_traces(x1['mask_bool']) == int(round(0.5 * H))
+    assert _masked_traces(x1['mask_bool']) == round(0.5 * H)
 
     mask_op.gen.mode = 'add'
     mask_op.gen.noise_std = 0.0
 
     x2 = ds[None]
-    assert _masked_traces(x2['mask_bool']) == int(round(0.5 * H))
+    assert _masked_traces(x2['mask_bool']) == round(0.5 * H)
 
     np.testing.assert_allclose(
         x2['input'].cpu().numpy(),

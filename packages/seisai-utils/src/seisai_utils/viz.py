@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 @dataclass(frozen=True)
@@ -22,36 +25,43 @@ class ImshowPanel:
 def _as_hw(a: np.ndarray) -> np.ndarray:
     a = np.asarray(a)
     if a.ndim != 2:
-        raise ValueError(f'data must be 2D (H,W), got shape={a.shape}')
+        msg = f'data must be 2D (H,W), got shape={a.shape}'
+        raise ValueError(msg)
     return a
 
 
 def to_numpy_bchw(x: torch.Tensor | np.ndarray, *, name: str) -> np.ndarray:
     if isinstance(x, torch.Tensor):
         if int(x.ndim) != 4:
+            msg = f'{name} must be (B,C,H,W) tensor, got shape={tuple(x.shape)}'
             raise ValueError(
-                f'{name} must be (B,C,H,W) tensor, got shape={tuple(x.shape)}'
+                msg
             )
         return x.detach().cpu().numpy()
     if isinstance(x, np.ndarray):
         if int(x.ndim) != 4:
-            raise ValueError(f'{name} must be (B,C,H,W) array, got shape={x.shape}')
+            msg = f'{name} must be (B,C,H,W) array, got shape={x.shape}'
+            raise ValueError(msg)
         return x
-    raise TypeError(f'{name} must be torch.Tensor or numpy.ndarray')
+    msg = f'{name} must be torch.Tensor or numpy.ndarray'
+    raise TypeError(msg)
 
 
 def select_hw(x_bchw: np.ndarray, *, b: int, c: int, name: str) -> np.ndarray:
     if not (0 <= int(b) < int(x_bchw.shape[0])):
+        msg = f'{name}: batch index out of range: b={b} B={int(x_bchw.shape[0])}'
         raise ValueError(
-            f'{name}: batch index out of range: b={b} B={int(x_bchw.shape[0])}'
+            msg
         )
     if not (0 <= int(c) < int(x_bchw.shape[1])):
+        msg = f'{name}: channel index out of range: c={c} C={int(x_bchw.shape[1])}'
         raise ValueError(
-            f'{name}: channel index out of range: c={c} C={int(x_bchw.shape[1])}'
+            msg
         )
     hw = x_bchw[int(b), int(c)]
     if hw.ndim != 2:
-        raise ValueError(f'{name}: expected (H,W), got {hw.shape}')
+        msg = f'{name}: expected (H,W), got {hw.shape}'
+        raise ValueError(msg)
     return np.asarray(hw)
 
 
@@ -66,7 +76,7 @@ def imshow_hw(
     vmax: float | None = None,
     alpha: float = 1.0,
 ) -> None:
-    """(H,W) を表示。transpose_for_trace_time=True で x=Trace, y=Time になるように表示する。"""
+    """(H,W) を表示。transpose_for_trace_time=True で x=Trace, y=Time になるように表示する。."""
     hw = _as_hw(data_hw)
     img = hw.T if transpose_for_trace_time else hw
     ax.imshow(img, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax, alpha=alpha)
@@ -97,11 +107,12 @@ def imshow_overlay_hw(
     overlay_vmax: float | None = None,
     overlay_alpha: float = 0.5,
 ) -> None:
-    """Base の上に overlay を重ねる(example_segy_gather_pipline_ds.py のやつ)。"""
+    """Base の上に overlay を重ねる(example_segy_gather_pipline_ds.py のやつ)。."""
     base = _as_hw(base_hw)
     ov = _as_hw(overlay_hw)
     if base.shape != ov.shape:
-        raise ValueError(f'shape mismatch: base={base.shape} overlay={ov.shape}')
+        msg = f'shape mismatch: base={base.shape} overlay={ov.shape}'
+        raise ValueError(msg)
 
     imshow_hw(
         ax,
@@ -134,7 +145,7 @@ def save_imshow_row(
     figsize: tuple[float, float] = (21.0, 5.0),
     dpi: int = 150,
 ) -> None:
-    """横一列に並べて保存(入力/GT/Pred みたいな triptych 用)。"""
+    """横一列に並べて保存(入力/GT/Pred みたいな triptych 用)。."""
     panels = list(panels)
     if len(panels) == 0:
         msg = 'panels must be non-empty'
@@ -169,7 +180,7 @@ def save_imshow_row(
 
 
 def per_trace_zscore_hw(a_hw: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    """(H,W) をトレース毎(行ごと)に z-score。
+    """(H,W) をトレース毎(行ごと)に z-score。.
 
     主に可視化用途を想定。
     """
@@ -198,7 +209,7 @@ def save_triptych_bchw(
     figsize: tuple[float, float] = (20.0, 15.0),
     dpi: int = 300,
 ) -> None:
-    """入力/正解/予測を横3枚(triptych)で保存する。
+    """入力/正解/予測を横3枚(triptych)で保存する。.
 
     Args:
             x_in_bchw/x_tg_bchw/x_pr_bchw: (B,C,H,W)

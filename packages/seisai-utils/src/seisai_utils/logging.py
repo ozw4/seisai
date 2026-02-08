@@ -117,7 +117,7 @@ class MetricLogger:
         self.meters = defaultdict(SmoothedValue)
         self.delimiter = delimiter
 
-    def update(self, **kwargs):
+    def update(self, **kwargs) -> None:
         for k, v in kwargs.items():
             if isinstance(v, torch.Tensor):
                 v = v.item()

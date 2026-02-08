@@ -44,7 +44,7 @@ def _make_plan(mask_ratio: float = 0.25) -> BuildPlan:
     )
 
 
-def test_build_plan_produces_required_keys_and_shapes():
+def test_build_plan_produces_required_keys_and_shapes() -> None:
     sample = _make_sample(H=10, W=64)
     plan = _make_plan(mask_ratio=0.25)
 
@@ -79,7 +79,7 @@ def test_build_plan_produces_required_keys_and_shapes():
     assert m.shape == (H, W)
 
 
-def test_select_stack_expands_2d_to_3d():
+def test_select_stack_expands_2d_to_3d() -> None:
     sample = _make_sample(H=6, W=20)
 
     plan = BuildPlan(
@@ -97,7 +97,7 @@ def test_select_stack_expands_2d_to_3d():
     assert y.shape == (1, 6, 20)
 
 
-def test_missing_required_key_raises_keyerror():
+def test_missing_required_key_raises_keyerror() -> None:
     sample = _make_sample(H=4, W=12)
 
     plan = BuildPlan(
@@ -111,7 +111,7 @@ def test_missing_required_key_raises_keyerror():
         plan.run(sample, rng=np.random.default_rng(3))
 
 
-def test_select_stack_shape_mismatch_raises_valueerror():
+def test_select_stack_shape_mismatch_raises_valueerror() -> None:
     rng = np.random.default_rng(0)
     H, W = 5, 16
     sample = {

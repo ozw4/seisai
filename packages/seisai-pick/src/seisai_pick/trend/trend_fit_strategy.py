@@ -5,13 +5,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from seisai_pick.trend.trend_fit import (
     robust_linear_trend,
     robust_linear_trend_sections_ransac,
 )
-from torch import Tensor
+
+if TYPE_CHECKING:
+    from torch import Tensor
 
 
 class TrendFitStrategy(Protocol):
@@ -25,7 +27,7 @@ class TrendFitStrategy(Protocol):
         valid: Tensor,  # (B,H) bool/int
         w_conf: Tensor,  # (B,H)
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-        """Return: trend_t, trend_s, v_trend, w_used, covered (all (B,H))"""
+        """Return: trend_t, trend_s, v_trend, w_used, covered (all (B,H))."""
         ...
 
 

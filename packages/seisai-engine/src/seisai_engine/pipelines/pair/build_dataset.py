@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from seisai_dataset import BuildPlan, SegyGatherPairDataset
 from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
 
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
 
-from .config import PairDatasetCfg, PairPaths
+if TYPE_CHECKING:
+    from .config import PairDatasetCfg, PairPaths
 
 __all__ = [
     'build_infer_transform',

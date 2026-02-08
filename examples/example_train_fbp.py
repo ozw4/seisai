@@ -82,7 +82,7 @@ def fb_gauss_map_from_idx(
     sigma: float = 10.0,
     trace_valid: np.ndarray | None = None,
 ) -> np.ndarray:
-    """fb_idx_view (H,) -> (H,W) ガウスheatmap(無効は0)"""
+    """fb_idx_view (H,) -> (H,W) ガウスheatmap(無効は0)."""
     fb = np.asarray(fb_idx_view, dtype=np.int64)
     H = int(fb.shape[0])
 
@@ -91,7 +91,8 @@ def fb_gauss_map_from_idx(
     else:
         tv = np.asarray(trace_valid, dtype=np.bool_)
         if tv.shape[0] != H:
-            raise ValueError(f'trace_valid shape mismatch: {tv.shape} vs H={H}')
+            msg = f'trace_valid shape mismatch: {tv.shape} vs H={H}'
+            raise ValueError(msg)
 
     t = np.arange(W, dtype=np.float32)[None, :]  # (1,W)
     c = fb.astype(np.float32)[:, None]  # (H,1)
@@ -115,13 +116,15 @@ def save_infer_triptych_no_lines(
     """横3枚(線なし・間引きなし):
     (1) input gather(ch0)
     (2) GT FB heatmap(FBGaussMap: fb_idx_view -> gauss)
-    (3) Pred FB heatmap(FBGaussMap: pred_idx_view -> gauss)
+    (3) Pred FB heatmap(FBGaussMap: pred_idx_view -> gauss).
     """
     if x_bchw.ndim != 4:
-        raise ValueError(f'x_bchw must be (B,C,H,W), got {tuple(x_bchw.shape)}')
+        msg = f'x_bchw must be (B,C,H,W), got {tuple(x_bchw.shape)}'
+        raise ValueError(msg)
     if logits_b1hw.ndim != 4 or int(logits_b1hw.shape[1]) != 1:
+        msg = f'logits_b1hw must be (B,1,H,W), got {tuple(logits_b1hw.shape)}'
         raise ValueError(
-            f'logits_b1hw must be (B,1,H,W), got {tuple(logits_b1hw.shape)}'
+            msg
         )
 
     B, C, H, Wmax = x_bchw.shape
@@ -130,7 +133,8 @@ def save_infer_triptych_no_lines(
         msg = 'x/logits shape mismatch'
         raise ValueError(msg)
     if not (0 <= batch_index < B):
-        raise ValueError(f'batch_index out of range: {batch_index} for B={B}')
+        msg = f'batch_index out of range: {batch_index} for B={B}'
+        raise ValueError(msg)
     if C <= 0:
         msg = 'C must be positive'
         raise ValueError(msg)
@@ -139,7 +143,8 @@ def save_infer_triptych_no_lines(
     time_view = np.asarray(meta['time_view'], dtype=np.float32)
     W = int(time_view.shape[0])
     if W <= 0 or Wmax < W:
-        raise ValueError(f'invalid W from meta time_view: W={W}, Wmax={Wmax}')
+        msg = f'invalid W from meta time_view: W={W}, Wmax={Wmax}'
+        raise ValueError(msg)
 
     # (1) gather: input ch0  (H,W)
     gather_hw = x_bchw[batch_index, 0, :, :W].detach().cpu()

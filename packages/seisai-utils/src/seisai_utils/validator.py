@@ -22,7 +22,8 @@ def _allowed_shapes_text(allowed_ndims: Iterable[int]) -> str:
 # ---------- NumPy ----------
 def require_numpy(x, *, name: str = 'x') -> None:
     if not isinstance(x, np.ndarray):
-        raise TypeError(f'{name} must be numpy.ndarray')
+        msg = f'{name} must be numpy.ndarray'
+        raise TypeError(msg)
 
 
 def require_ndim_numpy(
@@ -35,12 +36,14 @@ def require_ndim_numpy(
     allowed = tuple(int(d) for d in allowed_ndims)
     if x.ndim not in allowed:
         hint = shape_hint if shape_hint is not None else _allowed_shapes_text(allowed)
-        raise ValueError(f'{name} must be {hint}')
+        msg = f'{name} must be {hint}'
+        raise ValueError(msg)
 
 
 def require_non_empty_numpy(x: np.ndarray, *, name: str = 'x') -> None:
     if x.size == 0:
-        raise ValueError(f'{name} must be non-empty')
+        msg = f'{name} must be non-empty'
+        raise ValueError(msg)
 
 
 def validate_numpy(
@@ -58,7 +61,8 @@ def validate_numpy(
 # ---------- Torch ----------
 def require_torch_tensor(x, *, name: str = 'x') -> None:
     if not isinstance(x, torch.Tensor):
-        raise TypeError(f'{name} must be torch.Tensor')
+        msg = f'{name} must be torch.Tensor'
+        raise TypeError(msg)
 
 
 def require_ndim_torch(
@@ -71,12 +75,14 @@ def require_ndim_torch(
     allowed = tuple(int(d) for d in allowed_ndims)
     if int(x.ndim) not in allowed:
         hint = shape_hint if shape_hint is not None else _allowed_shapes_text(allowed)
-        raise ValueError(f'{name} must be {hint}')
+        msg = f'{name} must be {hint}'
+        raise ValueError(msg)
 
 
 def require_non_empty_torch(x: Tensor, *, name: str = 'x') -> None:
     if int(x.numel()) == 0:
-        raise ValueError(f'{name} must be non-empty')
+        msg = f'{name} must be non-empty'
+        raise ValueError(msg)
 
 
 def validate_torch(
@@ -112,41 +118,49 @@ def validate_array(
     if isinstance(x, torch.Tensor):
         validate_torch(x, allowed_ndims=allowed_ndims, name=name, shape_hint=shape_hint)
         return
-    raise TypeError(f'{name} must be numpy.ndarray or torch.Tensor')
+    msg = f'{name} must be numpy.ndarray or torch.Tensor'
+    raise TypeError(msg)
 
 
 def _require_array_like(x, *, name: str, backend: Backend) -> None:
     if backend == 'numpy':
         if not isinstance(x, np.ndarray):
-            raise TypeError(f'{name} must be numpy.ndarray')
+            msg = f'{name} must be numpy.ndarray'
+            raise TypeError(msg)
         return
     if backend == 'torch':
         if not isinstance(x, torch.Tensor):
-            raise TypeError(f'{name} must be torch.Tensor')
+            msg = f'{name} must be torch.Tensor'
+            raise TypeError(msg)
         return
-    if not (isinstance(x, np.ndarray) or isinstance(x, torch.Tensor)):
-        raise TypeError(f'{name} must be numpy.ndarray or torch.Tensor')
+    if not (isinstance(x, (np.ndarray, torch.Tensor))):
+        msg = f'{name} must be numpy.ndarray or torch.Tensor'
+        raise TypeError(msg)
 
 
 def require_float_array(x, *, name='x', backend: Backend = 'auto') -> None:
     if backend == 'numpy' or (backend == 'auto' and isinstance(x, np.ndarray)):
         require_numpy(x, name=name)
         if not np.issubdtype(x.dtype, np.floating):
-            raise TypeError(f'{name} must be a floating array')
+            msg = f'{name} must be a floating array'
+            raise TypeError(msg)
         return
     if backend == 'torch' or (backend == 'auto' and isinstance(x, torch.Tensor)):
         require_torch_tensor(x, name=name)
         if not torch.is_floating_point(x):
-            raise TypeError(f'{name} must be a floating tensor')
+            msg = f'{name} must be a floating tensor'
+            raise TypeError(msg)
         return
-    raise TypeError(f'{name} must be numpy.ndarray or torch.Tensor')
+    msg = f'{name} must be numpy.ndarray or torch.Tensor'
+    raise TypeError(msg)
 
 
 def require_boolint_array(x, *, name='x', backend: Backend = 'auto') -> None:
     if backend == 'numpy' or (backend == 'auto' and isinstance(x, np.ndarray)):
         require_numpy(x, name=name)
         if not (np.issubdtype(x.dtype, np.bool_) or np.issubdtype(x.dtype, np.integer)):
-            raise TypeError(f'{name} must be bool/int array')
+            msg = f'{name} must be bool/int array'
+            raise TypeError(msg)
         return
     if backend == 'torch' or (backend == 'auto' and isinstance(x, torch.Tensor)):
         require_torch_tensor(x, name=name)
@@ -158,34 +172,42 @@ def require_boolint_array(x, *, name='x', backend: Backend = 'auto') -> None:
             torch.int64,
             torch.uint8,
         ):
-            raise TypeError(f'{name} must be bool/int tensor')
+            msg = f'{name} must be bool/int tensor'
+            raise TypeError(msg)
         return
-    raise TypeError(f'{name} must be numpy.ndarray or torch.Tensor')
+    msg = f'{name} must be numpy.ndarray or torch.Tensor'
+    raise TypeError(msg)
 
 
 def require_non_negative(x, *, name='x', backend: Backend = 'auto') -> None:
     if backend == 'numpy' or (backend == 'auto' and isinstance(x, np.ndarray)):
         if (x < 0).any():
-            raise ValueError(f'{name} must be >= 0')
+            msg = f'{name} must be >= 0'
+            raise ValueError(msg)
         return
     if backend == 'torch' or (backend == 'auto' and isinstance(x, torch.Tensor)):
         if (x < 0).any().item():
-            raise ValueError(f'{name} must be >= 0')
+            msg = f'{name} must be >= 0'
+            raise ValueError(msg)
         return
-    raise TypeError(f'{name} must be numpy.ndarray or torch.Tensor')
+    msg = f'{name} must be numpy.ndarray or torch.Tensor'
+    raise TypeError(msg)
 
 
 def require_all_finite(x, *, name='x', backend: Backend = 'auto') -> None:
     if backend == 'numpy' or (backend == 'auto' and isinstance(x, np.ndarray)):
         if not np.isfinite(x).all():
-            raise ValueError(f'{name} must contain only finite values')
+            msg = f'{name} must contain only finite values'
+            raise ValueError(msg)
         return
     if backend == 'torch' or (backend == 'auto' and isinstance(x, torch.Tensor)):
         # torch.isfinite: NaN/Inf を False にする
         if (~torch.isfinite(x)).any().item():
-            raise ValueError(f'{name} must contain only finite values')
+            msg = f'{name} must contain only finite values'
+            raise ValueError(msg)
         return
-    raise TypeError(f'{name} must be numpy.ndarray or torch.Tensor')
+    msg = f'{name} must be numpy.ndarray or torch.Tensor'
+    raise TypeError(msg)
 
 
 def require_all_numpy(*xs) -> bool:
@@ -210,19 +232,24 @@ def require_same_shape_and_backend(
     _require_array_like(a, name=name_a, backend=backend)
     _require_array_like(b, name=name_b, backend=backend)
     if type(a) is not type(b):
-        raise TypeError(f'{name_a} and {name_b} must use the same backend')
+        msg = f'{name_a} and {name_b} must use the same backend'
+        raise TypeError(msg)
 
     sa = tuple(a.shape)
     sb = tuple(b.shape)
     if sa != sb:
-        raise ValueError(
+        msg = (
             f'{name_a} and {name_b} must have the same shape (e.g., {shape_hint}). '
             f'Got {sa} vs {sb}'
         )
+        raise ValueError(
+            msg
+        )
 
     if other_names is not None and len(other_names) != len(others):
+        msg = f'other_names length must equal number of extra arrays ({len(others)})'
         raise ValueError(
-            f'other_names length must equal number of extra arrays ({len(others)})'
+            msg
         )
 
     # 以降の追加引数も検証
@@ -231,10 +258,14 @@ def require_same_shape_and_backend(
         name_x = other_names[i] if other_names is not None else f'arg{i + 3}'
         _require_array_like(x, name=name_x, backend=backend)
         if type(x) is not base_type:
-            raise TypeError(f'{name_x} must use the same backend as {name_a}')
+            msg = f'{name_x} must use the same backend as {name_a}'
+            raise TypeError(msg)
         sx = tuple(x.shape)
         if sx != sa:
-            raise ValueError(
+            msg = (
                 f'{name_x} must have the same shape as {name_a} (e.g., {shape_hint}). '
                 f'Got {sx} vs {sa}'
+            )
+            raise ValueError(
+                msg
             )

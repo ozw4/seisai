@@ -13,7 +13,7 @@ class ConvBnAct2d(nn.Module):
         stride: int = 1,
         norm_layer: nn.Module = nn.Identity,
         act_layer: nn.Module = nn.ReLU,
-    ):
+    ) -> None:
         super().__init__()
         self.conv = nn.Conv2d(
             in_channels,
@@ -33,7 +33,7 @@ class ConvBnAct2d(nn.Module):
 
 
 class SCSEModule2d(nn.Module):
-    def __init__(self, in_channels, reduction=16):
+    def __init__(self, in_channels, reduction=16) -> None:
         super().__init__()
         self.cSE = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
@@ -49,14 +49,15 @@ class SCSEModule2d(nn.Module):
 
 
 class Attention2d(nn.Module):
-    def __init__(self, name, **params):
+    def __init__(self, name, **params) -> None:
         super().__init__()
         if name is None:
             self.attention = nn.Identity(**params)
         elif name == 'scse':
             self.attention = SCSEModule2d(**params)
         else:
-            raise ValueError(f'Attention {name} is not implemented')
+            msg = f'Attention {name} is not implemented'
+            raise ValueError(msg)
 
     def forward(self, x):
         return self.attention(x)
@@ -71,11 +72,11 @@ class DecoderBlock2d(nn.Module):
         skip_channels,
         out_channels,
         norm_layer: nn.Module = nn.Identity,
-        attention_type: str = None,
+        attention_type: str | None = None,
         intermediate_conv: bool = False,
         upsample_mode: str = 'bilinear',
         scale_factor: int | tuple[int, int] = 2,
-    ):
+    ) -> None:
         super().__init__()
         self.upsample_mode = upsample_mode
         self.scale_factor = scale_factor

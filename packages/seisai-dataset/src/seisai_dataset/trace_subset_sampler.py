@@ -22,7 +22,7 @@ class TraceSubsetSampler:
     - primary_unique: str           サブセット内 primary 値のユニークを昇順に','連結
     """
 
-    def __init__(self, cfg: TraceSubsetSamplerConfig):
+    def __init__(self, cfg: TraceSubsetSamplerConfig) -> None:
         self.cfg = cfg
         self._valid_primary = {'ffid', 'chno', 'cmp'}
 

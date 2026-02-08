@@ -56,7 +56,7 @@ def _make_transformer(*, H: int, W0: int, transform):
     return st, info, indices, fb_subset
 
 
-def test_sample_transformer_raises_when_meta_is_not_dict():
+def test_sample_transformer_raises_when_meta_is_not_dict() -> None:
     H, W0 = 4, 16
 
     def bad_meta_transform(
@@ -71,7 +71,7 @@ def test_sample_transformer_raises_when_meta_is_not_dict():
         st.load_transform(info, indices, fb_subset, rng=np.random.default_rng(0))
 
 
-def test_sample_transformer_raises_when_output_is_not_2d_numpy():
+def test_sample_transformer_raises_when_output_is_not_2d_numpy() -> None:
     H, W0 = 4, 16
 
     def bad_ndim_transform(
@@ -86,7 +86,7 @@ def test_sample_transformer_raises_when_output_is_not_2d_numpy():
         st.load_transform(info, indices, fb_subset, rng=np.random.default_rng(0))
 
 
-def test_sample_transformer_raises_when_transform_changes_H():
+def test_sample_transformer_raises_when_transform_changes_H() -> None:
     H, W0 = 5, 16
 
     def change_h_transform(
@@ -101,7 +101,7 @@ def test_sample_transformer_raises_when_transform_changes_H():
         st.load_transform(info, indices, fb_subset, rng=np.random.default_rng(0))
 
 
-def test_sample_transformer_adds_required_meta_fields():
+def test_sample_transformer_adds_required_meta_fields() -> None:
     H, W0 = 6, 20
     W = 10
 

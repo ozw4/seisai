@@ -25,7 +25,7 @@ class FirstBreakGate:
 
     """
 
-    def __init__(self, cfg: FirstBreakGateConfig):
+    def __init__(self, cfg: FirstBreakGateConfig) -> None:
         """Initialize the gate with configuration.
 
         Args:

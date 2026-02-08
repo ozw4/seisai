@@ -83,10 +83,12 @@ class SampleFlow:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, int]:
         H0 = int(indices.size)
         if H0 > H:
-            raise ValueError(f'indices length {H0} > loaded H {H}')
+            msg = f'indices length {H0} > loaded H {H}'
+            raise ValueError(msg)
         if fb_subset is not None and int(fb_subset.size) != H0:
+            msg = f'fb_subset length {fb_subset.size} != indices length {H0}'
             raise ValueError(
-                f'fb_subset length {fb_subset.size} != indices length {H0}'
+                msg
             )
 
         trace_valid = np.zeros(H, dtype=np.bool_)
@@ -125,12 +127,14 @@ class SampleFlow:
         out = self.transform(x, rng=rng, return_meta=True)
         x_view, meta = out if isinstance(out, tuple) else (out, {})
         if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
+            msg = f'transform({name}) は 2D numpy または (2D, meta) を返す必要があります'
             raise ValueError(
-                f'transform({name}) は 2D numpy または (2D, meta) を返す必要があります'
+                msg
             )
         if not isinstance(meta, dict):
+            msg = f'transform({name}) meta must be dict, got {type(meta).__name__}'
             raise ValueError(
-                f'transform({name}) meta must be dict, got {type(meta).__name__}'
+                msg
             )
         return x_view, meta
 

@@ -18,7 +18,7 @@ def _time_stretch_poly(x_hw: np.ndarray, factor: float) -> np.ndarray:
     - 入力: x_hw (H,W)
     - 出力: (H,W') で W' は factor に応じて変化
     - 補間: resample_poly(IIR前提の polyphase)、端のパディングは 'line'
-    - 例外: factor <= 0.0 は即時失敗
+    - 例外: factor <= 0.0 は即時失敗.
     """
     if x_hw.ndim != 2:
         msg = 'x_hw must be (H,W)'
@@ -43,7 +43,7 @@ def _spatial_stretch(x_hw: np.ndarray, factor: float) -> np.ndarray:
     """幾何ストレッチ: H方向(トレース方向)のみ中心固定で座標写像し、出力は (H,W) を保つ。
     - 伸縮は1回の座標変換で実施(ぼかし用の拡大→縮小の2段ズームは廃止)
     - T軸は不変(zoom=(?, 1.0) 相当)
-    - 補間: H方向の線形補間(境界はedge-clamp)
+    - 補間: H方向の線形補間(境界はedge-clamp).
 
     契約:
     x_hw: (H, W) float/np.ndarray
@@ -102,7 +102,9 @@ def _make_freq_mask(
     f = np.linspace(0.0, 1.0, n_rfft, dtype=np.float32)
     m = np.ones_like(f, dtype=np.float32)
     if kind == 'bandpass':
-        assert f_lo is not None and f_hi is not None and f_hi > f_lo
+        assert f_lo is not None
+        assert f_hi is not None
+        assert f_hi > f_lo
         bw = max(f_hi - f_lo, 1e-4)
         r = max(roll, 0.05 * bw)
         up = _cosine_ramp(f, max(0.0, f_lo - r), min(1.0, f_lo + r), invert=False)
@@ -119,7 +121,8 @@ def _make_freq_mask(
         up = _cosine_ramp(f, max(0.0, f_lo - r), min(1.0, f_lo + r), invert=False)
         m = up
     else:
-        raise ValueError(f'unknown freq-augment kind: {kind}')
+        msg = f'unknown freq-augment kind: {kind}'
+        raise ValueError(msg)
     return m.astype(np.float32)
 
 
@@ -134,7 +137,7 @@ def _apply_freq_augment(
 ) -> np.ndarray:
     """Apply same frequency mask to all traces (deterministic if rng given)."""
     r = rng or np.random.default_rng()
-    H, W = x_hw.shape
+    _H, W = x_hw.shape
     kind = r.choice(augment_freq_kinds)
     lo_min, hi_max = augment_freq_band
 
@@ -148,7 +151,8 @@ def _apply_freq_augment(
     elif kind == 'highpass':
         f_lo, f_hi = float(r.uniform(lo_min, hi_max - 0.02)), None
     else:
-        raise ValueError(f'unknown freq-augment kind: {kind}')
+        msg = f'unknown freq-augment kind: {kind}'
+        raise ValueError(msg)
 
     n_rfft = W // 2 + 1
     mask = _make_freq_mask(n_rfft, kind, f_lo, f_hi, augment_freq_roll)

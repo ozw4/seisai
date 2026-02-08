@@ -1,8 +1,7 @@
 # packages/seisai-transforms/src/seisai_transforms/augment.py
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Protocol, TypeAlias
+from typing import TYPE_CHECKING, Protocol, TypeAlias
 
 import numpy as np
 from seisai_utils.validator import validate_array
@@ -15,9 +14,12 @@ from .signal_ops.scaling.standardize import (
     standardize_per_trace_torch,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
 
 class RandomFreqFilter:
-    def __init__(self, cfg: FreqAugConfig = FreqAugConfig()):
+    def __init__(self, cfg: FreqAugConfig = FreqAugConfig()) -> None:
         self.cfg = cfg
 
     def __call__(
@@ -48,7 +50,7 @@ class RandomFreqFilter:
 
 
 class RandomTimeStretch:
-    def __init__(self, cfg: TimeAugConfig = TimeAugConfig()):
+    def __init__(self, cfg: TimeAugConfig = TimeAugConfig()) -> None:
         self.cfg = cfg
 
     def __call__(
@@ -74,7 +76,7 @@ class RandomTimeStretch:
 
 
 class RandomSpatialStretchSameH:
-    def __init__(self, cfg: SpaceAugConfig = SpaceAugConfig()):
+    def __init__(self, cfg: SpaceAugConfig = SpaceAugConfig()) -> None:
         self.cfg = cfg
 
     def __call__(
@@ -95,7 +97,7 @@ class RandomSpatialStretchSameH:
 
 
 class RandomHFlip:
-    def __init__(self, prob: float = 0.5):
+    def __init__(self, prob: float = 0.5) -> None:
         self.prob = float(prob)
 
     def __call__(
@@ -114,7 +116,7 @@ class RandomHFlip:
 
 
 class RandomCropOrPad:
-    def __init__(self, target_len: int):
+    def __init__(self, target_len: int) -> None:
         self.L = int(target_len)
 
     def __call__(
@@ -124,7 +126,7 @@ class RandomCropOrPad:
         return_meta=False,
     ):
         r = rng or np.random.default_rng()
-        H, W = x_hw.shape
+        _H, W = x_hw.shape
         if self.L == W:
             meta = {'start': 0}
             return (x_hw, meta) if return_meta else x_hw
@@ -140,9 +142,9 @@ class RandomCropOrPad:
 
 
 class DeterministicCropOrPad:
-    """常に決定論"""
+    """常に決定論."""
 
-    def __init__(self, target_len: int):
+    def __init__(self, target_len: int) -> None:
         if target_len <= 0:
             msg = 'target_len must be positive'
             raise ValueError(msg)
@@ -154,7 +156,7 @@ class DeterministicCropOrPad:
         rng: np.random.Generator | None = None,
         return_meta=False,
     ):
-        H, W = x_hw.shape
+        _H, W = x_hw.shape
         if self.L == W:
             meta = {'start': 0}
             return (x_hw, meta) if return_meta else x_hw
@@ -173,10 +175,10 @@ class DeterministicCropOrPad:
 class PerTraceStandardize:
     """トレース方向(最後の軸=W)で平均0・分散1に標準化する。
     - NumPy:  (W,), (H,W), (C,H,W), (B,C,H,W)
-    - Torch:  (W,), (H,W), (C,H,W), (B,C,H,W)(CPU/GPU両対応)
+    - Torch:  (W,), (H,W), (C,H,W), (B,C,H,W)(CPU/GPU両対応).
     """
 
-    def __init__(self, eps: float = 1e-10):
+    def __init__(self, eps: float = 1e-10) -> None:
         self.eps = float(eps)
 
     def __call__(
@@ -187,7 +189,7 @@ class PerTraceStandardize:
     ):
         """x: np.ndarray または torch.Tensor(CPU/GPU)
         rng はインターフェース維持のためのダミー(未使用)。
-        return_meta=True の場合は (y, {}) を返す。
+        return_meta=True の場合は (y, {}) を返す。.
         """
         # backend='auto' で NumPy / Torch 両方を検証
         validate_array(
@@ -202,7 +204,8 @@ class PerTraceStandardize:
         elif isinstance(x, Tensor):
             y = standardize_per_trace_torch(x, eps=self.eps)
         else:
-            raise TypeError(f'x must be numpy.ndarray or torch.Tensor, got {type(x)}')
+            msg = f'x must be numpy.ndarray or torch.Tensor, got {type(x)}'
+            raise TypeError(msg)
 
         if return_meta:
             # ViewCompose 互換のため空 dict を返す
@@ -215,13 +218,13 @@ ArrayLike: TypeAlias = np.ndarray | Tensor
 
 
 class RNGLike(Protocol):
-    def random(self, *args, **kwargs): ...
-    def uniform(self, *args, **kwargs): ...
-    def integers(self, *args, **kwargs): ...
+    def random(self, *args, **kwargs) -> None: ...
+    def uniform(self, *args, **kwargs) -> None: ...
+    def integers(self, *args, **kwargs) -> None: ...
 
 
 class ViewCompose:
-    def __init__(self, ops: Iterable):
+    def __init__(self, ops: Iterable) -> None:
         self.ops = list(ops)
 
     def __call__(

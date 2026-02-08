@@ -1,8 +1,8 @@
 from torch import nn
 
 
-def set_first_conv_padding(backbone: nn.Module, padding=(1, 1)):
-    """backboneの最初のConvだけpaddingを上書き"""
+def set_first_conv_padding(backbone: nn.Module, padding=(1, 1)) -> None:
+    """backboneの最初のConvだけpaddingを上書き."""
     for m in backbone.modules():
         if isinstance(m, nn.Conv2d):
             m.padding = padding
@@ -11,7 +11,7 @@ def set_first_conv_padding(backbone: nn.Module, padding=(1, 1)):
             break
 
 
-def override_stage_strides(backbone: nn.Module, stage_strides: list[tuple[int, int]]):
+def override_stage_strides(backbone: nn.Module, stage_strides: list[tuple[int, int]]) -> None:
     """Apply anisotropic strides per stage to the backbone.
 
     Parameters

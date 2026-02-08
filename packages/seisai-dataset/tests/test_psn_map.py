@@ -10,7 +10,7 @@ def _csr_from_rows(rows: list[list[int]]) -> tuple[np.ndarray, np.ndarray]:
     return indptr, data
 
 
-def test_psn_map_basic_contract_and_normalization():
+def test_psn_map_basic_contract_and_normalization() -> None:
     H, W = 3, 32
     rng = np.random.default_rng(0)
 
@@ -49,7 +49,7 @@ def test_psn_map_basic_contract_and_normalization():
     )
 
 
-def test_psn_map_out_of_range_picks_drop_and_trace_becomes_invalid():
+def test_psn_map_out_of_range_picks_drop_and_trace_becomes_invalid() -> None:
     H, W = 2, 8
     rng = np.random.default_rng(0)
 
@@ -79,7 +79,7 @@ def test_psn_map_out_of_range_picks_drop_and_trace_becomes_invalid():
     np.testing.assert_allclose(y[2, 0], np.ones(W, dtype=np.float32), atol=1e-6, rtol=0)
 
 
-def test_psn_map_overlap_p_and_s_is_renormalized():
+def test_psn_map_overlap_p_and_s_is_renormalized() -> None:
     H, W = 1, 16
     rng = np.random.default_rng(0)
 
@@ -105,7 +105,7 @@ def test_psn_map_overlap_p_and_s_is_renormalized():
     assert float(y[2, 0, 5]) == 0.0
 
 
-def test_psn_map_label_valid_respects_trace_valid():
+def test_psn_map_label_valid_respects_trace_valid() -> None:
     H, W = 2, 16
     rng = np.random.default_rng(0)
 
@@ -128,7 +128,7 @@ def test_psn_map_label_valid_respects_trace_valid():
     np.testing.assert_array_equal(label_valid, np.array([True, False], dtype=np.bool_))
 
 
-def test_psn_map_accepts_3d_x_view_channels_first():
+def test_psn_map_accepts_3d_x_view_channels_first() -> None:
     H, W = 2, 16
     rng = np.random.default_rng(0)
 

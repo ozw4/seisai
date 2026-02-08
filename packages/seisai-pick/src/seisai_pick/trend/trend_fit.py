@@ -1,7 +1,8 @@
 # validators.py の関数を用いた入力検証版
 from __future__ import annotations
 
-import numpy as np
+from typing import TYPE_CHECKING
+
 import torch
 from seisai_utils.convert import to_numpy, to_torch
 
@@ -16,6 +17,9 @@ from seisai_utils.validator import (
     validate_array,
 )
 from torch import Tensor
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def _apply_speed_bounds_on_slowness(
@@ -33,7 +37,7 @@ def _apply_speed_bounds_on_slowness(
     return b_slope.clamp(min=min_s, max=max_s)
 
 
-def _validation(offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, iters):
+def _validation(offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, iters) -> None:
     validate_array(
         offsets, allowed_ndims=(2,), name='offsets', backend='torch', shape_hint='(B,H)'
     )
@@ -103,7 +107,7 @@ def robust_linear_trend(
 ]:
     """Windowed IRLS で t(x) ≈ a + s·x を推定。
     - 入力がすべてNumPyなら NumPy を返す。そうでなければ Torch を返す。
-    - 内部計算は Torch(CPU)で行う。dtype は t_sec に合わせて統一。
+    - 内部計算は Torch(CPU)で行う。dtype は t_sec に合わせて統一。.
     """
     # 返却形態の決定(全入力が NumPy なら True)
     if valid is None:
@@ -263,7 +267,7 @@ def robust_linear_trend_sections_ransac(
 ]:
     """RANSAC ベースの線形トレンド推定(NumPy/Torch両対応)。
     - 入力がすべて NumPy なら NumPy を返す。そうでなければ Torch を返す。
-    - 内部計算は Torch(CPU)で行い、dtype は t_sec に合わせる。
+    - 内部計算は Torch(CPU)で行い、dtype は t_sec に合わせる。.
     """
     # 返却形態の決定
     if valid is None:
@@ -298,7 +302,8 @@ def robust_linear_trend_sections_ransac(
         stride,
         ransac_trials,
     )
-    assert ransac_pack >= 1 and refine_irls_iters >= 0
+    assert ransac_pack >= 1
+    assert refine_irls_iters >= 0
 
     # dtype/device 完全一致
     t_offsets = t_offsets.to(t_tsec)

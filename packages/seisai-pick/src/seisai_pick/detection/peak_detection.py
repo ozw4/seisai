@@ -10,7 +10,7 @@ def detect_event_peaks(
     smooth_window: int = 1,
 ) -> np.ndarray:
     """Step2:
-    1D スコア列 S_t からイベント候補ピークの時刻インデックスを抽出する。
+    1D スコア列 S_t からイベント候補ピークの時刻インデックスを抽出する。.
 
     パラメータ
     ----------
@@ -70,5 +70,4 @@ def detect_event_peaks(
         if not too_close:
             selected.append(int(idx))
 
-    selected = np.array(sorted(selected), dtype=np.int64)
-    return selected
+    return np.array(sorted(selected), dtype=np.int64)

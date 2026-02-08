@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from seisai_utils.config import (
     require_bool,
@@ -11,7 +12,9 @@ from seisai_utils.config import (
 )
 
 from seisai_engine.pipelines.common.config_loaders import load_common_train_config
-from seisai_engine.pipelines.common.config_schema import CommonTrainConfig
+
+if TYPE_CHECKING:
+    from seisai_engine.pipelines.common.config_schema import CommonTrainConfig
 
 __all__ = ['PsnTrainConfig', 'load_psn_train_config']
 

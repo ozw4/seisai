@@ -22,7 +22,7 @@ torch.manual_seed(0)
 
 def demo() -> None:
     # ---- Step1: prob ------------------------------------------------
-    B, C, H, W = 1, 1, 256, 512
+    B, _C, H, W = 1, 1, 256, 512
     offsets = torch.linspace(0.0, 1500.0, H).view(1, -1)  # (B,H) [m]
     fb_idx = torch.zeros(B, H, dtype=torch.long)
     dt_sec = torch.tensor([0.002], dtype=torch.float32)  # 2 ms
@@ -44,7 +44,7 @@ def demo() -> None:
     t_sec = _argmax_time_parabolic(prob, dt_sec)  # (B,H) [s]
     valid = (fb_idx >= 0).to(torch.bool)  # (B,H)
 
-    trend_t_i, trend_s_i, v_i, _, covered_i = robust_linear_trend(
+    trend_t_i, _trend_s_i, _v_i, _, covered_i = robust_linear_trend(
         offsets=offsets.to(prob),
         t_sec=t_sec.to(prob),
         valid=valid,
@@ -58,7 +58,7 @@ def demo() -> None:
         sort_offsets=True,
         use_taper=True,
     )
-    trend_t_r, trend_s_r, v_r, _, covered_r = robust_linear_trend_sections_ransac(
+    trend_t_r, _trend_s_r, _v_r, _, covered_r = robust_linear_trend_sections_ransac(
         offsets=offsets.to(prob),
         t_sec=t_sec.to(prob),
         valid=valid,
@@ -156,12 +156,12 @@ def demo() -> None:
     axes[0].legend(loc='upper left')
 
     # (2) IRLS(prior を logits に適用した fused prob を表示)
-    im1 = show(axes[1], prob_i[0], 'IRLS: Prior-applied (fused prob)')
+    show(axes[1], prob_i[0], 'IRLS: Prior-applied (fused prob)')
     axes[1].plot(t_sec_ms_irls, y_off, 'w.', ms=6, label='t_sec_ms_irls')
     axes[1].legend(loc='upper left')
 
     # (3) RANSAC(同上)
-    im2 = show(axes[2], prob_r[0], 'RANSAC: Prior-applied (fused prob)')
+    show(axes[2], prob_r[0], 'RANSAC: Prior-applied (fused prob)')
     axes[2].plot(t_sec_ms_ransac, y_off, 'w.', ms=6, label='t_sec_ms_ransac')
     axes[2].legend(loc='upper left')
 

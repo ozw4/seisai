@@ -35,7 +35,7 @@ def _shift_robust_l2_pertrace_vec(
     max_shift: int,
 ) -> torch.Tensor:
     """W軸の±max_shift の範囲で per-(b,h) の MSE を最小化した値を返す。
-    返り値: (B, H)
+    返り値: (B, H).
 
     外側で行う前提のチェック(重複排除):
       - pred/gt の 4D 形状一致・device/dtype 整合
@@ -72,8 +72,7 @@ def _shift_robust_l2_pertrace_vec(
 
     diff2 = (pred_g - gt_g) ** 2
     loss_kbh = diff2.mean(dim=(2, 4))  # (K,B,H)
-    best_bh = loss_kbh.min(dim=0).values  # (B,H)
-    return best_bh
+    return loss_kbh.min(dim=0).values  # (B,H)
 
 
 class ShiftRobustPerTraceMSE:
@@ -82,10 +81,10 @@ class ShiftRobustPerTraceMSE:
       - pred: (B,C,H,W)
       - batch['target']: (B,C,H,W)
       - 優先: batch.get('trace_mask'): (B,H) bool
-      - 代替: batch.get('mask_bool'): (B,H) or (B,C,H,W) → (B,H) に正規化
+      - 代替: batch.get('mask_bool'): (B,H) or (B,C,H,W) → (B,H) に正規化.
     """
 
-    def __init__(self, max_shift: int = 8, *, ch_reduce: Literal['all', 'any'] = 'all'):
+    def __init__(self, max_shift: int = 8, *, ch_reduce: Literal['all', 'any'] = 'all') -> None:
         assert max_shift >= 0
         self.max_shift = int(max_shift)
         self.ch_reduce = ch_reduce
@@ -128,7 +127,7 @@ class ShiftRobustPerTraceMSE:
         assert trace_mask.dtype == torch.bool and trace_mask.ndim == 2, (
             'trace_mask: (B,H) bool expected'
         )
-        B, C, H, W = pred.shape
+        B, _C, H, _W = pred.shape
         assert trace_mask.shape == (B, H), 'trace_mask must be (B,H)'
 
         # per-(b,h) の最小MSE

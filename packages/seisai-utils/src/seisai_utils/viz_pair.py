@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
-import numpy as np
-import torch
+from typing import TYPE_CHECKING, Any
 
 from seisai_utils.viz import (
     ImshowPanel,
@@ -14,6 +11,10 @@ from seisai_utils.viz import (
     select_hw,
     to_numpy_bchw,
 )
+
+if TYPE_CHECKING:
+    import numpy as np
+    import torch
 
 
 @dataclass(frozen=True)
@@ -36,13 +37,12 @@ def _pick_str_from_batch(batch: dict[str, Any], key: str, b: int) -> str | None:
         return v
     if isinstance(v, (Path,)):
         return str(v)
-    if isinstance(v, list):
-        if 0 <= int(b) < len(v):
-            vi = v[int(b)]
-            if isinstance(vi, str):
-                return vi
-            if isinstance(vi, Path):
-                return str(vi)
+    if isinstance(v, list) and 0 <= int(b) < len(v):
+        vi = v[int(b)]
+        if isinstance(vi, str):
+            return vi
+        if isinstance(vi, Path):
+            return str(vi)
     return None
 
 
@@ -90,8 +90,9 @@ def save_pair_triptych_png(
     x_pr = to_numpy_bchw(x_pr_bchw, name='x_pr_bchw')
 
     if x_in.shape != x_tg.shape or x_in.shape != x_pr.shape:
+        msg = f'shape mismatch: in={x_in.shape} tg={x_tg.shape} pr={x_pr.shape}'
         raise ValueError(
-            f'shape mismatch: in={x_in.shape} tg={x_tg.shape} pr={x_pr.shape}'
+            msg
         )
 
     in_hw = select_hw(x_in, b=b, c=c, name='x_in_bchw')

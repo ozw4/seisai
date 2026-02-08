@@ -22,7 +22,7 @@ def cover_all_traces_predict_striped(
     passes_batch: int = 4,
 ) -> torch.Tensor:
     """等間隔(striped)マスクで全トレースを一度は隠し、その位置の予測を合成。
-    offsets を複数与えると、開始位置をずらした複数ラウンドの平均(TTA)を行う。
+    offsets を複数与えると、開始位置をずらした複数ラウンドの平均(TTA)を行う。.
 
     - band_width=1 で従来の「1トレース幅」
     - mask_ratio * H / band_width ≒ 1パスに含めるバンド本数
@@ -41,7 +41,8 @@ def cover_all_traces_predict_striped(
         msg = 'noise_std must be >= 0'
         raise ValueError(msg)
     if mask_noise_mode not in ('replace', 'add'):
-        raise ValueError(f'Invalid mask_noise_mode: {mask_noise_mode}')
+        msg = f'Invalid mask_noise_mode: {mask_noise_mode}'
+        raise ValueError(msg)
     if len(offsets) == 0:
         msg = 'offsets must be non-empty'
         raise ValueError(msg)
@@ -61,7 +62,7 @@ def cover_all_traces_predict_striped(
     num_blocks = len(blocks)
 
     # 1パスあたりの目標トレース本数と、必要ブロック数
-    traces_per_pass = max(1, min(int(round(mask_ratio * H)), H))
+    traces_per_pass = max(1, min(round(mask_ratio * H), H))
     blocks_per_pass = max(1, min(math.ceil(traces_per_pass / w), num_blocks))
 
     # 等間隔化のためのパス数(ブロックを K 分割して mod K ごとに採る)
@@ -118,5 +119,4 @@ def cover_all_traces_predict_striped(
 
     # 平均化(全行 hit>=1 のはず。もし0があれば設計ミス)
     hits_clamped = hits.clamp_min(1)
-    y_full = y_sum / hits_clamped
-    return y_full
+    return y_sum / hits_clamped

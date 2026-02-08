@@ -1,6 +1,8 @@
 # proc/util/model_utils.py
 from __future__ import annotations
 
+import contextlib
+
 import torch
 from torch import nn
 
@@ -30,8 +32,7 @@ def _dup_or_init_like(
         base = base.expand(base.shape[0], in_ch, kH, kW)
 
     # if old already has >1 in/out, just center-crop/avg to fit
-    base = base[:out_ch, :in_ch].clone()
-    return base
+    return base[:out_ch, :in_ch].clone()
 
 
 def _inflate_conv_in_to_2(conv: nn.Conv2d, *, verbose: bool, init_mode: str) -> None:
@@ -246,7 +247,8 @@ def _inflate_conv_in_channels(
             # fan-in を揃えるためスケール
             new_weight = new_weight * (float(old_in) / float(target_in_ch))
         else:
-            raise ValueError(f"Unsupported init_mode '{init_mode}'")
+            msg = f"Unsupported init_mode '{init_mode}'"
+            raise ValueError(msg)
 
     # in-place swap
     conv.in_channels = target_in_ch
@@ -268,7 +270,7 @@ def inflate_input_convs_to_2ch(
 ) -> None:
     """Make the *raw-input path* truly 2ch end-to-end:
       - pre_down[0] and pre_down[1] convs → (in=2, out=2) + 対応BNを2ch化
-      - backbone 最初の Conv を汎用に特定(stem_0 / stem.conv / patch_embed.proj / conv1 など)し in を 2ch にinflate
+      - backbone 最初の Conv を汎用に特定(stem_0 / stem.conv / patch_embed.proj / conv1 など)し in を 2ch にinflate.
 
     Tips:
       - 既存 1ch 重みを複製して2chへ展開(init_mode='duplicate' 推奨)
@@ -326,9 +328,9 @@ def inflate_input_convs_to_2ch(
         print('[inflate] done.')
 
 
-def _register_grad_mask_for_old_in_channels(conv: nn.Conv2d, old_in_ch: int):
+def _register_grad_mask_for_old_in_channels(conv: nn.Conv2d, old_in_ch: int) -> None:
     """conv.weight: (out_ch, in_ch, kH, kW)
-    旧 in-ch 部分 [:, :old_in_ch, ...] の勾配を 0 にして凍結する。
+    旧 in-ch 部分 [:, :old_in_ch, ...] の勾配を 0 にして凍結する。.
     """
     assert isinstance(conv, nn.Conv2d)
     assert conv.weight.size(1) >= old_in_ch
@@ -340,10 +342,8 @@ def _register_grad_mask_for_old_in_channels(conv: nn.Conv2d, old_in_ch: int):
 
     # 既存のフックがあれば外す
     if hasattr(conv, '_grad_mask_handle') and conv._grad_mask_handle is not None:
-        try:
+        with contextlib.suppress(Exception):
             conv._grad_mask_handle.remove()
-        except Exception:
-            pass
         conv._grad_mask_handle = None
 
     def _hook(grad):
@@ -356,12 +356,10 @@ def _register_grad_mask_for_old_in_channels(conv: nn.Conv2d, old_in_ch: int):
     conv._grad_mask_handle = conv.weight.register_hook(_hook)
 
 
-def _remove_grad_mask(conv: nn.Conv2d):
+def _remove_grad_mask(conv: nn.Conv2d) -> None:
     if hasattr(conv, '_grad_mask_handle') and conv._grad_mask_handle is not None:
-        try:
+        with contextlib.suppress(Exception):
             conv._grad_mask_handle.remove()
-        except Exception:
-            pass
         conv._grad_mask_handle = None
     if hasattr(conv, '_grad_mask_in_old'):
         conv._grad_mask_in_old = None
@@ -371,7 +369,7 @@ def find_input_convs_for_inflation(model: nn.Module):
     """あなたのNetAEに合わせて、入力を最初に受けるConvを列挙。
     - pre_down[0] の先頭Conv
     - pre_down[1] の先頭Conv(あれば)
-    - backbone.stem_0 も対象
+    - backbone.stem_0 も対象.
     """
     convs = []
     if hasattr(model, 'pre_down') and len(model.pre_down) > 0:
@@ -394,14 +392,14 @@ def find_input_convs_for_inflation(model: nn.Module):
     return uniq
 
 
-def freeze_original_in_channels(model: nn.Module, old_in_ch: int = 1):
-    """旧 in-ch を凍結(新規追加チャンネルのみ学習)するフックを登録。"""
+def freeze_original_in_channels(model: nn.Module, old_in_ch: int = 1) -> None:
+    """旧 in-ch を凍結(新規追加チャンネルのみ学習)するフックを登録。."""
     for conv in find_input_convs_for_inflation(model):
         if conv.in_channels >= old_in_ch + 1:
             _register_grad_mask_for_old_in_channels(conv, old_in_ch)
 
 
-def unfreeze_all_inflated_convs(model: nn.Module):
-    """凍結解除：勾配マスクを外す。"""
+def unfreeze_all_inflated_convs(model: nn.Module) -> None:
+    """凍結解除：勾配マスクを外す。."""
     for conv in find_input_convs_for_inflation(model):
         _remove_grad_mask(conv)

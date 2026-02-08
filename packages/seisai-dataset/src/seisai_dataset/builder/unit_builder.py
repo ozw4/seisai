@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from seisai_transforms.masking import MaskGenerator
 
 # 既存の operator / stack / plan は流用
 from .builder import (
@@ -18,12 +16,17 @@ from .builder import (
     SelectStack,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
+    from seisai_transforms.masking import MaskGenerator
+
 
 # ---------------- 基本ユニット ----------------
 class BuildUnit:
-    """一方(input か target どちらか)の組立ユニット。"""
+    """一方(input か target どちらか)の組立ユニット。."""
 
-    def __init__(self, ops: list[Callable], stack: SelectStack):
+    def __init__(self, ops: list[Callable], stack: SelectStack) -> None:
         self.ops = ops
         self.stack = stack
 
@@ -49,7 +52,7 @@ def _require_masker(ctx: dict[str, Any]) -> MaskGenerator:
 
 
 def make_registry(ctx: dict[str, Any] | None = None) -> dict[str, RegItem]:
-    """タグ→レシピのレジストリ。ctx には依存物を入れる(例: masker, fb_sigma, offset_normalize)。"""
+    """タグ→レシピのレジストリ。ctx には依存物を入れる(例: masker, fb_sigma, offset_normalize)。."""
     ctx = {} if ctx is None else dict(ctx)
     reg: dict[str, RegItem] = {}
 
@@ -116,7 +119,7 @@ def builder(
     """単独(input か target 片側)用のビルダー。
     - tags: 生成したいチャネルのタグ列(例: ["masked","time_ch"])
     - ctx : タグが必要とする依存物(input/target で別 dict を渡す)
-    - dst : 最終的に格納するキー名("input"や"target"など)
+    - dst : 最終的に格納するキー名("input"や"target"など).
     """
     ctx = {} if ctx is None else dict(ctx)
     reg = registry or make_registry(ctx)
@@ -125,7 +128,8 @@ def builder(
     # 未登録タグチェック
     unknown = [t for t in tags if t not in reg]
     if unknown:
-        raise KeyError(f'Unknown tag(s): {unknown}. Available: {sorted(reg.keys())}')
+        msg = f'Unknown tag(s): {unknown}. Available: {sorted(reg.keys())}'
+        raise KeyError(msg)
 
     ops: list[Callable] = []
     produced_ops: dict[str, Callable] = {}

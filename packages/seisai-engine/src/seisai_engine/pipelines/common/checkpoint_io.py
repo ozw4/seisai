@@ -28,13 +28,16 @@ def _validate_checkpoint(ckpt: dict) -> None:
 
     for key, expected_type in _REQUIRED_KEYS.items():
         if key not in ckpt:
-            raise KeyError(f'checkpoint missing: {key}')
+            msg = f'checkpoint missing: {key}'
+            raise KeyError(msg)
         value = ckpt[key]
         if expected_type is int:
             if not _is_strict_int(value):
-                raise TypeError(f'checkpoint {key} must be int')
+                msg = f'checkpoint {key} must be int'
+                raise TypeError(msg)
         elif not isinstance(value, expected_type):
-            raise TypeError(f'checkpoint {key} must be {expected_type.__name__}')
+            msg = f'checkpoint {key} must be {expected_type.__name__}'
+            raise TypeError(msg)
 
     if ckpt['version'] != 1:
         msg = 'checkpoint version must be 1'

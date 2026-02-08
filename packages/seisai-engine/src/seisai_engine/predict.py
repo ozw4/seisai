@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from typing import NoReturn
 
 import numpy as np
 import torch
@@ -16,15 +17,15 @@ PostTileTransform = Callable[[torch.Tensor], torch.Tensor]
 
 class _NoRandRNG:
     # 乱数使用を禁止するダミー RNG(PreView 内で rng を使ったら即失敗)
-    def random(self, *a, **k):
+    def random(self, *a, **k) -> NoReturn:
         msg = 'random() forbidden in deterministic inference'
         raise RuntimeError(msg)
 
-    def uniform(self, *a, **k):
+    def uniform(self, *a, **k) -> NoReturn:
         msg = 'uniform() forbidden in deterministic inference'
         raise RuntimeError(msg)
 
-    def integers(self, *a, **k):
+    def integers(self, *a, **k) -> NoReturn:
         msg = 'integers() forbidden in deterministic inference'
         raise RuntimeError(msg)
 
@@ -44,16 +45,21 @@ def _run_tiled(
     tile_transform: ViewCompose | None = None,
     post_tile_transform: ViewCompose | None = None,
 ) -> torch.Tensor:
-    assert x.ndim == 4 and hasattr(model, 'out_chans')
+    assert x.ndim == 4
+    assert hasattr(model, 'out_chans')
     c_out = int(model.out_chans)
     b, c, h, w = x.shape
     tile_h, tile_w = tile
     ov_h, ov_w = overlap
-    assert 0 < tile_h <= h and 0 < tile_w <= w
-    assert 0 <= ov_h < tile_h and 0 <= ov_w < tile_w
+    assert 0 < tile_h <= h
+    assert 0 < tile_w <= w
+    assert 0 <= ov_h < tile_h
+    assert 0 <= ov_w < tile_w
     stride_h = tile_h - ov_h
     stride_w = tile_w - ov_w
-    assert tiles_per_batch > 0 and stride_h > 0 and stride_w > 0
+    assert tiles_per_batch > 0
+    assert stride_h > 0
+    assert stride_w > 0
 
     def _tile_starts(full: int, tile_size: int, overlap_size: int) -> list[int]:
         stride = tile_size - overlap_size

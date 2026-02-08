@@ -13,7 +13,7 @@ def _csr_from_rows(
     return indptr, data
 
 
-def test_project_pick_csr_view_hflip_only():
+def test_project_pick_csr_view_hflip_only() -> None:
     H, W = 4, 100
     rows = [[11], [22, 23], [33], [44, 45, 46]]
     indptr, data = _csr_from_rows(rows)
@@ -28,7 +28,7 @@ def test_project_pick_csr_view_hflip_only():
     np.testing.assert_array_equal(data_v, exp_data)
 
 
-def test_project_pick_csr_view_factor_h_only_expand():
+def test_project_pick_csr_view_factor_h_only_expand() -> None:
     # factor_h=2.0, H=5 の最近傍リサンプル: src indices -> [1,2,2,3,3]
     H, W = 5, 100
     rows = [[10], [20], [30], [40], [50]]
@@ -44,7 +44,7 @@ def test_project_pick_csr_view_factor_h_only_expand():
     np.testing.assert_array_equal(data_v, exp_data)
 
 
-def test_project_pick_csr_view_factor_and_start_only():
+def test_project_pick_csr_view_factor_and_start_only() -> None:
     H, W = 2, 20
     rows = [[1, 2, 3], [10]]
     indptr, data = _csr_from_rows(rows)
@@ -59,7 +59,7 @@ def test_project_pick_csr_view_factor_and_start_only():
     np.testing.assert_array_equal(data_v, exp_data)
 
 
-def test_project_pick_csr_view_combined_hflip_factor_h_factor_start():
+def test_project_pick_csr_view_combined_hflip_factor_h_factor_start() -> None:
     H, W = 5, 20
     rows = [[1], [2], [3], [4], [5]]
     indptr, data = _csr_from_rows(rows)
@@ -77,7 +77,7 @@ def test_project_pick_csr_view_combined_hflip_factor_h_factor_start():
     np.testing.assert_array_equal(data_v, exp_data)
 
 
-def test_project_pick_csr_view_drop_out_of_range_and_non_positive():
+def test_project_pick_csr_view_drop_out_of_range_and_non_positive() -> None:
     H, W = 2, 5
     rows = [[0, -1, 5, 6], [2, 5]]  # trace0 becomes empty, trace1 keeps [2]
     indptr, data = _csr_from_rows(rows)
@@ -90,7 +90,7 @@ def test_project_pick_csr_view_drop_out_of_range_and_non_positive():
     np.testing.assert_array_equal(data_v, exp_data)
 
 
-def test_project_pick_csr_view_invalid_meta_raises():
+def test_project_pick_csr_view_invalid_meta_raises() -> None:
     H, W = 1, 10
     indptr, data = _csr_from_rows([[1]])
 

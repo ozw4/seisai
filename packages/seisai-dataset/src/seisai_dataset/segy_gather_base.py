@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -14,11 +15,13 @@ from seisai_transforms.view_projection import (
 from torch.utils.data import Dataset
 
 from .config import LoaderConfig, TraceSubsetSamplerConfig
-from .file_info import FileInfo
-from .gate_fblc import FirstBreakGate
 from .sample_flow import SampleFlow
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
+
+if TYPE_CHECKING:
+    from .file_info import FileInfo
+    from .gate_fblc import FirstBreakGate
 
 
 class SampleTransformer:

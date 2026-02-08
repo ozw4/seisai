@@ -1,21 +1,24 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import segyio
+from typing_extensions import Self
 
 from .file_info import build_file_info
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
 
 SortWithinGather = Literal['none', 'chno', 'offset']
 
 
 @dataclass(frozen=True)
 class FfidGather:
-    """FFID(=shot gather)単位で取り出した gather とメタ情報。"""
+    """FFID(=shot gather)単位で取り出した gather とメタ情報。."""
 
     file_idx: int
     file_path: str
@@ -42,14 +45,15 @@ def _sort_indices_within_gather(
     elif sort_within == 'offset':
         key = np.asarray(info['offsets'], dtype=np.float64)[idx]
     else:
-        raise ValueError(f'unknown sort_within: {sort_within}')
+        msg = f'unknown sort_within: {sort_within}'
+        raise ValueError(msg)
 
     o = np.argsort(key, kind='mergesort')
     return idx[o]
 
 
 class FFIDGatherIterator:
-    """SEG-Y を FFID ごとに順に取り出す iterator。
+    """SEG-Y を FFID ごとに順に取り出す iterator。.
 
     - trace の並びは、デフォルトで chno で安定ソート(mergesort)
     - x_hw は float32 で返す(mmap -> gather slice)
@@ -81,7 +85,8 @@ class FFIDGatherIterator:
         self._file_infos: list[dict] = []
         for p in self.segy_files:
             if not Path(p).is_file():
-                raise FileNotFoundError(f'SEG-Y not found: {p}')
+                msg = f'SEG-Y not found: {p}'
+                raise FileNotFoundError(msg)
             info = build_file_info(
                 p,
                 ffid_byte=self.ffid_byte,
@@ -92,7 +97,8 @@ class FFIDGatherIterator:
                 include_centroids=False,
             )
             if info['ffid_key_to_indices'] is None:
-                raise ValueError(f'ffid_key_to_indices is None for: {p}')
+                msg = f'ffid_key_to_indices is None for: {p}'
+                raise ValueError(msg)
             self._file_infos.append(info)
 
     def close(self) -> None:
@@ -101,7 +107,7 @@ class FFIDGatherIterator:
             if f is not None:
                 f.close()
 
-    def __enter__(self) -> FFIDGatherIterator:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -116,7 +122,7 @@ class FFIDGatherIterator:
         ffids: Sequence[int] | None = None,
         file_indices: Sequence[int] | None = None,
     ) -> Iterator[FfidGather]:
-        """FFID gather を順に yield。
+        """FFID gather を順に yield。.
 
         Args:
                 ffids: 指定した FFID のみを処理(None なら全 FFID)

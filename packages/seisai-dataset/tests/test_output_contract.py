@@ -74,7 +74,7 @@ def _build_ds() -> SegyGatherPipelineDataset:
     )
 
 
-def test_output_contract_v0():
+def test_output_contract_v0() -> None:
     ds = _build_ds()
     try:
         out = ds[None]

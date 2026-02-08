@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
-import numpy as np
 import torch
 from seisai_utils.convert import to_numpy, to_torch
 from seisai_utils.validator import (
@@ -13,6 +13,9 @@ from seisai_utils.validator import (
 )
 from torch import Tensor
 
+if TYPE_CHECKING:
+    import numpy as np
+
 
 @torch.no_grad()
 def trace_confidence_from_prob(
@@ -22,7 +25,7 @@ def trace_confidence_from_prob(
     eps: float = 1e-9,  # 数値下限(log(0)回避)
 ) -> Tensor | np.ndarray:
     """エントロピーで (B,H) の自信度を算出。
-    すべてNumPy入力→NumPyで返却。それ以外→Torchで返却。内部計算はTorch(CPU)。
+    すべてNumPy入力→NumPyで返却。それ以外→Torchで返却。内部計算はTorch(CPU)。.
     """
     # 返却形態の決定(単一引数でも利用可)
     all_numpy = require_all_numpy(prob)

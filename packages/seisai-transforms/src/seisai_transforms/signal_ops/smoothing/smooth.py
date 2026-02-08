@@ -6,7 +6,7 @@ def smooth_1d_np(
     x: np.ndarray,
     window: int,
 ) -> np.ndarray:
-    """1次元配列の移動平均による平滑化。
+    """1次元配列の移動平均による平滑化。.
 
     パラメータ
     ----------
@@ -29,5 +29,4 @@ def smooth_1d_np(
 
     x = np.asarray(x, dtype=np.float64)
     kernel = np.ones(window, dtype=np.float64) / float(window)
-    y = np.convolve(x, kernel, mode='same')
-    return y
+    return np.convolve(x, kernel, mode='same')

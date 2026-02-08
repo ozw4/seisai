@@ -20,7 +20,8 @@ DataKind = Literal['continuous', 'discrete']
 def _to_hw(x: int | tuple[int, int]) -> tuple[int, int]:
     if isinstance(x, int):
         return int(x), int(x)
-    assert isinstance(x, tuple) and len(x) == 2
+    assert isinstance(x, tuple)
+    assert len(x) == 2
     return int(x[0]), int(x[1])
 
 
@@ -29,9 +30,11 @@ def _to_scale(x: float | tuple[float, float]) -> tuple[float, float]:
         v = float(x)
         assert v > 0.0
         return v, v
-    assert isinstance(x, tuple) and len(x) == 2
+    assert isinstance(x, tuple)
+    assert len(x) == 2
     sx, sy = float(x[0]), float(x[1])
-    assert sx > 0.0 and sy > 0.0
+    assert sx > 0.0
+    assert sy > 0.0
     return sx, sy
 
 
@@ -41,7 +44,7 @@ class Resizer(nn.Module):
     - policy に応じて目標サイズを決定し、F.interpolate でリサイズ。
     - data_kind:
         * "continuous": デフォルト補間 'bilinear'(align_corners=False, 勾配可)
-        * "discrete"  : デフォルト補間 'nearest'(離散ラベル保持)
+        * "discrete"  : デフォルト補間 'nearest'(離散ラベル保持).
     """
 
     def __init__(
@@ -90,7 +93,8 @@ class Resizer(nn.Module):
         if self.policy == 'fixed':
             assert fixed_size is not None
             H, W = _to_hw(fixed_size)
-            assert H > 0 and W > 0
+            assert H > 0
+            assert W > 0
             self.fixed_size = (H, W)
         else:
             self.fixed_size = None
@@ -112,7 +116,7 @@ class Resizer(nn.Module):
         *,
         ref: torch.Tensor | None = None,
     ) -> tuple[int, int] | None:
-        """目標サイズを返す。None のときはリサイズしない(native)。"""
+        """目標サイズを返す。None のときはリサイズしない(native)。."""
         if self.policy == 'native':
             return None
 
@@ -128,11 +132,12 @@ class Resizer(nn.Module):
         if self.policy == 'scale':
             sh, sw = self.scale_hw  # float
             # 端数は四捨五入で整数化。0 は許容しない。
-            th = max(1, int(round(H * sh)))
-            tw = max(1, int(round(W * sw)))
+            th = max(1, round(H * sh))
+            tw = max(1, round(W * sw))
             return (th, tw)
 
-        assert False, f'unknown policy: {self.policy}'
+        msg = f'unknown policy: {self.policy}'
+        raise AssertionError(msg)
 
     def forward(
         self, y: torch.Tensor, *, ref: torch.Tensor | None = None

@@ -27,7 +27,7 @@ def _make_synthetic_probabilities(
     """合成 p_ht を作る:
     - イベント k ごとに、中心 t0_k(秒)・振幅 amp_k・時間幅 sigma_sec
     - チャネルごとに線形 moveout(samples/ch)= slopes[k] を適用
-    - 各イベントを和して [0,1] にクリップ
+    - 各イベントを和して [0,1] にクリップ.
     """
     if not (len(event_secs) == len(slopes_samp_per_ch) == len(amps)):
         msg = 'event_secs, slopes_samp_per_ch, amps must have same length'
@@ -37,7 +37,7 @@ def _make_synthetic_probabilities(
     p = np.zeros((H, T), dtype=np.float64)
     sigma = sigma_sec / dt_sec  # samples
 
-    for k, (t0_sec, slope, amp) in enumerate(
+    for _k, (t0_sec, slope, amp) in enumerate(
         zip(event_secs, slopes_samp_per_ch, amps, strict=False)
     ):
         mu = t0_sec / dt_sec
@@ -47,8 +47,7 @@ def _make_synthetic_probabilities(
 
     # 0-1 へ正規化(最大1に抑えつつ軽いノイズ)
     p += noise_level * rng.random((H, T))
-    p = np.clip(p, 0.0, 1.0)
-    return p
+    return np.clip(p, 0.0, 1.0)
 
 
 if __name__ == '__main__':
@@ -76,23 +75,25 @@ if __name__ == '__main__':
 
     # ---- Step1 の窓(Δ)を秒 → サンプルに変換 ----
     half_window_sec = 1.5
-    half_window = int(round(half_window_sec / dt_sec))
+    half_window = round(half_window_sec / dt_sec)
 
     # ---- Step2 のパラメータ(秒 → サンプル) ----
     min_score = 0.6
     min_distance_sec = 5.0
-    min_distance = int(round(min_distance_sec / dt_sec))
+    min_distance = round(min_distance_sec / dt_sec)
     smooth_window_sec = 1
-    smooth_window = max(1, int(round(smooth_window_sec / dt_sec)))
+    smooth_window = max(1, round(smooth_window_sec / dt_sec))
 
     # ---- パイプライン実行 ----
-    S_fn = lambda x: compute_time_support_from_probabilities(x, half_window=half_window)
-    P_fn = lambda S: detect_event_peaks(
-        S,
-        min_score=min_score,
-        min_distance=min_distance,
-        smooth_window=smooth_window,
-    )
+    def S_fn(x):
+        return compute_time_support_from_probabilities(x, half_window=half_window)
+    def P_fn(S):
+        return detect_event_peaks(
+            S,
+            min_score=min_score,
+            min_distance=min_distance,
+            smooth_window=smooth_window,
+        )
 
     peak_indices, S_t, event_scores = run_event_detection_pipeline(
         p_ht,

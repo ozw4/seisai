@@ -1,9 +1,8 @@
 # %%
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from seisai_pick.trend._time_pick import _argmax_time_parabolic
@@ -15,6 +14,9 @@ from seisai_pick.trend.trend_fit_strategy import (
 )
 from torch import Tensor
 from torch.amp import autocast
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -59,11 +61,12 @@ def _resolve_channels(ch_spec: int | Iterable[int], C: int) -> Sequence[int]:
 class TrendPriorOp:
     """(B,C,H,W) logits を受け取り、選択チャネルに trend 中心の Gaussian prior を
     log 空間で合成して返す。prior_mode='logit' のみを提供(損失計算は別モジュール)。
-    トレンド推定は Strategy インスタンス(IRLS/RANSAC等)で差し替え。
+    トレンド推定は Strategy インスタンス(IRLS/RANSAC等)で差し替え。.
     """
 
     def __init__(self, cfg: TrendPriorConfig) -> None:
-        assert cfg.prior_sigma_ms > 0.0 and cfg.prior_alpha >= 0.0
+        assert cfg.prior_sigma_ms > 0.0
+        assert cfg.prior_alpha >= 0.0
         self.cfg = cfg
 
     @torch.no_grad()
@@ -86,8 +89,10 @@ class TrendPriorOp:
         offsets: Tensor = batch[cfg.offsets_key]
         fb_idx: Tensor = batch[cfg.fb_idx_key]
         dt_sec: Tensor = batch[cfg.dt_key]
-        assert isinstance(offsets, torch.Tensor) and offsets.shape == (B, H)
-        assert isinstance(fb_idx, torch.Tensor) and fb_idx.shape == (B, H)
+        assert isinstance(offsets, torch.Tensor)
+        assert offsets.shape == (B, H)
+        assert isinstance(fb_idx, torch.Tensor)
+        assert fb_idx.shape == (B, H)
 
         valid = fb_idx >= 0
         chs = _resolve_channels(cfg.channels, C)
@@ -131,7 +136,7 @@ class TrendPriorOp:
             t_sec = _argmax_time_parabolic(prob, dt_sec)  # (B,H) [s]
 
             # --- トレンド推定(Strategy 呼び出し) ---
-            trend_t, trend_s, v_trend, w_used, covered = cfg.fit(
+            trend_t, _trend_s, v_trend, w_used, covered = cfg.fit(
                 offsets=offsets.to(logit),
                 t_sec=t_sec.to(logit),
                 valid=valid,

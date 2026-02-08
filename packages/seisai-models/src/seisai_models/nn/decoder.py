@@ -8,14 +8,14 @@ class UnetDecoder2d(nn.Module):
     def __init__(
         self,
         encoder_channels: tuple[int],
-        skip_channels: tuple[int] = None,
+        skip_channels: tuple[int] | None = None,
         decoder_channels: tuple = (256, 128, 64, 32),
         scale_factors: tuple = (2, 2, 2, 2),
         norm_layer: nn.Module = nn.Identity,
         attention_type: str = 'scse',
         intermediate_conv: bool = True,
         upsample_mode: str = 'bilinear',
-    ):
+    ) -> None:
         super().__init__()
 
         # 期待段数 = encoder_levels - 1
@@ -44,13 +44,13 @@ class UnetDecoder2d(nn.Module):
 
         # skip_channels 安全化
         if skip_channels is None:
-            skip_channels = list(encoder_channels[1:]) + [0]
+            skip_channels = [*list(encoder_channels[1:]), 0]
         if len(skip_channels) < len(decoder_channels):
             skip_channels += [0] * (len(decoder_channels) - len(skip_channels))
         else:
             skip_channels = skip_channels[: len(decoder_channels)]
 
-        in_channels = [encoder_channels[0]] + list(decoder_channels[:-1])
+        in_channels = [encoder_channels[0], *list(decoder_channels[:-1])]
 
         self.blocks = nn.ModuleList(
             [

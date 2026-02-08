@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from seisai_utils.config import (
     optional_bool,
@@ -23,8 +24,10 @@ from seisai_engine.pipelines.common.config_io import (
     resolve_relpath,
 )
 from seisai_engine.pipelines.common.config_loaders import load_common_train_config
-from seisai_engine.pipelines.common.config_schema import CommonTrainConfig
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
+
+if TYPE_CHECKING:
+    from seisai_engine.pipelines.common.config_schema import CommonTrainConfig
 
 __all__ = [
     'PairCkptCfg',

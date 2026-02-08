@@ -10,7 +10,7 @@ from torch import Tensor
 def _moving_rms_axis_last(xf: np.ndarray, win: int, *, causal: bool) -> np.ndarray:
     """xf: (*, W) float64
     返り値: (*, W) float64 (Wは最後の軸)
-    causal=True のとき、時刻 t のRMSは [max(0, t-win+1) .. t] の平均に対応。
+    causal=True のとき、時刻 t のRMSは [max(0, t-win+1) .. t] の平均に対応。.
     """
     if win <= 0:
         msg = 'win must be positive'
@@ -64,7 +64,7 @@ def agc_np(
 ):
     """一般的なRMSベースAGC(自動利得制御) NumPy版(CPU)。
     受け付ける形状: (W,) / (H,W) / (C,H,W) / (B,C,H,W) いずれも W は最後の軸。
-    出力は入力と同形状・同dtype。
+    出力は入力と同形状・同dtype。.
 
     - RMSは移動平均(窓長=win)で推定(causal/centered選択可)
     - 目標RMS=target_rms に合わせてゲインをスカラーで時変適用
@@ -109,7 +109,7 @@ def _moving_rms_axis_last_torch(xf: Tensor, win: int, *, causal: bool) -> Tensor
     """xf: (*, W) float64 (任意デバイス)
     返り値: (*, W) float64(Wは最後の軸)
     causal=True: 時刻tのRMSは [max(0, t-win+1) .. t] の平均
-    causal=False: 中心化(左右 pad=win//2)した移動平均
+    causal=False: 中心化(左右 pad=win//2)した移動平均.
     """
     if win <= 0:
         msg = 'win must be positive'
@@ -172,7 +172,7 @@ def agc_torch(
 ) -> Tensor | tuple[Tensor, Tensor]:
     """一般的なRMSベースAGC(PyTorch版)。
     受け付ける形状: (W,) / (H,W) / (C,H,W) / (B,C,H,W) いずれも W は最後の軸。
-    出力は入力と同形状・同dtype。
+    出力は入力と同形状・同dtype。.
     """
     validate_array(x, allowed_ndims=(1, 2, 3, 4), name='x', backend='torch')
     if not (float(target_rms) > 0.0):
@@ -190,7 +190,7 @@ def agc_torch(
     if W <= 0:
         msg = 'W must be > 0'
         raise ValueError(msg)
-    N = int(torch.tensor(Hdims).prod().item()) if Hdims else 1  # 情報用
+    int(torch.tensor(Hdims).prod().item()) if Hdims else 1  # 情報用
 
     device = x.device
     orig_dtype = x.dtype

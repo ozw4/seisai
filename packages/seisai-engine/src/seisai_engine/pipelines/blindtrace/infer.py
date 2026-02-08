@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
-from torch.utils.data import DataLoader
 
 from seisai_engine.infer.runner import TiledHConfig, infer_batch_tiled_h
 
 from .vis import save_triptych_step
+
+if TYPE_CHECKING:
+    from torch.utils.data import DataLoader
 
 __all__ = ['run_infer_epoch']
 

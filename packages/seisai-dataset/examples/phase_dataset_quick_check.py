@@ -40,7 +40,8 @@ def _write_empty_phase_picks_npz(path: Path, *, n_traces: int) -> None:
     """Write an NPZ file containing empty (no picks) phase-pick data for `n_traces` traces."""
     n_traces = int(n_traces)
     if n_traces <= 0:
-        raise ValueError(f'n_traces must be > 0, got {n_traces}')
+        msg = f'n_traces must be > 0, got {n_traces}'
+        raise ValueError(msg)
     indptr = np.zeros(n_traces + 1, dtype=np.int64)
     data = np.zeros(0, dtype=np.int64)
     np.savez_compressed(
@@ -61,18 +62,22 @@ def _describe(name: str, v: object) -> None:
 def _to_numpy_hw_from_input(x: torch.Tensor) -> np.ndarray:
     """input: (C,H,W) torch -> (H,W) float32 numpy (channel 0)."""
     if not isinstance(x, torch.Tensor):
-        raise ValueError(f'input must be torch.Tensor, got {type(x).__name__}')
+        msg = f'input must be torch.Tensor, got {type(x).__name__}'
+        raise ValueError(msg)
     if x.ndim != 3:
-        raise ValueError(f'input must be (C,H,W), got shape={tuple(x.shape)}')
+        msg = f'input must be (C,H,W), got shape={tuple(x.shape)}'
+        raise ValueError(msg)
     return x[0].detach().cpu().numpy().astype(np.float32, copy=False)
 
 
 def _to_numpy_chw_from_target(y: torch.Tensor) -> np.ndarray:
     """target: (C,H,W) torch -> (C,H,W) float32 numpy."""
     if not isinstance(y, torch.Tensor):
-        raise ValueError(f'target must be torch.Tensor, got {type(y).__name__}')
+        msg = f'target must be torch.Tensor, got {type(y).__name__}'
+        raise ValueError(msg)
     if y.ndim != 3:
-        raise ValueError(f'target must be (C,H,W), got shape={tuple(y.shape)}')
+        msg = f'target must be (C,H,W), got shape={tuple(y.shape)}'
+        raise ValueError(msg)
     return y.detach().cpu().numpy().astype(np.float32, copy=False)
 
 
@@ -162,7 +167,8 @@ def main() -> None:
 
     for p in segy_files:
         if not Path(p).exists():
-            raise FileNotFoundError(f'SEGY not found: {p}')
+            msg = f'SEGY not found: {p}'
+            raise FileNotFoundError(msg)
 
     # Create an empty CSR pick file if missing (useful for smoke checks).
     pick_path = Path(phase_pick_files[0])

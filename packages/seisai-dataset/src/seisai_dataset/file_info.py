@@ -171,7 +171,7 @@ def build_index_map(arr: np.ndarray | None) -> dict[int, np.ndarray] | None:
     """1次元配列 arr から {値 -> その値を持つトレースのインデックス配列(int32)} を作る。
     - arr が None のときは None を返す
     - 安定性のため mergesort を使用
-    - 戻り値の各インデックス配列は dtype=int32(GPU転送やシリアライズで軽量)
+    - 戻り値の各インデックス配列は dtype=int32(GPU転送やシリアライズで軽量).
     """
     if arr is None:
         return None
@@ -190,7 +190,7 @@ def _build_centroids(
     x: np.ndarray | None,
     y: np.ndarray | None,
 ) -> dict[int, tuple[float, float]] | None:
-    """キーごとの (mean(x), mean(y)) を返す。入力が欠けていれば None を返す。"""
+    """キーごとの (mean(x), mean(y)) を返す。入力が欠けていれば None を返す。."""
     if key_to_indices is None or x is None or y is None:
         return None
     out: dict[int, tuple[float, float]] = {}
@@ -213,7 +213,7 @@ def build_file_info(
     use_header_cache: bool = True,
     include_centroids: bool = False,
 ) -> dict:
-    """SEG-Y 1ファイルから dataset が要求する file_info dict を構築する共通関数。
+    """SEG-Y 1ファイルから dataset が要求する file_info dict を構築する共通関数。.
 
     - ヘッダは load_headers_with_cache() を用いて取得(cache_dir の有無で自動切替)
     - インデックスマップ({値→行インデックス配列})を安定ソートで構築
@@ -230,7 +230,8 @@ def build_file_info(
     """
     segy_path = str(segy_path)
     if not Path(segy_path).exists():
-        raise FileNotFoundError(f'SEG-Y not found: {segy_path}')
+        msg = f'SEG-Y not found: {segy_path}'
+        raise FileNotFoundError(msg)
 
     meta = load_headers_with_cache(
         segy_path,

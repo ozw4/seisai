@@ -29,7 +29,7 @@ torch.manual_seed(0)
 
 def demo() -> None:
     # ---- 実験設定 ---------------------------------------------------
-    B, C, H, W = 1, 1, 256, 512
+    B, _C, H, W = 1, 1, 256, 512
     offsets = torch.linspace(0.0, 1500.0, H).view(1, -1)  # (B,H) [m]
     fb_idx = torch.zeros(B, H, dtype=torch.long)  # 全トレース有効
     dt_sec = torch.tensor([0.002], dtype=torch.float32)  # (B,) 2ms
@@ -149,12 +149,12 @@ def demo() -> None:
     axes[0].legend(loc='upper left')
 
     # (2) IRLS(prior適用後の fused prob + trend_t)
-    im1 = show(axes[1], prob_i[0], 'IRLS: Prior-applied (fused prob)')
+    show(axes[1], prob_i[0], 'IRLS: Prior-applied (fused prob)')
     axes[1].plot(t_sec_ms_irls, y_off, 'w.', ms=6, label='trend_t (IRLS)')
     axes[1].legend(loc='upper left')
 
     # (3) RANSAC(prior適用後の fused prob + trend_t)
-    im2 = show(axes[2], prob_r[0], 'RANSAC: Prior-applied (fused prob)')
+    show(axes[2], prob_r[0], 'RANSAC: Prior-applied (fused prob)')
     axes[2].plot(t_sec_ms_ransac, y_off, 'w.', ms=6, label='trend_t (RANSAC)')
     axes[2].legend(loc='upper left')
 

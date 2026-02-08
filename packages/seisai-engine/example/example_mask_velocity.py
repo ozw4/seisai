@@ -13,7 +13,7 @@ from seisai_engine.postprocess.velocity_filter_op import (
 
 def demo() -> None:
     # ---- ダミー入力 -------------------------------------------------
-    B, C, H, W = 1, 1, 64, 512
+    B, _C, H, W = 1, 1, 64, 512
     offsets_m = torch.linspace(0.0, 1500.0, H).view(1, -1)  # (B,H)
     dt_sec = torch.tensor([0.002], dtype=torch.float32)  # (B,) = 2ms
 
@@ -66,7 +66,7 @@ def demo() -> None:
 
     def show(
         ax, img, title: str, *, vmin: float | None = None, vmax: float | None = None
-    ):
+    ) -> None:
         im = ax.imshow(
             img.detach().cpu().numpy(),
             origin='lower',

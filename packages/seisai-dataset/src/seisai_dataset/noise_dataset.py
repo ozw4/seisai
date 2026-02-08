@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import numpy as np
 import segyio
@@ -13,7 +13,6 @@ import torch
 from torch.utils.data import Dataset
 
 # seisai-dataset
-from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
 from seisai_dataset.file_info import build_file_info
 
 # 共通の判定ロジック(ここに一本化)
@@ -21,10 +20,15 @@ from seisai_dataset.noise_decider import EventDetectConfig, decide_noise
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from seisai_dataset.trace_subset_sampler import TraceSubsetSampler
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
+
 
 class NoiseTraceSubsetDataset(Dataset):
     """SEG-Y から TraceSubset を抽出 → (任意)Transform → decide_noise() でイベント除外し、
-    ノイズのみ返す Dataset。
+    ノイズのみ返す Dataset。.
     """
 
     def __init__(

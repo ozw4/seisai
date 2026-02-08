@@ -416,9 +416,12 @@ def test_phase_pipeline_dataset_padding_forces_label_valid_false_on_padded_trace
     lv = out['label_valid']
     y = out['target']
 
-    assert isinstance(tv, torch.Tensor) and tv.dtype == torch.bool
-    assert isinstance(lv, torch.Tensor) and lv.dtype == torch.bool
-    assert isinstance(y, torch.Tensor) and y.dtype == torch.float32
+    assert isinstance(tv, torch.Tensor)
+    assert tv.dtype == torch.bool
+    assert isinstance(lv, torch.Tensor)
+    assert lv.dtype == torch.bool
+    assert isinstance(y, torch.Tensor)
+    assert y.dtype == torch.float32
 
     assert tv.shape == (subset_traces,)
     assert lv.shape == (subset_traces,)

@@ -27,7 +27,7 @@ def _make_synthetic(
     seed: int = 0,
 ):
     """合成の first-break っぽい時刻列と確率マップ(prob)を生成。
-    明らかな外れ値をランダム／連続ブロックで注入可能。
+    明らかな外れ値をランダム／連続ブロックで注入可能。.
 
     Returns
     -------
@@ -59,7 +59,7 @@ def _make_synthetic(
     t_pred = t_true + noise
 
     # --- 外れ値インデックスの作成(ランダム + 連続ブロック) ---
-    n_rand = int(round(outlier_frac * H))
+    n_rand = round(outlier_frac * H)
     rand_idx = (
         torch.randperm(H, generator=g, device=device)[:n_rand]
         if n_rand > 0
@@ -121,9 +121,9 @@ def _make_synthetic(
     return offsets, t_true, t_pred, valid, prob, dt_sec
 
 
-def main():
+def main() -> None:
     B = 1
-    offsets, t_true, t_pred, valid, prob, dt_sec = _make_synthetic(B=B)
+    offsets, t_true, t_pred, valid, prob, _dt_sec = _make_synthetic(B=B)
 
     conf_floor = 0.2
     conf_power = 0.5
@@ -134,7 +134,7 @@ def main():
     ).to(t_pred)
 
     # IRLS(w_conf を直接渡す設計に変更)
-    trend_t_i, trend_s_i, v_i, w_conf_used, covered = robust_linear_trend(
+    trend_t_i, _trend_s_i, v_i, w_conf_used, covered = robust_linear_trend(
         offsets,
         t_pred,
         valid,
@@ -149,7 +149,7 @@ def main():
     )
 
     # RANSAC(同様に w_conf を渡す)
-    trend_t_r, trend_s_r, v_r, _, _ = robust_linear_trend_sections_ransac(
+    trend_t_r, _trend_s_r, v_r, _, _ = robust_linear_trend_sections_ransac(
         offsets,
         t_pred,
         valid,
