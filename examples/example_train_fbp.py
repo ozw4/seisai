@@ -68,6 +68,23 @@ LOSS_FN = FbSegKLLossView(tau=1.0, eps=0.0)
 
 
 def criterion(pred: torch.Tensor, target: torch.Tensor, batch: dict) -> torch.Tensor:
+    """Compute the training loss while ensuring the batch target tensor is on the same device as `pred`.
+
+    The training loop provides `target` already moved to the active device, but `batch["target"]`
+    may still be a CPU tensor. Some loss implementations (e.g., `FbSegKLLossView`) read the target
+    from `batch` and require `pred` and the batch target to share the same device. This function
+    creates a shallow copy of `batch`, replaces `"target"` with the device-resident `target`, and
+    invokes the configured `LOSS_FN` with mean reduction.
+
+    Args:
+        pred: Model predictions tensor.
+        target: Ground-truth tensor already moved to the appropriate device.
+        batch: Original batch dictionary (may contain CPU tensors).
+
+    Returns:
+        A scalar loss tensor reduced with `"mean"`.
+
+    """
     # train_loop passes `target` as a device tensor, but `batch['target']` is still on CPU.
     # FbSegKLLossView expects pred/target to share device and reads target from batch.
     batch_dev = dict(batch)
@@ -113,19 +130,12 @@ def save_infer_triptych_no_lines(
     batch_index: int = 0,
     sigma: float = 10.0,
 ) -> None:
-    """横3枚(線なし・間引きなし):
-    (1) input gather(ch0)
-    (2) GT FB heatmap(FBGaussMap: fb_idx_view -> gauss)
-    (3) Pred FB heatmap(FBGaussMap: pred_idx_view -> gauss).
-    """
     if x_bchw.ndim != 4:
         msg = f'x_bchw must be (B,C,H,W), got {tuple(x_bchw.shape)}'
         raise ValueError(msg)
     if logits_b1hw.ndim != 4 or int(logits_b1hw.shape[1]) != 1:
         msg = f'logits_b1hw must be (B,1,H,W), got {tuple(logits_b1hw.shape)}'
-        raise ValueError(
-            msg
-        )
+        raise ValueError(msg)
 
     B, C, H, Wmax = x_bchw.shape
     B2, _, H2, Wmax2 = logits_b1hw.shape
@@ -212,6 +222,23 @@ def run_inference_with_vis(
     infer_fb_files: list[str],
     train_plan: BuildPlan,
 ) -> None:
+    """Run tiled-window inference and optionally save visualization images for a few batches.
+
+    This function builds an inference dataset/loader, runs `infer_batch_tiled_w` over each batch
+    using width tiling, and saves triptych plots (input gather, GT FB heatmap, predicted FB heatmap)
+    for the first `VIS_N` steps into `VIS_OUT_DIR`.
+
+    Args:
+        model: Trained model to evaluate.
+        device: Torch device to run inference on.
+        infer_segy_files: List of SEG-Y file paths used as inference input.
+        infer_fb_files: List of first-break label file paths used for visualization/GT heatmaps.
+        train_plan: Training `BuildPlan`; converted to an input-only plan for inference if needed.
+
+    Returns:
+        None.
+
+    """
     # 推論では target を作らない(= InputOnlyPlan)
     infer_plan = (
         train_plan
