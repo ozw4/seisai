@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 import yaml
-from seisai_utils.config import load_config
 from seisai_engine.pipelines.common import load_checkpoint
+from seisai_utils.config import load_config
+
+import examples.example_train_psn as m
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -22,8 +24,6 @@ def _run_e2e(*, out_dir: Path) -> tuple[Path, Path]:
 	cfg = repo_root / 'tests' / 'e2e' / 'config_train_psn.yaml'
 	if not cfg.is_file():
 		raise FileNotFoundError(cfg)
-
-	import examples.example_train_psn as m
 
 	cfg_data = load_config(cfg)
 	base_dir = cfg.parent

@@ -16,187 +16,190 @@ from .file_info import FileInfo
 
 
 class SampleFlow:
-	"""Sampling and preprocessing orchestrator for SeisAI datasets.
+    """Sampling and preprocessing orchestrator for SeisAI datasets.
 
-	This class ties together a sampler, a transform, and a plan:
-	- `draw_sample` draws a deterministic sample using an RNG-derived seed.
-	- `pad_indices_offsets` / `pad_indices_offsets_fb` pad indices/offsets (and optional
-	  `fb_subset`) to a fixed length and return a validity mask.
-	- `apply_transform` applies the configured transform and validates its output.
-	- `run_plan` executes the configured plan to populate `input` (and optionally `target`).
+    This class ties together a sampler, a transform, and a plan:
+    - `draw_sample` draws a deterministic sample using an RNG-derived seed.
+    - `pad_indices_offsets` / `pad_indices_offsets_fb` pad indices/offsets (and optional
+      `fb_subset`) to a fixed length and return a validity mask.
+    - `apply_transform` applies the configured transform and validates its output.
+    - `run_plan` executes the configured plan to populate `input` (and optionally `target`).
 
-	Parameters
-	----------
-	transform
-		Callable that accepts `(x, rng=..., return_meta=True)` and returns either a 2D numpy
-		array or `(2D numpy array, meta dict)`.
-	plan
-		Object providing `run(sample_for_plan, rng=...)` that populates `sample_for_plan`.
+    Parameters
+    ----------
+    transform
+            Callable that accepts `(x, rng=..., return_meta=True)` and returns either a 2D numpy
+            array or `(2D numpy array, meta dict)`.
+    plan
+            Object providing `run(sample_for_plan, rng=...)` that populates `sample_for_plan`.
 
-	"""
+    """
 
-	def __init__(self, transform, plan) -> None:
-		self.transform = transform
-		self.plan = plan
+    def __init__(self, transform, plan) -> None:
+        self.transform = transform
+        self.plan = plan
 
-	def draw_sample(
-		self,
-		info: dict | FileInfo,
-		rng: np.random.Generator,
-		*,
-		sampler,
-	) -> dict:
-		if sampler is None:
-			raise ValueError('sampler must be provided')
-		seed = int(rng.integers(0, 2**31 - 1))
-		sample = sampler.draw(info, py_random=random.Random(seed))
-		return {
-			'indices': np.asarray(sample['indices'], dtype=np.int64),
-			'key_name': sample['key_name'],
-			'secondary_key': sample['secondary_key'],
-			'did_super': bool(sample['did_super']),
-			'primary_unique': sample['primary_unique'],
-		}
+    def draw_sample(
+        self,
+        info: dict | FileInfo,
+        rng: np.random.Generator,
+        *,
+        sampler,
+    ) -> dict:
+        if sampler is None:
+            msg = 'sampler must be provided'
+            raise ValueError(msg)
+        seed = int(rng.integers(0, 2**31 - 1))
+        sample = sampler.draw(info, py_random=random.Random(seed))
+        return {
+            'indices': np.asarray(sample['indices'], dtype=np.int64),
+            'key_name': sample['key_name'],
+            'secondary_key': sample['secondary_key'],
+            'did_super': bool(sample['did_super']),
+            'primary_unique': sample['primary_unique'],
+        }
 
-	def pad_indices_offsets(
-		self,
-		indices: np.ndarray,
-		offsets: np.ndarray,
-		H: int,
-	) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-		indices, offsets, _fb_subset, trace_valid, pad = self.pad_indices_offsets_fb(
-			indices=indices,
-			offsets=offsets,
-			fb_subset=None,
-			H=H,
-		)
-		return indices, offsets, trace_valid, pad
+    def pad_indices_offsets(
+        self,
+        indices: np.ndarray,
+        offsets: np.ndarray,
+        H: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        indices, offsets, _fb_subset, trace_valid, pad = self.pad_indices_offsets_fb(
+            indices=indices,
+            offsets=offsets,
+            fb_subset=None,
+            H=H,
+        )
+        return indices, offsets, trace_valid, pad
 
-	@staticmethod
-	def pad_indices_offsets_fb(
-		*,
-		indices: np.ndarray,
-		offsets: np.ndarray,
-		fb_subset: np.ndarray | None,
-		H: int,
-	) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, int]:
-		H0 = int(indices.size)
-		if H0 > H:
-			raise ValueError(f'indices length {H0} > loaded H {H}')
-		if fb_subset is not None and int(fb_subset.size) != H0:
-			raise ValueError(
-				f'fb_subset length {fb_subset.size} != indices length {H0}'
-			)
+    @staticmethod
+    def pad_indices_offsets_fb(
+        *,
+        indices: np.ndarray,
+        offsets: np.ndarray,
+        fb_subset: np.ndarray | None,
+        H: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, int]:
+        H0 = int(indices.size)
+        if H0 > H:
+            raise ValueError(f'indices length {H0} > loaded H {H}')
+        if fb_subset is not None and int(fb_subset.size) != H0:
+            raise ValueError(
+                f'fb_subset length {fb_subset.size} != indices length {H0}'
+            )
 
-		trace_valid = np.zeros(H, dtype=np.bool_)
-		trace_valid[:H0] = True
+        trace_valid = np.zeros(H, dtype=np.bool_)
+        trace_valid[:H0] = True
 
-		indices = indices.astype(np.int64, copy=False)
-		offsets = offsets.astype(np.float32, copy=False)
-		if fb_subset is not None:
-			fb_subset = np.asarray(fb_subset, dtype=np.int64)
+        indices = indices.astype(np.int64, copy=False)
+        offsets = offsets.astype(np.float32, copy=False)
+        if fb_subset is not None:
+            fb_subset = np.asarray(fb_subset, dtype=np.int64)
 
-		pad = H - H0
-		if pad > 0:
-			offsets = np.concatenate(
-				[offsets, np.zeros(pad, dtype=np.float32)],
-				axis=0,
-			)
-			indices = np.concatenate(
-				[indices, -np.ones(pad, dtype=np.int64)],
-				axis=0,
-			)
-			if fb_subset is not None:
-				fb_subset = np.concatenate(
-					[fb_subset, -np.ones(pad, dtype=np.int64)],
-					axis=0,
-				)
+        pad = H - H0
+        if pad > 0:
+            offsets = np.concatenate(
+                [offsets, np.zeros(pad, dtype=np.float32)],
+                axis=0,
+            )
+            indices = np.concatenate(
+                [indices, -np.ones(pad, dtype=np.int64)],
+                axis=0,
+            )
+            if fb_subset is not None:
+                fb_subset = np.concatenate(
+                    [fb_subset, -np.ones(pad, dtype=np.int64)],
+                    axis=0,
+                )
 
-		return indices, offsets, fb_subset, trace_valid, pad
+        return indices, offsets, fb_subset, trace_valid, pad
 
-	def apply_transform(
-		self,
-		x: np.ndarray,
-		rng: np.random.Generator,
-		*,
-		name: str,
-	) -> tuple[np.ndarray, dict]:
-		out = self.transform(x, rng=rng, return_meta=True)
-		x_view, meta = out if isinstance(out, tuple) else (out, {})
-		if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
-			raise ValueError(
-				f'transform({name}) は 2D numpy または (2D, meta) を返す必要があります'
-			)
-		if not isinstance(meta, dict):
-			raise ValueError(
-				f'transform({name}) meta must be dict, got {type(meta).__name__}'
-			)
-		return x_view, meta
+    def apply_transform(
+        self,
+        x: np.ndarray,
+        rng: np.random.Generator,
+        *,
+        name: str,
+    ) -> tuple[np.ndarray, dict]:
+        out = self.transform(x, rng=rng, return_meta=True)
+        x_view, meta = out if isinstance(out, tuple) else (out, {})
+        if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
+            raise ValueError(
+                f'transform({name}) は 2D numpy または (2D, meta) を返す必要があります'
+            )
+        if not isinstance(meta, dict):
+            raise ValueError(
+                f'transform({name}) meta must be dict, got {type(meta).__name__}'
+            )
+        return x_view, meta
 
-	def build_plan_input_base(
-		self,
-		*,
-		meta: dict,
-		dt_sec: float,
-		offsets: np.ndarray,
-		indices: np.ndarray,
-		key_name: str,
-		secondary_key: str,
-		primary_unique: str,
-		extra: dict | None = None,
-	) -> dict:
-		sample_for_plan = {
-			'meta': meta,
-			'dt_sec': float(dt_sec),
-			'offsets': offsets,
-			'indices': indices,
-			'key_name': key_name,
-			'secondary_key': secondary_key,
-			'primary_unique': primary_unique,
-		}
-		if extra:
-			sample_for_plan.update(extra)
-		return sample_for_plan
+    def build_plan_input_base(
+        self,
+        *,
+        meta: dict,
+        dt_sec: float,
+        offsets: np.ndarray,
+        indices: np.ndarray,
+        key_name: str,
+        secondary_key: str,
+        primary_unique: str,
+        extra: dict | None = None,
+    ) -> dict:
+        sample_for_plan = {
+            'meta': meta,
+            'dt_sec': float(dt_sec),
+            'offsets': offsets,
+            'indices': indices,
+            'key_name': key_name,
+            'secondary_key': secondary_key,
+            'primary_unique': primary_unique,
+        }
+        if extra:
+            sample_for_plan.update(extra)
+        return sample_for_plan
 
-	def run_plan(
-		self,
-		sample_for_plan: dict,
-		*,
-		rng: np.random.Generator,
-		require_target: bool = True,
-	) -> dict:
-		self.plan.run(sample_for_plan, rng=rng)
-		if 'input' not in sample_for_plan:
-			raise KeyError("plan must populate 'input'")
-		if require_target and 'target' not in sample_for_plan:
-			raise KeyError("plan must populate 'target'")
-		return sample_for_plan
+    def run_plan(
+        self,
+        sample_for_plan: dict,
+        *,
+        rng: np.random.Generator,
+        require_target: bool = True,
+    ) -> dict:
+        self.plan.run(sample_for_plan, rng=rng)
+        if 'input' not in sample_for_plan:
+            msg = "plan must populate 'input'"
+            raise KeyError(msg)
+        if require_target and 'target' not in sample_for_plan:
+            msg = "plan must populate 'target'"
+            raise KeyError(msg)
+        return sample_for_plan
 
-	def build_output_base(
-		self,
-		sample_for_plan: dict,
-		*,
-		meta: dict,
-		dt_sec: float,
-		offsets: np.ndarray,
-		indices: np.ndarray,
-		key_name: str,
-		secondary_key: str,
-		primary_unique: str,
-		extra: dict | None = None,
-	) -> dict:
-		out: dict = {
-			'input': sample_for_plan['input'],
-			'meta': meta,
-			'dt_sec': torch.tensor(float(dt_sec), dtype=torch.float32),
-			'offsets': torch.from_numpy(offsets),
-			'indices': indices,
-			'key_name': key_name,
-			'secondary_key': secondary_key,
-			'primary_unique': primary_unique,
-		}
-		if 'target' in sample_for_plan:
-			out['target'] = sample_for_plan['target']
-		if extra:
-			out.update(extra)
-		return out
+    def build_output_base(
+        self,
+        sample_for_plan: dict,
+        *,
+        meta: dict,
+        dt_sec: float,
+        offsets: np.ndarray,
+        indices: np.ndarray,
+        key_name: str,
+        secondary_key: str,
+        primary_unique: str,
+        extra: dict | None = None,
+    ) -> dict:
+        out: dict = {
+            'input': sample_for_plan['input'],
+            'meta': meta,
+            'dt_sec': torch.tensor(float(dt_sec), dtype=torch.float32),
+            'offsets': torch.from_numpy(offsets),
+            'indices': indices,
+            'key_name': key_name,
+            'secondary_key': secondary_key,
+            'primary_unique': primary_unique,
+        }
+        if 'target' in sample_for_plan:
+            out['target'] = sample_for_plan['target']
+        if extra:
+            out.update(extra)
+        return out

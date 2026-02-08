@@ -7,14 +7,14 @@ from .train import main
 from .vis import build_triptych_cfg, save_triptych_step
 
 __all__ = [
-	'build_dataset',
-	'build_fbgate',
-	'build_transform',
-	'build_model',
-	'build_plan',
-	'run_infer_epoch',
-	'build_masked_criterion',
-	'build_triptych_cfg',
-	'save_triptych_step',
-	'main',
+    'build_dataset',
+    'build_fbgate',
+    'build_masked_criterion',
+    'build_model',
+    'build_plan',
+    'build_transform',
+    'build_triptych_cfg',
+    'main',
+    'run_infer_epoch',
+    'save_triptych_step',
 ]

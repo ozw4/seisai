@@ -19,362 +19,367 @@ _EPS = 1e-6  # 比較時の許容誤差(ほぼ等しいかの判定に使用)
 
 
 def _resample_idx_nearest(v: np.ndarray, factor_h: float) -> np.ndarray:
-	"""(H,) 整数インデックス列を H を保ったまま「最近傍補間」で再サンプルする.
+    """(H,) 整数インデックス列を H を保ったまま「最近傍補間」で再サンプルする.
 
-	目的:
-	- fb_idx のような「離散位置」を線形でぼかさず、段差を保ったまま伸縮する。
+    目的:
+    - fb_idx のような「離散位置」を線形でぼかさず、段差を保ったまま伸縮する。
 
-	契約:
-	- v: (H,), int 系(-1 は無効)
-	- factor_h: >0、1.0 で恒等。中心 (H-1)/2 を固定してスケール。
-	- 端はクリップ(外挿なし)
+    契約:
+    - v: (H,), int 系(-1 は無効)
+    - factor_h: >0、1.0 で恒等。中心 (H-1)/2 を固定してスケール。
+    - 端はクリップ(外挿なし)
 
-	無効の扱い:
-	- 最近傍に選ばれた元値が -1 なら出力も -1(無効の“にじみ”は起こさない)
+    無効の扱い:
+    - 最近傍に選ばれた元値が -1 なら出力も -1(無効の“にじみ”は起こさない)
 
-	戻り値:
-	- (H,), int64
-	"""
-	H = int(v.shape[0])
-	# Keep the mapping identical to CSR projection (`project_pick_csr_view`).
-	j = _nearest_resample_indices(H, factor_h)
-	return v[j].astype(np.int64, copy=True)
+    戻り値:
+    - (H,), int64
+    """
+    H = int(v.shape[0])
+    # Keep the mapping identical to CSR projection (`project_pick_csr_view`).
+    j = _nearest_resample_indices(H, factor_h)
+    return v[j].astype(np.int64, copy=True)
 
 
 def _nearest_resample_indices(H: int, factor_h: float) -> np.ndarray:
-	"""Return dst->src indices for the H-axis nearest-neighbor resample used by fb_idx."""
-	H = int(H)
-	if H <= 0:
-		return np.zeros(0, dtype=np.int64)
-	if abs(float(factor_h) - 1.0) <= 1e-6:
-		return np.arange(H, dtype=np.int64)
+    """Return dst->src indices for the H-axis nearest-neighbor resample used by fb_idx."""
+    H = int(H)
+    if H <= 0:
+        return np.zeros(0, dtype=np.int64)
+    if abs(float(factor_h) - 1.0) <= 1e-6:
+        return np.arange(H, dtype=np.int64)
 
-	c = (H - 1) * 0.5
-	dst = np.arange(H, dtype=np.float32)
-	src = c + (dst - c) / float(factor_h)  # continuous coordinate
-	j = np.floor(src + 0.5).astype(np.int64)  # nearest
-	return np.clip(j, 0, H - 1)
+    c = (H - 1) * 0.5
+    dst = np.arange(H, dtype=np.float32)
+    src = c + (dst - c) / float(factor_h)  # continuous coordinate
+    j = np.floor(src + 0.5).astype(np.int64)  # nearest
+    return np.clip(j, 0, H - 1)
 
 
 def _project_trace_src_map(H: int, meta: dict) -> np.ndarray:
-	"""Build dst-trace -> src-trace mapping following the same order as fb projection.
+    """Build dst-trace -> src-trace mapping following the same order as fb projection.
 
-	Applies:
-	1) hflip (reverse trace order)
-	2) factor_h nearest-neighbor resample (center-fixed, no extrapolation)
-	"""
-	H = int(H)
-	if H <= 0:
-		return np.zeros(0, dtype=np.int64)
+    Applies:
+    1) hflip (reverse trace order)
+    2) factor_h nearest-neighbor resample (center-fixed, no extrapolation)
+    """
+    H = int(H)
+    if H <= 0:
+        return np.zeros(0, dtype=np.int64)
 
-	hflip = bool(meta.get('hflip', False))
-	f_h = float(meta.get('factor_h', 1.0))
-	if f_h <= 0.0:
-		raise ValueError("meta['factor_h'] must be > 0")
+    hflip = bool(meta.get('hflip', False))
+    f_h = float(meta.get('factor_h', 1.0))
+    if f_h <= 0.0:
+        msg = "meta['factor_h'] must be > 0"
+        raise ValueError(msg)
 
-	src = np.arange(H, dtype=np.int64)
-	if hflip:
-		src = src[::-1]
-	j = _nearest_resample_indices(H, f_h)
-	return src[j].astype(np.int64, copy=False)
+    src = np.arange(H, dtype=np.int64)
+    if hflip:
+        src = src[::-1]
+    j = _nearest_resample_indices(H, f_h)
+    return src[j].astype(np.int64, copy=False)
 
 
 def _resample_float_linear(v: np.ndarray, factor_h: float) -> np.ndarray:
-	"""(H,) の float 系列を中心固定・線形補間で同じ H のままリサンプリングする.
+    """(H,) の float 系列を中心固定・線形補間で同じ H のままリサンプリングする.
 
-	トレース方向(H軸)の中心を固定し、線形補間で拡大/縮小する。
+    トレース方向(H軸)の中心を固定し、線形補間で拡大/縮小する。
 
-	契約:
-	- 入力 v: 形状 (H,), dtype は float を想定(例: offsets)
-	- factor_h: >0 の拡大率。1.0 で恒等。中心 (H-1)/2 を固定して拡大/縮小。
-	- 端はクリップ(外挿なし)
-	戻り値:
-	- 形状 (H,), dtype=float32
-	例外:
-	- H==0 の場合は v.astype(np.float32, copy=True) を返す(恒等)
-	"""
-	H = int(v.shape[0])
-	if H == 0 or abs(factor_h - 1.0) <= 1e-6:
-		return v.astype(np.float32, copy=True)
-	c = (H - 1) * 0.5
-	dst = np.arange(H, dtype=np.float32)
-	src = c + (dst - c) / float(factor_h)
-	src = np.clip(src, 0.0, H - 1.0)
-	h0 = np.floor(src).astype(np.int64)
-	h1 = np.clip(h0 + 1, 0, H - 1)
-	w = (src - h0).astype(np.float32)
-	return ((1.0 - w) * v[h0] + w * v[h1]).astype(np.float32)
+    契約:
+    - 入力 v: 形状 (H,), dtype は float を想定(例: offsets)
+    - factor_h: >0 の拡大率。1.0 で恒等。中心 (H-1)/2 を固定して拡大/縮小。
+    - 端はクリップ(外挿なし)
+    戻り値:
+    - 形状 (H,), dtype=float32
+    例外:
+    - H==0 の場合は v.astype(np.float32, copy=True) を返す(恒等)
+    """
+    H = int(v.shape[0])
+    if H == 0 or abs(factor_h - 1.0) <= 1e-6:
+        return v.astype(np.float32, copy=True)
+    c = (H - 1) * 0.5
+    dst = np.arange(H, dtype=np.float32)
+    src = c + (dst - c) / float(factor_h)
+    src = np.clip(src, 0.0, H - 1.0)
+    h0 = np.floor(src).astype(np.int64)
+    h1 = np.clip(h0 + 1, 0, H - 1)
+    w = (src - h0).astype(np.float32)
+    return ((1.0 - w) * v[h0] + w * v[h1]).astype(np.float32)
 
 
 def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.ndarray:
-	"""生の初動インデックス列 `fb_idx` を、meta(hflip/factor_h/factor/start)に基づいて View 空間へ投影する.
+    """生の初動インデックス列 `fb_idx` を、meta(hflip/factor_h/factor/start)に基づいて View 空間へ投影する.
 
-	前提:
-	- インデックスは 0-based だが、0 は無効扱い(有効なのは 1..W-1).
-	- -1 は無効値。
+    前提:
+    - インデックスは 0-based だが、0 は無効扱い(有効なのは 1..W-1).
+    - -1 は無効値。
 
-	処理順:
-	1) H方向: hflip → factor_h による再サンプル(最近傍、無効値伝播ルール適用)
-	2) T方向: round(fb * factor) - start で時間窓へ写像(0以下は無効扱い)
-	3) 範囲外は -1(無効)にする。有効範囲は 1..W-1。
+    処理順:
+    1) H方向: hflip → factor_h による再サンプル(最近傍、無効値伝播ルール適用)
+    2) T方向: round(fb * factor) - start で時間窓へ写像(0以下は無効扱い)
+    3) 範囲外は -1(無効)にする。有効範囲は 1..W-1。
 
-	引数:
-	- fb_idx: (H,), int。0-based。-1 は無効。0 も無効扱い。
-	- H, W : x_view の形状に一致するトレース数・サンプル数
-	- meta : dict。{'hflip':bool, 'factor_h':float, 'factor':float, 'start':int}
+    引数:
+    - fb_idx: (H,), int。0-based。-1 は無効。0 も無効扱い。
+    - H, W : x_view の形状に一致するトレース数・サンプル数
+    - meta : dict。{'hflip':bool, 'factor_h':float, 'factor':float, 'start':int}
 
-	戻り値:
-	- fb_idx_view: (H,), int64。1..W-1 が有効、-1 が無効。
+    戻り値:
+    - fb_idx_view: (H,), int64。1..W-1 が有効、-1 が無効。
 
-	例外:
-	- H と fb_idx 長さ不一致、factor<=0、start<0、factor_h<=0 などの不正は ValueError。
-	"""
-	fb = np.asarray(fb_idx, dtype=np.int64).copy()
-	if fb.shape[0] != H:
-		msg = f'fb_idx length {fb.shape[0]} != H {H}'
-		raise ValueError(msg)
+    例外:
+    - H と fb_idx 長さ不一致、factor<=0、start<0、factor_h<=0 などの不正は ValueError。
+    """
+    fb = np.asarray(fb_idx, dtype=np.int64).copy()
+    if fb.shape[0] != H:
+        msg = f'fb_idx length {fb.shape[0]} != H {H}'
+        raise ValueError(msg)
 
-	# H方向: hflip → factor_h (same mapping as CSR projection)
-	src_map = _project_trace_src_map(H, meta)
-	fb = fb[src_map]
+    # H方向: hflip → factor_h (same mapping as CSR projection)
+    src_map = _project_trace_src_map(H, meta)
+    fb = fb[src_map]
 
-	factor = float(meta.get('factor', 1.0))
-	if factor <= 0.0:
-		msg = "meta['factor'] must be > 0"
-		raise ValueError(msg)
+    factor = float(meta.get('factor', 1.0))
+    if factor <= 0.0:
+        msg = "meta['factor'] must be > 0"
+        raise ValueError(msg)
 
-	start_raw = meta.get('start', 0)
-	start_f = float(start_raw)
-	if start_f < 0.0:
-		msg = "meta['start'] must be >= 0"
-		raise ValueError(msg)
-	if abs(start_f - round(start_f)) > 1e-9:
-		msg = "meta['start'] must be an integer >= 0"
-		raise ValueError(msg)
-	start = round(start_f)
+    start_raw = meta.get('start', 0)
+    start_f = float(start_raw)
+    if start_f < 0.0:
+        msg = "meta['start'] must be >= 0"
+        raise ValueError(msg)
+    if abs(start_f - round(start_f)) > 1e-9:
+        msg = "meta['start'] must be an integer >= 0"
+        raise ValueError(msg)
+    start = round(start_f)
 
-	fb = (
-		np.round(fb * factor).astype(np.int64) - start
-	)  # 0-based mapping; 0 is treated as invalid
-	fb[(fb <= 0) | (fb >= W)] = -1
-	return fb
+    fb = (
+        np.round(fb * factor).astype(np.int64) - start
+    )  # 0-based mapping; 0 is treated as invalid
+    fb[(fb <= 0) | (fb >= W)] = -1
+    return fb
 
 
 def project_pick_csr_view(
-	indptr: np.ndarray, data: np.ndarray, H: int, W: int, meta: dict
+    indptr: np.ndarray, data: np.ndarray, H: int, W: int, meta: dict
 ) -> tuple[np.ndarray, np.ndarray]:
-	"""Project CSR pick lists into view space based on meta(hflip/factor_h/factor/start).
+    """Project CSR pick lists into view space based on meta(hflip/factor_h/factor/start).
 
-	This is the CSR (per-trace variable-length list) counterpart of `project_fb_idx_view`
-	and follows the same order and meta interpretation:
-	1) H方向: hflip → factor_h (nearest-neighbor resample in trace axis)
-	2) T方向: pick_v = round(pick * factor) - start
-	3) 範囲外/無効は捨てる: pick_v <= 0 or pick_v >= W
+    This is the CSR (per-trace variable-length list) counterpart of `project_fb_idx_view`
+    and follows the same order and meta interpretation:
+    1) H方向: hflip → factor_h (nearest-neighbor resample in trace axis)
+    2) T方向: pick_v = round(pick * factor) - start
+    3) 範囲外/無効は捨てる: pick_v <= 0 or pick_v >= W
 
-	Parameters
-	----------
-	indptr, data
-		CSR arrays of shape `(H+1,)` and `(nnz,)`.
-		Pick values follow the same rule as fb: `<=0` are invalid, `>0` are valid.
-	H, W
-		Output view dimensions. H must match `len(indptr)-1`.
-	meta
-		Transform metadata. Uses the same keys as `project_fb_idx_view`:
-		`hflip: bool`, `factor_h: float`, `factor: float`, `start: int`.
+    Parameters
+    ----------
+    indptr, data
+            CSR arrays of shape `(H+1,)` and `(nnz,)`.
+            Pick values follow the same rule as fb: `<=0` are invalid, `>0` are valid.
+    H, W
+            Output view dimensions. H must match `len(indptr)-1`.
+    meta
+            Transform metadata. Uses the same keys as `project_fb_idx_view`:
+            `hflip: bool`, `factor_h: float`, `factor: float`, `start: int`.
 
-	Returns
-	-------
-	(indptr_v, data_v)
-		View-projected CSR arrays (both int64).
+    Returns
+    -------
+    (indptr_v, data_v)
+            View-projected CSR arrays (both int64).
 
-	Raises
-	------
-	ValueError
-		If CSR arrays are invalid or meta values are invalid.
-	"""
-	H = int(H)
-	W = int(W)
-	if W <= 0:
-		raise ValueError(f'W must be > 0, got {W}')
+    Raises
+    ------
+    ValueError
+            If CSR arrays are invalid or meta values are invalid.
 
-	ip_in = np.asarray(indptr)
-	if ip_in.ndim != 1:
-		raise ValueError(f'indptr must be 1D, got shape={ip_in.shape}')
-	if not np.issubdtype(ip_in.dtype, np.integer):
-		raise ValueError(f'indptr must be integer dtype, got {ip_in.dtype}')
-	if int(ip_in.size) != H + 1:
-		raise ValueError(f'indptr length {ip_in.size} != H+1 {H + 1}')
-	if H == 0:
-		if int(ip_in.size) != 1:
-			raise ValueError(f'indptr length {ip_in.size} != H+1 {H + 1}')
-		d_in = np.asarray(data)
-		if d_in.ndim != 1:
-			raise ValueError(f'data must be 1D, got shape={d_in.shape}')
-		if int(d_in.size) != 0:
-			raise ValueError('data must be empty when H==0')
-		return np.zeros(1, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    """
+    H = int(H)
+    W = int(W)
+    if W <= 0:
+        raise ValueError(f'W must be > 0, got {W}')
 
-	if int(ip_in[0]) != 0:
-		raise ValueError(f'indptr[0] must be 0, got {int(ip_in[0])}')
-	if np.any(ip_in[1:] < ip_in[:-1]):
-		raise ValueError('indptr must be monotonic non-decreasing')
+    ip_in = np.asarray(indptr)
+    if ip_in.ndim != 1:
+        raise ValueError(f'indptr must be 1D, got shape={ip_in.shape}')
+    if not np.issubdtype(ip_in.dtype, np.integer):
+        raise ValueError(f'indptr must be integer dtype, got {ip_in.dtype}')
+    if int(ip_in.size) != H + 1:
+        raise ValueError(f'indptr length {ip_in.size} != H+1 {H + 1}')
+    if H == 0:
+        if int(ip_in.size) != 1:
+            raise ValueError(f'indptr length {ip_in.size} != H+1 {H + 1}')
+        d_in = np.asarray(data)
+        if d_in.ndim != 1:
+            raise ValueError(f'data must be 1D, got shape={d_in.shape}')
+        if int(d_in.size) != 0:
+            msg = 'data must be empty when H==0'
+            raise ValueError(msg)
+        return np.zeros(1, dtype=np.int64), np.zeros(0, dtype=np.int64)
 
-	d_in = np.asarray(data)
-	if d_in.ndim != 1:
-		raise ValueError(f'data must be 1D, got shape={d_in.shape}')
-	if not np.issubdtype(d_in.dtype, np.integer):
-		raise ValueError(f'data must be integer dtype, got {d_in.dtype}')
-	if int(ip_in[-1]) != int(d_in.size):
-		raise ValueError(
-			f'indptr[-1] must equal len(data)={d_in.size}, got {int(ip_in[-1])}'
-		)
+    if int(ip_in[0]) != 0:
+        raise ValueError(f'indptr[0] must be 0, got {int(ip_in[0])}')
+    if np.any(ip_in[1:] < ip_in[:-1]):
+        msg = 'indptr must be monotonic non-decreasing'
+        raise ValueError(msg)
 
-	ip = ip_in.astype(np.int64, copy=False)
-	d = d_in.astype(np.int64, copy=False)
+    d_in = np.asarray(data)
+    if d_in.ndim != 1:
+        raise ValueError(f'data must be 1D, got shape={d_in.shape}')
+    if not np.issubdtype(d_in.dtype, np.integer):
+        raise ValueError(f'data must be integer dtype, got {d_in.dtype}')
+    if int(ip_in[-1]) != int(d_in.size):
+        raise ValueError(
+            f'indptr[-1] must equal len(data)={d_in.size}, got {int(ip_in[-1])}'
+        )
 
-	# --- H direction: hflip -> factor_h ---
-	src_map = _project_trace_src_map(H, meta)
+    ip = ip_in.astype(np.int64, copy=False)
+    d = d_in.astype(np.int64, copy=False)
 
-	# --- T direction: factor/start ---
-	factor = float(meta.get('factor', 1.0))
-	if factor <= 0.0:
-		raise ValueError("meta['factor'] must be > 0")
+    # --- H direction: hflip -> factor_h ---
+    src_map = _project_trace_src_map(H, meta)
 
-	start_raw = meta.get('start', 0)
-	start_f = float(start_raw)
-	if start_f < 0.0:
-		raise ValueError("meta['start'] must be >= 0")
-	if abs(start_f - round(start_f)) > 1e-9:
-		raise ValueError("meta['start'] must be an integer >= 0")
-	start = round(start_f)
+    # --- T direction: factor/start ---
+    factor = float(meta.get('factor', 1.0))
+    if factor <= 0.0:
+        msg = "meta['factor'] must be > 0"
+        raise ValueError(msg)
 
-	out_indptr = np.zeros(H + 1, dtype=np.int64)
-	out_chunks: list[np.ndarray] = []
-	nnz = 0
-	for t in range(H):
-		src = int(src_map[t])
-		st = int(ip[src])
-		en = int(ip[src + 1])
-		if st == en:
-			out_indptr[t + 1] = nnz
-			continue
+    start_raw = meta.get('start', 0)
+    start_f = float(start_raw)
+    if start_f < 0.0:
+        msg = "meta['start'] must be >= 0"
+        raise ValueError(msg)
+    if abs(start_f - round(start_f)) > 1e-9:
+        msg = "meta['start'] must be an integer >= 0"
+        raise ValueError(msg)
+    start = round(start_f)
 
-		v = d[st:en]
-		v = v[v > 0]  # enforce pick<=0 invalid
-		if v.size == 0:
-			out_indptr[t + 1] = nnz
-			continue
+    out_indptr = np.zeros(H + 1, dtype=np.int64)
+    out_chunks: list[np.ndarray] = []
+    nnz = 0
+    for t in range(H):
+        src = int(src_map[t])
+        st = int(ip[src])
+        en = int(ip[src + 1])
+        if st == en:
+            out_indptr[t + 1] = nnz
+            continue
 
-		vv = np.round(v * factor).astype(np.int64) - start
-		vv = vv[(vv > 0) & (vv < W)]
-		if vv.size == 0:
-			out_indptr[t + 1] = nnz
-			continue
+        v = d[st:en]
+        v = v[v > 0]  # enforce pick<=0 invalid
+        if v.size == 0:
+            out_indptr[t + 1] = nnz
+            continue
 
-		out_chunks.append(vv.astype(np.int64, copy=False))
-		nnz += int(vv.size)
-		out_indptr[t + 1] = nnz
+        vv = np.round(v * factor).astype(np.int64) - start
+        vv = vv[(vv > 0) & (vv < W)]
+        if vv.size == 0:
+            out_indptr[t + 1] = nnz
+            continue
 
-	out_data = (
-		np.concatenate(out_chunks, axis=0)
-		if nnz > 0
-		else np.zeros(0, dtype=np.int64)
-	)
-	return out_indptr, out_data
+        out_chunks.append(vv.astype(np.int64, copy=False))
+        nnz += int(vv.size)
+        out_indptr[t + 1] = nnz
+
+    out_data = (
+        np.concatenate(out_chunks, axis=0) if nnz > 0 else np.zeros(0, dtype=np.int64)
+    )
+    return out_indptr, out_data
 
 
 def project_offsets_view(offsets: np.ndarray, H: int, meta: dict) -> np.ndarray:
-	"""生のオフセット列 (H,) を meta の H 方向変換(hflip / factor_h)に合わせて View 空間へ投影して返す.
+    """生のオフセット列 (H,) を meta の H 方向変換(hflip / factor_h)に合わせて View 空間へ投影して返す.
 
-	Parameters
-	----------
-	offsets : np.ndarray
-		形状 (H,) の 1D 配列(float 可)。各トレースの受信点オフセット [m]。
-	H : int
-		ビューのトレース数(offsets 長と一致している必要がある)。
-	meta : dict
-		{'hflip': bool, 'factor_h': float} を想定。存在しない場合は既定値 False / 1.0。
+    Parameters
+    ----------
+    offsets : np.ndarray
+            形状 (H,) の 1D 配列(float 可)。各トレースの受信点オフセット [m]。
+    H : int
+            ビューのトレース数(offsets 長と一致している必要がある)。
+    meta : dict
+            {'hflip': bool, 'factor_h': float} を想定。存在しない場合は既定値 False / 1.0。
 
-	Returns
-	-------
-	np.ndarray
-		形状 (H,) の float32 配列。ビュー空間のオフセット列。
+    Returns
+    -------
+    np.ndarray
+            形状 (H,) の float32 配列。ビュー空間のオフセット列。
 
-	Raises
-	------
-	ValueError
-		offsets が 1D でない、長さが H と一致しない、または factor_h <= 0 の場合。
+    Raises
+    ------
+    ValueError
+            offsets が 1D でない、長さが H と一致しない、または factor_h <= 0 の場合。
 
-	"""
-	off = np.asarray(offsets, dtype=np.float32)
-	if off.ndim != 1:
-		msg = 'offsets must be 1D'
-		raise ValueError(msg)
-	if off.shape[0] != H:
-		msg = f'offsets length {off.shape[0]} != H {H}'
-		raise ValueError(msg)
+    """
+    off = np.asarray(offsets, dtype=np.float32)
+    if off.ndim != 1:
+        msg = 'offsets must be 1D'
+        raise ValueError(msg)
+    if off.shape[0] != H:
+        msg = f'offsets length {off.shape[0]} != H {H}'
+        raise ValueError(msg)
 
-	if bool(meta.get('hflip', False)):
-		off = off[::-1].copy()
+    if bool(meta.get('hflip', False)):
+        off = off[::-1].copy()
 
-	factor_h = float(meta.get('factor_h', 1.0))
-	if factor_h <= 0.0:
-		msg = "meta['factor_h'] must be > 0"
-		raise ValueError(msg)
+    factor_h = float(meta.get('factor_h', 1.0))
+    if factor_h <= 0.0:
+        msg = "meta['factor_h'] must be > 0"
+        raise ValueError(msg)
 
-	if abs(factor_h - 1.0) <= _EPS:
-		return off
+    if abs(factor_h - 1.0) <= _EPS:
+        return off
 
-	out = _resample_float_linear(off, factor_h)
-	return np.asarray(out, dtype=np.float32)
+    out = _resample_float_linear(off, factor_h)
+    return np.asarray(out, dtype=np.float32)
 
 
 def project_time_view(time_1d: np.ndarray, H: int, W: int, meta: dict) -> np.ndarray:
-	"""Project a 1D time axis (seconds) into view space based on meta.
+    """Project a 1D time axis (seconds) into view space based on meta.
 
-	生の時間軸(1D, 秒)を meta の時間ストレッチ / クロップに追従させ、
-	全トレース共通の 1D 時間グリッド (W,) を返す。
-	注: H はインターフェイス整合のための引数で計算には使用しない。
+    生の時間軸(1D, 秒)を meta の時間ストレッチ / クロップに追従させ、
+    全トレース共通の 1D 時間グリッド (W,) を返す。
+    注: H はインターフェイス整合のための引数で計算には使用しない。
 
-	Parameters
-	----------
-	time_1d : np.ndarray
-		形状 (W0,) の等間隔時刻列(例: np.arange(W0) * dt0 + t0)。
-	H : int
-		ビューのトレース数(未使用)。
-	W : int
-		出力時間グリッドのサンプル数。
-	meta : dict
-		{'factor': float (>0), 'start': int (>=0)} を想定。
+    Parameters
+    ----------
+    time_1d : np.ndarray
+            形状 (W0,) の等間隔時刻列(例: np.arange(W0) * dt0 + t0)。
+    H : int
+            ビューのトレース数(未使用)。
+    W : int
+            出力時間グリッドのサンプル数。
+    meta : dict
+            {'factor': float (>0), 'start': int (>=0)} を想定。
 
-	Returns
-	-------
-	np.ndarray
-		形状 (W,) の float32 配列。ビュー空間の時間グリッド [s]。
+    Returns
+    -------
+    np.ndarray
+            形状 (W,) の float32 配列。ビュー空間の時間グリッド [s]。
 
-	Raises
-	------
-	ValueError
-		time_1d が 1D でない、長さ < 2、factor <= 0、または start < 0 の場合。
+    Raises
+    ------
+    ValueError
+            time_1d が 1D でない、長さ < 2、factor <= 0、または start < 0 の場合。
 
-	"""
-	t_raw = np.asarray(time_1d, dtype=np.float64)
-	if t_raw.ndim != 1 or t_raw.size < 2:
-		msg = 'time_1d must be 1D with length >= 2'
-		raise ValueError(msg)
+    """
+    t_raw = np.asarray(time_1d, dtype=np.float64)
+    if t_raw.ndim != 1 or t_raw.size < 2:
+        msg = 'time_1d must be 1D with length >= 2'
+        raise ValueError(msg)
 
-	dt0 = float(np.mean(np.diff(t_raw)))
-	t0 = float(t_raw[0])
+    dt0 = float(np.mean(np.diff(t_raw)))
+    t0 = float(t_raw[0])
 
-	factor = float(meta.get('factor', 1.0))
-	if factor <= 0.0:
-		msg = "meta['factor'] must be > 0"
-		raise ValueError(msg)
+    factor = float(meta.get('factor', 1.0))
+    if factor <= 0.0:
+        msg = "meta['factor'] must be > 0"
+        raise ValueError(msg)
 
-	start = int(meta.get('start', 0))
-	if start < 0:
-		msg = "meta['start'] must be >= 0"
-		raise ValueError(msg)
+    start = int(meta.get('start', 0))
+    if start < 0:
+        msg = "meta['start'] must be >= 0"
+        raise ValueError(msg)
 
-	tv = t0 + (np.arange(W, dtype=np.float64) + start) * (dt0 / factor)
-	return tv.astype(np.float32)
+    tv = t0 + (np.arange(W, dtype=np.float64) + start) * (dt0 / factor)
+    return tv.astype(np.float32)

@@ -6,4 +6,4 @@ __all__ = ['seed_all']
 
 
 def seed_all(seed: int) -> None:
-	set_seed(int(seed))
+    set_seed(int(seed))
