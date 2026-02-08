@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 # ---------------- 基本ユニット ----------------
 class BuildUnit:
-    """一方(input か target どちらか)の組立ユニット。."""
+    """一方(input か target どちらか)の組立ユニット."""
 
     def __init__(self, ops: list[Callable], stack: SelectStack) -> None:
         self.ops = ops
@@ -52,7 +52,7 @@ def _require_masker(ctx: dict[str, Any]) -> MaskGenerator:
 
 
 def make_registry(ctx: dict[str, Any] | None = None) -> dict[str, RegItem]:
-    """タグ→レシピのレジストリ。ctx には依存物を入れる(例: masker, fb_sigma, offset_normalize)。."""
+    """タグ→レシピのレジストリ。ctx には依存物を入れる(例: masker, fb_sigma, offset_normalize)."""
     ctx = {} if ctx is None else dict(ctx)
     reg: dict[str, RegItem] = {}
 

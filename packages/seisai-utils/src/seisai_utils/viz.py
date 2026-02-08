@@ -76,7 +76,7 @@ def imshow_hw(
     vmax: float | None = None,
     alpha: float = 1.0,
 ) -> None:
-    """(H,W) を表示。transpose_for_trace_time=True で x=Trace, y=Time になるように表示する。."""
+    """(H,W) を表示。transpose_for_trace_time=True で x=Trace, y=Time になるように表示する."""
     hw = _as_hw(data_hw)
     img = hw.T if transpose_for_trace_time else hw
     ax.imshow(img, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax, alpha=alpha)
@@ -107,7 +107,7 @@ def imshow_overlay_hw(
     overlay_vmax: float | None = None,
     overlay_alpha: float = 0.5,
 ) -> None:
-    """Base の上に overlay を重ねる(example_segy_gather_pipline_ds.py のやつ)。."""
+    """Base の上に overlay を重ねる(example_segy_gather_pipline_ds.py のやつ)."""
     base = _as_hw(base_hw)
     ov = _as_hw(overlay_hw)
     if base.shape != ov.shape:
@@ -145,7 +145,7 @@ def save_imshow_row(
     figsize: tuple[float, float] = (21.0, 5.0),
     dpi: int = 150,
 ) -> None:
-    """横一列に並べて保存(入力/GT/Pred みたいな triptych 用)。."""
+    """横一列に並べて保存(入力/GT/Pred みたいな triptych 用)."""
     panels = list(panels)
     if len(panels) == 0:
         msg = 'panels must be non-empty'

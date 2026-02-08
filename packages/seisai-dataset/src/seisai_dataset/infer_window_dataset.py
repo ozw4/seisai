@@ -46,7 +46,7 @@ class InferenceGatherWindowsConfig:
 
 
 class _NoRandRNG:
-    """推論で RNG が呼ばれたら即失敗させるためのダミー RNG。."""
+    """推論で RNG が呼ばれたら即失敗させるためのダミー RNG."""
 
     def random(self, *args, **kwargs) -> NoReturn:
         msg = 'random() is not allowed in inference'

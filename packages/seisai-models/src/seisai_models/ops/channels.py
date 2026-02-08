@@ -393,13 +393,13 @@ def find_input_convs_for_inflation(model: nn.Module):
 
 
 def freeze_original_in_channels(model: nn.Module, old_in_ch: int = 1) -> None:
-    """旧 in-ch を凍結(新規追加チャンネルのみ学習)するフックを登録。."""
+    """旧 in-ch を凍結(新規追加チャンネルのみ学習)するフックを登録."""
     for conv in find_input_convs_for_inflation(model):
         if conv.in_channels >= old_in_ch + 1:
             _register_grad_mask_for_old_in_channels(conv, old_in_ch)
 
 
 def unfreeze_all_inflated_convs(model: nn.Module) -> None:
-    """凍結解除：勾配マスクを外す。."""
+    """凍結解除：勾配マスクを外す."""
     for conv in find_input_convs_for_inflation(model):
         _remove_grad_mask(conv)

@@ -343,7 +343,7 @@ def run_infer_loader_tiled_w(
     tile_transform: TileTransform | None = None,
     post_tile_transform: PostTileTransform | None = None,
 ) -> list[tuple[torch.Tensor, list[dict[str, Any]]]]:
-    """iter_infer_loader_tiled_w の収集版(小規模デモ用)。."""
+    """iter_infer_loader_tiled_w の収集版(小規模デモ用)."""
     return list(
         iter_infer_loader_tiled_w(
             model,
@@ -370,7 +370,7 @@ def run_infer_loader_tiled_h(
     tile_transform: TileTransform | None = None,
     post_tile_transform: PostTileTransform | None = None,
 ) -> list[tuple[torch.Tensor, list[dict[str, Any]]]]:
-    """iter_infer_loader_tiled_h の収集版(小規模デモ用)。."""
+    """iter_infer_loader_tiled_h の収集版(小規模デモ用)."""
     return list(
         iter_infer_loader_tiled_h(
             model,

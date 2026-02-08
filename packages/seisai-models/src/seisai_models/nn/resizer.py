@@ -116,7 +116,7 @@ class Resizer(nn.Module):
         *,
         ref: torch.Tensor | None = None,
     ) -> tuple[int, int] | None:
-        """目標サイズを返す。None のときはリサイズしない(native)。."""
+        """目標サイズを返す。None のときはリサイズしない(native)."""
         if self.policy == 'native':
             return None
 

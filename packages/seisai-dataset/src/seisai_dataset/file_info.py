@@ -190,7 +190,7 @@ def _build_centroids(
     x: np.ndarray | None,
     y: np.ndarray | None,
 ) -> dict[int, tuple[float, float]] | None:
-    """キーごとの (mean(x), mean(y)) を返す。入力が欠けていれば None を返す。."""
+    """キーごとの (mean(x), mean(y)) を返す。入力が欠けていれば None を返す."""
     if key_to_indices is None or x is None or y is None:
         return None
     out: dict[int, tuple[float, float]] = {}

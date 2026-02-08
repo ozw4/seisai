@@ -49,7 +49,7 @@ def _infer_hw_denorm_like_input(
     cfg: Tiled2DConfig,
     eps_std: float,
 ) -> np.ndarray:
-    """x_hw(=元スケール) -> per-trace標準化 -> tiled推論 -> denormして元スケールで返す。."""
+    """x_hw(=元スケール) -> per-trace標準化 -> tiled推論 -> denormして元スケールで返す."""
     if x_hw.ndim != 2:
         msg = f'x_hw must be (H,W), got {x_hw.shape}'
         raise ValueError(msg)

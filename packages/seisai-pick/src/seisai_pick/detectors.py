@@ -5,7 +5,7 @@ from .stalta import stalta_1d
 
 
 def _ms_to_samples(dt_sec: float, ms: float) -> int:
-    """Ms をサンプル数へ変換(最低1)。."""
+    """Ms をサンプル数へ変換(最低1)."""
     if dt_sec <= 0.0:
         msg = 'dt_sec must be > 0'
         raise ValueError(msg)
@@ -68,7 +68,7 @@ def _stalta_pick_hist(
     min_on_len: int,
     refr_len: int,
 ) -> np.ndarray:
-    """(H,T) の各トレースに対して STALTA→初動run抽出→ヒスト加算を行い、hist[T] を返す。."""
+    """(H,T) の各トレースに対して STALTA→初動run抽出→ヒスト加算を行い、hist[T] を返す."""
     H, T = x_ht.shape
     hist = np.zeros(T, dtype=np.int32)
     for h in range(H):

@@ -18,7 +18,7 @@ SortWithinGather = Literal['none', 'chno', 'offset']
 
 @dataclass(frozen=True)
 class FfidGather:
-    """FFID(=shot gather)単位で取り出した gather とメタ情報。."""
+    """FFID(=shot gather)単位で取り出した gather とメタ情報."""
 
     file_idx: int
     file_path: str
