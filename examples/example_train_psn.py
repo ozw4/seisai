@@ -1,5 +1,6 @@
 """Thin entrypoint for PSN training."""
 
+# %%
 from __future__ import annotations
 
 import argparse

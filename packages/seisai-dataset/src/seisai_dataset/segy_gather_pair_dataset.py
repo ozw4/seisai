@@ -4,17 +4,13 @@ from typing import cast
 
 import numpy as np
 import segyio
-from torch.utils.data import Dataset
 
 from .builder.builder import BuildPlan
-from .config import LoaderConfig, TraceSubsetSamplerConfig
 from .file_info import PairFileInfo, build_file_info_dataclass
-from .sample_flow import SampleFlow
-from .trace_subset_preproc import TraceSubsetLoader
-from .trace_subset_sampler import TraceSubsetSampler
+from .segy_gather_base import BaseRandomSegyDataset
 
 
-class SegyGatherPairDataset(Dataset):
+class SegyGatherPairDataset(BaseRandomSegyDataset):
 	"""SEG-Y 対応ペアから同期 transform で input/target を生成する Dataset."""
 
 	def __init__(
@@ -48,46 +44,27 @@ class SegyGatherPairDataset(Dataset):
 
 		self.input_segy_files = list(input_segy_files)
 		self.target_segy_files = list(target_segy_files)
-		self.transform = transform
-		self.plan = plan
 
-		self.ffid_byte = ffid_byte
-		self.chno_byte = chno_byte
-		self.cmp_byte = cmp_byte
+		super().__init__(transform, plan, max_trials=max_trials, verbose=verbose)
 
-		self.primary_keys = tuple(primary_keys) if primary_keys else None
-		self.primary_key_weights = (
-			tuple(primary_key_weights) if primary_key_weights else None
+		self._init_header_config(
+			ffid_byte=ffid_byte,
+			chno_byte=chno_byte,
+			cmp_byte=cmp_byte,
+			use_header_cache=use_header_cache,
+			header_cache_dir=header_cache_dir,
 		)
 
-		self.use_superwindow = bool(use_superwindow)
-		self.sw_halfspan = int(sw_halfspan)
-		self.sw_prob = float(sw_prob)
-
-		self.use_header_cache = bool(use_header_cache)
-		self.header_cache_dir = header_cache_dir
-
-		self.secondary_key_fixed = bool(secondary_key_fixed)
-		self.verbose = bool(verbose)
-		self.max_trials = int(max_trials)
-
-		self._rng = np.random.default_rng()
-		self.sample_flow = SampleFlow(transform, plan)
-
-		self.subsetloader = TraceSubsetLoader(
-			LoaderConfig(pad_traces_to=int(subset_traces))
+		self.sampler = self._init_sampler_config(
+			primary_keys=primary_keys,
+			primary_key_weights=primary_key_weights,
+			use_superwindow=use_superwindow,
+			sw_halfspan=sw_halfspan,
+			sw_prob=sw_prob,
+			secondary_key_fixed=secondary_key_fixed,
+			subset_traces=subset_traces,
 		)
-		self.sampler = TraceSubsetSampler(
-			TraceSubsetSamplerConfig(
-				primary_keys=self.primary_keys,
-				primary_key_weights=self.primary_key_weights,
-				use_superwindow=self.use_superwindow,
-				sw_halfspan=self.sw_halfspan,
-				sw_prob=self.sw_prob,
-				secondary_key_fixed=self.secondary_key_fixed,
-				subset_traces=int(subset_traces),
-			)
-		)
+		self.subsetloader = self._build_subset_loader(self.subset_traces)
 
 		self.file_infos: list[PairFileInfo] = []
 		for input_path, target_path in zip(
@@ -154,28 +131,13 @@ class SegyGatherPairDataset(Dataset):
 				)
 			)
 
-	def close(self) -> None:
-		"""Close all open SEG-Y handles held by this dataset.
-
-		This releases file handles for both input and target SEG-Y files and clears
-		internal state; any exceptions raised while closing are suppressed.
-		"""
-		for info in self.file_infos:
-			if info.input_info.segy_obj is not None:
-				with contextlib.suppress(Exception):
-					info.input_info.segy_obj.close()
-			if info.target_segy_obj is not None:
-				with contextlib.suppress(Exception):
-					info.target_segy_obj.close()
-		self.file_infos.clear()
-
-	def __del__(self) -> None:
-		"""Finalize the dataset by closing any open SEG-Y handles."""
-		self.close()
-
-	def __len__(self) -> int:
-		"""Return the dataset length used by the sampler/loader."""
-		return 1024
+	def _close_file_info(self, info: PairFileInfo) -> None:
+		if info.input_info.segy_obj is not None:
+			with contextlib.suppress(Exception):
+				info.input_info.segy_obj.close()
+		if info.target_segy_obj is not None:
+			with contextlib.suppress(Exception):
+				info.target_segy_obj.close()
 
 	def __getitem__(self, idx: int) -> dict:
 		"""Return one randomized input/target sample pair.
@@ -188,93 +150,85 @@ class SegyGatherPairDataset(Dataset):
 
 		"""
 		_ = idx
-		for _attempt in range(self.max_trials):
-			pair_idx = int(self._rng.integers(0, len(self.file_infos)))
-			info = self.file_infos[pair_idx]
-			input_info = info.input_info
+		return self._sample_with_retries()
 
-			sample = self.sample_flow.draw_sample(
-				input_info,
-				self._rng,
-				sampler=self.sampler,
-			)
-			indices = sample['indices']
-			if indices.size == 0:
-				continue
+	def _try_build_sample(
+		self, info: PairFileInfo, counters: dict[str, int]
+	) -> dict | None:
+		input_info = info.input_info
 
-			x_in = self.subsetloader.load(input_info.mmap, indices)
-			x_tg = self.subsetloader.load(info.target_mmap, indices)
+		sample = self._draw_sample(input_info)
+		indices = sample['indices']
+		if indices.size == 0:
+			return None
 
-			H = int(x_in.shape[0])
-			offsets = input_info.offsets[indices].astype(np.float32, copy=False)
-			indices, offsets, _fb_subset, _trace_valid, _pad = (
-				self.sample_flow.pad_indices_offsets_fb(
-					indices=indices,
-					offsets=offsets,
-					fb_subset=None,
-					H=H,
-				)
-			)
+		x_in = self.subsetloader.load(input_info.mmap, indices)
+		x_tg = self.subsetloader.load(info.target_mmap, indices)
 
-			seed = int(self._rng.integers(0, 2**31 - 1))
-			rng_in = np.random.default_rng(seed)
-			rng_tg = np.random.default_rng(seed)
-			x_view_input, meta = self.sample_flow.apply_transform(
-				x_in,
-				rng_in,
-				name='input',
-			)
-			x_view_target, _meta_tg = self.sample_flow.apply_transform(
-				x_tg,
-				rng_tg,
-				name='target',
-			)
-			if x_view_input.shape != x_view_target.shape:
-				msg = (
-					'input/target transform shape mismatch: '
-					f'{x_view_input.shape} vs {x_view_target.shape}'
-				)
-				raise ValueError(msg)
-			did_superwindow = bool(sample['did_super'])
-
-			dt_sec = float(input_info.dt_sec)
-			sample_for_plan = self.sample_flow.build_plan_input_base(
-				meta=meta,
-				dt_sec=dt_sec,
-				offsets=offsets,
+		H = int(x_in.shape[0])
+		offsets = input_info.offsets[indices].astype(np.float32, copy=False)
+		indices, offsets, _fb_subset, _trace_valid, _pad = (
+			self.sample_flow.pad_indices_offsets_fb(
 				indices=indices,
-				key_name=sample['key_name'],
-				secondary_key=sample['secondary_key'],
-				primary_unique=sample['primary_unique'],
-				extra={
-					'x_view_input': x_view_input,
-					'x_view_target': x_view_target,
-					'file_path_input': input_info.path,
-					'file_path_target': info.target_path,
-					'did_superwindow': did_superwindow,
-				},
-			)
-
-			self.sample_flow.run_plan(sample_for_plan, rng=self._rng)
-
-			return self.sample_flow.build_output_base(
-				sample_for_plan,
-				meta=meta,
-				dt_sec=dt_sec,
 				offsets=offsets,
-				indices=indices,
-				key_name=sample['key_name'],
-				secondary_key=sample['secondary_key'],
-				primary_unique=sample['primary_unique'],
-				extra={
-					'file_path_input': input_info.path,
-					'file_path_target': info.target_path,
-					'did_superwindow': did_superwindow,
-				},
+				fb_subset=None,
+				H=H,
 			)
-
-		msg = (
-			f'failed to draw a valid sample within max_trials={self.max_trials}; '
-			f'files={len(self.file_infos)}'
 		)
-		raise RuntimeError(msg)
+
+		seed = int(self._rng.integers(0, 2**31 - 1))
+		rng_in = np.random.default_rng(seed)
+		rng_tg = np.random.default_rng(seed)
+		x_view_input, meta = self.sample_flow.apply_transform(
+			x_in,
+			rng_in,
+			name='input',
+		)
+		x_view_target, _meta_tg = self.sample_flow.apply_transform(
+			x_tg,
+			rng_tg,
+			name='target',
+		)
+		if x_view_input.shape != x_view_target.shape:
+			msg = (
+				'input/target transform shape mismatch: '
+				f'{x_view_input.shape} vs {x_view_target.shape}'
+			)
+			raise ValueError(msg)
+		did_superwindow = bool(sample['did_super'])
+
+		dt_sec = float(input_info.dt_sec)
+		sample_for_plan = self.sample_flow.build_plan_input_base(
+			meta=meta,
+			dt_sec=dt_sec,
+			offsets=offsets,
+			indices=indices,
+			key_name=sample['key_name'],
+			secondary_key=sample['secondary_key'],
+			primary_unique=sample['primary_unique'],
+			extra={
+				'x_view_input': x_view_input,
+				'x_view_target': x_view_target,
+				'file_path_input': input_info.path,
+				'file_path_target': info.target_path,
+				'did_superwindow': did_superwindow,
+			},
+		)
+
+		self.sample_flow.run_plan(sample_for_plan, rng=self._rng)
+
+		return self.sample_flow.build_output_base(
+			sample_for_plan,
+			meta=meta,
+			dt_sec=dt_sec,
+			offsets=offsets,
+			indices=indices,
+			key_name=sample['key_name'],
+			secondary_key=sample['secondary_key'],
+			primary_unique=sample['primary_unique'],
+			extra={
+				'file_path_input': input_info.path,
+				'file_path_target': info.target_path,
+				'did_superwindow': did_superwindow,
+			},
+		)
