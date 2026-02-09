@@ -8,9 +8,12 @@ _ALLOWED_RE = re.compile(r'[A-Za-z0-9_./-]')
 
 
 def sanitize_key(key: str) -> str:
-    if not isinstance(key, str) or not key:
-        msg = 'key must be non-empty str'
+    if not isinstance(key, str):
+        msg = 'key must be str'
         raise TypeError(msg)
+    if not key:
+        msg = 'key must be non-empty str'
+        raise ValueError(msg)
 
     sanitized = ''.join(ch if _ALLOWED_RE.match(ch) else '_' for ch in key)
 
