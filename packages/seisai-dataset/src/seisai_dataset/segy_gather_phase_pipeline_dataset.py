@@ -12,10 +12,12 @@ Key points:
 """
 
 import contextlib
+from pathlib import Path
 
 import numpy as np
 import segyio
 import torch
+from tqdm.auto import tqdm
 from seisai_transforms.view_projection import (
     project_fb_idx_view,
 )
@@ -105,12 +107,25 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
             sample_transformer=sample_transformer,
             gate_evaluator=gate_evaluator,
         )
-
         # Build per-file metadata and attach CSR arrays.
         self.file_infos: list[FileInfo] = []
-        for segy_path, pick_path in zip(
-            self.segy_files, self.phase_pick_files, strict=True
-        ):
+
+        total_files = int(len(self.segy_files))
+        total_traces = 0
+        total_p_nnz = 0
+        total_s_nnz = 0
+        total_p_valid = 0
+        total_s_valid = 0
+
+        it = tqdm(
+            zip(self.segy_files, self.phase_pick_files, strict=True),
+            total=total_files,
+            desc='Indexing SEG-Y + picks',
+            unit='file',
+            disable=not self.verbose,
+        )
+        for segy_path, pick_path in it:
+            it.set_description_str(f'Index {Path(segy_path).name}', refresh=False)
             info = build_file_info_dataclass(
                 segy_path,
                 ffid_byte=self.ffid_byte,
@@ -136,6 +151,19 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
             info.s_indptr = picks.s_indptr
             info.s_data = picks.s_data
             self.file_infos.append(info)
+
+            total_traces += int(info.n_traces)
+            p_nnz = int(picks.p_data.size)
+            s_nnz = int(picks.s_data.size)
+            total_p_nnz += p_nnz
+            total_s_nnz += s_nnz
+            total_p_valid += int((picks.p_data > 0).sum())
+            total_s_valid += int((picks.s_data > 0).sum())
+            it.set_postfix(
+                traces=total_traces,
+                p=f'{total_p_valid}/{total_p_nnz}',
+                s=f'{total_s_valid}/{total_s_nnz}',
+            )
 
     def _close_file_info(self, info: FileInfo) -> None:
         if info.segy_obj is not None:

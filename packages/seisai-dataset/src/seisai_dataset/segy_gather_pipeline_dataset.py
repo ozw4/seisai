@@ -11,9 +11,11 @@ This module provides a `torch.utils.data.Dataset` implementation that:
 # %%
 import contextlib
 import warnings
+from pathlib import Path
 
 import numpy as np
 import segyio
+from tqdm.auto import tqdm
 
 from .builder.builder import (
     BuildPlan,
@@ -98,15 +100,27 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
             sample_transformer=sample_transformer,
             gate_evaluator=gate_evaluator,
         )
-
         # ファイルごとのインデックス辞書等を構築
         self.file_infos: list[FileInfo] = []
+
+        total_files = int(len(self.segy_files))
+        total_traces = 0
+        total_fb_valid = 0
+
         if fb_files is None:
             warnings.warn(
                 'fb_files is None; generating dummy fb (1) for all traces',
                 UserWarning,
             )
-            for segy_path in self.segy_files:
+            it = tqdm(
+                self.segy_files,
+                total=total_files,
+                desc='Indexing SEG-Y',
+                unit='file',
+                disable=not self.verbose,
+            )
+            for segy_path in it:
+                it.set_description_str(f'Index {Path(segy_path).name}', refresh=False)
                 info = build_file_info_dataclass(
                     segy_path,
                     ffid_byte=self.ffid_byte,
@@ -119,8 +133,20 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                 fb = np.full(int(info.n_traces), 1, dtype=np.int32)
                 info.fb = fb
                 self.file_infos.append(info)
+
+                total_traces += int(info.n_traces)
+                total_fb_valid += int(info.n_traces)
+                it.set_postfix(traces=total_traces, fb=total_fb_valid)
         else:
-            for segy_path, fb_path in zip(self.segy_files, self.fb_files, strict=True):
+            it = tqdm(
+                zip(self.segy_files, self.fb_files, strict=True),
+                total=total_files,
+                desc='Indexing SEG-Y',
+                unit='file',
+                disable=not self.verbose,
+            )
+            for segy_path, fb_path in it:
+                it.set_description_str(f'Index {Path(segy_path).name}', refresh=False)
                 info = build_file_info_dataclass(
                     segy_path,
                     ffid_byte=self.ffid_byte,
@@ -133,6 +159,10 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                 fb = np.load(fb_path)
                 info.fb = fb
                 self.file_infos.append(info)
+
+                total_traces += int(info.n_traces)
+                total_fb_valid += int(np.count_nonzero(fb > 0))
+                it.set_postfix(traces=total_traces, fb=total_fb_valid)
 
     def _close_file_info(self, info: FileInfo) -> None:
         if info.segy_obj is not None:

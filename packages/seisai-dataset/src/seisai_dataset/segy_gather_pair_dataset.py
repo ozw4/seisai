@@ -1,9 +1,11 @@
 # %%
 import contextlib
+from pathlib import Path
 from typing import cast
 
 import numpy as np
 import segyio
+from tqdm.auto import tqdm
 
 from .builder.builder import BuildPlan
 from .file_info import PairFileInfo, build_file_info_dataclass
@@ -65,11 +67,20 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
             subset_traces=subset_traces,
         )
         self.subsetloader = self._build_subset_loader(self.subset_traces)
-
         self.file_infos: list[PairFileInfo] = []
-        for input_path, target_path in zip(
-            self.input_segy_files, self.target_segy_files, strict=True
-        ):
+
+        total_files = int(len(self.input_segy_files))
+        total_traces = 0
+
+        it = tqdm(
+            zip(self.input_segy_files, self.target_segy_files, strict=True),
+            total=total_files,
+            desc='Indexing SEG-Y pairs',
+            unit='file',
+            disable=not self.verbose,
+        )
+        for input_path, target_path in it:
+            it.set_description_str(f'Index {Path(input_path).name}', refresh=False)
             input_info = build_file_info_dataclass(
                 input_path,
                 ffid_byte=self.ffid_byte,
@@ -130,6 +141,9 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
                     target_dt_sec=float(target_dt_sec),
                 )
             )
+
+            total_traces += int(input_info.n_traces)
+            it.set_postfix(traces=total_traces)
 
     def _close_file_info(self, info: PairFileInfo) -> None:
         if info.input_info.segy_obj is not None:
