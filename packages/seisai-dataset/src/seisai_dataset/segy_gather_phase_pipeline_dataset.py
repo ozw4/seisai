@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import segyio
 import torch
-from tqdm.auto import tqdm
+from tqdm import tqdm
 from seisai_transforms.view_projection import (
     project_fb_idx_view,
 )
@@ -71,6 +71,7 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
         verbose: bool = False,
+        progress: bool | None = None,
         max_trials: int = 2048,
         sample_transformer: SampleTransformer | None = None,
         gate_evaluator: GateEvaluator | None = None,
@@ -107,6 +108,7 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
             sample_transformer=sample_transformer,
             gate_evaluator=gate_evaluator,
         )
+        self.progress = self.verbose if progress is None else bool(progress)
         # Build per-file metadata and attach CSR arrays.
         self.file_infos: list[FileInfo] = []
 
@@ -122,7 +124,7 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
             total=total_files,
             desc='Indexing SEG-Y + picks',
             unit='file',
-            disable=not self.verbose,
+            disable=not self.progress,
         )
         for segy_path, pick_path in it:
             it.set_description_str(f'Index {Path(segy_path).name}', refresh=False)

@@ -65,6 +65,7 @@ def build_dataset(
     primary_keys: tuple[str, ...],
     secondary_key_fixed: bool,
     verbose: bool,
+    progress: bool,
     max_trials: int,
     use_header_cache: bool,
 ) -> SegyGatherPipelineDataset:
@@ -82,6 +83,7 @@ def build_dataset(
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
         verbose=bool(verbose),
+        progress=bool(progress),
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
     )

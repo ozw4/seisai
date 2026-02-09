@@ -105,6 +105,7 @@ def main(argv: list[str] | None = None) -> None:
     max_trials = optional_int(ds_cfg, 'max_trials', 2048)
     use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)
     verbose = optional_bool(ds_cfg, 'verbose', default=True)
+    progress = optional_bool(ds_cfg, 'progress', default=bool(verbose))
     primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
     primary_keys = validate_primary_keys(primary_keys_list)
 
@@ -284,6 +285,7 @@ def main(argv: list[str] | None = None) -> None:
         primary_keys=primary_keys,
         secondary_key_fixed=False,
         verbose=bool(verbose),
+        progress=bool(progress),
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
     )
@@ -298,6 +300,7 @@ def main(argv: list[str] | None = None) -> None:
         primary_keys=primary_keys,
         secondary_key_fixed=True,
         verbose=bool(verbose),
+        progress=bool(progress),
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
     )

@@ -115,6 +115,7 @@ def build_dataset(cfg: dict, *, transform: ViewCompose) -> SegyGatherPhasePipeli
     max_trials = optional_int(ds_cfg, 'max_trials', 2048)
     use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)
     verbose = optional_bool(ds_cfg, 'verbose', default=True)
+    progress = optional_bool(ds_cfg, 'progress', default=bool(verbose))
     include_empty_gathers = optional_bool(
         ds_cfg, 'include_empty_gathers', default=False
     )
@@ -143,5 +144,6 @@ def build_dataset(cfg: dict, *, transform: ViewCompose) -> SegyGatherPhasePipeli
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
         verbose=bool(verbose),
+        progress=bool(progress),
         max_trials=int(max_trials),
     )

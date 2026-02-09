@@ -49,6 +49,7 @@ def build_pair_dataset(
         primary_keys=ds_cfg.primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
         verbose=bool(ds_cfg.verbose),
+        progress=bool(ds_cfg.progress),
         max_trials=int(ds_cfg.max_trials),
         use_header_cache=bool(ds_cfg.use_header_cache),
     )

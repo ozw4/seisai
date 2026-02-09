@@ -5,7 +5,7 @@ from typing import cast
 
 import numpy as np
 import segyio
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from .builder.builder import BuildPlan
 from .file_info import PairFileInfo, build_file_info_dataclass
@@ -35,6 +35,7 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
         verbose: bool = False,
+        progress: bool | None = None,
         max_trials: int = 2048,
     ) -> None:
         if len(input_segy_files) == 0 or len(target_segy_files) == 0:
@@ -48,6 +49,8 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
         self.target_segy_files = list(target_segy_files)
 
         super().__init__(transform, plan, max_trials=max_trials, verbose=verbose)
+
+        self.progress = self.verbose if progress is None else bool(progress)
 
         self._init_header_config(
             ffid_byte=ffid_byte,
@@ -77,7 +80,7 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
             total=total_files,
             desc='Indexing SEG-Y pairs',
             unit='file',
-            disable=not self.verbose,
+            disable=not self.progress,
         )
         for input_path, target_path in it:
             it.set_description_str(f'Index {Path(input_path).name}', refresh=False)

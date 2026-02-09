@@ -59,6 +59,7 @@ class PairDatasetCfg:
     max_trials: int
     use_header_cache: bool
     verbose: bool
+    progress: bool
     primary_keys: tuple[str, ...]
     secondary_key_fixed: bool
 
@@ -176,6 +177,7 @@ def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
     max_trials = require_int(ds_cfg, 'max_trials')
     use_header_cache = require_bool(ds_cfg, 'use_header_cache')
     verbose = require_bool(ds_cfg, 'verbose')
+    progress = optional_bool(ds_cfg, 'progress', default=bool(verbose))
     primary_keys_list = require_list_str(ds_cfg, 'primary_keys')
     primary_keys = validate_primary_keys(primary_keys_list)
     secondary_key_fixed = require_bool(ds_cfg, 'secondary_key_fixed')
@@ -183,6 +185,7 @@ def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
         verbose=bool(verbose),
+        progress=bool(progress),
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
     )

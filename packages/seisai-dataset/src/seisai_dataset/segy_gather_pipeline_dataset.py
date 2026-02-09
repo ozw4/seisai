@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import segyio
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from .builder.builder import (
     BuildPlan,
@@ -59,6 +59,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
         verbose: bool = False,
+        progress: bool | None = None,
         max_trials: int = 2048,
         sample_transformer: SampleTransformer | None = None,
         gate_evaluator: GateEvaluator | None = None,
@@ -100,6 +101,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
             sample_transformer=sample_transformer,
             gate_evaluator=gate_evaluator,
         )
+        self.progress = self.verbose if progress is None else bool(progress)
         # ファイルごとのインデックス辞書等を構築
         self.file_infos: list[FileInfo] = []
 
@@ -117,7 +119,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                 total=total_files,
                 desc='Indexing SEG-Y',
                 unit='file',
-                disable=not self.verbose,
+                disable=not self.progress,
             )
             for segy_path in it:
                 it.set_description_str(f'Index {Path(segy_path).name}', refresh=False)
@@ -143,7 +145,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                 total=total_files,
                 desc='Indexing SEG-Y',
                 unit='file',
-                disable=not self.verbose,
+                disable=not self.progress,
             )
             for segy_path, fb_path in it:
                 it.set_description_str(f'Index {Path(segy_path).name}', refresh=False)
