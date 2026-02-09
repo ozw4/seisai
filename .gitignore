@@ -51,6 +51,7 @@ workflow/
 code_snippet/
 mlruns/
 tracking/
+proc/
 !tests/
 !tests/data
 !tests/data/*sgy
