@@ -46,6 +46,7 @@ debug_*/
 *.a
 *.pt
 *patch
+*.db
 
 workflow/
 code_snippet/
