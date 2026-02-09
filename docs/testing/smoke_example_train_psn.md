@@ -9,6 +9,8 @@
 1. `examples/config_train_psn.yaml` の以下を自分の環境に合わせて設定する。
    - `paths.segy_files`
    - `paths.phase_pick_files`
+   - `paths.infer_segy_files`
+   - `paths.infer_phase_pick_files`
    - `paths.out_dir`（出力先）
 
 2. 速く回すために、まずは以下を推奨（任意）。

@@ -5,19 +5,32 @@ from seisai_dataset import (
     FirstBreakGateConfig,
     SegyGatherPipelineDataset,
 )
-from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
+from seisai_transforms.augment import (
+    DeterministicCropOrPad,
+    PerTraceStandardize,
+    RandomCropOrPad,
+    ViewCompose,
+)
 
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
 
 __all__ = [
     'build_dataset',
     'build_fbgate',
-    'build_transform',
+    'build_infer_transform',
+    'build_train_transform',
 ]
 
 
-def build_transform(*, time_len: int, per_trace_standardize: bool) -> ViewCompose:
+def build_train_transform(*, time_len: int, per_trace_standardize: bool) -> ViewCompose:
     ops: list = [RandomCropOrPad(target_len=int(time_len))]
+    if per_trace_standardize:
+        ops.append(PerTraceStandardize(eps=1e-8))
+    return ViewCompose(ops)
+
+
+def build_infer_transform(*, time_len: int, per_trace_standardize: bool) -> ViewCompose:
+    ops: list = [DeterministicCropOrPad(target_len=int(time_len))]
     if per_trace_standardize:
         ops.append(PerTraceStandardize(eps=1e-8))
     return ViewCompose(ops)
@@ -44,7 +57,7 @@ def build_fbgate(
 def build_dataset(
     *,
     segy_files: list[str],
-    fb_files: list[str],
+    fb_files: list[str] | None,
     transform: ViewCompose,
     fbgate: FirstBreakGate,
     plan,
@@ -55,7 +68,10 @@ def build_dataset(
     max_trials: int,
     use_header_cache: bool,
 ) -> SegyGatherPipelineDataset:
-    validate_files_exist(list(segy_files) + list(fb_files))
+    if fb_files is None:
+        validate_files_exist(list(segy_files))
+    else:
+        validate_files_exist(list(segy_files) + list(fb_files))
     return SegyGatherPipelineDataset(
         segy_files=segy_files,
         fb_files=fb_files,

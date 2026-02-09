@@ -5,7 +5,12 @@ from seisai_dataset import (
     FirstBreakGateConfig,
     SegyGatherPhasePipelineDataset,
 )
-from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
+from seisai_transforms.augment import (
+    DeterministicCropOrPad,
+    PerTraceStandardize,
+    RandomCropOrPad,
+    ViewCompose,
+)
 from seisai_utils.config import (
     optional_bool,
     optional_float,
@@ -21,7 +26,7 @@ from seisai_engine.pipelines.common.validate_primary_keys import validate_primar
 
 from .build_plan import build_plan
 
-__all__ = ['build_dataset']
+__all__ = ['build_dataset', 'build_infer_transform', 'build_train_transform']
 
 
 def _build_fbgate(fbgate_cfg: dict | None) -> FirstBreakGate:
@@ -55,7 +60,37 @@ def _build_fbgate(fbgate_cfg: dict | None) -> FirstBreakGate:
     )
 
 
-def build_dataset(cfg: dict) -> SegyGatherPhasePipelineDataset:
+def build_train_transform(cfg: dict) -> ViewCompose:
+    if not isinstance(cfg, dict):
+        msg = 'cfg must be dict'
+        raise TypeError(msg)
+    transform_cfg = require_dict(cfg, 'transform')
+    target_len = require_int(transform_cfg, 'target_len')
+    standardize_eps = optional_float(transform_cfg, 'standardize_eps', 1.0e-8)
+    return ViewCompose(
+        [
+            RandomCropOrPad(target_len=int(target_len)),
+            PerTraceStandardize(eps=float(standardize_eps)),
+        ]
+    )
+
+
+def build_infer_transform(cfg: dict) -> ViewCompose:
+    if not isinstance(cfg, dict):
+        msg = 'cfg must be dict'
+        raise TypeError(msg)
+    transform_cfg = require_dict(cfg, 'transform')
+    target_len = require_int(transform_cfg, 'target_len')
+    standardize_eps = optional_float(transform_cfg, 'standardize_eps', 1.0e-8)
+    return ViewCompose(
+        [
+            DeterministicCropOrPad(target_len=int(target_len)),
+            PerTraceStandardize(eps=float(standardize_eps)),
+        ]
+    )
+
+
+def build_dataset(cfg: dict, *, transform: ViewCompose) -> SegyGatherPhasePipelineDataset:
     if not isinstance(cfg, dict):
         msg = 'cfg must be dict'
         raise TypeError(msg)
@@ -63,7 +98,6 @@ def build_dataset(cfg: dict) -> SegyGatherPhasePipelineDataset:
     paths = require_dict(cfg, 'paths')
     ds_cfg = require_dict(cfg, 'dataset')
     train_cfg = require_dict(cfg, 'train')
-    transform_cfg = require_dict(cfg, 'transform')
     fbgate_cfg = cfg.get('fbgate')
     if fbgate_cfg is not None and not isinstance(fbgate_cfg, dict):
         msg = 'fbgate must be dict'
@@ -91,15 +125,9 @@ def build_dataset(cfg: dict) -> SegyGatherPhasePipelineDataset:
     subset_traces = require_int(train_cfg, 'subset_traces')
     psn_sigma = optional_float(train_cfg, 'psn_sigma', 1.5)
 
-    target_len = require_int(transform_cfg, 'target_len')
-    standardize_eps = optional_float(transform_cfg, 'standardize_eps', 1.0e-8)
-
-    transform = ViewCompose(
-        [
-            RandomCropOrPad(target_len=int(target_len)),
-            PerTraceStandardize(eps=float(standardize_eps)),
-        ]
-    )
+    if not callable(transform):
+        msg = 'transform must be callable'
+        raise TypeError(msg)
     fbgate = _build_fbgate(fbgate_cfg)
     plan = build_plan(psn_sigma=float(psn_sigma))
 

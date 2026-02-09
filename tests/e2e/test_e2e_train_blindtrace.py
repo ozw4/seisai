@@ -49,6 +49,8 @@ def _run_e2e(*, out_dir: Path) -> tuple[Path, Path]:
 
     cfg_data['paths']['segy_files'] = [str(segy_path)]
     cfg_data['paths']['phase_pick_files'] = [str(fb_path)]
+    cfg_data['paths']['infer_segy_files'] = [str(segy_path)]
+    cfg_data['paths']['infer_phase_pick_files'] = [str(fb_path)]
     cfg_data['paths']['out_dir'] = str(out_dir)
     cfg_tmp = out_dir / 'config_train_blindtrace.yaml'
     cfg_tmp.write_text(yaml.safe_dump(cfg_data, sort_keys=False))

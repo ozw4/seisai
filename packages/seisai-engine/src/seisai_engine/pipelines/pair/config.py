@@ -129,6 +129,7 @@ class PairCkptCfg:
 class PairTrainConfig:
     common: CommonTrainConfig
     paths: PairPaths
+    infer_paths: PairPaths
     dataset: PairDatasetCfg
     train: PairTrainCfg
     infer: PairInferCfg
@@ -211,11 +212,19 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
     paths = require_dict(cfg, 'paths')
     input_segy_files = require_list_str(paths, 'input_segy_files')
     target_segy_files = require_list_str(paths, 'target_segy_files')
+    infer_input_segy_files = require_list_str(paths, 'infer_input_segy_files')
+    infer_target_segy_files = require_list_str(paths, 'infer_target_segy_files')
     if len(input_segy_files) != len(target_segy_files):
         msg = 'paths.input_segy_files and paths.target_segy_files must have same length'
         raise ValueError(
             msg
         )
+    if len(infer_input_segy_files) != len(infer_target_segy_files):
+        msg = (
+            'paths.infer_input_segy_files and paths.infer_target_segy_files '
+            'must have same length'
+        )
+        raise ValueError(msg)
 
     ds_cfg = require_dict(cfg, 'dataset')
     train_cfg = require_dict(cfg, 'train')
@@ -278,6 +287,11 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
             target_segy_files=list(target_segy_files),
             out_dir=str(common.output.out_dir),
         ),
+        infer_paths=PairPaths(
+            input_segy_files=list(infer_input_segy_files),
+            target_segy_files=list(infer_target_segy_files),
+            out_dir=str(common.output.out_dir),
+        ),
         dataset=_load_dataset_cfg(ds_cfg),
         train=PairTrainCfg(
             batch_size=int(common.train.train_batch_size),
@@ -334,11 +348,21 @@ def load_train_config(config_path: str | Path) -> PairTrainConfig:
     resolve_cfg_paths(
         cfg,
         base_dir,
-        keys=['paths.input_segy_files', 'paths.target_segy_files'],
+        keys=[
+            'paths.input_segy_files',
+            'paths.target_segy_files',
+            'paths.infer_input_segy_files',
+            'paths.infer_target_segy_files',
+        ],
     )
     expand_cfg_listfiles(
         cfg,
-        keys=['paths.input_segy_files', 'paths.target_segy_files'],
+        keys=[
+            'paths.input_segy_files',
+            'paths.target_segy_files',
+            'paths.infer_input_segy_files',
+            'paths.infer_target_segy_files',
+        ],
     )
     return load_pair_train_config(cfg)
 

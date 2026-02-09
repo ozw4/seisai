@@ -12,6 +12,19 @@ paths:
     - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.32.00_NR.sgy
     - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.33.00_NR.sgy
     - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.34.00_NR.sgy
+  infer_input_segy_files:
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.30.00_bpf.sgy
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.31.00_bpf.sgy
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.32.00_bpf.sgy
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.33.00_bpf.sgy
+    - /home/dcuser/data/kshitf22/raw/F1_2025-01-05_15.34.00_bpf.sgy
+
+  infer_target_segy_files:
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.30.00_NR.sgy
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.31.00_NR.sgy
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.32.00_NR.sgy
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.33.00_NR.sgy
+    - /home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.34.00_NR.sgy
   out_dir: ./_pair_out
 
 dataset:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 import torch
@@ -32,7 +33,8 @@ from seisai_engine.pipelines.common.validate_primary_keys import validate_primar
 from .build_dataset import (
     build_dataset,
     build_fbgate,
-    build_transform,
+    build_infer_transform,
+    build_train_transform,
 )
 from .build_model import build_model
 from .build_plan import build_plan
@@ -63,15 +65,15 @@ def main(argv: list[str] | None = None) -> None:
     args, _unknown = parser.parse_known_args(argv)
 
     cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
-    resolve_cfg_paths(
-        cfg,
-        base_dir,
-        keys=['paths.segy_files', 'paths.phase_pick_files'],
-    )
-    expand_cfg_listfiles(
-        cfg,
-        keys=['paths.segy_files', 'paths.phase_pick_files'],
-    )
+    paths_raw = require_dict(cfg, 'paths')
+    path_keys = ['paths.segy_files', 'paths.infer_segy_files']
+    if 'phase_pick_files' in paths_raw:
+        path_keys.append('paths.phase_pick_files')
+    if 'infer_phase_pick_files' in paths_raw:
+        path_keys.append('paths.infer_phase_pick_files')
+
+    resolve_cfg_paths(cfg, base_dir, keys=path_keys)
+    expand_cfg_listfiles(cfg, keys=path_keys)
 
     paths = require_dict(cfg, 'paths')
     ds_cfg = require_dict(cfg, 'dataset')
@@ -87,7 +89,17 @@ def main(argv: list[str] | None = None) -> None:
     ckpt_cfg = require_dict(cfg, 'ckpt')
 
     segy_files = require_list_str(paths, 'segy_files')
-    phase_pick_files = require_list_str(paths, 'phase_pick_files')
+    infer_segy_files = require_list_str(paths, 'infer_segy_files')
+    phase_pick_files = (
+        require_list_str(paths, 'phase_pick_files')
+        if 'phase_pick_files' in paths
+        else None
+    )
+    infer_phase_pick_files = (
+        require_list_str(paths, 'infer_phase_pick_files')
+        if 'infer_phase_pick_files' in paths
+        else None
+    )
     out_dir_path = resolve_out_dir(cfg, base_dir)
 
     max_trials = optional_int(ds_cfg, 'max_trials', 2048)
@@ -204,7 +216,22 @@ def main(argv: list[str] | None = None) -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     seed_all(seed_train)
 
-    transform = build_transform(
+    if phase_pick_files is not None and len(segy_files) != len(phase_pick_files):
+        msg = 'paths.segy_files and paths.phase_pick_files must have same length'
+        raise ValueError(msg)
+    if infer_phase_pick_files is not None and len(infer_segy_files) != len(
+        infer_phase_pick_files
+    ):
+        msg = (
+            'paths.infer_segy_files and paths.infer_phase_pick_files '
+            'must have same length'
+        )
+        raise ValueError(msg)
+
+    train_transform = build_train_transform(
+        time_len=int(time_len), per_trace_standardize=bool(per_trace_standardize)
+    )
+    infer_transform = build_infer_transform(
         time_len=int(time_len), per_trace_standardize=bool(per_trace_standardize)
     )
     plan = build_plan(
@@ -215,9 +242,31 @@ def main(argv: list[str] | None = None) -> None:
         offset_normalize=bool(offset_normalize),
         use_time_ch=bool(use_time_ch),
     )
-    fbgate = build_fbgate(
-        apply_on=apply_on, min_pick_ratio=min_pick_ratio, verbose=bool(verbose)
-    )
+    if phase_pick_files is None:
+        warnings.warn(
+            'train fb_files is None; using fbgate apply_on="off" and min_pick_ratio=0.0',
+            UserWarning,
+        )
+        fbgate_train = build_fbgate(
+            apply_on='off', min_pick_ratio=0.0, verbose=bool(verbose)
+        )
+    else:
+        fbgate_train = build_fbgate(
+            apply_on=apply_on, min_pick_ratio=min_pick_ratio, verbose=bool(verbose)
+        )
+
+    if infer_phase_pick_files is None:
+        warnings.warn(
+            'infer fb_files is None; using fbgate apply_on="off" and min_pick_ratio=0.0',
+            UserWarning,
+        )
+        fbgate_infer = build_fbgate(
+            apply_on='off', min_pick_ratio=0.0, verbose=bool(verbose)
+        )
+    else:
+        fbgate_infer = build_fbgate(
+            apply_on=apply_on, min_pick_ratio=min_pick_ratio, verbose=bool(verbose)
+        )
 
     criterion = build_masked_criterion(
         loss_kind=loss_kind,
@@ -228,8 +277,8 @@ def main(argv: list[str] | None = None) -> None:
     ds_train_full = build_dataset(
         segy_files=segy_files,
         fb_files=phase_pick_files,
-        transform=transform,
-        fbgate=fbgate,
+        transform=train_transform,
+        fbgate=fbgate_train,
         plan=plan,
         subset_traces=int(train_subset_traces),
         primary_keys=primary_keys,
@@ -240,10 +289,10 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     ds_infer_full = build_dataset(
-        segy_files=segy_files,
-        fb_files=phase_pick_files,
-        transform=transform,
-        fbgate=fbgate,
+        segy_files=infer_segy_files,
+        fb_files=infer_phase_pick_files,
+        transform=infer_transform,
+        fbgate=fbgate_infer,
         plan=plan,
         subset_traces=int(infer_subset_traces),
         primary_keys=primary_keys,

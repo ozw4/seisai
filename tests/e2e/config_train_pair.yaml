@@ -3,6 +3,10 @@ paths:
     - ../data/20200623002546.sgy
   target_segy_files:
     - ../data/20200623002546.sgy
+  infer_input_segy_files:
+    - ../data/20200623002546.sgy
+  infer_target_segy_files:
+    - ../data/20200623002546.sgy
   out_dir: ./_pair_out
 
 dataset:

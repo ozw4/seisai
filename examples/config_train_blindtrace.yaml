@@ -3,6 +3,10 @@ paths:
     - /home/dcuser/data/ActiveSeisField/TSTKRES/shotgath.sgy
   phase_pick_files:
     - /home/dcuser/data/ActiveSeisField/TSTKRES/fb_time_all_1341ch.crd.0613.ReMerge.npy
+  infer_segy_files:
+    - /home/dcuser/data/ActiveSeisField/TSTKRES/shotgath.sgy
+  infer_phase_pick_files:
+    - /home/dcuser/data/ActiveSeisField/TSTKRES/fb_time_all_1341ch.crd.0613.ReMerge.npy
   out_dir: ./_blindtrace_out
 
 dataset:

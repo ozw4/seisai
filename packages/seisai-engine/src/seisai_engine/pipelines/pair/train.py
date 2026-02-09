@@ -43,11 +43,21 @@ def main(argv: list[str] | None = None) -> None:
     resolve_cfg_paths(
         cfg,
         base_dir,
-        keys=['paths.input_segy_files', 'paths.target_segy_files'],
+        keys=[
+            'paths.input_segy_files',
+            'paths.target_segy_files',
+            'paths.infer_input_segy_files',
+            'paths.infer_target_segy_files',
+        ],
     )
     expand_cfg_listfiles(
         cfg,
-        keys=['paths.input_segy_files', 'paths.target_segy_files'],
+        keys=[
+            'paths.input_segy_files',
+            'paths.target_segy_files',
+            'paths.infer_input_segy_files',
+            'paths.infer_target_segy_files',
+        ],
     )
 
     typed = load_pair_train_config(cfg)
@@ -104,8 +114,14 @@ def main(argv: list[str] | None = None) -> None:
         secondary_key_fixed=bool(typed.dataset.secondary_key_fixed),
     )
 
+    infer_paths_cfg = PairPaths(
+        input_segy_files=list(typed.infer_paths.input_segy_files),
+        target_segy_files=list(typed.infer_paths.target_segy_files),
+        out_dir=str(out_dir_path),
+    )
+
     ds_infer_full = build_pair_dataset(
-        paths=paths_cfg,
+        paths=infer_paths_cfg,
         ds_cfg=dataset_cfg,
         transform=infer_transform,
         plan=plan,

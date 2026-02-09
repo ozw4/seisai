@@ -277,7 +277,8 @@ tracking:
 - 3本とも YAML 内の相対パスは「YAML ファイルの場所」基準で解決します。
 - 出力は `paths.out_dir` 起点で、`ckpt/best.pt` と `vis/<epoch>/step_<step>.png` が作られます。
 - 可視化のルートは `vis.out_subdir` で指定します（例: `vis`）。
-- 対応キー (`paths.segy_files` / `paths.phase_pick_files` / `paths.input_segy_files` / `paths.target_segy_files`) は `list[str]` の代わりに listfile (1行1パスのテキスト) を指定できます。
+- 対応キー (`paths.segy_files` / `paths.phase_pick_files` / `paths.infer_segy_files` / `paths.infer_phase_pick_files` / `paths.input_segy_files` / `paths.target_segy_files` / `paths.infer_input_segy_files` / `paths.infer_target_segy_files`) は `list[str]` の代わりに listfile (1行1パスのテキスト) を指定できます。
+- PSN / Pair は `paths.infer_*` が必須です（blindtrace は `paths.infer_segy_files` が必須）。
 - listfile の空行と行頭 `#` は無視され、相対パスは listfile のあるディレクトリ基準で解決されます。
 - listfile の各行は環境変数と `~` を展開します。
 - 例: `paths.segy_files: data_lists/train_segy.txt`

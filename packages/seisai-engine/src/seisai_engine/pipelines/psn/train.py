@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
-from seisai_utils.config import require_dict
+from seisai_utils.config import optional_bool, require_dict, require_list_str
 from seisai_utils.viz_phase import make_title_from_batch_meta, save_psn_debug_png
 
 from seisai_engine.pipelines.common import (
@@ -20,7 +20,7 @@ from seisai_engine.pipelines.common import (
     seed_all,
 )
 
-from .build_dataset import build_dataset
+from .build_dataset import build_dataset, build_infer_transform, build_train_transform
 from .build_model import build_model
 from .config import load_psn_train_config
 from .loss import criterion
@@ -33,11 +33,24 @@ __all__ = ['main']
 DEFAULT_CONFIG_PATH = Path('examples/config_train_psn.yaml')
 
 
-def _build_dataset_for_subset(cfg: dict, subset_traces: int):
+def _build_dataset_for_subset(
+    cfg: dict,
+    subset_traces: int,
+    *,
+    segy_files: list[str],
+    phase_pick_files: list[str],
+    transform,
+    secondary_key_fixed: bool,
+):
     cfg_copy = copy.deepcopy(cfg)
     train_cfg = require_dict(cfg_copy, 'train')
     train_cfg['subset_traces'] = int(subset_traces)
-    return build_dataset(cfg_copy)
+    paths = require_dict(cfg_copy, 'paths')
+    paths['segy_files'] = list(segy_files)
+    paths['phase_pick_files'] = list(phase_pick_files)
+    ds_cfg = require_dict(cfg_copy, 'dataset')
+    ds_cfg['secondary_key_fixed'] = bool(secondary_key_fixed)
+    return build_dataset(cfg_copy, transform=transform)
 
 
 def _run_infer_epoch(
@@ -109,6 +122,8 @@ def main(argv: list[str] | None = None) -> None:
         keys=[
             'paths.segy_files',
             'paths.phase_pick_files',
+            'paths.infer_segy_files',
+            'paths.infer_phase_pick_files',
         ],
     )
     expand_cfg_listfiles(
@@ -116,6 +131,8 @@ def main(argv: list[str] | None = None) -> None:
         keys=[
             'paths.segy_files',
             'paths.phase_pick_files',
+            'paths.infer_segy_files',
+            'paths.infer_phase_pick_files',
         ],
     )
 
@@ -139,8 +156,45 @@ def main(argv: list[str] | None = None) -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     seed_all(common.seeds.seed_train)
 
-    ds_train_full = _build_dataset_for_subset(cfg, typed.train.subset_traces)
-    ds_infer_full = _build_dataset_for_subset(cfg, typed.infer.subset_traces)
+    train_transform = build_train_transform(cfg)
+    infer_transform = build_infer_transform(cfg)
+
+    paths_cfg = require_dict(cfg, 'paths')
+    train_segy_files = require_list_str(paths_cfg, 'segy_files')
+    train_phase_pick_files = require_list_str(paths_cfg, 'phase_pick_files')
+    infer_segy_files = require_list_str(paths_cfg, 'infer_segy_files')
+    infer_phase_pick_files = require_list_str(paths_cfg, 'infer_phase_pick_files')
+    if len(train_segy_files) != len(train_phase_pick_files):
+        msg = 'paths.segy_files and paths.phase_pick_files must have same length'
+        raise ValueError(msg)
+    if len(infer_segy_files) != len(infer_phase_pick_files):
+        msg = (
+            'paths.infer_segy_files and paths.infer_phase_pick_files '
+            'must have same length'
+        )
+        raise ValueError(msg)
+
+    ds_cfg = require_dict(cfg, 'dataset')
+    train_secondary_key_fixed = optional_bool(
+        ds_cfg, 'secondary_key_fixed', default=False
+    )
+
+    ds_train_full = _build_dataset_for_subset(
+        cfg,
+        typed.train.subset_traces,
+        segy_files=list(train_segy_files),
+        phase_pick_files=list(train_phase_pick_files),
+        transform=train_transform,
+        secondary_key_fixed=bool(train_secondary_key_fixed),
+    )
+    ds_infer_full = _build_dataset_for_subset(
+        cfg,
+        typed.infer.subset_traces,
+        segy_files=list(infer_segy_files),
+        phase_pick_files=list(infer_phase_pick_files),
+        transform=infer_transform,
+        secondary_key_fixed=True,
+    )
 
     model = build_model(cfg).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(typed.train.lr))

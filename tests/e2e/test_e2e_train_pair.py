@@ -32,6 +32,14 @@ def _run_e2e(*, out_dir: Path) -> tuple[Path, Path]:
     cfg_data['paths']['target_segy_files'] = [
         str((base_dir / p).resolve()) for p in cfg_data['paths']['target_segy_files']
     ]
+    cfg_data['paths']['infer_input_segy_files'] = [
+        str((base_dir / p).resolve())
+        for p in cfg_data['paths']['infer_input_segy_files']
+    ]
+    cfg_data['paths']['infer_target_segy_files'] = [
+        str((base_dir / p).resolve())
+        for p in cfg_data['paths']['infer_target_segy_files']
+    ]
     cfg_data['paths']['out_dir'] = str(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     cfg_tmp = out_dir / 'config_train_pair.yaml'

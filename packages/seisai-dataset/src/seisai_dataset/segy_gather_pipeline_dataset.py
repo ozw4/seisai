@@ -10,6 +10,7 @@ This module provides a `torch.utils.data.Dataset` implementation that:
 
 # %%
 import contextlib
+import warnings
 
 import numpy as np
 import segyio
@@ -38,7 +39,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
     def __init__(
         self,
         segy_files: list[str],
-        fb_files: list[str],
+        fb_files: list[str] | None,
         transform,
         fbgate: FirstBreakGate,
         plan: BuildPlan,
@@ -60,14 +61,20 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
         sample_transformer: SampleTransformer | None = None,
         gate_evaluator: GateEvaluator | None = None,
     ) -> None:
-        if len(segy_files) == 0 or len(fb_files) == 0:
-            msg = 'segy_files / fb_files は空であってはならない'
-            raise ValueError(msg)
-        if len(segy_files) != len(fb_files):
-            msg = 'segy_files と fb_files の長さが一致していません'
+        if len(segy_files) == 0:
+            msg = 'segy_files は空であってはならない'
             raise ValueError(msg)
 
-        self.fb_files = list(fb_files)
+        if fb_files is not None:
+            if len(fb_files) == 0:
+                msg = 'fb_files は空であってはならない'
+                raise ValueError(msg)
+            if len(segy_files) != len(fb_files):
+                msg = 'segy_files と fb_files の長さが一致していません'
+                raise ValueError(msg)
+            self.fb_files = list(fb_files)
+        else:
+            self.fb_files = []
 
         super().__init__(
             segy_files=segy_files,
@@ -94,19 +101,38 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
 
         # ファイルごとのインデックス辞書等を構築
         self.file_infos: list[FileInfo] = []
-        for segy_path, fb_path in zip(self.segy_files, self.fb_files, strict=True):
-            info = build_file_info_dataclass(
-                segy_path,
-                ffid_byte=self.ffid_byte,
-                chno_byte=self.chno_byte,
-                cmp_byte=self.cmp_byte,
-                header_cache_dir=self.header_cache_dir,
-                use_header_cache=self.use_header_cache,
-                include_centroids=True,  # or False
+        if fb_files is None:
+            warnings.warn(
+                'fb_files is None; generating dummy fb (1) for all traces',
+                UserWarning,
             )
-            fb = np.load(fb_path)
-            info.fb = fb
-            self.file_infos.append(info)
+            for segy_path in self.segy_files:
+                info = build_file_info_dataclass(
+                    segy_path,
+                    ffid_byte=self.ffid_byte,
+                    chno_byte=self.chno_byte,
+                    cmp_byte=self.cmp_byte,
+                    header_cache_dir=self.header_cache_dir,
+                    use_header_cache=self.use_header_cache,
+                    include_centroids=True,  # or False
+                )
+                fb = np.full(int(info.n_traces), 1, dtype=np.int32)
+                info.fb = fb
+                self.file_infos.append(info)
+        else:
+            for segy_path, fb_path in zip(self.segy_files, self.fb_files, strict=True):
+                info = build_file_info_dataclass(
+                    segy_path,
+                    ffid_byte=self.ffid_byte,
+                    chno_byte=self.chno_byte,
+                    cmp_byte=self.cmp_byte,
+                    header_cache_dir=self.header_cache_dir,
+                    use_header_cache=self.use_header_cache,
+                    include_centroids=True,  # or False
+                )
+                fb = np.load(fb_path)
+                info.fb = fb
+                self.file_infos.append(info)
 
     def _close_file_info(self, info: FileInfo) -> None:
         if info.segy_obj is not None:
