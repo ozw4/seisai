@@ -10,6 +10,7 @@ from seisai_utils.viz_pair import PairTriptychVisConfig
 from seisai_engine.infer.runner import TiledHConfig
 from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
+    expand_cfg_listfiles,
     load_cfg_with_base_dir,
     resolve_cfg_paths,
     resolve_out_dir,
@@ -42,6 +43,10 @@ def main(argv: list[str] | None = None) -> None:
     resolve_cfg_paths(
         cfg,
         base_dir,
+        keys=['paths.input_segy_files', 'paths.target_segy_files'],
+    )
+    expand_cfg_listfiles(
+        cfg,
         keys=['paths.input_segy_files', 'paths.target_segy_files'],
     )
 

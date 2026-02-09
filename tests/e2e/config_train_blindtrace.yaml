@@ -1,7 +1,7 @@
 paths:
   segy_files:
     - ../data/20200623002546.sgy
-  fb_files:
+  phase_pick_files:
     - ../data/20200623002546_fb_dummy.npy
   out_dir: ./_blindtrace_out
 

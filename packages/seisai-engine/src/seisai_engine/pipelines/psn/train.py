@@ -12,6 +12,7 @@ from seisai_utils.viz_phase import make_title_from_batch_meta, save_psn_debug_pn
 
 from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
+    expand_cfg_listfiles,
     load_cfg_with_base_dir,
     resolve_cfg_paths,
     resolve_out_dir,
@@ -105,6 +106,13 @@ def main(argv: list[str] | None = None) -> None:
     resolve_cfg_paths(
         cfg,
         base_dir,
+        keys=[
+            'paths.segy_files',
+            'paths.phase_pick_files',
+        ],
+    )
+    expand_cfg_listfiles(
+        cfg,
         keys=[
             'paths.segy_files',
             'paths.phase_pick_files',

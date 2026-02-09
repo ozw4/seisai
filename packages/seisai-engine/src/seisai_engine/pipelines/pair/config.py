@@ -23,6 +23,7 @@ from seisai_engine.pipelines.common.config_io import (
     resolve_cfg_paths,
     resolve_relpath,
 )
+from seisai_engine.pipelines.common.listfiles import expand_cfg_listfiles
 from seisai_engine.pipelines.common.config_loaders import load_common_train_config
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 
@@ -335,6 +336,10 @@ def load_train_config(config_path: str | Path) -> PairTrainConfig:
         base_dir,
         keys=['paths.input_segy_files', 'paths.target_segy_files'],
     )
+    expand_cfg_listfiles(
+        cfg,
+        keys=['paths.input_segy_files', 'paths.target_segy_files'],
+    )
     return load_pair_train_config(cfg)
 
 
@@ -345,6 +350,10 @@ def load_infer_config(config_path: str | Path) -> PairInferConfig:
     resolve_cfg_paths(
         cfg,
         base_dir,
+        keys=['paths.input_segy_files', 'paths.target_segy_files'],
+    )
+    expand_cfg_listfiles(
+        cfg,
         keys=['paths.input_segy_files', 'paths.target_segy_files'],
     )
 

@@ -20,6 +20,7 @@ from seisai_utils.config import (
 from seisai_engine.infer.runner import TiledHConfig
 from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
+    expand_cfg_listfiles,
     load_cfg_with_base_dir,
     resolve_cfg_paths,
     resolve_out_dir,
@@ -65,7 +66,11 @@ def main(argv: list[str] | None = None) -> None:
     resolve_cfg_paths(
         cfg,
         base_dir,
-        keys=['paths.segy_files', 'paths.fb_files'],
+        keys=['paths.segy_files', 'paths.phase_pick_files'],
+    )
+    expand_cfg_listfiles(
+        cfg,
+        keys=['paths.segy_files', 'paths.phase_pick_files'],
     )
 
     paths = require_dict(cfg, 'paths')
@@ -82,7 +87,7 @@ def main(argv: list[str] | None = None) -> None:
     ckpt_cfg = require_dict(cfg, 'ckpt')
 
     segy_files = require_list_str(paths, 'segy_files')
-    fb_files = require_list_str(paths, 'fb_files')
+    phase_pick_files = require_list_str(paths, 'phase_pick_files')
     out_dir_path = resolve_out_dir(cfg, base_dir)
 
     max_trials = optional_int(ds_cfg, 'max_trials', 2048)
@@ -222,7 +227,7 @@ def main(argv: list[str] | None = None) -> None:
 
     ds_train_full = build_dataset(
         segy_files=segy_files,
-        fb_files=fb_files,
+        fb_files=phase_pick_files,
         transform=transform,
         fbgate=fbgate,
         plan=plan,
@@ -236,7 +241,7 @@ def main(argv: list[str] | None = None) -> None:
 
     ds_infer_full = build_dataset(
         segy_files=segy_files,
-        fb_files=fb_files,
+        fb_files=phase_pick_files,
         transform=transform,
         fbgate=fbgate,
         plan=plan,
