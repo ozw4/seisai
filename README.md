@@ -1,12 +1,12 @@
 # seisai
 
-PyTorch で扱いやすい **SEG-Y gather データセット + 学習/推論ユーティリティ**のモノレポです。
+PyTorch で扱いやすい **SEG-Y gather データセット群 + 学習/推論ユーティリティ**のモノレポです。
 
 - このリポジトリは `packages/*` に複数の Python パッケージを持ちます。
 - いまのところ **`import seisai` のような統合トップレベルパッケージはありません**。
   - 入口は用途ごとに `seisai_dataset`, `seisai_transforms`, `seisai_engine`, `seisai_models`, `seisai_pick`, `seisai_utils` です。
 
-動作確認は主に Python 3.10/3.11 (CI も 3.10/3.11) です。
+動作確認は主に Python 3.10/3.11 (CI も 3.10/3.11) です。各パッケージの `requires-python` は `>=3.10`。
 
 ## パッケージ構成
 
@@ -15,9 +15,9 @@ PyTorch で扱いやすい **SEG-Y gather データセット + 学習/推論ユ�
 | `seisai-utils` | `seisai_utils` | YAML 設定ローダ/型チェック、可視化ヘルパなど |
 | `seisai-transforms` | `seisai_transforms` | 2D 波形 view の augment、mask、view projection など |
 | `seisai-pick` | `seisai_pick` | pick/検出のユーティリティ (gaussian, STA/LTA など) |
-| `seisai-dataset` | `seisai_dataset` | SEG-Y gather Dataset 群 (pipeline / phase / pair) |
+| `seisai-dataset` | `seisai_dataset` | SEG-Y gather Dataset 群 (pipeline / phase / pair / 推論 window) |
 | `seisai-models` | `seisai_models` | モデル群 (例: `EncDec2D`) + timm backbone |
-| `seisai-engine` | `seisai_engine` | train loop / loss / metrics / tiled inference など |
+| `seisai-engine` | `seisai_engine` | train loop / loss / metrics / tiled inference / 可視化 / tracking など |
 
 ## Install (local dev / monorepo)
 
@@ -28,20 +28,21 @@ PyTorch で扱いやすい **SEG-Y gather データセット + 学習/推論ユ�
 ```bash
 python -m pip install -U pip
 
-# まとめて editable install (CI と同じ順序)
+# まとめて editable install
 for p in seisai-utils seisai-transforms seisai-pick seisai-dataset seisai-models seisai-engine; do
-  pip install -e "packages/$p"
+  python -m pip install -e "packages/$p"
 done
 ```
 
 メモ:
-- `seisai-dataset` は `segyio`, `torch` を使います。
+- `seisai-dataset` は `segyio` を使います（環境によってはビルド/導入に追加要件が出る場合があります）。
 - `seisai-pick` は `numba` 依存があります。
 - `seisai-models` は `timm` を使います。
+- `seisai-engine` は `mlflow>=2.0` を依存に含みます（tracking を使わない場合でも import には入ります）。
 
 ## Quick Start: SegyGatherPipelineDataset
 
-「SEG-Y → gather 抽出 → transform → gate → BuildPlan で input/target を組み立て」という最小例です。
+「SEG-Y → gather 抽出 → transform → gate → BuildPlan で input/target を組み立て」の最小例です。
 
 ```python
 from torch.utils.data import DataLoader
@@ -53,10 +54,10 @@ from seisai_dataset import (
     SegyGatherPipelineDataset,
 )
 from seisai_dataset.builder.builder import (
-    FBGaussMap,
     IdentitySignal,
     MaskedSignal,
     SelectStack,
+    # FBGaussMap,
 )
 from seisai_transforms.augment import (
     PerTraceStandardize,
@@ -99,7 +100,7 @@ plan = BuildPlan(
         mask_op,
     ],
     label_ops=[
-        # fb heatmap 例 (必要なら):
+        # first-break heatmap が必要なら:
         # FBGaussMap(dst="fb_map", sigma=1.5, src="fb_idx_view"),
     ],
     input_stack=SelectStack(keys="x_masked", dst="input"),
@@ -119,8 +120,9 @@ loader = DataLoader(ds, batch_size=2, num_workers=2)
 batch = next(iter(loader))
 
 # batch は dict
-# 代表的なキー: input, target, mask_bool(任意), meta, trace_valid, fb_idx, offsets, dt_sec,
-#              indices, file_path, key_name, secondary_key, primary_unique, did_superwindow
+# 代表的なキー: input, target(※plan が作る), mask_bool(任意), meta, trace_valid(任意),
+#              dt_sec, offsets, indices, file_path, key_name, secondary_key, primary_unique,
+#              fb_idx, did_superwindow
 ```
 
 ## Quick Start: Phase Picks (P/S/Noise)
@@ -205,8 +207,8 @@ transform = ViewCompose([RandomCropOrPad(target_len=2048)])
 
 plan = BuildPlan(
     wave_ops=[
-        IdentitySignal(source_key="x_view_input", dst="x_in", copy=False),
-        IdentitySignal(source_key="x_view_target", dst="x_tg", copy=False),
+        IdentitySignal(src="x_view_input", dst="x_in", copy=False),
+        IdentitySignal(src="x_view_target", dst="x_tg", copy=False),
     ],
     label_ops=[],
     input_stack=SelectStack(keys=["x_in"], dst="input"),
@@ -225,6 +227,49 @@ loader = DataLoader(ds, batch_size=4, num_workers=2)
 batch = next(iter(loader))
 ```
 
+## Inference: gather window 列挙 + tiled 推論
+
+推論向けに「**gather を決定論で window 列挙**」する Dataset が `seisai_dataset.infer_window_dataset` にあります。
+
+- `InferenceGatherWindowsDataset`: H 方向を window 列挙（不足は pad）、W 方向は crop せず不足時のみ右 0pad
+- `collate_pad_w_right`: 可変 W をバッチでまとめるための右 0pad collate
+- `InputOnlyPlan`: `BuildPlan` から `InputOnlyPlan.from_build_plan(...)` で推論用 plan を作れます
+
+> この Dataset は推論で RNG が呼ばれると例外を投げる設計です（決定論の崩れを検知するため）。
+
+```python
+from seisai_dataset.infer_window_dataset import (
+    InferenceGatherWindowsDataset,
+    InferenceGatherWindowsConfig,
+    collate_pad_w_right,
+)
+
+cfg = InferenceGatherWindowsConfig(
+    domains=("shot",),
+    win_size_traces=128,
+    stride_traces=64,
+    target_len=6016,
+)
+
+ds = InferenceGatherWindowsDataset(
+    segy_files=["/path/input.sgy"],
+    fb_files=["/path/fb.npy"],
+    plan=plan,  # BuildPlan でも OK（内部で InputOnlyPlan に変換）
+    cfg=cfg,
+)
+
+# 可変Wなので collate_fn を差し替える
+# (x_bchw, metas) を返す
+# loader = DataLoader(ds, batch_size=4, collate_fn=collate_pad_w_right)
+```
+
+tiled 推論は `seisai_engine.infer.runner` にあり、H/W の両方向をサポートします。
+
+- `infer_batch_tiled_w` / `iter_infer_loader_tiled_w` / `run_infer_loader_tiled_w`
+- `infer_batch_tiled_h` / `iter_infer_loader_tiled_h` / `run_infer_loader_tiled_h`
+
+※ `seisai_engine` のトップレベル export は現在 `*_tiled_w` のみです（`*_tiled_h` は `seisai_engine.infer.runner` から import）。
+
 ## Examples (実行スクリプト)
 
 ### 1) データセット単体の quick check
@@ -239,10 +284,10 @@ python packages/seisai-dataset/examples/phase_dataset_quick_check.py
 
 ### 2) 学習スクリプト (root/examples)
 
-このリポジトリには **YAML 設定で学習/可視化まで回すサンプル**が入っています。
+このリポジトリには **YAML 設定で学習/推論/可視化まで回すサンプル**が入っています。
 
 - `examples/example_train_psn.py` : P/S/Noise (3-class) 学習 + 推論 + 可視化
-- `examples/example_train_pair.py` : paired SEG-Y 学習 + tiled-h 推論 + triptych 可視化
+- `examples/example_train_pair.py` : paired SEG-Y 学習 + tiled 推論 + triptych 可視化
 - `examples/example_train_fbp.py` : first-break 系の学習例
 - `examples/examples_train_blindtrace.py` : mask/blindtrace 系の学習例
 
@@ -268,20 +313,11 @@ tracking:
 ```
 
 注意:
-- `tracking_uri` の相対パスは **YAML ファイルの場所**基準で解決されます。
-- 長い文字列は tags/params に入れず artifacts に退避します（詳細は
-  `docs/spec/mlflow_tracking_spec.md` を参照）。
+- `tracking_uri` の相対パスは **YAML ファイルの場所**基準で解決されます（詳細は `docs/spec/mlflow_tracking_spec.md`）。
 
-挙動メモ:
-- YAML は常に読み込みます。
-- 3本とも YAML 内の相対パスは「YAML ファイルの場所」基準で解決します。
-- 出力は `paths.out_dir` 起点で、`ckpt/best.pt` と `vis/<epoch>/step_<step>.png` が作られます。
-- 可視化のルートは `vis.out_subdir` で指定します（例: `vis`）。
-- 対応キー (`paths.segy_files` / `paths.phase_pick_files` / `paths.infer_segy_files` / `paths.infer_phase_pick_files` / `paths.input_segy_files` / `paths.target_segy_files` / `paths.infer_input_segy_files` / `paths.infer_target_segy_files`) は `list[str]` の代わりに listfile (1行1パスのテキスト) を指定できます。
-- PSN / Pair は `paths.infer_*` が必須です（blindtrace は `paths.infer_segy_files` が必須）。
-- listfile の空行と行頭 `#` は無視され、相対パスは listfile のあるディレクトリ基準で解決されます。
-- listfile の各行は環境変数と `~` を展開します。
-- 例: `paths.segy_files: data_lists/train_segy.txt`
+出力レイアウト（共通）:
+- best checkpoint: `out_dir/ckpt/best.pt`
+- vis: `out_dir/<vis.out_subdir>/epoch_####/step_####.png`（`vis.out_subdir` のデフォルトは `vis`）
 
 同梱データでの最小実行 (1 epoch / PNG 出力):
 
@@ -296,7 +332,7 @@ python packages/seisai-engine/example/example2.py
 python packages/seisai-engine/example/example_mask_velocity.py
 python packages/seisai-engine/example/example_trend_prior_op.py
 
-python packages/seisai-transforms/example/examle_mask.py
+python packages/seisai-transforms/example/example_mask.py
 python packages/seisai-pick/example/example_trend_fit.py
 ```
 
@@ -327,9 +363,15 @@ pytest -q -m integration
 
 ## ドキュメント
 
-- Dataset 出力契約: `docs/spec/segy_gather_pipeline_dataset_output_contract.md`
+- SegyGatherPipelineDataset 出力契約: `docs/spec/segy_gather_pipeline_dataset_output_contract.md`
+- SegyGatherPipelineDataset 入力前提 (SEG-Y): `docs/spec/segy_gather_pipeline_dataset_input_assumptions.md`
+- Phase pick ファイル仕様: `docs/spec/phase_pick_files_spec.md`
+- Phase dataset 出力契約: `docs/spec/segy_gather_phase_pipeline_dataset_output_contract.md`
 - Pair dataset 仕様: `docs/spec/segy_gather_pair_dataset_spec.md`
-- 入力前提 (SEG-Y): `docs/spec/segy_gahter_pipeline_dataset_input_assumptions.md`
+- BuildPlan 契約: `docs/spec/build_plan_contract.md`
+- Mask 契約: `docs/spec/mask_contract.md`
+- Training pipeline 出力レイアウト: `docs/spec/training_pipeline_output_layout.md`
+- MLflow tracking 仕様: `docs/spec/mlflow_tracking_spec.md`
 
 ## License
 
