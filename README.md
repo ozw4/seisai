@@ -256,6 +256,22 @@ python examples/example_train_psn.py --config examples/config_train_psn.yaml
 python examples/example_train_pair.py --config examples/config_train_pair.yaml
 ```
 
+tracking 設定（最小例）:
+
+```yaml
+tracking:
+  enabled: true
+  exp_name: baseline
+  tracking_uri: file:./mlruns
+  vis_best_only: true
+  vis_max_files: 50
+```
+
+注意:
+- `tracking_uri` の相対パスは **YAML ファイルの場所**基準で解決されます。
+- 長い文字列は tags/params に入れず artifacts に退避します（詳細は
+  `docs/spec/mlflow_tracking_spec.md` を参照）。
+
 挙動メモ:
 - YAML は常に読み込みます。
 - 3本とも YAML 内の相対パスは「YAML ファイルの場所」基準で解決します。

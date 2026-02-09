@@ -49,3 +49,10 @@ model:
   pretrained: false
   in_chans: 1
   out_chans: 3
+
+tracking:
+  enabled: true
+  exp_name: baseline
+  tracking_uri: file:./mlruns
+  vis_best_only: true
+  vis_max_files: 50

@@ -79,3 +79,10 @@ ckpt:
   save_best_only: true
   metric: infer_loss
   mode: min
+
+tracking:
+  enabled: true
+  exp_name: baseline
+  tracking_uri: file:./mlruns
+  vis_best_only: true
+  vis_max_files: 50

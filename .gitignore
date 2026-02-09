@@ -49,6 +49,8 @@ debug_*/
 
 workflow/
 code_snippet/
+mlruns/
+tracking/
 !tests/
 !tests/data
 !tests/data/*sgy
