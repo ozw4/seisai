@@ -270,6 +270,10 @@ tiled 推論は `seisai_engine.infer.runner` にあり、H/W の両方向をサ�
 
 ※ `seisai_engine` のトップレベル export は現在 `*_tiled_w` のみです（`*_tiled_h` は `seisai_engine.infer.runner` から import）。
 
+- 設定クラス:
+  - `TiledWConfig` は `from seisai_engine import TiledWConfig` で import
+  - `TiledHConfig` は `from seisai_engine.infer.runner import TiledHConfig` で import
+
 ## Examples (実行スクリプト)
 
 ### 1) データセット単体の quick check
@@ -290,6 +294,23 @@ python packages/seisai-dataset/examples/phase_dataset_quick_check.py
 - `examples/example_train_pair.py` : paired SEG-Y 学習 + tiled 推論 + triptych 可視化
 - `examples/example_train_fbp.py` : first-break 系の学習例
 - `examples/examples_train_blindtrace.py` : mask/blindtrace 系の学習例
+
+#### config の `paths` セクション（train と infer を分ける）
+
+YAML で指定する入力ファイルは、**train 用**と **infer（評価/可視化）用**を `paths` で別々に受け取ります。
+（同じファイルを使う場合でも、対応する `infer_*` を明示します。）
+
+- PSN / blindtrace:
+  - train: `paths.segy_files`, `paths.phase_pick_files`
+  - infer: `paths.infer_segy_files`, `paths.infer_phase_pick_files`
+- Pair:
+  - train: `paths.input_segy_files`, `paths.target_segy_files`
+  - infer: `paths.infer_input_segy_files`, `paths.infer_target_segy_files`
+- 共通:
+  - `paths.out_dir`: 出力先（相対パスは YAML ファイルの場所基準で解決）
+
+また、各 `*_files` は `list[str]` だけでなく **listfile へのパス（`str`）** でも指定できます（1行1パス）。
+listfile 内の相対パスは、**listfile のあるディレクトリ**基準で解決されます。
 
 実行例:
 
