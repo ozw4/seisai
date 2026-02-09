@@ -1,0 +1,5 @@
+# Core must be reviewed by core owners
+packages/   @ozw4
+src/        @ozw4
+docs/spec/  @ozw4
+
