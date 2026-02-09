@@ -51,6 +51,7 @@ input:
   use_time_ch: false
 
 train:
+  device: auto # auto | cpu | cuda | cuda:N
   seed: 42
   loss_kind: shift_robust_mse
   shift_max: 5

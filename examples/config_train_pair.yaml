@@ -35,6 +35,7 @@ dataset:
   secondary_key_fixed: false
 
 train:
+  device: auto # auto | cpu | cuda | cuda:N
   batch_size: 8
   epochs: 100
   lr: 1.0e-4

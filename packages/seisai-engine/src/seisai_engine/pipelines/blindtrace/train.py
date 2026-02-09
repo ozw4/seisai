@@ -24,6 +24,7 @@ from seisai_engine.pipelines.common import (
     expand_cfg_listfiles,
     load_cfg_with_base_dir,
     resolve_cfg_paths,
+    resolve_device,
     resolve_out_dir,
     run_train_skeleton,
     seed_all,
@@ -142,6 +143,7 @@ def main(argv: list[str] | None = None) -> None:
     epochs = require_int(train_cfg, 'epochs')
     samples_per_epoch = require_int(train_cfg, 'samples_per_epoch')
     train_subset_traces = require_int(train_cfg, 'subset_traces')
+    device_str = optional_str(train_cfg, 'device', 'auto')
 
     seed_infer = optional_int(infer_cfg, 'seed', 43)
     infer_batch_size = require_int(infer_cfg, 'batch_size')
@@ -215,7 +217,7 @@ def main(argv: list[str] | None = None) -> None:
         'out_chans': int(out_chans),
     }
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = resolve_device(device_str)
     seed_all(seed_train)
 
     if phase_pick_files is not None and len(segy_files) != len(phase_pick_files):

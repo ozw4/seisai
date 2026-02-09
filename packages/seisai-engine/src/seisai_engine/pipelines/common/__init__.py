@@ -8,6 +8,7 @@ from .config_schema import (
     SeedsConfig,
     TrainLoopConfig,
 )
+from .device import resolve_device
 from .listfiles import expand_cfg_listfiles, load_path_listfile
 from .seed import seed_all
 from .skeleton_helpers import (
@@ -32,6 +33,7 @@ __all__ = [
     'SeedsConfig',
     'TrainLoopConfig',
     'TrainSkeletonSpec',
+    'resolve_device',
     'ensure_fixed_infer_num_workers',
     'epoch_vis_dir',
     'expand_cfg_listfiles',

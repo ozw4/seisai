@@ -5,6 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
+from seisai_utils.config import optional_str, require_dict
 from seisai_utils.viz_pair import PairTriptychVisConfig
 
 from seisai_engine.infer.runner import TiledHConfig
@@ -13,6 +14,7 @@ from seisai_engine.pipelines.common import (
     expand_cfg_listfiles,
     load_cfg_with_base_dir,
     resolve_cfg_paths,
+    resolve_device,
     resolve_out_dir,
     run_train_skeleton,
     seed_all,
@@ -61,6 +63,8 @@ def main(argv: list[str] | None = None) -> None:
         ],
     )
 
+    train_cfg = require_dict(cfg, 'train')
+    device_str = optional_str(train_cfg, 'device', 'auto')
     typed = load_pair_train_config(cfg)
     common = typed.common
 
@@ -90,7 +94,7 @@ def main(argv: list[str] | None = None) -> None:
         msg = 'infer.max_batches must be positive'
         raise ValueError(msg)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = resolve_device(device_str)
     seed_all(common.seeds.seed_train)
 
     train_transform = build_train_transform(

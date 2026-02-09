@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
-from seisai_utils.config import optional_bool, require_dict, require_list_str
+from seisai_utils.config import optional_bool, optional_str, require_dict, require_list_str
 from seisai_utils.viz_phase import make_title_from_batch_meta, save_psn_debug_png
 
 from seisai_engine.pipelines.common import (
@@ -15,6 +15,7 @@ from seisai_engine.pipelines.common import (
     expand_cfg_listfiles,
     load_cfg_with_base_dir,
     resolve_cfg_paths,
+    resolve_device,
     resolve_out_dir,
     run_train_skeleton,
     seed_all,
@@ -136,6 +137,8 @@ def main(argv: list[str] | None = None) -> None:
         ],
     )
 
+    train_cfg = require_dict(cfg, 'train')
+    device_str = optional_str(train_cfg, 'device', 'auto')
     typed = load_psn_train_config(cfg)
     common = typed.common
 
@@ -153,7 +156,7 @@ def main(argv: list[str] | None = None) -> None:
 
     model_sig = asdict(typed.model)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = resolve_device(device_str)
     seed_all(common.seeds.seed_train)
 
     train_transform = build_train_transform(cfg)

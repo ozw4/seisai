@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader, Subset
 import yaml
 
 from seisai_engine.train_loop import train_one_epoch
+from seisai_engine.schedulers import build_lr_scheduler, load_lr_scheduler_cfg
 from seisai_engine.tracking.config import load_tracking_config
 from seisai_engine.tracking.data_id import build_data_manifest, calc_data_id
 from seisai_engine.tracking.factory import build_tracker
@@ -78,6 +79,9 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
 
     ckpt_dir, vis_root = prepare_output_dirs(spec.out_dir, spec.vis_subdir)
     ensure_fixed_infer_num_workers(spec.infer_num_workers)
+
+    scheduler_cfg = load_lr_scheduler_cfg(spec.cfg)
+    lr_sched_spec = None
 
     best_infer_loss: float | None = None
     global_step = 0
@@ -177,6 +181,14 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 'seeds/seed_train': int(spec.seed_train),
                 'seeds/seed_infer': int(spec.seed_infer),
             }
+
+            if scheduler_cfg is not None:
+                sched_type = scheduler_cfg.get('type')
+                if isinstance(sched_type, str):
+                    params['scheduler/type'] = sched_type
+                sched_interval = scheduler_cfg.get('interval')
+                if isinstance(sched_interval, str):
+                    params['scheduler/interval'] = sched_interval
 
             if not spec.optimizer.param_groups:
                 msg = 'optimizer.param_groups must be non-empty'
@@ -336,6 +348,20 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 worker_init_fn=train_worker_init_fn,
             )
 
+            if lr_sched_spec is None:
+                lr_sched_spec = build_lr_scheduler(
+                    spec.optimizer,
+                    spec.cfg,
+                    steps_per_epoch=len(train_loader),
+                    epochs=spec.epochs,
+                )
+
+            lr_scheduler_step = (
+                lr_sched_spec.scheduler
+                if (lr_sched_spec is not None and lr_sched_spec.interval == 'step')
+                else None
+            )
+
             spec.model.train()
             stats = train_one_epoch(
                 spec.model,
@@ -343,7 +369,7 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 spec.optimizer,
                 spec.criterion,
                 device=spec.device,
-                lr_scheduler=None,
+                lr_scheduler=lr_scheduler_step,
                 gradient_accumulation_steps=1,
                 max_norm=spec.max_norm,
                 use_amp=spec.use_amp_train,
@@ -353,6 +379,10 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 print_freq=spec.print_freq,
                 on_step=None,
             )
+
+            if lr_sched_spec is not None and lr_sched_spec.interval == 'epoch':
+                if lr_sched_spec.monitor is None:
+                    lr_sched_spec.scheduler.step()
             print(
                 f'epoch={epoch} loss={stats["loss"]:.6f} steps={int(stats["steps"])} '
                 f'samples={int(stats["samples"])}'
@@ -386,8 +416,32 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
             )
             print(f'epoch={epoch} infer_loss={infer_loss:.6f}')
 
+            if lr_sched_spec is not None and lr_sched_spec.interval == 'epoch':
+                if lr_sched_spec.monitor is not None:
+                    monitor = lr_sched_spec.monitor
+                    if monitor in ('infer_loss', 'infer/loss'):
+                        lr_sched_spec.scheduler.step(float(infer_loss))
+                    elif monitor in ('train_loss', 'train/loss'):
+                        lr_sched_spec.scheduler.step(float(stats['loss']))
+                    else:
+                        msg = (
+                            'unknown scheduler.monitor: '
+                            f'{monitor} (expected infer_loss/train_loss)'
+                        )
+                        raise ValueError(msg)
+
             ckpt_path = ckpt_dir / 'best.pt'
             did_update = best_infer_loss is None or infer_loss < best_infer_loss
+            scheduler_state_dict = None
+            scheduler_sig = None
+            if lr_sched_spec is not None:
+                if callable(getattr(lr_sched_spec.scheduler, 'state_dict', None)):
+                    scheduler_state_dict = lr_sched_spec.scheduler.state_dict()
+                scheduler_sig = {
+                    'name': lr_sched_spec.name,
+                    'interval': lr_sched_spec.interval,
+                    'monitor': lr_sched_spec.monitor,
+                }
             best_infer_loss = maybe_save_best_min(
                 best_infer_loss,
                 infer_loss,
@@ -400,6 +454,8 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                     'model_sig': spec.model_sig,
                     'model_state_dict': spec.model.state_dict(),
                     'optimizer_state_dict': spec.optimizer.state_dict(),
+                    'lr_scheduler_sig': scheduler_sig,
+                    'lr_scheduler_state_dict': scheduler_state_dict,
                     'cfg': spec.cfg,
                 },
             )
