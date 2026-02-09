@@ -7,6 +7,7 @@ from .augment import (
     RandomCropOrPad,
     RandomFreqFilter,
     RandomHFlip,
+    RandomPolarityFlip,
     RandomSpatialStretchSameH,
     RandomTimeStretch,
     ViewCompose,
@@ -31,6 +32,7 @@ __all__ = [
     # augment
     'RandomFreqFilter',
     'RandomHFlip',
+    'RandomPolarityFlip',
     'RandomSpatialStretchSameH',
     'RandomTimeStretch',
     'SpaceAugConfig',

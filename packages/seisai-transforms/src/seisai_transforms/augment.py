@@ -104,14 +104,45 @@ class RandomHFlip:
         self,
         x_hw: np.ndarray,
         rng: np.random.Generator | None = None,
-        return_meta=False,
+        return_meta: bool = False,
     ):
+        p = float(self.prob)
+        if p <= 0.0:
+            meta = {'hflip': False}
+            return (x_hw, meta) if return_meta else x_hw
+
         r = rng or np.random.default_rng()
-        if r.random() < self.prob:
+        if r.random() < p:
             y = x_hw[::-1, :].copy()
             meta = {'hflip': True}
             return (y, meta) if return_meta else y
+
         meta = {'hflip': False}
+        return (x_hw, meta) if return_meta else x_hw
+
+
+class RandomPolarityFlip:
+    def __init__(self, prob: float = 0.0) -> None:
+        self.prob = float(prob)
+
+    def __call__(
+        self,
+        x_hw: np.ndarray,
+        rng: np.random.Generator | None = None,
+        return_meta: bool = False,
+    ):
+        p = float(self.prob)
+        if p <= 0.0:
+            meta = {'polarity_flip': False}
+            return (x_hw, meta) if return_meta else x_hw
+
+        r = rng or np.random.default_rng()
+        if r.random() < p:
+            y = -x_hw
+            meta = {'polarity_flip': True}
+            return (y, meta) if return_meta else y
+
+        meta = {'polarity_flip': False}
         return (x_hw, meta) if return_meta else x_hw
 
 

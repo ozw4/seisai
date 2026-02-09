@@ -78,6 +78,7 @@ def main(argv: list[str] | None = None) -> None:
     paths = require_dict(cfg, 'paths')
     ds_cfg = require_dict(cfg, 'dataset')
     transform_cfg = require_dict(cfg, 'transform')
+    augment_cfg = cfg.get('augment')
     fbgate_cfg = require_dict(cfg, 'fbgate')
     mask_cfg = require_dict(cfg, 'mask')
     input_cfg = require_dict(cfg, 'input')
@@ -230,7 +231,9 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(msg)
 
     train_transform = build_train_transform(
-        time_len=int(time_len), per_trace_standardize=bool(per_trace_standardize)
+        time_len=int(time_len),
+        per_trace_standardize=bool(per_trace_standardize),
+        augment_cfg=augment_cfg,
     )
     infer_transform = build_infer_transform(
         time_len=int(time_len), per_trace_standardize=bool(per_trace_standardize)

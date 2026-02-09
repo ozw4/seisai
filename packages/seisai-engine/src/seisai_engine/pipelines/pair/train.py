@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> None:
     args, _unknown = parser.parse_known_args(argv)
 
     cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
+    augment_cfg = cfg.get('augment')
     resolve_cfg_paths(
         cfg,
         base_dir,
@@ -92,7 +93,10 @@ def main(argv: list[str] | None = None) -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     seed_all(common.seeds.seed_train)
 
-    train_transform = build_train_transform(int(typed.train.time_len))
+    train_transform = build_train_transform(
+        int(typed.train.time_len),
+        augment_cfg=augment_cfg,
+    )
     infer_transform = build_infer_transform()
 
     plan = build_plan()

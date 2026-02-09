@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from seisai_dataset import BuildPlan, SegyGatherPairDataset
 from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
 
+from seisai_engine.pipelines.common.augment import build_train_augment_ops
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
 
 if TYPE_CHECKING:
@@ -17,10 +18,17 @@ __all__ = [
 ]
 
 
-def build_train_transform(time_len: int, eps: float = 1e-8) -> ViewCompose:
+def build_train_transform(
+    time_len: int,
+    eps: float = 1e-8,
+    augment_cfg: dict | None = None,
+) -> ViewCompose:
+    geom_ops, post_ops = build_train_augment_ops(augment_cfg)
     return ViewCompose(
         [
+            *geom_ops,
             RandomCropOrPad(target_len=int(time_len)),
+            *post_ops,
             PerTraceStandardize(eps=float(eps)),
         ]
     )

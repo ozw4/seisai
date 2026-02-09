@@ -21,6 +21,7 @@ from seisai_utils.config import (
     require_list_str,
 )
 
+from seisai_engine.pipelines.common.augment import build_train_augment_ops
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 
@@ -65,11 +66,15 @@ def build_train_transform(cfg: dict) -> ViewCompose:
         msg = 'cfg must be dict'
         raise TypeError(msg)
     transform_cfg = require_dict(cfg, 'transform')
+    augment_cfg = cfg.get('augment')
     target_len = require_int(transform_cfg, 'target_len')
     standardize_eps = optional_float(transform_cfg, 'standardize_eps', 1.0e-8)
+    geom_ops, post_ops = build_train_augment_ops(augment_cfg)
     return ViewCompose(
         [
+            *geom_ops,
             RandomCropOrPad(target_len=int(target_len)),
+            *post_ops,
             PerTraceStandardize(eps=float(standardize_eps)),
         ]
     )

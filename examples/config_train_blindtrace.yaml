@@ -19,6 +19,23 @@ transform:
   time_len: 5024
   per_trace_standardize: true
 
+augment:
+  hflip_prob: 0.0
+  polarity_prob: 0.0
+  space:
+    prob: 0.0
+    factor_range: [0.90, 1.10]
+  time:
+    prob: 0.0
+    factor_range: [0.95, 1.05]
+  freq:
+    prob: 0.0
+    kinds: [bandpass, lowpass, highpass]
+    band: [0.05, 0.45]
+    width: [0.10, 0.35]
+    roll: 0.02
+    restandardize: false
+
 fbgate:
   apply_on: "off"
   min_pick_ratio: 0.1

@@ -12,6 +12,7 @@ from seisai_transforms.augment import (
     ViewCompose,
 )
 
+from seisai_engine.pipelines.common.augment import build_train_augment_ops
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
 
 __all__ = [
@@ -22,8 +23,18 @@ __all__ = [
 ]
 
 
-def build_train_transform(*, time_len: int, per_trace_standardize: bool) -> ViewCompose:
-    ops: list = [RandomCropOrPad(target_len=int(time_len))]
+def build_train_transform(
+    *,
+    time_len: int,
+    per_trace_standardize: bool,
+    augment_cfg: dict | None = None,
+) -> ViewCompose:
+    geom_ops, post_ops = build_train_augment_ops(augment_cfg)
+    ops: list = [
+        *geom_ops,
+        RandomCropOrPad(target_len=int(time_len)),
+        *post_ops,
+    ]
     if per_trace_standardize:
         ops.append(PerTraceStandardize(eps=1e-8))
     return ViewCompose(ops)
