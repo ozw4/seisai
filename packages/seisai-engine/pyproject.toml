@@ -13,14 +13,12 @@ dependencies = [
   "numpy",
   "torch",
   "tqdm",
+  "mlflow>=2.0",
   "seisai-dataset>=0.1.0",
   "seisai-transforms>=0.1.0",
   "seisai-models>=0.1.0",
   "seisai-utils>=0.1.0",
 ]
-
-[project.optional-dependencies]
-mlflow = ["mlflow>=2.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

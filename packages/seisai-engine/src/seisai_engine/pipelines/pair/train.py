@@ -153,6 +153,7 @@ def main(argv: list[str] | None = None) -> None:
     spec = TrainSkeletonSpec(
         pipeline='pair',
         cfg=cfg,
+        base_dir=base_dir,
         out_dir=out_dir_path,
         vis_subdir=str(common.output.vis_subdir),
         model_sig=model_sig,

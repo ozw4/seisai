@@ -43,10 +43,9 @@ in seisai-engine so future implementation is consistent and low-risk.
 - `TrainSkeletonSpec` must include `base_dir: Path`, and each `*/train.py` passes
   the `base_dir` returned by `load_cfg_with_base_dir`
 
-## Tracking Enablement / Optional Dependency
+## Tracking Enablement
 - Tracking is controlled by `cfg['tracking']`.
-- If tracking is disabled (`tracking.enabled=false` or missing), the implementation
-  must not import `mlflow` (MLflow is an optional dependency).
+
 
 ## Tags (small, searchable)
 - `pipeline`
