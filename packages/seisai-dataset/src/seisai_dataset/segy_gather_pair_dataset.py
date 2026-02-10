@@ -16,6 +16,30 @@ from .file_info import (
 from .segy_gather_base import BaseRandomSegyDataset
 
 
+def _standardize_pair_from_input(
+    x_in_hw: np.ndarray,
+    x_tg_hw: np.ndarray,
+    eps: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if not isinstance(x_in_hw, np.ndarray) or x_in_hw.ndim != 2:
+        msg = 'x_in_hw must be a 2D numpy array'
+        raise ValueError(msg)
+    if not isinstance(x_tg_hw, np.ndarray) or x_tg_hw.ndim != 2:
+        msg = 'x_tg_hw must be a 2D numpy array'
+        raise ValueError(msg)
+    if x_in_hw.shape != x_tg_hw.shape:
+        msg = f'x_in_hw.shape != x_tg_hw.shape: {x_in_hw.shape} vs {x_tg_hw.shape}'
+        raise ValueError(msg)
+
+    xf = x_in_hw.astype(np.float32, copy=False)
+    mean = xf.mean(axis=-1).astype(np.float32, copy=False)
+    std = xf.std(axis=-1).astype(np.float32, copy=False) + np.float32(eps)
+
+    x_in_std = (xf - mean[:, None]) / std[:, None]
+    x_tg_std = (x_tg_hw.astype(np.float32, copy=False) - mean[:, None]) / std[:, None]
+    return x_in_std, x_tg_std, mean, std
+
+
 class SegyGatherPairDataset(BaseRandomSegyDataset):
     """SEG-Y 対応ペアから同期 transform で input/target を生成する Dataset."""
 
@@ -41,6 +65,8 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
         secondary_key_fixed: bool = False,
         verbose: bool = False,
         progress: bool | None = None,
+        standardize_from_input: bool = False,
+        standardize_eps: float = 1e-8,
         max_trials: int = 2048,
     ) -> None:
         if len(input_segy_files) == 0 or len(target_segy_files) == 0:
@@ -57,6 +83,12 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
 
         self.progress = self.verbose if progress is None else bool(progress)
         self.waveform_mode = normalize_waveform_mode(waveform_mode)
+        self.standardize_from_input = bool(standardize_from_input)
+        standardize_eps_val = float(standardize_eps)
+        if not np.isfinite(standardize_eps_val) or standardize_eps_val <= 0.0:
+            msg = 'standardize_eps must be a positive finite value'
+            raise ValueError(msg)
+        self.standardize_eps = standardize_eps_val
 
         self._init_header_config(
             ffid_byte=ffid_byte,
@@ -223,6 +255,16 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
                 f'{x_view_input.shape} vs {x_view_target.shape}'
             )
             raise ValueError(msg)
+        if self.standardize_from_input:
+            x_view_input, x_view_target, mean_h, std_h = (
+                _standardize_pair_from_input(
+                    x_view_input,
+                    x_view_target,
+                    eps=self.standardize_eps,
+                )
+            )
+            meta['per_trace_mean'] = mean_h
+            meta['per_trace_std'] = std_h
         did_superwindow = bool(sample['did_super'])
 
         dt_sec = float(input_info.dt_sec)

@@ -127,7 +127,8 @@ def main(argv: list[str] | None = None) -> None:
     model.eval()
 
     plan = build_plan()
-    infer_transform = build_infer_transform()
+    standardize_eps = 1e-8
+    infer_transform = build_infer_transform(eps=standardize_eps)
 
     ds_infer_full = build_pair_dataset(
         paths=cfg.paths,
@@ -136,6 +137,7 @@ def main(argv: list[str] | None = None) -> None:
         plan=plan,
         subset_traces=cfg.infer.subset_traces,
         secondary_key_fixed=True,
+        standardize_eps=standardize_eps,
     )
 
     try:

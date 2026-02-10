@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from seisai_dataset import BuildPlan, SegyGatherPairDataset
-from seisai_transforms.augment import PerTraceStandardize, RandomCropOrPad, ViewCompose
+from seisai_transforms.augment import RandomCropOrPad, ViewCompose
 
 from seisai_engine.pipelines.common.augment import build_train_augment_ops
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
@@ -29,13 +29,13 @@ def build_train_transform(
             *geom_ops,
             RandomCropOrPad(target_len=int(time_len)),
             *post_ops,
-            PerTraceStandardize(eps=float(eps)),
         ]
     )
 
 
 def build_infer_transform(eps: float = 1e-8) -> ViewCompose:
-    return ViewCompose([PerTraceStandardize(eps=float(eps))])
+    _ = eps
+    return ViewCompose([])
 
 
 def build_pair_dataset(
@@ -45,6 +45,7 @@ def build_pair_dataset(
     plan: BuildPlan,
     subset_traces: int,
     secondary_key_fixed: bool,
+    standardize_eps: float = 1e-8,
 ) -> SegyGatherPairDataset:
     validate_files_exist(list(paths.input_segy_files) + list(paths.target_segy_files))
 
@@ -61,4 +62,6 @@ def build_pair_dataset(
         progress=bool(ds_cfg.progress),
         max_trials=int(ds_cfg.max_trials),
         use_header_cache=bool(ds_cfg.use_header_cache),
+        standardize_from_input=True,
+        standardize_eps=float(standardize_eps),
     )

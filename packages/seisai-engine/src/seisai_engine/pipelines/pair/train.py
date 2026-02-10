@@ -97,11 +97,13 @@ def main(argv: list[str] | None = None) -> None:
     device = resolve_device(device_str)
     seed_all(common.seeds.seed_train)
 
+    standardize_eps = 1e-8
     train_transform = build_train_transform(
         int(typed.train.time_len),
+        eps=standardize_eps,
         augment_cfg=augment_cfg,
     )
-    infer_transform = build_infer_transform()
+    infer_transform = build_infer_transform(eps=standardize_eps)
 
     plan = build_plan()
     criterion = build_criterion(typed.train.loss_kind)
@@ -126,6 +128,7 @@ def main(argv: list[str] | None = None) -> None:
         plan=plan,
         subset_traces=int(typed.train.subset_traces),
         secondary_key_fixed=bool(typed.dataset.secondary_key_fixed),
+        standardize_eps=standardize_eps,
     )
 
     infer_paths_cfg = PairPaths(
@@ -141,6 +144,7 @@ def main(argv: list[str] | None = None) -> None:
         plan=plan,
         subset_traces=int(typed.infer.subset_traces),
         secondary_key_fixed=True,
+        standardize_eps=standardize_eps,
     )
 
     model_sig = asdict(typed.model)
