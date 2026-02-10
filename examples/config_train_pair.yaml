@@ -50,22 +50,22 @@ train:
   num_workers: 0
 
 
-# ema:
-#   enabled: true
-#   decay: 0.999
-#   start_step: 0
-#   update_every: 1
-#   use_for_infer: true
-#   device: cpu  # omit -> same device as model; "cpu" saves VRAM but is slower
+#ema:
+#  enabled: true
+#  decay: 0.999
+#  start_step: 0
+#  update_every: 1
+#  use_for_infer: true
+#  device: cuda  # omit -> same device as model; "cpu" saves VRAM but is slower
 
 augment:
-  hflip_prob: 0.0
-  polarity_prob: 0.0
+  hflip_prob: 0.5
+  polarity_prob: 0.5
   space:
-    prob: 0.0
+    prob: 0.3
     factor_range: [0.90, 1.10]
   time:
-    prob: 0.0
+    prob: 0.3
     factor_range: [0.95, 1.05]
   freq:
     prob: 0.0
@@ -98,8 +98,8 @@ vis:
   transpose_for_trace_time: true
   per_trace_norm: true
   per_trace_eps: 1.0e-8
-  figsize: [20.0, 15.0]
-  dpi: 300
+  figsize: [15.0, 10.0]
+  dpi: 200
 
 model:
   backbone: resnet18 # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
