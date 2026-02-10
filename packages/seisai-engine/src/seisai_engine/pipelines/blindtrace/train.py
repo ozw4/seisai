@@ -30,6 +30,7 @@ from seisai_engine.pipelines.common import (
     seed_all,
 )
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
+from seisai_engine.loss import composite
 
 from .build_dataset import (
     build_dataset,
@@ -40,7 +41,6 @@ from .build_dataset import (
 from .build_model import build_model
 from .build_plan import build_plan
 from .infer import run_infer_epoch
-from .loss import build_masked_criterion
 from .vis import build_triptych_cfg
 
 __all__ = ['main']
@@ -136,9 +136,10 @@ def main(argv: list[str] | None = None) -> None:
     use_time_ch = optional_bool(input_cfg, 'use_time_ch', default=False)
 
     seed_train = optional_int(train_cfg, 'seed', 42)
-    loss_scope = optional_str(train_cfg, 'loss_scope', 'masked_only').lower()
-    loss_kind = optional_str(train_cfg, 'loss_kind', 'l1').lower()
-    shift_max = optional_int(train_cfg, 'shift_max', 8)
+    loss_scope = optional_str(train_cfg, 'loss_scope', 'masked_only')
+    loss_specs = composite.parse_loss_specs(
+        train_cfg.get('losses'), default_scope=loss_scope
+    )
     train_batch_size = require_int(train_cfg, 'batch_size')
     train_num_workers = optional_int(train_cfg, 'num_workers', 0)
     train_use_amp = require_bool(train_cfg, 'use_amp')
@@ -191,11 +192,7 @@ def main(argv: list[str] | None = None) -> None:
         msg = 'ckpt.mode must be "min"'
         raise ValueError(msg)
 
-    if loss_kind not in ('l1', 'mse', 'shift_mse', 'shift_robust_mse'):
-        msg = 'train.loss_kind must be "l1", "mse", "shift_mse", or "shift_robust_mse"'
-        raise ValueError(msg)
-
-    if loss_scope == 'masked_only':
+    if any(spec.scope == 'masked_only' for spec in loss_specs):
         _validate_mask_ratio_for_subset(
             mask_ratio=mask_ratio, subset_traces=train_subset_traces, label='train'
         )
@@ -285,11 +282,7 @@ def main(argv: list[str] | None = None) -> None:
             apply_on=apply_on, min_pick_ratio=min_pick_ratio, verbose=bool(verbose)
         )
 
-    criterion = build_masked_criterion(
-        loss_kind=loss_kind,
-        loss_scope=loss_scope,
-        shift_max=int(shift_max),
-    )
+    criterion = composite.build_weighted_criterion(loss_specs)
 
     ds_train_full = build_dataset(
         segy_files=segy_files,

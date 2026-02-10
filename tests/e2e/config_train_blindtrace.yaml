@@ -35,9 +35,12 @@ input:
 
 train:
   seed: 42
-  loss_kind: l1
-  shift_max: 5
   loss_scope: masked_only
+  losses:
+    - kind: l1
+      weight: 1.0
+      scope: masked_only
+      params: {}
   time_len: 6000
   batch_size: 1
   num_workers: 0

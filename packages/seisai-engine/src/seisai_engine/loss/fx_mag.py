@@ -36,6 +36,8 @@ class FxMagPerTraceMSE:
 
         self.use_log = bool(use_log)
         self.eps = float(eps)
+        self.f_lo = int(f_lo)
+        self.f_hi = None if f_hi is None else int(f_hi)
 
     def __call__(
         self,
@@ -139,9 +141,6 @@ class FxMagPerTraceMSE:
 
         if reduction == 'none':
             return sel_vals.reshape(-1)
-        if reduction == 'sum':
-            return sel_vals.sum()
-        return sel_vals.mean()
         if reduction == 'sum':
             return sel_vals.sum()
         return sel_vals.mean()
