@@ -27,6 +27,15 @@ train:
   max_norm: 1.0
   num_workers: 0
 
+
+# ema:
+#   enabled: true
+#   decay: 0.999
+#   start_step: 0
+#   update_every: 1
+#   use_for_infer: true
+#   device: cpu  # omit -> same device as model; "cpu" saves VRAM but is slower
+
 transform:
   target_len: 6016
   standardize_eps: 1.0e-8

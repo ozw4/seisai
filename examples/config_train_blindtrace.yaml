@@ -67,6 +67,15 @@ train:
   samples_per_epoch: 256
   subset_traces: 128
 
+
+# ema:
+#   enabled: true
+#   decay: 0.999
+#   start_step: 0
+#   update_every: 1
+#   use_for_infer: true
+#   device: cpu  # omit -> same device as model; "cpu" saves VRAM but is slower
+
 infer:
   seed: 43
   batch_size: 1

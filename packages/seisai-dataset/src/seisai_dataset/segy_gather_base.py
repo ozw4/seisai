@@ -181,11 +181,11 @@ class GateEvaluator:
             meta['fb_idx_view'], dt_eff_sec=dt_eff_sec, did_super=did_super
         )
         if not ok_fblc:
-            if self.verbose:
-                print(
-                    f'Rejecting gather {info.path} key={meta.get("key_name", "")}:{meta.get("primary_unique", "")} '
-                    f'(FBLC gate; pairs={valid_pairs}, p_ms={p_ms})'
-                )
+            # if self.verbose:
+            #    print(
+            #        f'Rejecting gather {info.path} key={meta.get("key_name", "")}:{meta.get("primary_unique", "")} '
+            #        f'(FBLC gate; pairs={valid_pairs}, p_ms={p_ms})'
+            #    )
             self.last_reject = 'fblc'
             return False
 

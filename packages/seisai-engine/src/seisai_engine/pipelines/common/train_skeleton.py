@@ -15,6 +15,15 @@ import torch
 from torch.utils.data import DataLoader, Subset
 import yaml
 
+from seisai_utils.config import (
+    optional_bool,
+    optional_float,
+    optional_int,
+    optional_str,
+    require_dict,
+)
+
+from seisai_engine.ema_controller import EmaConfig, EmaController
 from seisai_engine.train_loop import train_one_epoch
 from seisai_engine.schedulers import build_lr_scheduler, load_lr_scheduler_cfg
 from seisai_engine.tracking.config import load_tracking_config
@@ -88,11 +97,49 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
     tracking_enabled = False
     run_started = False
     tracker = None
+    ema_cfg_obj: EmaConfig | None = None
+    ema_controller: EmaController | None = None
     try:
         tracking_cfg = load_tracking_config(spec.cfg, spec.base_dir)
         tracking_enabled = tracking_cfg.enabled
         run_started = False
         tracker = build_tracker(tracking_cfg)
+
+        ema_cfg_obj = None
+        ema_controller = None
+        if 'ema' in spec.cfg:
+            ema_cfg = require_dict(spec.cfg, 'ema')
+            ema_enabled = optional_bool(ema_cfg, 'enabled', default=True)
+            if ema_enabled:
+                decay = float(optional_float(ema_cfg, 'decay', 0.999))
+                start_step = int(optional_int(ema_cfg, 'start_step', 0))
+                update_every = int(optional_int(ema_cfg, 'update_every', 1))
+                use_for_infer = bool(
+                    optional_bool(ema_cfg, 'use_for_infer', default=True)
+                )
+
+                device_str = str(optional_str(ema_cfg, 'device', ''))
+                device: torch.device | None = None
+                if device_str:
+                    if device_str not in {'cpu', 'cuda'}:
+                        msg = 'ema.device must be "cpu" or "cuda" when provided'
+                        raise ValueError(msg)
+                    if device_str == 'cpu':
+                        device = torch.device('cpu')
+                    else:
+                        if spec.device.type != 'cuda':
+                            msg = 'ema.device="cuda" requires CUDA device'
+                            raise ValueError(msg)
+                        device = spec.device
+
+                ema_cfg_obj = EmaConfig(
+                    decay=float(decay),
+                    start_step=int(start_step),
+                    update_every=int(update_every),
+                    use_for_infer=bool(use_for_infer),
+                    device=device,
+                )
+                ema_controller = EmaController(spec.model, ema_cfg_obj, initial_step=0)
 
         if tracking_enabled:
             tracking_dir = Path(spec.out_dir) / 'tracking'
@@ -189,6 +236,17 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 sched_interval = scheduler_cfg.get('interval')
                 if isinstance(sched_interval, str):
                     params['scheduler/interval'] = sched_interval
+
+            if ema_cfg_obj is not None:
+                params['ema/enabled'] = True
+                params['ema/decay'] = float(ema_cfg_obj.decay)
+                params['ema/start_step'] = int(ema_cfg_obj.start_step)
+                params['ema/update_every'] = int(ema_cfg_obj.update_every)
+                params['ema/use_for_infer'] = bool(ema_cfg_obj.use_for_infer)
+                if ema_cfg_obj.device is None:
+                    params['ema/device'] = 'same'
+                else:
+                    params['ema/device'] = str(ema_cfg_obj.device)
 
             if not spec.optimizer.param_groups:
                 msg = 'optimizer.param_groups must be non-empty'
@@ -362,6 +420,9 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 else None
             )
 
+            if ema_controller is not None:
+                ema_controller.set_step(int(global_step))
+
             spec.model.train()
             stats = train_one_epoch(
                 spec.model,
@@ -374,7 +435,7 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 max_norm=spec.max_norm,
                 use_amp=spec.use_amp_train,
                 scaler=None,
-                ema=None,
+                ema=ema_controller,
                 step_offset=0,
                 print_freq=spec.print_freq,
                 on_step=None,
@@ -395,21 +456,32 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 spec.ds_infer_full,
                 range(spec.infer_batch_size * spec.infer_max_batches),
             )
+            infer_use_ema = bool(
+                ema_cfg_obj is not None
+                and ema_controller is not None
+                and ema_cfg_obj.use_for_infer
+            )
+            infer_model = ema_controller.module if infer_use_ema else spec.model
+            infer_device = (
+                ema_cfg_obj.device
+                if (infer_use_ema and ema_cfg_obj.device is not None)
+                else spec.device
+            )
             infer_loader = DataLoader(
                 infer_ds,
                 batch_size=spec.infer_batch_size,
                 shuffle=False,
                 num_workers=0,
-                pin_memory=(spec.device.type == 'cuda'),
+                pin_memory=(infer_device.type == 'cuda'),
             )
 
             vis_epoch_dir = epoch_vis_dir(vis_root, epoch)
 
-            spec.model.eval()
+            infer_model.eval()
             infer_loss = spec.infer_epoch_fn(
-                spec.model,
+                infer_model,
                 infer_loader,
-                spec.device,
+                infer_device,
                 vis_epoch_dir,
                 spec.vis_n,
                 spec.infer_max_batches,
@@ -442,22 +514,38 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                     'interval': lr_sched_spec.interval,
                     'monitor': lr_sched_spec.monitor,
                 }
+            ckpt_payload = {
+                'version': 1,
+                'pipeline': spec.pipeline,
+                'epoch': int(epoch),
+                'global_step': int(global_step),
+                'model_sig': spec.model_sig,
+                'model_state_dict': spec.model.state_dict(),
+                'optimizer_state_dict': spec.optimizer.state_dict(),
+                'lr_scheduler_sig': scheduler_sig,
+                'lr_scheduler_state_dict': scheduler_state_dict,
+                'cfg': spec.cfg,
+            }
+            if ema_cfg_obj is not None and ema_controller is not None:
+                dev = None
+                if ema_cfg_obj.device is not None:
+                    dev = str(ema_cfg_obj.device)
+                ckpt_payload['ema_cfg'] = {
+                    'decay': float(ema_cfg_obj.decay),
+                    'start_step': int(ema_cfg_obj.start_step),
+                    'update_every': int(ema_cfg_obj.update_every),
+                    'use_for_infer': bool(ema_cfg_obj.use_for_infer),
+                    'device': dev,
+                }
+                ckpt_payload['ema_state_dict'] = ema_controller.state_dict_cpu()
+                ckpt_payload['ema_step'] = int(ema_controller.step)
+                ckpt_payload['infer_used_ema'] = bool(ema_cfg_obj.use_for_infer)
+
             best_infer_loss = maybe_save_best_min(
                 best_infer_loss,
                 infer_loss,
                 ckpt_path,
-                {
-                    'version': 1,
-                    'pipeline': spec.pipeline,
-                    'epoch': int(epoch),
-                    'global_step': int(global_step),
-                    'model_sig': spec.model_sig,
-                    'model_state_dict': spec.model.state_dict(),
-                    'optimizer_state_dict': spec.optimizer.state_dict(),
-                    'lr_scheduler_sig': scheduler_sig,
-                    'lr_scheduler_state_dict': scheduler_state_dict,
-                    'cfg': spec.cfg,
-                },
+                ckpt_payload,
             )
 
             if tracking_enabled and run_started:
