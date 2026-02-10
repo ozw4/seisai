@@ -3,17 +3,33 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 
 import numpy as np
 import segyio
 
 logger = logging.getLogger(__name__)
 
+WaveformMode = Literal['eager', 'mmap']
+
+
+def normalize_waveform_mode(waveform_mode: str | None) -> WaveformMode:
+    if waveform_mode is None:
+        return 'eager'
+    if not isinstance(waveform_mode, str):
+        msg = 'waveform_mode must be str'
+        raise TypeError(msg)
+    mode = waveform_mode.strip().lower()
+    if mode not in ('eager', 'mmap'):
+        msg = 'waveform_mode must be "eager" or "mmap"'
+        raise ValueError(msg)
+    return cast(WaveformMode, mode)
+
 
 @dataclass(slots=True)
 class FileInfo:
     path: str
-    mmap: np.ndarray
+    mmap: np.ndarray | segyio.trace.Trace
     segy_obj: segyio.SegyFile
     dt_sec: float
     n_traces: int
@@ -52,7 +68,7 @@ class FileInfo:
 class PairFileInfo:
     input_info: FileInfo
     target_path: str
-    target_mmap: np.ndarray
+    target_mmap: np.ndarray | segyio.trace.Trace
     target_segy_obj: segyio.SegyFile
     target_n_samples: int
     target_n_traces: int
@@ -212,11 +228,14 @@ def build_file_info(
     header_cache_dir: str | None = None,
     use_header_cache: bool = True,
     include_centroids: bool = False,
+    waveform_mode: str = 'eager',
 ) -> dict:
     """SEG-Y 1ファイルから dataset が要求する file_info dict を構築する共通関数。.
 
     - ヘッダは load_headers_with_cache() を用いて取得(cache_dir の有無で自動切替)
     - インデックスマップ({値→行インデックス配列})を安定ソートで構築
+    - waveform_mode="eager": trace を全量読み込み (np.ndarray) を保持
+    - waveform_mode="mmap": segyio mmap + trace accessor を保持 (全量確保しない)
     - mmap を開いた segyio オブジェクトを保持(caller が close() を呼ぶこと)
     - include_centroids=True の場合、座標が読めたときのみキーごとのセントロイドを付与
     (座標が欠落/不一致なら警告を出して None を格納)
@@ -232,6 +251,8 @@ def build_file_info(
     if not Path(segy_path).exists():
         msg = f'SEG-Y not found: {segy_path}'
         raise FileNotFoundError(msg)
+
+    mode = normalize_waveform_mode(waveform_mode)
 
     meta = load_headers_with_cache(
         segy_path,
@@ -252,7 +273,11 @@ def build_file_info(
 
     # mmap 用に開いて保持(caller が close する)
     f = segyio.open(segy_path, 'r', ignore_geometry=True)
-    mmap = f.trace.raw[:]
+    if mode == 'mmap':
+        f.mmap()
+        mmap = f.trace.raw
+    else:
+        mmap = f.trace.raw[:]
 
     # index maps(安定ソート)と unique_keys
     ffid_key_to_indices = build_index_map(ffid_values)
@@ -354,6 +379,7 @@ def build_file_info_dataclass(
     header_cache_dir: str | None = None,
     use_header_cache: bool = True,
     include_centroids: bool = False,
+    waveform_mode: str = 'eager',
 ) -> FileInfo:
     info = build_file_info(
         segy_path,
@@ -363,5 +389,6 @@ def build_file_info_dataclass(
         header_cache_dir=header_cache_dir,
         use_header_cache=use_header_cache,
         include_centroids=include_centroids,
+        waveform_mode=waveform_mode,
     )
     return FileInfo(**info)

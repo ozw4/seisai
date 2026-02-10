@@ -23,7 +23,7 @@ from seisai_transforms.view_projection import (
 )
 
 from .builder.builder import BuildPlan
-from .file_info import FileInfo, build_file_info_dataclass
+from .file_info import FileInfo, build_file_info_dataclass, normalize_waveform_mode
 from .gate_fblc import FirstBreakGate
 from .phase_pick_io import load_phase_pick_csr_npz, subset_pad_first_invalidate
 from .segy_gather_base import (
@@ -68,6 +68,7 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
         sw_prob: float = 0.3,
         use_header_cache: bool = True,
         header_cache_dir: str | None = None,
+        waveform_mode: str = 'eager',
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
         verbose: bool = False,
@@ -109,6 +110,7 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
             gate_evaluator=gate_evaluator,
         )
         self.progress = self.verbose if progress is None else bool(progress)
+        self.waveform_mode = normalize_waveform_mode(waveform_mode)
         # Build per-file metadata and attach CSR arrays.
         self.file_infos: list[FileInfo] = []
 
@@ -136,6 +138,7 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
                 header_cache_dir=self.header_cache_dir,
                 use_header_cache=self.use_header_cache,
                 include_centroids=True,
+                waveform_mode=self.waveform_mode,
             )
 
             picks = load_phase_pick_csr_npz(pick_path)

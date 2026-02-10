@@ -25,7 +25,7 @@ def _make_fb_file(*, segy_path: Path, fb_path: Path) -> None:
     np.save(fb_path, fb)
 
 
-def _run_e2e(*, out_dir: Path) -> tuple[Path, Path]:
+def _run_e2e(*, out_dir: Path, waveform_mode: str | None = None) -> tuple[Path, Path]:
     repo_root = _repo_root()
     cfg = repo_root / 'tests' / 'e2e' / 'config_train_blindtrace.yaml'
     if not cfg.is_file():
@@ -51,6 +51,9 @@ def _run_e2e(*, out_dir: Path) -> tuple[Path, Path]:
     cfg_data['paths']['phase_pick_files'] = [str(fb_path)]
     cfg_data['paths']['infer_segy_files'] = [str(segy_path)]
     cfg_data['paths']['infer_phase_pick_files'] = [str(fb_path)]
+    if waveform_mode is not None:
+        cfg_data.setdefault('dataset', {})
+        cfg_data['dataset']['waveform_mode'] = str(waveform_mode)
     cfg_data['paths']['out_dir'] = str(out_dir)
     cfg_tmp = out_dir / 'config_train_blindtrace.yaml'
     cfg_tmp.write_text(yaml.safe_dump(cfg_data, sort_keys=False))
@@ -66,6 +69,30 @@ def _run_e2e(*, out_dir: Path) -> tuple[Path, Path]:
 def test_e2e_train_blindtrace_one_epoch(tmp_path: Path) -> None:
     out_dir = tmp_path / '_blindtrace_out'
     png, ckpt = _run_e2e(out_dir=out_dir)
+    assert png.is_file()
+    assert png.stat().st_size > 0
+    assert ckpt.is_file()
+    assert ckpt.stat().st_size > 0
+    ckpt_dict = load_checkpoint(ckpt)
+    assert ckpt_dict['version'] == 1
+    assert ckpt_dict['pipeline'] == 'blindtrace'
+    assert isinstance(ckpt_dict['model_sig'], dict)
+    assert isinstance(ckpt_dict['model_state_dict'], dict)
+    assert ckpt_dict['epoch'] == 0
+    assert ckpt_dict['global_step'] > 0
+    model_sig = ckpt_dict['model_sig']
+    for key in ('backbone', 'pretrained', 'in_chans', 'out_chans'):
+        assert key in model_sig
+    assert model_sig['backbone'] == 'resnet18'
+    assert model_sig['pretrained'] is False
+    assert model_sig['in_chans'] == 1
+    assert model_sig['out_chans'] == 1
+
+
+@pytest.mark.e2e
+def test_e2e_train_blindtrace_one_epoch_mmap(tmp_path: Path) -> None:
+    out_dir = tmp_path / '_blindtrace_out_mmap'
+    png, ckpt = _run_e2e(out_dir=out_dir, waveform_mode='mmap')
     assert png.is_file()
     assert png.stat().st_size > 0
     assert ckpt.is_file()

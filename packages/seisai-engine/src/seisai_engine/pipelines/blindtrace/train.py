@@ -110,6 +110,11 @@ def main(argv: list[str] | None = None) -> None:
     progress = optional_bool(ds_cfg, 'progress', default=bool(verbose))
     primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
     primary_keys = validate_primary_keys(primary_keys_list)
+    waveform_mode = optional_str(ds_cfg, 'waveform_mode', 'eager').lower()
+    if waveform_mode not in ('eager', 'mmap'):
+        msg = 'dataset.waveform_mode must be "eager" or "mmap"'
+        raise ValueError(msg)
+    ds_cfg['waveform_mode'] = waveform_mode
 
     time_len = require_int(transform_cfg, 'time_len')
     per_trace_standardize = optional_bool(
@@ -207,6 +212,12 @@ def main(argv: list[str] | None = None) -> None:
     if infer_max_batches <= 0:
         msg = 'infer.max_batches must be positive'
         raise ValueError(msg)
+    if waveform_mode == 'mmap' and int(train_num_workers) > 0:
+        msg = 'dataset.waveform_mode="mmap" requires train.num_workers=0'
+        raise ValueError(msg)
+    if waveform_mode == 'mmap' and int(infer_num_workers) > 0:
+        msg = 'dataset.waveform_mode="mmap" requires infer.num_workers=0'
+        raise ValueError(msg)
 
     in_chans = 1 + int(bool(use_offset_ch)) + int(bool(use_time_ch))
     out_chans = 1
@@ -293,6 +304,7 @@ def main(argv: list[str] | None = None) -> None:
         progress=bool(progress),
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
+        waveform_mode=str(waveform_mode),
     )
 
     ds_infer_full = build_dataset(
@@ -308,6 +320,7 @@ def main(argv: list[str] | None = None) -> None:
         progress=bool(progress),
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
+        waveform_mode=str(waveform_mode),
     )
 
     model = build_model(

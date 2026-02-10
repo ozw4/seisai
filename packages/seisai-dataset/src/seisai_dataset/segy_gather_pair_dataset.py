@@ -8,7 +8,11 @@ import segyio
 from tqdm import tqdm
 
 from .builder.builder import BuildPlan
-from .file_info import PairFileInfo, build_file_info_dataclass
+from .file_info import (
+    PairFileInfo,
+    build_file_info_dataclass,
+    normalize_waveform_mode,
+)
 from .segy_gather_base import BaseRandomSegyDataset
 
 
@@ -32,6 +36,7 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
         sw_prob: float = 0.3,
         use_header_cache: bool = True,
         header_cache_dir: str | None = None,
+        waveform_mode: str = 'eager',
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
         verbose: bool = False,
@@ -51,6 +56,7 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
         super().__init__(transform, plan, max_trials=max_trials, verbose=verbose)
 
         self.progress = self.verbose if progress is None else bool(progress)
+        self.waveform_mode = normalize_waveform_mode(waveform_mode)
 
         self._init_header_config(
             ffid_byte=ffid_byte,
@@ -92,9 +98,14 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
                 header_cache_dir=self.header_cache_dir,
                 use_header_cache=self.use_header_cache,
                 include_centroids=True,
+                waveform_mode=self.waveform_mode,
             )
             target_obj = segyio.open(target_path, 'r', ignore_geometry=True)
-            target_mmap = target_obj.trace.raw[:]
+            if self.waveform_mode == 'mmap':
+                target_obj.mmap()
+                target_mmap = target_obj.trace.raw
+            else:
+                target_mmap = target_obj.trace.raw[:]
             target_n_samples = (
                 int(target_obj.samples.size) if target_obj.samples is not None else 0
             )

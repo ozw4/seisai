@@ -56,6 +56,7 @@ def build_pair_dataset(
         subset_traces=int(subset_traces),
         primary_keys=ds_cfg.primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
+        waveform_mode=str(ds_cfg.waveform_mode),
         verbose=bool(ds_cfg.verbose),
         progress=bool(ds_cfg.progress),
         max_trials=int(ds_cfg.max_trials),

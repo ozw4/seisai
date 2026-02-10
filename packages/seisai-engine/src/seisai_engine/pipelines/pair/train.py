@@ -112,6 +112,12 @@ def main(argv: list[str] | None = None) -> None:
         out_dir=str(out_dir_path),
     )
     dataset_cfg = typed.dataset
+    if dataset_cfg.waveform_mode == 'mmap' and int(common.train.train_num_workers) > 0:
+        msg = 'dataset.waveform_mode="mmap" requires train.num_workers=0'
+        raise ValueError(msg)
+    if dataset_cfg.waveform_mode == 'mmap' and int(common.infer.infer_num_workers) > 0:
+        msg = 'dataset.waveform_mode="mmap" requires infer.num_workers=0'
+        raise ValueError(msg)
 
     ds_train_full = build_pair_dataset(
         paths=paths_cfg,

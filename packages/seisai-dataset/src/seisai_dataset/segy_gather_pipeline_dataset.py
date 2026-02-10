@@ -20,7 +20,7 @@ from tqdm import tqdm
 from .builder.builder import (
     BuildPlan,
 )
-from .file_info import FileInfo, build_file_info_dataclass
+from .file_info import FileInfo, build_file_info_dataclass, normalize_waveform_mode
 from .gate_fblc import FirstBreakGate
 from .segy_gather_base import (
     BaseSegyGatherPipelineDataset,
@@ -56,6 +56,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
         sw_prob: float = 0.3,
         use_header_cache: bool = True,
         header_cache_dir: str | None = None,
+        waveform_mode: str = 'eager',
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
         verbose: bool = False,
@@ -102,6 +103,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
             gate_evaluator=gate_evaluator,
         )
         self.progress = self.verbose if progress is None else bool(progress)
+        self.waveform_mode = normalize_waveform_mode(waveform_mode)
         # ファイルごとのインデックス辞書等を構築
         self.file_infos: list[FileInfo] = []
 
@@ -131,6 +133,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                     header_cache_dir=self.header_cache_dir,
                     use_header_cache=self.use_header_cache,
                     include_centroids=True,  # or False
+                    waveform_mode=self.waveform_mode,
                 )
                 fb = np.full(int(info.n_traces), 1, dtype=np.int32)
                 info.fb = fb
@@ -157,6 +160,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                     header_cache_dir=self.header_cache_dir,
                     use_header_cache=self.use_header_cache,
                     include_centroids=True,  # or False
+                    waveform_mode=self.waveform_mode,
                 )
                 fb = np.load(fb_path)
                 info.fb = fb

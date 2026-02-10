@@ -79,6 +79,7 @@ def build_dataset(
     progress: bool,
     max_trials: int,
     use_header_cache: bool,
+    waveform_mode: str,
 ) -> SegyGatherPipelineDataset:
     if fb_files is None:
         validate_files_exist(list(segy_files))
@@ -93,6 +94,7 @@ def build_dataset(
         subset_traces=int(subset_traces),
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
+        waveform_mode=str(waveform_mode),
         verbose=bool(verbose),
         progress=bool(progress),
         max_trials=int(max_trials),

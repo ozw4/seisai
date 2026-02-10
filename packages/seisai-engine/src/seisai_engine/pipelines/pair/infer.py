@@ -106,6 +106,10 @@ def main(argv: list[str] | None = None) -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     seed_all(cfg.infer.seed)
 
+    if cfg.dataset.waveform_mode == 'mmap' and int(cfg.infer.num_workers) > 0:
+        msg = 'dataset.waveform_mode="mmap" requires infer.num_workers=0'
+        raise ValueError(msg)
+
     ckpt = load_checkpoint(ckpt_path)
     if ckpt['pipeline'] != 'pair':
         msg = 'checkpoint pipeline must be "pair"'

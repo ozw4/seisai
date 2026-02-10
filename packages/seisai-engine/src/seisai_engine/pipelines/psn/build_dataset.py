@@ -127,6 +127,10 @@ def build_dataset(cfg: dict, *, transform: ViewCompose) -> SegyGatherPhasePipeli
     secondary_key_fixed = optional_bool(ds_cfg, 'secondary_key_fixed', default=False)
     primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
     primary_keys = validate_primary_keys(primary_keys_list)
+    waveform_mode = optional_str(ds_cfg, 'waveform_mode', 'eager').lower()
+    if waveform_mode not in ('eager', 'mmap'):
+        msg = 'dataset.waveform_mode must be "eager" or "mmap"'
+        raise ValueError(msg)
 
     subset_traces = require_int(train_cfg, 'subset_traces')
     psn_sigma = optional_float(train_cfg, 'psn_sigma', 1.5)
@@ -148,6 +152,7 @@ def build_dataset(cfg: dict, *, transform: ViewCompose) -> SegyGatherPhasePipeli
         use_header_cache=bool(use_header_cache),
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
+        waveform_mode=str(waveform_mode),
         verbose=bool(verbose),
         progress=bool(progress),
         max_trials=int(max_trials),

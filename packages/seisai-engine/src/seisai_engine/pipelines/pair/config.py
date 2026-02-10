@@ -62,6 +62,7 @@ class PairDatasetCfg:
     progress: bool
     primary_keys: tuple[str, ...]
     secondary_key_fixed: bool
+    waveform_mode: str
 
 
 @dataclass(frozen=True)
@@ -181,6 +182,10 @@ def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
     primary_keys_list = require_list_str(ds_cfg, 'primary_keys')
     primary_keys = validate_primary_keys(primary_keys_list)
     secondary_key_fixed = require_bool(ds_cfg, 'secondary_key_fixed')
+    waveform_mode = optional_str(ds_cfg, 'waveform_mode', 'eager').lower()
+    if waveform_mode not in ('eager', 'mmap'):
+        msg = 'dataset.waveform_mode must be "eager" or "mmap"'
+        raise ValueError(msg)
     return PairDatasetCfg(
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
@@ -188,6 +193,7 @@ def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
         progress=bool(progress),
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
+        waveform_mode=str(waveform_mode),
     )
 
 

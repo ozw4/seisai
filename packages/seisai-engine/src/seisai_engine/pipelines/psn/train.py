@@ -181,6 +181,17 @@ def main(argv: list[str] | None = None) -> None:
     train_secondary_key_fixed = optional_bool(
         ds_cfg, 'secondary_key_fixed', default=False
     )
+    waveform_mode = optional_str(ds_cfg, 'waveform_mode', 'eager').lower()
+    if waveform_mode not in ('eager', 'mmap'):
+        msg = 'dataset.waveform_mode must be "eager" or "mmap"'
+        raise ValueError(msg)
+    ds_cfg['waveform_mode'] = waveform_mode
+    if waveform_mode == 'mmap' and int(common.train.train_num_workers) > 0:
+        msg = 'dataset.waveform_mode="mmap" requires train.num_workers=0'
+        raise ValueError(msg)
+    if waveform_mode == 'mmap' and int(common.infer.infer_num_workers) > 0:
+        msg = 'dataset.waveform_mode="mmap" requires infer.num_workers=0'
+        raise ValueError(msg)
 
     ds_train_full = _build_dataset_for_subset(
         cfg,
