@@ -33,6 +33,7 @@ dataset:
   verbose: true
   primary_keys: [ffid]
   secondary_key_fixed: false
+  standardize_from_input: true
 
 train:
   device: auto # auto | cpu | cuda | cuda:N

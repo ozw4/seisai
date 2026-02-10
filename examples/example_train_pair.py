@@ -1,3 +1,4 @@
+# %%
 """Thin entrypoint for paired SEG-Y training."""
 
 from __future__ import annotations
