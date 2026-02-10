@@ -8,6 +8,13 @@ PyTorch で扱いやすい **SEG-Y gather データセット群 + 学習/推論�
 
 動作確認は主に Python 3.10/3.11 (CI も 3.10/3.11) です。各パッケージの `requires-python` は `>=3.10`。
 
+## リポジトリ構成
+
+- `packages/` : 各機能を分割した Python パッケージ群（editable install 前提）
+- `examples/` : 実行スクリプト（PSN / pair / blindtrace は YAML 駆動。FBP は単体スクリプト）
+- `docs/` : 仕様・メモ・テスト補助ドキュメント
+- `tests/` : ルートの e2e テスト（同梱サンプル `tests/data` を使用）
+
 ## パッケージ構成
 
 | package | import | 役割 |
