@@ -4,10 +4,14 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import torch
+from seisai_utils.config import (
+    optional_value,
+    require_float,
+    require_int,
+    require_value,
+)
 
-from seisai_utils.config import optional_value, require_float, require_int, require_value
-
-from seisai_engine.scheduler import WarmupCosineScheduler
+from seisai_engine.schedulers.scheduler import WarmupCosineScheduler
 
 Interval = Literal['step', 'epoch']
 
@@ -32,7 +36,6 @@ def load_lr_scheduler_cfg(cfg: dict) -> dict | None:
 
     Missing/None => no scheduler.
     """
-
     if 'scheduler' not in cfg:
         return None
     sched = cfg['scheduler']
@@ -78,8 +81,8 @@ def build_lr_scheduler(
         Number of optimizer steps per epoch.
     epochs:
         Total epochs.
-    """
 
+    """
     if steps_per_epoch <= 0:
         msg = 'steps_per_epoch must be positive'
         raise ValueError(msg)

@@ -4,7 +4,9 @@ import torch
 
 
 class WarmupCosineScheduler(torch.optim.lr_scheduler._LRScheduler):
-    def __init__(self, optimizer, warmup_steps, total_steps, eta_min=0, last_epoch=-1) -> None:
+    def __init__(
+        self, optimizer, warmup_steps, total_steps, eta_min=0, last_epoch=-1
+    ) -> None:
         self.warmup_steps = warmup_steps
         self.total_steps = total_steps
         self.eta_min = eta_min
