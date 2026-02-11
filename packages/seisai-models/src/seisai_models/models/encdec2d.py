@@ -1,6 +1,7 @@
 import timm
 import torch
 import torch.nn.functional as F
+from seisai_models.nn.anti_alias import BlurPool2d
 from seisai_models.nn.decoder import UnetDecoder2d
 from seisai_models.nn.heads import SegmentationHead2d
 from seisai_models.ops.stride_pad import override_stage_strides
@@ -31,6 +32,9 @@ class EncDec2D(nn.Module):
         pre_stage_kernels: tuple[int, ...] | None = None,
         pre_stage_channels: tuple[int, ...] | None = None,
         pre_stage_use_bn: bool = True,
+        pre_stage_antialias: bool = False,
+        pre_stage_aa_taps: int = 3,
+        pre_stage_aa_pad_mode: str = 'zeros',
         # decoder オプション
         decoder_channels: tuple = (256, 128, 64, 32),
         decoder_scales: tuple = (2, 2, 2, 2),
@@ -41,6 +45,11 @@ class EncDec2D(nn.Module):
         super().__init__()
         self.in_chans = in_chans
         self.out_chans = out_chans
+        if pre_stage_antialias and pre_stage_aa_pad_mode != 'zeros':
+            raise ValueError(
+                f'Unsupported pre_stage_aa_pad_mode: {pre_stage_aa_pad_mode}. '
+                'Use "zeros".'
+            )
         # 前段のダウンサンプル
         self.pre_down = nn.ModuleList()
         self.pre_out_channels = []  # ★追加：各pre段の出力chリスト
@@ -51,9 +60,44 @@ class EncDec2D(nn.Module):
         for i in range(pre_stages):
             k = kernels[i] if i < len(kernels) else 3
             s = strides[i] if i < len(strides) else (1, 1)
+            stride_h = None
+            stride_w = None
+            if isinstance(s, int):
+                stride_h, stride_w = s, s
+            elif isinstance(s, (tuple, list)) and len(s) == 2:
+                stride_h, stride_w = s
+            if stride_h is not None and stride_w is not None:
+                stride_h = int(stride_h)
+                stride_w = int(stride_w)
+                s_norm = (stride_h, stride_w)
+            else:
+                s_norm = s
             p = k // 2
             c_out = channels[i] if i < len(channels) else c_in
-            block = [nn.Conv2d(c_in, c_out, k, stride=s, padding=p, bias=False)]
+            block = []
+            if pre_stage_antialias:
+                if stride_h is None or stride_w is None:
+                    raise ValueError(f'Invalid pre_stage stride: {s}')
+                if stride_w > 1:
+                    if stride_h != 1:
+                        raise ValueError(
+                            f'pre_stage stride_h must be 1, got {stride_h}'
+                        )
+                    block.append(
+                        BlurPool2d(
+                            taps=pre_stage_aa_taps,
+                            stride_w=stride_w,
+                            pad_mode=pre_stage_aa_pad_mode,
+                        )
+                    )
+                    conv_stride = (1, 1)
+                else:
+                    conv_stride = s_norm
+            else:
+                conv_stride = s_norm
+            block.append(
+                nn.Conv2d(c_in, c_out, k, stride=conv_stride, padding=p, bias=False)
+            )
             if pre_stage_use_bn:
                 block.append(nn.BatchNorm2d(c_out))
             block.append(nn.ReLU(inplace=True))
