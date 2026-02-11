@@ -185,6 +185,14 @@ class MLflowTracker(BaseTracker):
             self._mlflow.log_artifact(str(path), artifact_path=str(artifact_path))
         return None
 
+    def log_artifacts(self, artifacts: dict[str, Path]) -> None:
+        safe_artifacts = _validate_artifacts(artifacts)
+        if not safe_artifacts:
+            return None
+        for key, path in safe_artifacts.items():
+            self._mlflow.log_artifact(str(path), artifact_path=str(key))
+        return None
+
     def end_run(self, *, status: str) -> None:
         if not isinstance(status, str) or not status:
             msg = 'status must be non-empty str'

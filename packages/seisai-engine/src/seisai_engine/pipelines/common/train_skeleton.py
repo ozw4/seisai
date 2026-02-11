@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from typing import Any
 
 import torch
@@ -93,6 +94,46 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
     scheduler_cfg = load_lr_scheduler_cfg(spec.cfg)
     lr_sched_spec = None
 
+    def _extract_time_len(cfg: dict) -> int | None:
+        if not isinstance(cfg, dict):
+            return None
+        for section_key, value_key in (
+            ('transform', 'time_len'),
+            ('train', 'time_len'),
+        ):
+            section = cfg.get(section_key)
+            if not isinstance(section, dict):
+                continue
+            val = section.get(value_key)
+            if isinstance(val, bool):
+                continue
+            if isinstance(val, int):
+                return int(val)
+            if isinstance(val, float) and val.is_integer():
+                return int(val)
+        return None
+
+    def _resolve_device_index(device: torch.device) -> int | None:
+        if not isinstance(device, torch.device):
+            return None
+        if device.type != 'cuda':
+            return None
+        if not torch.cuda.is_available():
+            return None
+        idx = device.index
+        if idx is None:
+            idx = torch.cuda.current_device()
+        return int(idx)
+
+    wall_start = time.perf_counter()
+    total_train_steps = 0
+    total_train_samples = 0
+    best_epoch: int | None = None
+
+    device_index = _resolve_device_index(spec.device)
+    if device_index is not None:
+        torch.cuda.reset_peak_memory_stats(device_index)
+
     best_infer_loss: float | None = None
     global_step = 0
     tracking_enabled = False
@@ -105,6 +146,8 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
         tracking_enabled = tracking_cfg.enabled
         run_started = False
         tracker = build_tracker(tracking_cfg)
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+        run_name = f'{timestamp}__{tracking_cfg.exp_name}__s{int(spec.seed_train)}'
 
         ema_cfg_obj = None
         ema_controller = None
@@ -365,8 +408,6 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 )
 
             experiment = f'{tracking_cfg.experiment_prefix}/{spec.pipeline}'
-            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
-            run_name = f'{timestamp}__{tracking_cfg.exp_name}__s{int(spec.seed_train)}'
 
             artifacts = {
                 'config.resolved.yaml': config_resolved_path,
@@ -458,6 +499,8 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 f'samples={int(stats["samples"])}'
             )
             global_step += int(stats['steps'])
+            total_train_steps += int(stats['steps'])
+            total_train_samples += int(stats['samples'])
 
             set_dataset_rng(spec.ds_infer_full, spec.seed_infer)
 
@@ -513,6 +556,8 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
 
             ckpt_path = ckpt_dir / 'best.pt'
             did_update = best_infer_loss is None or infer_loss < best_infer_loss
+            if did_update:
+                best_epoch = int(epoch)
             scheduler_state_dict = None
             scheduler_sig = None
             if lr_sched_spec is not None:
@@ -576,6 +621,71 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
             tracker.end_run(status='FAILED')
         raise
     else:
+        wall_time_sec = time.perf_counter() - wall_start
+        if device_index is None:
+            num_gpus = 0
+            gpu_name = 'cpu'
+            peak_mem_gb = 0.0
+        else:
+            num_gpus = int(torch.cuda.device_count())
+            gpu_name = torch.cuda.get_device_name(device_index)
+            peak_mem_gb = float(
+                torch.cuda.max_memory_allocated(device_index) / (1024**3)
+            )
+        gpu_hours = float(wall_time_sec) / 3600.0 * float(num_gpus)
+        if wall_time_sec > 0:
+            train_samples_per_sec = float(total_train_samples) / float(wall_time_sec)
+        else:
+            train_samples_per_sec = 0.0
+
+        time_len = _extract_time_len(spec.cfg)
+        run_summary = {
+            'meta': {
+                'pipeline': spec.pipeline,
+                'seed_train': int(spec.seed_train),
+                'exp_name': tracking_cfg.exp_name,
+                'run_name': run_name,
+                'gpu_name': gpu_name,
+                'num_gpus': int(num_gpus),
+            },
+            'budget': {
+                'time_len': time_len,
+                'epochs': int(spec.epochs),
+                'samples_per_epoch': int(spec.samples_per_epoch),
+                'train_batch_size': int(spec.train_batch_size),
+                'infer_batch_size': int(spec.infer_batch_size),
+                'infer_max_batches': int(spec.infer_max_batches),
+                'use_amp_train': bool(spec.use_amp_train),
+            },
+            'cost': {
+                'wall_time_sec': float(wall_time_sec),
+                'gpu_hours': float(gpu_hours),
+                'total_train_steps': int(total_train_steps),
+                'total_train_samples': int(total_train_samples),
+                'train_samples_per_sec': float(train_samples_per_sec),
+                'peak_mem_gb': float(peak_mem_gb),
+            },
+            'results': {
+                'best_infer_loss': (
+                    None if best_infer_loss is None else float(best_infer_loss)
+                ),
+                'best_epoch': best_epoch,
+            },
+        }
+
+        summary_path = Path(spec.out_dir) / 'run_summary.json'
+        summary_path.write_text(
+            json.dumps(
+                run_summary,
+                sort_keys=True,
+                separators=(',', ':'),
+                ensure_ascii=True,
+            )
+            + '\n',
+            encoding='utf-8',
+        )
+        if tracking_enabled and run_started:
+            tracker.log_artifacts({'run_summary.json': summary_path})
         if tracking_enabled and run_started:
             tracker.end_run(status='FINISHED')
     finally:

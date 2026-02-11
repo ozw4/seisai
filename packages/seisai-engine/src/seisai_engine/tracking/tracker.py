@@ -30,6 +30,9 @@ class BaseTracker:
     ) -> None:
         raise NotImplementedError
 
+    def log_artifacts(self, artifacts: dict[str, Path]) -> None:
+        raise NotImplementedError
+
     def end_run(self, *, status: str) -> None:
         raise NotImplementedError
 
@@ -57,6 +60,9 @@ class NoOpTracker(BaseTracker):
         vis_epoch_dir: Path | None,
         vis_max_files: int,
     ) -> None:
+        return None
+
+    def log_artifacts(self, artifacts: dict[str, Path]) -> None:
         return None
 
     def end_run(self, *, status: str) -> None:

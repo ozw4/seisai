@@ -233,27 +233,24 @@ class BaseRandomSegyDataset(Dataset, abc.ABC):
 
     def _init_sampler_config(
         self,
-        config: TraceSubsetSamplerConfig | None = None,
-        **kwargs,
+        *,
+        primary_keys: tuple[str, ...] | None,
+        primary_key_weights: tuple[float, ...] | None,
+        use_superwindow: bool,
+        sw_halfspan: int,
+        sw_prob: float,
+        secondary_key_fixed: bool,
+        subset_traces: int,
     ) -> TraceSubsetSampler:
-        """Initialize and store sampler config, returning a TraceSubsetSampler.
-
-        Accepts either a TraceSubsetSamplerConfig instance or keyword arguments
-        compatible with TraceSubsetSamplerConfig for backwards compatibility.
-        """
-        if config is None:
-            config = TraceSubsetSamplerConfig(**kwargs)
-
-        self.primary_keys = tuple(config.primary_keys) if config.primary_keys else None
+        self.primary_keys = tuple(primary_keys) if primary_keys else None
         self.primary_key_weights = (
-            tuple(config.primary_key_weights) if config.primary_key_weights else None
+            tuple(primary_key_weights) if primary_key_weights else None
         )
-        self.use_superwindow = bool(config.use_superwindow)
-        self.sw_halfspan = int(config.sw_halfspan)
-        self.sw_prob = float(config.sw_prob)
-        self.secondary_key_fixed = bool(config.secondary_key_fixed)
-        self.subset_traces = int(config.subset_traces)
-
+        self.use_superwindow = bool(use_superwindow)
+        self.sw_halfspan = int(sw_halfspan)
+        self.sw_prob = float(sw_prob)
+        self.secondary_key_fixed = bool(secondary_key_fixed)
+        self.subset_traces = int(subset_traces)
         return TraceSubsetSampler(
             TraceSubsetSamplerConfig(
                 primary_keys=self.primary_keys,
@@ -360,16 +357,15 @@ class BaseSegyGatherPipelineDataset(BaseRandomSegyDataset, abc.ABC):
             chno_byte=chno_byte,
             cmp_byte=cmp_byte,
             use_header_cache=use_header_cache,
-        sampler_cfg = TraceSubsetSamplerConfig(
+            header_cache_dir=header_cache_dir,
+        )
+
+        self.sampler = self._init_sampler_config(
             primary_keys=primary_keys,
             primary_key_weights=primary_key_weights,
             use_superwindow=use_superwindow,
             sw_halfspan=sw_halfspan,
             sw_prob=sw_prob,
-            secondary_key_fixed=secondary_key_fixed,
-            subset_traces=int(subset_traces),
-        )
-        self.sampler = self._init_sampler_config(sampler_cfg)
             secondary_key_fixed=secondary_key_fixed,
             subset_traces=subset_traces,
         )
