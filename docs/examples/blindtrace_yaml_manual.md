@@ -76,9 +76,24 @@ input:
 train:
   device: auto # auto | cpu | cuda | cuda:N
   seed: 42
-  loss_kind: shift_robust_mse
-  shift_max: 5
   loss_scope: masked_only # masked_only | all
+  losses:
+    - kind: shift_robust_mse
+      weight: 1.0
+      scope: masked_only
+      params:
+        shift_max: 5
+    - kind: fx_mag_mse
+      weight: 0.05
+      params:
+        use_log: true
+        eps: 1.0e-6
+        f_lo: 1
+        f_hi: null
+    - kind: mse
+      weight: 0.02
+      scope: all
+      params: {}
   time_len: 5024
   batch_size: 8
   num_workers: 0
@@ -89,6 +104,15 @@ train:
   epochs: 10
   samples_per_epoch: 256
   subset_traces: 128
+
+eval:
+  loss_scope: masked_only
+  losses:
+    - kind: shift_robust_mse
+      weight: 1.0
+      scope: masked_only
+      params:
+        shift_max: 5
 
 
 # ema:
@@ -228,7 +252,7 @@ FB pick を使ったゲート。`phase_pick_files` が未指定の場合は **�
 
 補足:
 - マスクは **トレース単位**（width=1）で生成される。
-- `loss_scope=masked_only` の場合、`round(mask.ratio * subset_traces) >= 1` が **学習/推論ともに必須**。
+- `train.loss_scope` または `eval.loss_scope` が `masked_only` の場合、該当する `subset_traces` について `round(mask.ratio * subset_traces) >= 1` が必須。
 
 ---
 
@@ -268,14 +292,44 @@ FB pick を使ったゲート。`phase_pick_files` が未指定の場合は **�
 ### 9.2 BlindTrace 固有
 | key | 型 | 必須 | 意味 / 制約 |
 |---|---:|:---:|---|
-| `train.loss_kind` | `str` | Yes | `l1` / `mse` / `shift_mse` / `shift_robust_mse` のみ。 |
-| `train.shift_max` | `int` | No | シフト損失の最大シフト量（W 方向）。`shift_*` のときのみ使用。`0 <= shift_max < W` を推奨。 |
-| `train.loss_scope` | `str` | No | `masked_only` / `all`。`masked_only` はマスクされたトレースのみで損失を計算。 |
+| `train.losses` | `list[dict]` | Yes | 損失のリスト。`kind`/`weight`/`scope`/`params` を持つ。`kind`: `l1` / `mse` / `huber` / `shift_mse` / `shift_robust_mse` / `fx_mag_mse`。 |
+| `train.loss_scope` | `str` | No | `masked_only` / `all`。各 loss で `scope` 未指定時のデフォルト。 |
+| `train.loss_kind` | `str` | No | **legacy**。`train.losses` 未指定時のみ有効。`l1` / `mse` / `shift_mse` / `shift_robust_mse`。 |
+| `train.shift_max` | `int` | No | **legacy**。`shift_*` のときのみ使用。`0 <= shift_max < W` 推奨。 |
+| `train.fx_weight` | `float` | No | **legacy**。`>0` のとき `fx_mag_mse` を追加。 |
+| `train.fx_use_log` | `bool` | No | **legacy**。`fx_mag_mse` の対数スケール有無。 |
+| `train.fx_eps` | `float` | No | **legacy**。`fx_mag_mse` の epsilon（`>0`）。 |
+| `train.fx_f_lo` | `int` | No | **legacy**。`fx_mag_mse` の下限周波数 bin。 |
+| `train.fx_f_hi` | `int` / `null` | No | **legacy**。`fx_mag_mse` の上限周波数 bin。 |
 | `train.time_len` | `int` | No | **現行実装では未使用**（`transform.time_len` が有効）。 |
+
+補足:
+- `train.losses` がある場合は **優先**され、legacy キーは無視される。
 
 ---
 
-## 10. `infer` セクション（評価/可視化ループ）
+## 10. `eval` セクション（評価用損失）
+
+`eval` セクションは **任意**。未指定の場合、`train` の損失設定が評価にも使われる。
+
+| key | 型 | 必須 | 意味 / 制約 |
+|---|---:|:---:|---|
+| `eval.losses` | `list[dict]` | No | 評価用損失リスト。指定時は評価損失を固定できる。 |
+| `eval.loss_scope` | `str` | No | `masked_only` / `all`。`eval.losses` の `scope` 未指定時のデフォルト。 |
+| `eval.loss_kind` | `str` | No | **legacy**。`eval.losses` 未指定時のみ有効。 |
+| `eval.shift_max` | `int` | No | **legacy**。`shift_*` のときのみ使用。 |
+| `eval.fx_weight` | `float` | No | **legacy**。`>0` のとき `fx_mag_mse` を追加。 |
+| `eval.fx_use_log` | `bool` | No | **legacy**。 |
+| `eval.fx_eps` | `float` | No | **legacy**。 |
+| `eval.fx_f_lo` | `int` | No | **legacy**。 |
+| `eval.fx_f_hi` | `int` / `null` | No | **legacy**。 |
+
+補足:
+- `eval.losses` がある場合は **優先**され、legacy キーは無視される。
+
+---
+
+## 11. `infer` セクション（評価/可視化ループ）
 
 `infer` セクションは **必須**。
 
@@ -289,7 +343,7 @@ FB pick を使ったゲート。`phase_pick_files` が未指定の場合は **�
 
 ---
 
-## 11. `tile` セクション（H 方向タイル推論）
+## 12. `tile` セクション（H 方向タイル推論）
 
 BlindTrace 推論は `infer_batch_tiled_h` を使って **H 方向タイル**で処理する。
 
@@ -307,7 +361,7 @@ BlindTrace 推論は `infer_batch_tiled_h` を使って **H 方向タイル**で
 
 ---
 
-## 12. `vis` セクション（triptych 可視化）
+## 13. `vis` セクション（triptych 可視化）
 
 | key | 型 | 必須 | 意味 |
 |---|---:|:---:|---|
@@ -327,7 +381,7 @@ BlindTrace 推論は `infer_batch_tiled_h` を使って **H 方向タイル**で
 
 ---
 
-## 13. `model` セクション
+## 14. `model` セクション
 
 | key | 型 | 必須 | 意味 / 制約 |
 |---|---:|:---:|---|

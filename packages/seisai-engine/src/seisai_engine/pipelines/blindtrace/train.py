@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import warnings
 from pathlib import Path
+from typing import Any
 
 import torch
 from seisai_utils.config import (
@@ -58,6 +59,87 @@ def _validate_mask_ratio_for_subset(
             f'(ratio={float(mask_ratio)}, subset_traces={int(subset_traces)})'
         )
         raise ValueError(msg)
+
+
+def _build_loss_specs_from_cfg(
+    cfg: dict[str, Any], *, label_prefix: str, default_scope: str
+) -> list[composite.LossSpec]:
+    if not isinstance(cfg, dict):
+        raise TypeError(f'{label_prefix} must be dict')
+
+    loss_scope = optional_str(cfg, 'loss_scope', default_scope)
+    losses = cfg.get('losses', None)
+    if losses is not None:
+        return composite.parse_loss_specs(
+            losses,
+            default_scope=loss_scope,
+            label=f'{label_prefix}.losses',
+            scope_label=f'{label_prefix}.loss_scope',
+        )
+
+    loss_kind = optional_str(cfg, 'loss_kind', 'l1').lower()
+    if loss_kind not in ('l1', 'mse', 'shift_mse', 'shift_robust_mse'):
+        msg = (
+            f'{label_prefix}.loss_kind must be "l1", "mse", "shift_mse", '
+            'or "shift_robust_mse"'
+        )
+        raise ValueError(msg)
+
+    loss_items: list[dict[str, Any]] = []
+    loss_params: dict[str, Any] = {}
+    if loss_kind in ('shift_mse', 'shift_robust_mse'):
+        shift_max = optional_int(cfg, 'shift_max', 8)
+        loss_params = {'shift_max': int(shift_max)}
+
+    loss_items.append(
+        {
+            'kind': loss_kind,
+            'weight': 1.0,
+            'scope': loss_scope,
+            'params': loss_params,
+        }
+    )
+
+    fx_weight = optional_float(cfg, 'fx_weight', 0.0)
+    if fx_weight < 0.0:
+        raise ValueError(f'{label_prefix}.fx_weight must be >= 0')
+
+    if fx_weight > 0.0:
+        fx_use_log = optional_bool(cfg, 'fx_use_log', default=True)
+        fx_eps = optional_float(cfg, 'fx_eps', 1.0e-6)
+        fx_f_lo = optional_int(cfg, 'fx_f_lo', 0)
+        fx_f_hi_raw = cfg.get('fx_f_hi', None)
+        if fx_f_hi_raw is None:
+            fx_f_hi = None
+        else:
+            if isinstance(fx_f_hi_raw, bool) or not isinstance(
+                fx_f_hi_raw, (int, float)
+            ):
+                raise TypeError(f'{label_prefix}.fx_f_hi must be int or null')
+            if isinstance(fx_f_hi_raw, float) and not fx_f_hi_raw.is_integer():
+                raise ValueError(f'{label_prefix}.fx_f_hi must be int or null')
+            fx_f_hi = int(fx_f_hi_raw)
+
+        loss_items.append(
+            {
+                'kind': 'fx_mag_mse',
+                'weight': float(fx_weight),
+                'scope': loss_scope,
+                'params': {
+                    'use_log': bool(fx_use_log),
+                    'eps': float(fx_eps),
+                    'f_lo': int(fx_f_lo),
+                    'f_hi': fx_f_hi,
+                },
+            }
+        )
+
+    return composite.parse_loss_specs(
+        loss_items,
+        default_scope=loss_scope,
+        label=f'{label_prefix}.losses',
+        scope_label=f'{label_prefix}.loss_scope',
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -136,9 +218,9 @@ def main(argv: list[str] | None = None) -> None:
     use_time_ch = optional_bool(input_cfg, 'use_time_ch', default=False)
 
     seed_train = optional_int(train_cfg, 'seed', 42)
-    loss_scope = optional_str(train_cfg, 'loss_scope', 'masked_only')
-    loss_specs = composite.parse_loss_specs(
-        train_cfg.get('losses'), default_scope=loss_scope
+    train_loss_scope = optional_str(train_cfg, 'loss_scope', 'masked_only')
+    loss_specs_train = _build_loss_specs_from_cfg(
+        train_cfg, label_prefix='train', default_scope=train_loss_scope
     )
     train_batch_size = require_int(train_cfg, 'batch_size')
     train_num_workers = optional_int(train_cfg, 'num_workers', 0)
@@ -192,10 +274,21 @@ def main(argv: list[str] | None = None) -> None:
         msg = 'ckpt.mode must be "min"'
         raise ValueError(msg)
 
-    if any(spec.scope == 'masked_only' for spec in loss_specs):
+    eval_cfg = cfg.get('eval')
+    if eval_cfg is None:
+        loss_specs_eval = loss_specs_train
+    else:
+        if not isinstance(eval_cfg, dict):
+            raise TypeError('eval must be dict')
+        loss_specs_eval = _build_loss_specs_from_cfg(
+            eval_cfg, label_prefix='eval', default_scope=train_loss_scope
+        )
+
+    if any(spec.scope == 'masked_only' for spec in loss_specs_train):
         _validate_mask_ratio_for_subset(
             mask_ratio=mask_ratio, subset_traces=train_subset_traces, label='train'
         )
+    if any(spec.scope == 'masked_only' for spec in loss_specs_eval):
         _validate_mask_ratio_for_subset(
             mask_ratio=mask_ratio, subset_traces=infer_subset_traces, label='infer'
         )
@@ -282,7 +375,8 @@ def main(argv: list[str] | None = None) -> None:
             apply_on=apply_on, min_pick_ratio=min_pick_ratio, verbose=bool(verbose)
         )
 
-    criterion = composite.build_weighted_criterion(loss_specs)
+    criterion_train = composite.build_weighted_criterion(loss_specs_train)
+    criterion_eval = composite.build_weighted_criterion(loss_specs_eval)
 
     ds_train_full = build_dataset(
         segy_files=segy_files,
@@ -350,17 +444,17 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     def infer_epoch_fn(model, loader, device, vis_epoch_dir, vis_n, max_batches):
-        return (run_infer_epoch(
-                model=model,
-                loader=loader,
-                device=device,
-                criterion=criterion,
-                tiled_cfg=tiled_cfg,
-                vis_cfg=triptych_cfg,
-                vis_out_dir=str(vis_epoch_dir),
-                vis_n=vis_n,
-                max_batches=max_batches,
-            ))
+        return run_infer_epoch(
+            model=model,
+            loader=loader,
+            device=device,
+            criterion=criterion_eval,
+            tiled_cfg=tiled_cfg,
+            vis_cfg=triptych_cfg,
+            vis_out_dir=str(vis_epoch_dir),
+            vis_n=vis_n,
+            max_batches=max_batches,
+        )
 
     spec = TrainSkeletonSpec(
         pipeline='blindtrace',
@@ -371,7 +465,7 @@ def main(argv: list[str] | None = None) -> None:
         model_sig=model_sig,
         model=model,
         optimizer=optimizer,
-        criterion=criterion,
+        criterion=criterion_train,
         ds_train_full=ds_train_full,
         ds_infer_full=ds_infer_full,
         device=device,

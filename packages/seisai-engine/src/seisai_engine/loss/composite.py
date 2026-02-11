@@ -213,37 +213,43 @@ def build_loss_term(
     raise ValueError(msg)
 
 
-def parse_loss_specs(losses: Any, *, default_scope: str) -> list[LossSpec]:
+def parse_loss_specs(
+    losses: Any,
+    *,
+    default_scope: str,
+    label: str = 'train.losses',
+    scope_label: str = 'train.loss_scope',
+) -> list[LossSpec]:
     if losses is None:
-        raise ValueError('train.losses is required')
+        raise ValueError(f'{label} is required')
     if not isinstance(losses, list):
-        raise TypeError('train.losses must be list[dict]')
+        raise TypeError(f'{label} must be list[dict]')
     if len(losses) == 0:
-        raise ValueError('train.losses must be non-empty')
+        raise ValueError(f'{label} must be non-empty')
 
-    default_scope_norm = _normalize_scope(default_scope, 'train.loss_scope')
+    default_scope_norm = _normalize_scope(default_scope, scope_label)
     specs: list[LossSpec] = []
 
     for i, item in enumerate(losses):
-        label = f'losses[{i}]'
+        item_label = f'{label}[{i}]'
         if not isinstance(item, dict):
-            raise TypeError(f'{label} must be dict')
+            raise TypeError(f'{item_label} must be dict')
 
         if 'kind' not in item:
-            raise ValueError(f'{label}.kind is required')
+            raise ValueError(f'{item_label}.kind is required')
         if not isinstance(item['kind'], str):
-            raise TypeError(f'{label}.kind must be str')
+            raise TypeError(f'{item_label}.kind must be str')
         kind = item['kind'].lower()
 
         if 'weight' not in item:
-            raise ValueError(f'{label}.weight is required')
+            raise ValueError(f'{item_label}.weight is required')
         weight = item['weight']
         if isinstance(weight, bool) or not isinstance(weight, (int, float)):
-            raise TypeError(f'{label}.weight must be float')
+            raise TypeError(f'{item_label}.weight must be float')
         weight_f = float(weight)
 
         if 'scope' in item and item['scope'] is not None:
-            scope = _normalize_scope(item['scope'], f'{label}.scope')
+            scope = _normalize_scope(item['scope'], f'{item_label}.scope')
         else:
             scope = default_scope_norm
 
@@ -251,7 +257,7 @@ def parse_loss_specs(losses: Any, *, default_scope: str) -> list[LossSpec]:
         if params_raw is None:
             params = {}
         elif not isinstance(params_raw, dict):
-            raise TypeError(f'{label}.params must be dict')
+            raise TypeError(f'{item_label}.params must be dict')
         else:
             params = dict(params_raw)
 
