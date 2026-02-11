@@ -41,6 +41,9 @@ class PsnModelCfg:
     pre_stage_kernels: tuple[int, ...] | None
     pre_stage_channels: tuple[int, ...] | None
     pre_stage_use_bn: bool
+    pre_stage_antialias: bool
+    pre_stage_aa_taps: int
+    pre_stage_aa_pad_mode: str
     decoder_channels: tuple[int, ...]
     decoder_scales: tuple[int, ...]
     upsample_mode: str
