@@ -18,6 +18,9 @@ _DEFAULTS: dict[str, Any] = {
     'pre_stage_kernels': None,
     'pre_stage_channels': None,
     'pre_stage_use_bn': True,
+    'pre_stage_antialias': False,
+    'pre_stage_aa_taps': 3,
+    'pre_stage_aa_pad_mode': 'zeros',
     'decoder_channels': (256, 128, 64, 32),
     'decoder_scales': (2, 2, 2, 2),
     'upsample_mode': 'bilinear',
@@ -253,6 +256,31 @@ def build_encdec2d_kwargs(
         model_cfg, 'pre_stage_use_bn', default=bool(pre_stage_use_bn_default)
     )
 
+    pre_stage_antialias_default = _default_value(
+        defaults, 'pre_stage_antialias', _DEFAULTS['pre_stage_antialias']
+    )
+    pre_stage_antialias = optional_bool(
+        model_cfg, 'pre_stage_antialias', default=bool(pre_stage_antialias_default)
+    )
+
+    pre_stage_aa_taps_default = _default_value(
+        defaults, 'pre_stage_aa_taps', _DEFAULTS['pre_stage_aa_taps']
+    )
+    pre_stage_aa_taps = optional_int(
+        model_cfg, 'pre_stage_aa_taps', int(pre_stage_aa_taps_default)
+    )
+    if int(pre_stage_aa_taps) not in (3, 5):
+        raise ValueError('config.model.pre_stage_aa_taps must be 3 or 5')
+
+    pre_stage_aa_pad_mode_default = _default_value(
+        defaults, 'pre_stage_aa_pad_mode', _DEFAULTS['pre_stage_aa_pad_mode']
+    )
+    pre_stage_aa_pad_mode = optional_str(
+        model_cfg, 'pre_stage_aa_pad_mode', str(pre_stage_aa_pad_mode_default)
+    )
+    if str(pre_stage_aa_pad_mode) != 'zeros':
+        raise ValueError('config.model.pre_stage_aa_pad_mode must be "zeros"')
+
     decoder_channels_default = _normalize_int_seq(
         'decoder_channels',
         _default_value(defaults, 'decoder_channels', _DEFAULTS['decoder_channels']),
@@ -322,6 +350,9 @@ def build_encdec2d_kwargs(
         'pre_stage_kernels': pre_stage_kernels,
         'pre_stage_channels': pre_stage_channels,
         'pre_stage_use_bn': bool(pre_stage_use_bn),
+        'pre_stage_antialias': bool(pre_stage_antialias),
+        'pre_stage_aa_taps': int(pre_stage_aa_taps),
+        'pre_stage_aa_pad_mode': str(pre_stage_aa_pad_mode),
         'decoder_channels': decoder_channels,
         'decoder_scales': decoder_scales,
         'upsample_mode': str(upsample_mode),
