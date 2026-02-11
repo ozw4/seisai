@@ -3,15 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from seisai_utils.config import (
-    require_bool,
-    require_dict,
-    require_float,
-    require_int,
-    require_value,
-)
+from seisai_utils.config import require_bool, require_dict, require_float, require_int, require_value
 
 from seisai_engine.pipelines.common.config_loaders import load_common_train_config
+from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
 
 if TYPE_CHECKING:
     from seisai_engine.pipelines.common.config_schema import CommonTrainConfig
@@ -36,6 +31,21 @@ class PsnModelCfg:
     pretrained: bool
     in_chans: int
     out_chans: int
+    stage_strides: list[tuple[int, int]] | None
+    extra_stages: int
+    extra_stage_strides: list[tuple[int, int]] | None
+    extra_stage_channels: tuple[int, ...] | None
+    extra_stage_use_bn: bool
+    pre_stages: int
+    pre_stage_strides: list[tuple[int, int]] | None
+    pre_stage_kernels: tuple[int, ...] | None
+    pre_stage_channels: tuple[int, ...] | None
+    pre_stage_use_bn: bool
+    decoder_channels: tuple[int, ...]
+    decoder_scales: tuple[int, ...]
+    upsample_mode: str
+    attention_type: str | None
+    intermediate_conv: bool
 
 
 @dataclass(frozen=True)
@@ -80,15 +90,14 @@ def load_psn_train_config(cfg: dict) -> PsnTrainConfig:
         type_message='config.ckpt.mode must be str',
     )
 
-    backbone = require_value(
-        model_cfg,
-        'backbone',
-        str,
-        type_message='config.model.backbone must be str',
-    )
-    pretrained = require_bool(model_cfg, 'pretrained')
     in_chans = require_int(model_cfg, 'in_chans')
     out_chans = require_int(model_cfg, 'out_chans')
+    if int(in_chans) != 1:
+        msg = 'model.in_chans must be 1 (waveform only)'
+        raise ValueError(msg)
+    if int(out_chans) != 3:
+        msg = 'model.out_chans must be 3 (P/S/Noise)'
+        raise ValueError(msg)
 
     return PsnTrainConfig(
         common=common,
@@ -100,10 +109,11 @@ def load_psn_train_config(cfg: dict) -> PsnTrainConfig:
             subset_traces=int(infer_subset_traces),
         ),
         model=PsnModelCfg(
-            backbone=str(backbone),
-            pretrained=bool(pretrained),
-            in_chans=int(in_chans),
-            out_chans=int(out_chans),
+            **build_encdec2d_kwargs(
+                model_cfg,
+                in_chans=int(in_chans),
+                out_chans=int(out_chans),
+            )
         ),
         ckpt=PsnCkptCfg(
             save_best_only=bool(save_best_only),

@@ -151,7 +151,22 @@ vis:
 
 model:
   backbone: resnet18 #resnet18, edgenext_small.usi_in1k
-  pretrained: true
+  # pretrained: false # default
+  # stage_strides: null
+  # extra_stages: 0
+  # extra_stage_strides: null
+  # extra_stage_channels: null
+  # extra_stage_use_bn: true
+  # pre_stages: 0
+  # pre_stage_strides: null
+  # pre_stage_kernels: null
+  # pre_stage_channels: null
+  # pre_stage_use_bn: true
+  # decoder_channels: [256, 128, 64, 32]
+  # decoder_scales: [2, 2, 2, 2]
+  # upsample_mode: bilinear
+  # attention_type: scse # or null
+  # intermediate_conv: true
 
 ckpt:
   save_best_only: true
@@ -386,10 +401,27 @@ BlindTrace 推論は `infer_batch_tiled_h` を使って **H 方向タイル**で
 | key | 型 | 必須 | 意味 / 制約 |
 |---|---:|:---:|---|
 | `model.backbone` | `str` | Yes | 例: `resnet18`。`EncDec2D` の backbone 名。 |
-| `model.pretrained` | `bool` | Yes | backbone の pretrained を使うか。 |
+| `model.pretrained` | `bool` | No | backbone の pretrained を使うか。未指定なら `false`。 |
+| `model.in_chans` | `int` | No | `input` から算出される値と一致必須（不一致はエラー）。 |
+| `model.out_chans` | `int` | No | `1` 固定。指定した場合は `1` と一致必須。 |
+| `model.stage_strides` | `null` or `list[[int,int]]` | No | backbone の stage stride を上書き。未指定なら `null`。 |
+| `model.extra_stages` | `int` | No | 追加 downsample 段数。未指定なら `0`。 |
+| `model.extra_stage_strides` | `null` or `list[[int,int]]` | No | 追加段 stride。未指定なら `null`。 |
+| `model.extra_stage_channels` | `null` or `list[int]` | No | 追加段 channel。未指定なら `null`。 |
+| `model.extra_stage_use_bn` | `bool` | No | 追加段 BN 有無。未指定なら `true`。 |
+| `model.pre_stages` | `int` | No | 前段 Conv+BN+ReLU 段数。未指定なら `0`。 |
+| `model.pre_stage_strides` | `null` or `list[[int,int]]` | No | 前段 stride。未指定なら `null`。 |
+| `model.pre_stage_kernels` | `null` or `list[int]` | No | 前段 kernel。未指定なら `null`。 |
+| `model.pre_stage_channels` | `null` or `list[int]` | No | 前段 channel。未指定なら `null`。 |
+| `model.pre_stage_use_bn` | `bool` | No | 前段 BN 有無。未指定なら `true`。 |
+| `model.decoder_channels` | `list[int]` | No | decoder channels。未指定なら `[256,128,64,32]`。 |
+| `model.decoder_scales` | `list[int]` | No | decoder scale factors。未指定なら `[2,2,2,2]`。 |
+| `model.upsample_mode` | `str` | No | upsample mode。未指定なら `bilinear`。 |
+| `model.attention_type` | `null` or `str` | No | attention 種別。`null` で無効。未指定なら `scse`。 |
+| `model.intermediate_conv` | `bool` | No | decoder の中間 conv を使うか。未指定なら `true`。 |
 
 補足:
-- 入力チャネル数は `input` セクションから算出され、`out_chans=1` が固定。
+- 入力チャネル数は `input` セクションから算出され、`out_chans=1` が固定。`model.in_chans` / `model.out_chans` を指定する場合は一致必須。
 
 ---
 

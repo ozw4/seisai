@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> None:
         secondary_key_fixed=True,
     )
 
-    model = build_model(cfg).to(device)
+    model = build_model(typed.model).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(typed.train.lr))
 
     def infer_epoch_fn(model, loader, device, vis_epoch_dir, vis_n, max_batches):

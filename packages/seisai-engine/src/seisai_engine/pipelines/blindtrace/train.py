@@ -30,6 +30,7 @@ from seisai_engine.pipelines.common import (
     run_train_skeleton,
     seed_all,
 )
+from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 from seisai_engine.loss import composite
 
@@ -258,9 +259,6 @@ def main(argv: list[str] | None = None) -> None:
     figsize = optional_tuple2_float(vis_cfg, 'figsize', (20.0, 15.0))
     dpi = optional_int(vis_cfg, 'dpi', 300)
 
-    backbone = optional_str(model_cfg, 'backbone', 'resnet18')
-    pretrained = optional_bool(model_cfg, 'pretrained', default=False)
-
     ckpt_best_only = optional_bool(ckpt_cfg, 'save_best_only', default=True)
     ckpt_metric = optional_str(ckpt_cfg, 'metric', 'infer_loss')
     ckpt_mode = optional_str(ckpt_cfg, 'mode', 'min')
@@ -311,12 +309,28 @@ def main(argv: list[str] | None = None) -> None:
 
     in_chans = 1 + int(bool(use_offset_ch)) + int(bool(use_time_ch))
     out_chans = 1
-    model_sig = {
-        'backbone': str(backbone),
-        'pretrained': bool(pretrained),
-        'in_chans': int(in_chans),
-        'out_chans': int(out_chans),
-    }
+    if 'in_chans' in model_cfg:
+        in_chans_cfg = model_cfg['in_chans']
+        if not isinstance(in_chans_cfg, int):
+            raise TypeError('config.model.in_chans must be int')
+        if int(in_chans_cfg) != int(in_chans):
+            msg = 'config.model.in_chans must match computed in_chans'
+            raise ValueError(msg)
+    if 'out_chans' in model_cfg:
+        out_chans_cfg = model_cfg['out_chans']
+        if not isinstance(out_chans_cfg, int):
+            raise TypeError('config.model.out_chans must be int')
+        if int(out_chans_cfg) != int(out_chans):
+            msg = 'config.model.out_chans must match computed out_chans'
+            raise ValueError(msg)
+
+    encdec_kwargs = build_encdec2d_kwargs(
+        model_cfg,
+        in_chans=int(in_chans),
+        out_chans=int(out_chans),
+        defaults={'pretrained': False},
+    )
+    model_sig = dict(encdec_kwargs)
 
     device = resolve_device(device_str)
     seed_all(seed_train)
@@ -410,12 +424,7 @@ def main(argv: list[str] | None = None) -> None:
         waveform_mode=str(waveform_mode),
     )
 
-    model = build_model(
-        backbone=backbone,
-        in_chans=int(in_chans),
-        out_chans=int(out_chans),
-        pretrained=bool(pretrained),
-    )
+    model = build_model(encdec_kwargs)
     model.to(device)
 
     optimizer = torch.optim.AdamW(

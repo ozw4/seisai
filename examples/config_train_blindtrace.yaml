@@ -127,7 +127,22 @@ vis:
 
 model:
   backbone: resnet18 #resnet18, edgenext_small.usi_in1k
-  pretrained: true
+  # pretrained: false # default
+  # stage_strides: null
+  # extra_stages: 0
+  # extra_stage_strides: null
+  # extra_stage_channels: null
+  # extra_stage_use_bn: true
+  # pre_stages: 0
+  # pre_stage_strides: null
+  # pre_stage_kernels: null
+  # pre_stage_channels: null
+  # pre_stage_use_bn: true
+  # decoder_channels: [256, 128, 64, 32]
+  # decoder_scales: [2, 2, 2, 2]
+  # upsample_mode: bilinear
+  # attention_type: scse # or null
+  # intermediate_conv: true
 
 ckpt:
   save_best_only: true

@@ -18,6 +18,7 @@ from seisai_utils.config import (
     require_value,
 )
 
+from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
 from seisai_engine.pipelines.common.config_io import (
     load_config,
     resolve_cfg_paths,
@@ -118,6 +119,21 @@ class PairModelCfg:
     pretrained: bool
     in_chans: int
     out_chans: int
+    stage_strides: list[tuple[int, int]] | None
+    extra_stages: int
+    extra_stage_strides: list[tuple[int, int]] | None
+    extra_stage_channels: tuple[int, ...] | None
+    extra_stage_use_bn: bool
+    pre_stages: int
+    pre_stage_strides: list[tuple[int, int]] | None
+    pre_stage_kernels: tuple[int, ...] | None
+    pre_stage_channels: tuple[int, ...] | None
+    pre_stage_use_bn: bool
+    decoder_channels: tuple[int, ...]
+    decoder_scales: tuple[int, ...]
+    upsample_mode: str
+    attention_type: str | None
+    intermediate_conv: bool
 
 
 @dataclass(frozen=True)
@@ -198,21 +214,14 @@ def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
 
 
 def _load_model_cfg(model_cfg: dict) -> PairModelCfg:
-    backbone = require_value(
-        model_cfg,
-        'backbone',
-        str,
-        type_message='config.model.backbone must be str',
-    )
-    pretrained = require_bool(model_cfg, 'pretrained')
     in_chans = require_int(model_cfg, 'in_chans')
     out_chans = require_int(model_cfg, 'out_chans')
-    return PairModelCfg(
-        backbone=str(backbone),
-        pretrained=bool(pretrained),
+    encdec_kwargs = build_encdec2d_kwargs(
+        model_cfg,
         in_chans=int(in_chans),
         out_chans=int(out_chans),
     )
+    return PairModelCfg(**encdec_kwargs)
 
 
 def load_pair_train_config(cfg: dict) -> PairTrainConfig:
