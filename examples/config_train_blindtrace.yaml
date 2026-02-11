@@ -73,6 +73,7 @@ train:
       params: {}
   time_len: 5024
   batch_size: 8
+  # gradient_accumulation_steps: 1
   num_workers: 0
   use_amp: true
   max_norm: 1.0

@@ -216,6 +216,7 @@ tracking:
 |---|---:|:---:|---|
 | `train.device` | `str` | No | 学習デバイス指定。`auto` / `cpu` / `cuda` / `cuda:N`。`auto` は CUDA があれば GPU、なければ CPU。 |
 | `train.batch_size` | `int` | Yes | 学習 DataLoader の batch size。 |
+| `train.gradient_accumulation_steps` | `int` | No | gradient accumulation のステップ数。未指定なら `1`。 |
 | `train.epochs` | `int` | Yes | epoch 数。 |
 | `train.samples_per_epoch` | `int` | Yes | 1 epoch あたりに使用するサンプル数（`Subset(ds_train_full, range(samples_per_epoch))`）。 |
 | `train.seed` | `int` | Yes | 学習の乱数 seed（epoch ごとに `seed+epoch` を使用）。 |
@@ -237,6 +238,7 @@ tracking:
 - `train.time_len > 元W` は **右側ゼロパディング**
 - 推論側は **時間方向の crop/pad を行わない**（元の W のまま）
 - 変換は input/target に同期適用され、学習/推論ともに `PerTraceStandardize(eps=1e-8)` が固定で入る
+- 実効バッチサイズは `train.batch_size × train.gradient_accumulation_steps`。
 
 ---
 

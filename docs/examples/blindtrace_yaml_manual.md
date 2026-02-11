@@ -295,6 +295,7 @@ FB pick を使ったゲート。`phase_pick_files` が未指定の場合は **�
 | `train.device` | `str` | No | 学習デバイス指定。`auto` / `cpu` / `cuda` / `cuda:N`。`auto` は CUDA があれば GPU、なければ CPU。 |
 | `train.seed` | `int` | No | 学習の乱数 seed（epoch ごとに `seed+epoch` を使用）。 |
 | `train.batch_size` | `int` | Yes | 学習 DataLoader の batch size。 |
+| `train.gradient_accumulation_steps` | `int` | No | gradient accumulation のステップ数。未指定なら `1`。 |
 | `train.num_workers` | `int` | No | 学習 DataLoader worker 数。0 の場合は main process が dataset RNG を直接更新。 |
 | `train.use_amp` | `bool` | Yes | AMP を使うか（CUDA 時のみ有効）。 |
 | `train.max_norm` | `float` | No | gradient clipping の max norm。 |
@@ -320,6 +321,7 @@ FB pick を使ったゲート。`phase_pick_files` が未指定の場合は **�
 
 補足:
 - `train.losses` がある場合は **優先**され、legacy キーは無視される。
+- 実効バッチサイズは `train.batch_size × train.gradient_accumulation_steps`。
 
 ---
 

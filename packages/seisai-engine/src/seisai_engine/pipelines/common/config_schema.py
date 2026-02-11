@@ -25,6 +25,7 @@ class TrainLoopConfig:
     train_num_workers: int
     max_norm: float
     use_amp_train: bool
+    gradient_accumulation_steps: int = 1
     print_freq: int = 10
 
 
@@ -58,6 +59,9 @@ class CommonTrainConfig:
             raise ValueError(msg)
         if self.train.train_batch_size <= 0:
             msg = 'train.batch_size must be positive'
+            raise ValueError(msg)
+        if self.train.gradient_accumulation_steps <= 0:
+            msg = 'train.gradient_accumulation_steps must be positive'
             raise ValueError(msg)
         if self.infer.infer_batch_size <= 0:
             msg = 'infer.batch_size must be positive'

@@ -12,6 +12,7 @@ from seisai_utils.config import (
     optional_int,
     optional_str,
     optional_tuple2_float,
+    optional_value,
     require_bool,
     require_dict,
     require_float,
@@ -225,6 +226,18 @@ def main(argv: list[str] | None = None) -> None:
     )
     train_batch_size = require_int(train_cfg, 'batch_size')
     train_num_workers = optional_int(train_cfg, 'num_workers', 0)
+    gradient_accumulation_steps = optional_value(
+        train_cfg,
+        'gradient_accumulation_steps',
+        1,
+        int,
+        type_message='config.train.gradient_accumulation_steps must be int',
+        coerce=int,
+        coerce_default=True,
+    )
+    if int(gradient_accumulation_steps) <= 0:
+        msg = 'config.train.gradient_accumulation_steps must be positive'
+        raise ValueError(msg)
     train_use_amp = require_bool(train_cfg, 'use_amp')
     max_norm = optional_float(train_cfg, 'max_norm', 1.0)
     lr = require_float(train_cfg, 'lr')
@@ -486,6 +499,7 @@ def main(argv: list[str] | None = None) -> None:
         samples_per_epoch=int(samples_per_epoch),
         max_norm=float(max_norm),
         use_amp_train=bool(train_use_amp),
+        gradient_accumulation_steps=int(gradient_accumulation_steps),
         infer_batch_size=int(infer_batch_size),
         infer_num_workers=int(infer_num_workers),
         infer_max_batches=int(infer_max_batches),

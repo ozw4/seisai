@@ -67,6 +67,7 @@ class TrainSkeletonSpec:
     samples_per_epoch: int
     max_norm: float
     use_amp_train: bool
+    gradient_accumulation_steps: int
     infer_batch_size: int
     infer_num_workers: int
     infer_max_batches: int
@@ -407,10 +408,18 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
             )
 
             if lr_sched_spec is None:
+                acc = int(spec.gradient_accumulation_steps)
+                if acc <= 0:
+                    msg = 'gradient_accumulation_steps must be positive'
+                    raise ValueError(msg)
+                optimizer_steps_per_epoch = (len(train_loader) + acc - 1) // acc
+                if optimizer_steps_per_epoch <= 0:
+                    msg = 'steps_per_epoch must be positive'
+                    raise ValueError(msg)
                 lr_sched_spec = build_lr_scheduler(
                     spec.optimizer,
                     spec.cfg,
-                    steps_per_epoch=len(train_loader),
+                    steps_per_epoch=int(optimizer_steps_per_epoch),
                     epochs=spec.epochs,
                 )
 
@@ -431,7 +440,7 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 spec.criterion,
                 device=spec.device,
                 lr_scheduler=lr_scheduler_step,
-                gradient_accumulation_steps=1,
+                gradient_accumulation_steps=int(spec.gradient_accumulation_steps),
                 max_norm=spec.max_norm,
                 use_amp=spec.use_amp_train,
                 scaler=None,

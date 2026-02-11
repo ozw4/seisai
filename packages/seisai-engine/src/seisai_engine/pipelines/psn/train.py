@@ -244,6 +244,7 @@ def main(argv: list[str] | None = None) -> None:
         samples_per_epoch=common.train.samples_per_epoch,
         max_norm=common.train.max_norm,
         use_amp_train=common.train.use_amp_train,
+        gradient_accumulation_steps=common.train.gradient_accumulation_steps,
         infer_batch_size=common.infer.infer_batch_size,
         infer_num_workers=common.infer.infer_num_workers,
         infer_max_batches=common.infer.infer_max_batches,

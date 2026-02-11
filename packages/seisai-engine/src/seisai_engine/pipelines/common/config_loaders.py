@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from seisai_utils.config import (
+    optional_value,
     require_bool,
     require_dict,
     require_float,
@@ -45,6 +46,16 @@ def load_common_train_config(cfg: dict) -> CommonTrainConfig:
     if 'print_freq' in train_cfg:
         print_freq = require_int(train_cfg, 'print_freq')
 
+    gradient_accumulation_steps = optional_value(
+        train_cfg,
+        'gradient_accumulation_steps',
+        1,
+        int,
+        type_message='config.train.gradient_accumulation_steps must be int',
+        coerce=int,
+        coerce_default=True,
+    )
+
     train = TrainLoopConfig(
         epochs=int(require_int(train_cfg, 'epochs')),
         samples_per_epoch=int(require_int(train_cfg, 'samples_per_epoch')),
@@ -52,6 +63,7 @@ def load_common_train_config(cfg: dict) -> CommonTrainConfig:
         train_num_workers=int(require_int(train_cfg, 'num_workers')),
         max_norm=float(require_float(train_cfg, 'max_norm')),
         use_amp_train=bool(require_bool(train_cfg, 'use_amp')),
+        gradient_accumulation_steps=int(gradient_accumulation_steps),
         print_freq=int(print_freq),
     )
     infer = InferLoopConfig(

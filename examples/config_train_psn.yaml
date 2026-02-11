@@ -16,6 +16,7 @@ dataset:
 train:
   device: auto # auto | cpu | cuda | cuda:N
   batch_size: 4
+  # gradient_accumulation_steps: 1
   epochs: 10
   lr: 1.0e-4
   subset_traces: 128

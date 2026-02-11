@@ -219,6 +219,7 @@ PSN は `transform.target_len` を用いて **時間方向（W）**を crop/pad 
 |---|---:|:---:|---|
 | `train.device` | `str` | No | 学習デバイス指定。`auto` / `cpu` / `cuda` / `cuda:N`。`auto` は CUDA があれば GPU、なければ CPU。 |
 | `train.batch_size` | `int` | Yes | 学習 DataLoader の batch size。 |
+| `train.gradient_accumulation_steps` | `int` | No | gradient accumulation のステップ数。未指定なら `1`。 |
 | `train.epochs` | `int` | Yes | epoch 数。 |
 | `train.samples_per_epoch` | `int` | Yes | 1 epoch あたりに使用するサンプル数（`Subset(ds_train_full, range(samples_per_epoch))`）。 |
 | `train.seed` | `int` | Yes | 学習の乱数 seed（epoch ごとに `seed+epoch` を使用）。 |
@@ -238,6 +239,7 @@ PSN は `transform.target_len` を用いて **時間方向（W）**を crop/pad 
 `examples/config_train_psn.yaml` には `train.time_len` が存在するが、PSN パイプライン実装では参照されない。
 - PSN で時間長（W）を決めるのは `transform.target_len`
 - `train.time_len` は現状 **無効パラメータ**（残置の可能性が高い）
+- 実効バッチサイズは `train.batch_size × train.gradient_accumulation_steps`。
 
 ---
 
