@@ -137,6 +137,8 @@ def main(argv: list[str] | None = None) -> None:
         plan=plan,
         subset_traces=cfg.infer.subset_traces,
         secondary_key_fixed=True,
+        input_segy_endian=str(cfg.dataset.infer_input_endian),
+        target_segy_endian=str(cfg.dataset.infer_target_endian),
         standardize_eps=standardize_eps,
     )
 

@@ -117,6 +117,8 @@ def main(argv: list[str] | None = None) -> None:
         plan=plan,
         subset_traces=int(typed.train.subset_traces),
         secondary_key_fixed=bool(typed.dataset.secondary_key_fixed),
+        input_segy_endian=str(typed.dataset.train_input_endian),
+        target_segy_endian=str(typed.dataset.train_target_endian),
         standardize_eps=standardize_eps,
     )
 
@@ -133,6 +135,8 @@ def main(argv: list[str] | None = None) -> None:
         plan=plan,
         subset_traces=int(typed.infer.subset_traces),
         secondary_key_fixed=True,
+        input_segy_endian=str(typed.dataset.infer_input_endian),
+        target_segy_endian=str(typed.dataset.infer_target_endian),
         standardize_eps=standardize_eps,
     )
 

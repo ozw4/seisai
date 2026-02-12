@@ -14,6 +14,8 @@ dataset:
   max_trials: 2048
   use_header_cache: true
   verbose: true
+  train_endian: big
+  infer_endian: big
 
 transform:
   time_len: 5024

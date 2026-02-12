@@ -56,6 +56,10 @@ dataset:
   verbose: true
   primary_keys: [ffid]
   secondary_key_fixed: false
+  train_input_endian: big
+  train_target_endian: big
+  infer_input_endian: big
+  infer_target_endian: big
 
 train:
   device: auto # auto | cpu | cuda | cuda:N
@@ -189,17 +193,21 @@ tracking:
 ## 4. `dataset` セクション
 
 `SegyGatherPairDataset` の生成パラメータ。
-`dataset` セクション自体は **必須**（`progress` と `waveform_mode` は optional）。
+`dataset` セクション自体は **必須**（`progress` / `waveform_mode` / `*_endian` は optional）。
 
 | key | 型 | 必須 | デフォルト | 意味 / 制約 |
 |---|---:|:---:|---:|---|
 | `dataset.max_trials` | `int` | Yes | - | サンプル生成のリトライ上限。小さすぎると有効サンプルを引けずエラーになり得る。 |
-| `dataset.use_header_cache` | `bool` | Yes | - | SEG-Y header を `*.headers.npz` にキャッシュして高速化する。SEG-Y と同階層に sidecar が作られる。 |
+| `dataset.use_header_cache` | `bool` | Yes | - | SEG-Y header を `*.headers.<endian>.npz` にキャッシュして高速化する。SEG-Y と同階層に sidecar が作られる。 |
 | `dataset.verbose` | `bool` | Yes | - | Dataset 内部のログ/情報出力の有無。 |
 | `dataset.progress` | `bool` | No | `dataset.verbose` | インデクシング時の tqdm 表示。未指定なら `verbose` と同じ。 |
 | `dataset.primary_keys` | `list[str]` | Yes | - | gather 抽出の主キー（例: `ffid`）。空は禁止、重複禁止。 |
 | `dataset.secondary_key_fixed` | `bool` | Yes | - | 2次整列（secondary key）ルールを固定するか。 **学習側のみ**この値が反映される（推論側は常に固定）。 |
 | `dataset.waveform_mode` | `str` | No | `eager` | `eager` / `mmap`。`mmap` はメモリ節約だが `train.num_workers=0` と `infer.num_workers=0` が必須。 |
+| `dataset.train_input_endian` | `str` | No | `big` | 学習用 input SEG-Y の読込エンディアン。`big` / `little`。 |
+| `dataset.train_target_endian` | `str` | No | `big` | 学習用 target SEG-Y の読込エンディアン。`big` / `little`。 |
+| `dataset.infer_input_endian` | `str` | No | `big` | 推論用 input SEG-Y の読込エンディアン。`big` / `little`。 |
+| `dataset.infer_target_endian` | `str` | No | `big` | 推論用 target SEG-Y の読込エンディアン。`big` / `little`。 |
 
 補足:
 - `primary_keys=['ffid']` の場合、`secondary_key_fixed=false` なら secondary が `chno` と `offset` からランダムに選ばれ得る。

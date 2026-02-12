@@ -95,7 +95,12 @@ def build_infer_transform(cfg: dict) -> ViewCompose:
     )
 
 
-def build_dataset(cfg: dict, *, transform: ViewCompose) -> SegyGatherPhasePipelineDataset:
+def build_dataset(
+    cfg: dict,
+    *,
+    transform: ViewCompose,
+    segy_endian: str | None = None,
+) -> SegyGatherPhasePipelineDataset:
     if not isinstance(cfg, dict):
         msg = 'cfg must be dict'
         raise TypeError(msg)
@@ -141,6 +146,16 @@ def build_dataset(cfg: dict, *, transform: ViewCompose) -> SegyGatherPhasePipeli
     fbgate = _build_fbgate(fbgate_cfg)
     plan = build_plan(psn_sigma=float(psn_sigma))
 
+    dataset_endian = (
+        optional_str(ds_cfg, 'train_endian', 'big')
+        if segy_endian is None
+        else str(segy_endian)
+    )
+    dataset_endian = dataset_endian.lower()
+    if dataset_endian not in ('big', 'little'):
+        msg = 'dataset segy_endian must be "big" or "little"'
+        raise ValueError(msg)
+
     return SegyGatherPhasePipelineDataset(
         segy_files=list(segy_files),
         phase_pick_files=list(phase_pick_files),
@@ -153,6 +168,7 @@ def build_dataset(cfg: dict, *, transform: ViewCompose) -> SegyGatherPhasePipeli
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
         waveform_mode=str(waveform_mode),
+        segy_endian=str(dataset_endian),
         verbose=bool(verbose),
         progress=bool(progress),
         max_trials=int(max_trials),

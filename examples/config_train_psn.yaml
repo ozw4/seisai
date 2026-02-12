@@ -12,6 +12,8 @@ dataset:
   primary_keys: [ffid]
   include_empty_gathers: false
   secondary_key_fixed: false
+  train_endian: big
+  infer_endian: big
 
 train:
   device: auto # auto | cpu | cuda | cuda:N

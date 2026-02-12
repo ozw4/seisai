@@ -45,6 +45,8 @@ def build_pair_dataset(
     plan: BuildPlan,
     subset_traces: int,
     secondary_key_fixed: bool,
+    input_segy_endian: str,
+    target_segy_endian: str,
     standardize_eps: float = 1e-8,
 ) -> SegyGatherPairDataset:
     validate_files_exist(list(paths.input_segy_files) + list(paths.target_segy_files))
@@ -58,6 +60,8 @@ def build_pair_dataset(
         primary_keys=ds_cfg.primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
         waveform_mode=str(ds_cfg.waveform_mode),
+        input_segy_endian=str(input_segy_endian),
+        target_segy_endian=str(target_segy_endian),
         verbose=bool(ds_cfg.verbose),
         progress=bool(ds_cfg.progress),
         max_trials=int(ds_cfg.max_trials),

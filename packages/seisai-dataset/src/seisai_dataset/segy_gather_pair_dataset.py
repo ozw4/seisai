@@ -11,7 +11,9 @@ from .builder.builder import BuildPlan
 from .file_info import (
     PairFileInfo,
     build_file_info_dataclass,
+    normalize_segy_endian,
     normalize_waveform_mode,
+    open_segy_with_endian,
 )
 from .segy_gather_base import BaseRandomSegyDataset
 
@@ -61,6 +63,8 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
         use_header_cache: bool = True,
         header_cache_dir: str | None = None,
         waveform_mode: str = 'eager',
+        input_segy_endian: str = 'big',
+        target_segy_endian: str = 'big',
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
         verbose: bool = False,
@@ -83,6 +87,8 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
 
         self.progress = self.verbose if progress is None else bool(progress)
         self.waveform_mode = normalize_waveform_mode(waveform_mode)
+        self.input_segy_endian = normalize_segy_endian(input_segy_endian)
+        self.target_segy_endian = normalize_segy_endian(target_segy_endian)
         self.standardize_from_input = bool(standardize_from_input)
         standardize_eps_val = float(standardize_eps)
         if not np.isfinite(standardize_eps_val) or standardize_eps_val <= 0.0:
@@ -131,8 +137,14 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
                 use_header_cache=self.use_header_cache,
                 include_centroids=True,
                 waveform_mode=self.waveform_mode,
+                segy_endian=self.input_segy_endian,
             )
-            target_obj = segyio.open(target_path, 'r', ignore_geometry=True)
+            target_obj = open_segy_with_endian(
+                target_path,
+                'r',
+                ignore_geometry=True,
+                segy_endian=self.target_segy_endian,
+            )
             if self.waveform_mode == 'mmap':
                 target_obj.mmap()
                 target_mmap = target_obj.trace.raw

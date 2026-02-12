@@ -50,6 +50,14 @@ __all__ = ['main']
 DEFAULT_CONFIG_PATH = Path('examples/config_train_blindtrace.yaml')
 
 
+def _normalize_endian(*, value: str, key_name: str) -> str:
+    endian = str(value).strip().lower()
+    if endian not in ('big', 'little'):
+        msg = f'{key_name} must be "big" or "little"'
+        raise ValueError(msg)
+    return endian
+
+
 def _validate_mask_ratio_for_subset(
     *, mask_ratio: float, subset_traces: int, label: str
 ) -> None:
@@ -197,6 +205,14 @@ def main(argv: list[str] | None = None) -> None:
         msg = 'dataset.waveform_mode must be "eager" or "mmap"'
         raise ValueError(msg)
     ds_cfg['waveform_mode'] = waveform_mode
+    train_endian = _normalize_endian(
+        value=optional_str(ds_cfg, 'train_endian', 'big'),
+        key_name='dataset.train_endian',
+    )
+    infer_endian = _normalize_endian(
+        value=optional_str(ds_cfg, 'infer_endian', 'big'),
+        key_name='dataset.infer_endian',
+    )
 
     time_len = require_int(transform_cfg, 'time_len')
     per_trace_standardize = optional_bool(
@@ -417,6 +433,7 @@ def main(argv: list[str] | None = None) -> None:
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
         waveform_mode=str(waveform_mode),
+        segy_endian=str(train_endian),
     )
 
     ds_infer_full = build_dataset(
@@ -433,6 +450,7 @@ def main(argv: list[str] | None = None) -> None:
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
         waveform_mode=str(waveform_mode),
+        segy_endian=str(infer_endian),
     )
 
     model = build_model(encdec_kwargs)

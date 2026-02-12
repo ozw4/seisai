@@ -34,6 +34,8 @@ dataset:
   primary_keys: [ffid]
   include_empty_gathers: false
   secondary_key_fixed: false
+  train_endian: big
+  infer_endian: big
 
 train:
   device: auto # auto | cpu | cuda | cuda:N
@@ -172,13 +174,15 @@ tracking:
 | key | 型 | 必須 | デフォルト | 意味 / 制約 |
 |---|---:|:---:|---:|---|
 | `dataset.max_trials` | `int` | No | `2048` | サンプル生成のリトライ上限。小さすぎると「有効サンプルを引けず」エラーになり得る。 |
-| `dataset.use_header_cache` | `bool` | No | `true` | SEG-Y header を `*.headers.npz` にキャッシュして高速化する。SEG-Y と同階層に sidecar が作られる（更新日時で再利用）。 |
+| `dataset.use_header_cache` | `bool` | No | `true` | SEG-Y header を `*.headers.<endian>.npz` にキャッシュして高速化する。SEG-Y と同階層に sidecar が作られる（更新日時で再利用）。 |
 | `dataset.verbose` | `bool` | No | `true` | Dataset 内部のログ/情報出力の有無。 |
 | `dataset.progress` | `bool` | No | `dataset.verbose` | インデクシング時の tqdm 表示。未指定なら `verbose` と同じ。 |
 | `dataset.primary_keys` | `list[str]` | No | `[ffid]` | gather 抽出の主キー（例: `ffid`）。空は禁止、重複禁止。 |
 | `dataset.include_empty_gathers` | `bool` | No | `false` | P/S ピックが両方とも存在しないサンプルを許容するか。`false` の場合は空サンプルを reject してリサンプル。 |
 | `dataset.secondary_key_fixed` | `bool` | No | `false` | 2次整列（secondary key）ルールを固定するか。 **学習側のみ**この値が反映される（推論側は常に固定）。 |
 | `dataset.waveform_mode` | `str` | No | `eager` | `eager` / `mmap`。`mmap` はメモリ節約だが `train.num_workers=0` かつ `infer.num_workers=0` が必須。 |
+| `dataset.train_endian` | `str` | No | `big` | 学習用 SEG-Y の読込エンディアン。`big` / `little`。 |
+| `dataset.infer_endian` | `str` | No | `big` | 推論用 SEG-Y の読込エンディアン。`big` / `little`。 |
 
 ### 5.1 `primary_keys` と `secondary_key_fixed` の補足
 - `primary_keys` はサンプル抽出時の gather 単位（例: `ffid`）を決める。

@@ -63,6 +63,10 @@ class PairDatasetCfg:
     primary_keys: tuple[str, ...]
     secondary_key_fixed: bool
     waveform_mode: str
+    train_input_endian: str
+    train_target_endian: str
+    infer_input_endian: str
+    infer_target_endian: str
 
 
 @dataclass(frozen=True)
@@ -192,6 +196,14 @@ def _load_paths(paths: dict, *, base_dir: Path) -> PairPaths:
     )
 
 
+def _normalize_endian(*, value: str, key_name: str) -> str:
+    endian = str(value).strip().lower()
+    if endian not in ('big', 'little'):
+        msg = f'{key_name} must be "big" or "little"'
+        raise ValueError(msg)
+    return endian
+
+
 def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
     max_trials = require_int(ds_cfg, 'max_trials')
     use_header_cache = require_bool(ds_cfg, 'use_header_cache')
@@ -204,6 +216,22 @@ def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
     if waveform_mode not in ('eager', 'mmap'):
         msg = 'dataset.waveform_mode must be "eager" or "mmap"'
         raise ValueError(msg)
+    train_input_endian = _normalize_endian(
+        value=optional_str(ds_cfg, 'train_input_endian', 'big'),
+        key_name='dataset.train_input_endian',
+    )
+    train_target_endian = _normalize_endian(
+        value=optional_str(ds_cfg, 'train_target_endian', 'big'),
+        key_name='dataset.train_target_endian',
+    )
+    infer_input_endian = _normalize_endian(
+        value=optional_str(ds_cfg, 'infer_input_endian', 'big'),
+        key_name='dataset.infer_input_endian',
+    )
+    infer_target_endian = _normalize_endian(
+        value=optional_str(ds_cfg, 'infer_target_endian', 'big'),
+        key_name='dataset.infer_target_endian',
+    )
     return PairDatasetCfg(
         max_trials=int(max_trials),
         use_header_cache=bool(use_header_cache),
@@ -212,6 +240,10 @@ def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
         waveform_mode=str(waveform_mode),
+        train_input_endian=str(train_input_endian),
+        train_target_endian=str(train_target_endian),
+        infer_input_endian=str(infer_input_endian),
+        infer_target_endian=str(infer_target_endian),
     )
 
 

@@ -11,6 +11,7 @@ import segyio
 logger = logging.getLogger(__name__)
 
 WaveformMode = Literal['eager', 'mmap']
+SegyEndian = Literal['big', 'little']
 
 
 def normalize_waveform_mode(waveform_mode: str | None) -> WaveformMode:
@@ -24,6 +25,44 @@ def normalize_waveform_mode(waveform_mode: str | None) -> WaveformMode:
         msg = 'waveform_mode must be "eager" or "mmap"'
         raise ValueError(msg)
     return cast(WaveformMode, mode)
+
+
+def normalize_segy_endian(segy_endian: str | None) -> SegyEndian:
+    if segy_endian is None:
+        return 'big'
+    if not isinstance(segy_endian, str):
+        msg = 'segy_endian must be str'
+        raise TypeError(msg)
+    endian = segy_endian.strip().lower()
+    if endian not in ('big', 'little'):
+        msg = 'segy_endian must be "big" or "little"'
+        raise ValueError(msg)
+    return cast(SegyEndian, endian)
+
+
+def open_segy_with_endian(
+    segy_path: str,
+    mode: str,
+    *,
+    ignore_geometry: bool = True,
+    segy_endian: str = 'big',
+) -> segyio.SegyFile:
+    endian = normalize_segy_endian(segy_endian)
+    try:
+        return segyio.open(
+            segy_path,
+            mode,
+            ignore_geometry=ignore_geometry,
+            endian=endian,
+        )
+    except TypeError as exc:
+        if endian != 'big':
+            msg = (
+                'this segyio build does not support endian="little"; '
+                'please upgrade segyio'
+            )
+            raise RuntimeError(msg) from exc
+        return segyio.open(segy_path, mode, ignore_geometry=ignore_geometry)
 
 
 @dataclass(slots=True)
@@ -82,15 +121,17 @@ def load_headers_with_cache(
     cmp_byte=None,
     cache_dir: str | None = None,
     rebuild: bool = False,
+    segy_endian: str = 'big',
 ):
     """Load SEG-Y header fields with a small npz cache.
     Logs via `logging` (no print/warnings).
     """
+    endian = normalize_segy_endian(segy_endian)
     segy_p = Path(segy_path)
     cache_p = (
-        Path(cache_dir) / (segy_p.name + '.headers.npz')
+        Path(cache_dir) / (segy_p.name + f'.headers.{endian}.npz')
         if cache_dir
-        else segy_p.with_suffix(segy_p.suffix + '.headers.npz')
+        else segy_p.with_suffix(segy_p.suffix + f'.headers.{endian}.npz')
     )
 
     # use cache if exists and newer than segy
@@ -119,7 +160,9 @@ def load_headers_with_cache(
         )
 
     # rebuild from segy
-    with segyio.open(segy_path, 'r', ignore_geometry=True) as f:
+    with open_segy_with_endian(
+        segy_path, 'r', ignore_geometry=True, segy_endian=endian
+    ) as f:
         ffid_values = np.asarray(f.attributes(ffid_byte)[:], dtype=np.int32)
         chno_values = np.asarray(f.attributes(chno_byte)[:], dtype=np.int32)
         cmp_values = None
@@ -229,6 +272,7 @@ def build_file_info(
     use_header_cache: bool = True,
     include_centroids: bool = False,
     waveform_mode: str = 'eager',
+    segy_endian: str = 'big',
 ) -> dict:
     """SEG-Y 1ファイルから dataset が要求する file_info dict を構築する共通関数。.
 
@@ -253,6 +297,7 @@ def build_file_info(
         raise FileNotFoundError(msg)
 
     mode = normalize_waveform_mode(waveform_mode)
+    endian = normalize_segy_endian(segy_endian)
 
     meta = load_headers_with_cache(
         segy_path,
@@ -261,6 +306,7 @@ def build_file_info(
         cmp_byte,
         cache_dir=(header_cache_dir if use_header_cache else None),
         rebuild=False,
+        segy_endian=endian,
     )
     ffid_values = meta['ffid_values']
     chno_values = meta['chno_values']
@@ -272,7 +318,9 @@ def build_file_info(
     dt_sec = dt_us * 1e-6
 
     # mmap 用に開いて保持(caller が close する)
-    f = segyio.open(segy_path, 'r', ignore_geometry=True)
+    f = open_segy_with_endian(
+        segy_path, 'r', ignore_geometry=True, segy_endian=endian
+    )
     if mode == 'mmap':
         f.mmap()
         mmap = f.trace.raw
@@ -380,6 +428,7 @@ def build_file_info_dataclass(
     use_header_cache: bool = True,
     include_centroids: bool = False,
     waveform_mode: str = 'eager',
+    segy_endian: str = 'big',
 ) -> FileInfo:
     info = build_file_info(
         segy_path,
@@ -390,5 +439,6 @@ def build_file_info_dataclass(
         use_header_cache=use_header_cache,
         include_centroids=include_centroids,
         waveform_mode=waveform_mode,
+        segy_endian=segy_endian,
     )
     return FileInfo(**info)

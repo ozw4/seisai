@@ -33,6 +33,14 @@ __all__ = ['main']
 DEFAULT_CONFIG_PATH = Path('examples/config_train_psn.yaml')
 
 
+def _normalize_endian(*, value: str, key_name: str) -> str:
+    endian = str(value).strip().lower()
+    if endian not in ('big', 'little'):
+        msg = f'{key_name} must be "big" or "little"'
+        raise ValueError(msg)
+    return endian
+
+
 def _build_dataset_for_subset(
     cfg: dict,
     subset_traces: int,
@@ -41,6 +49,7 @@ def _build_dataset_for_subset(
     phase_pick_files: list[str],
     transform,
     secondary_key_fixed: bool,
+    segy_endian: str,
 ):
     cfg_copy = copy.deepcopy(cfg)
     train_cfg = require_dict(cfg_copy, 'train')
@@ -50,7 +59,7 @@ def _build_dataset_for_subset(
     paths['phase_pick_files'] = list(phase_pick_files)
     ds_cfg = require_dict(cfg_copy, 'dataset')
     ds_cfg['secondary_key_fixed'] = bool(secondary_key_fixed)
-    return build_dataset(cfg_copy, transform=transform)
+    return build_dataset(cfg_copy, transform=transform, segy_endian=segy_endian)
 
 
 def _run_infer_epoch(
@@ -175,6 +184,14 @@ def main(argv: list[str] | None = None) -> None:
         msg = 'dataset.waveform_mode must be "eager" or "mmap"'
         raise ValueError(msg)
     ds_cfg['waveform_mode'] = waveform_mode
+    train_endian = _normalize_endian(
+        value=optional_str(ds_cfg, 'train_endian', 'big'),
+        key_name='dataset.train_endian',
+    )
+    infer_endian = _normalize_endian(
+        value=optional_str(ds_cfg, 'infer_endian', 'big'),
+        key_name='dataset.infer_endian',
+    )
     if waveform_mode == 'mmap' and int(common.train.train_num_workers) > 0:
         msg = 'dataset.waveform_mode="mmap" requires train.num_workers=0'
         raise ValueError(msg)
@@ -189,6 +206,7 @@ def main(argv: list[str] | None = None) -> None:
         phase_pick_files=list(train_phase_pick_files),
         transform=train_transform,
         secondary_key_fixed=bool(train_secondary_key_fixed),
+        segy_endian=str(train_endian),
     )
     ds_infer_full = _build_dataset_for_subset(
         cfg,
@@ -197,6 +215,7 @@ def main(argv: list[str] | None = None) -> None:
         phase_pick_files=list(infer_phase_pick_files),
         transform=infer_transform,
         secondary_key_fixed=True,
+        segy_endian=str(infer_endian),
     )
 
     model = build_model(typed.model).to(device)
