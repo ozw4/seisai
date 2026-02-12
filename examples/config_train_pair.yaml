@@ -1,32 +1,32 @@
 paths:
-  input_segy_files: ../test_data/marmousi/marmousi_shot101_chno161_fieldnoise008.sgy
-  target_segy_files:  ../test_data/marmousi/marmousi_shot101_chno161.sgy
-  infer_input_segy_files: ../test_data/marmousi/marmousi_shot101_chno161_fieldnoise008.sgy
-  infer_target_segy_files: ../test_data/marmousi/marmousi_shot101_chno161.sgy
+  input_segy_files: [../test_data/marmousi/marmousi_shot101_chno161_fieldnoise008.sgy]
+  target_segy_files:  [../test_data/marmousi/marmousi_shot101_chno161.sgy]
+  infer_input_segy_files: [../test_data/marmousi/marmousi_shot101_chno161_fieldnoise008.sgy]
+  infer_target_segy_files: [../test_data/marmousi/marmousi_shot101_chno161.sgy]
   out_dir: ./_pair_out
 
 dataset:
   max_trials: 2048
   use_header_cache: true
   verbose: true
-  primary_keys: [ffid]
-  secondary_key_fixed: false
+  primary_keys: [cmp]
+  secondary_key_fixed: true
   standardize_from_input: true
-  train_input_endian: big
-  train_target_endian: big
-  infer_input_endian: big
-  infer_target_endian: big
+  train_input_endian: little
+  train_target_endian: little
+  infer_input_endian: little
+  infer_target_endian: little
 
 train:
-  device: auto # auto | cpu | cuda | cuda:N
-  batch_size: 8
+  device: cuda # auto | cpu | cuda | cuda:N
+  batch_size: 32
   # gradient_accumulation_steps: 1
-  epochs: 100
+  epochs: 20
   lr: 1.0e-4
   subset_traces: 128
-  time_len: 6016
-  samples_per_epoch: 256
-  loss_kind: l1            # l1 or mse
+  time_len: 1280
+  samples_per_epoch: 4096
+  loss_kind: mse            # l1 or mse
   seed: 42
   use_amp: true
   max_norm: 1.0
@@ -42,12 +42,12 @@ train:
 
 augment:
   hflip_prob: 0.5
-  polarity_prob: 0.5
+  polarity_prob: 0
   space:
-    prob: 0.3
+    prob: 0
     factor_range: [0.90, 1.10]
   time:
-    prob: 0.3
+    prob: 0
     factor_range: [0.95, 1.05]
   freq:
     prob: 0.0
@@ -60,7 +60,7 @@ augment:
 infer:
   batch_size: 1
   max_batches: 12
-  subset_traces: 4096
+  subset_traces: 161
   seed: 43
   num_workers: 0
 
@@ -84,7 +84,7 @@ vis:
   dpi: 200
 
 model:
-  backbone: resnet18 # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
+  backbone: resnet50 # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
   # pretrained: false # default
   in_chans: 1
   out_chans: 1

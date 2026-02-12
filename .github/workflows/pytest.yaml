@@ -21,6 +21,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Ensure LFS files are present
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git lfs install --local
+          git lfs pull
+          git lfs checkout
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -40,4 +52,5 @@ jobs:
       - name: Run tests
         env:
           MPLBACKEND: Agg
-        run: python -m pytest -c /dev/null  #python -m pytest -q
+        run: |
+          python -m pytest -c /dev/null --cache-dir .pytest_cache
