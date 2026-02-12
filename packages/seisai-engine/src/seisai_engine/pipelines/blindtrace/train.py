@@ -25,7 +25,6 @@ from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
     expand_cfg_listfiles,
     load_cfg_with_base_dir,
-    resolve_cfg_paths,
     resolve_device,
     resolve_out_dir,
     run_train_skeleton,
@@ -157,7 +156,6 @@ def main(argv: list[str] | None = None) -> None:
     if 'infer_phase_pick_files' in paths_raw:
         path_keys.append('paths.infer_phase_pick_files')
 
-    resolve_cfg_paths(cfg, base_dir, keys=path_keys)
     expand_cfg_listfiles(cfg, keys=path_keys)
 
     paths = require_dict(cfg, 'paths')

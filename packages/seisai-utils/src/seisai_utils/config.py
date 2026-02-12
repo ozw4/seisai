@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
-import yaml
+from .config_yaml import load_yaml
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -538,12 +538,4 @@ def load_config(path: str | Path) -> dict:
             If the YAML content cannot be parsed.
 
     """
-    p = Path(path)
-    if not p.is_file():
-        msg = f'config file not found: {p}'
-        raise ValueError(msg)
-    cfg = yaml.safe_load(p.read_text())
-    if not isinstance(cfg, dict):
-        msg = 'config root must be a dict'
-        raise TypeError(msg)
-    return cfg
+    return load_yaml(path)

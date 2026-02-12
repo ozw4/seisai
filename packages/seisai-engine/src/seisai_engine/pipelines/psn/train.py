@@ -14,7 +14,6 @@ from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
     expand_cfg_listfiles,
     load_cfg_with_base_dir,
-    resolve_cfg_paths,
     resolve_device,
     resolve_out_dir,
     run_train_skeleton,
@@ -117,16 +116,6 @@ def main(argv: list[str] | None = None) -> None:
     args, _unknown = parser.parse_known_args(argv)
 
     cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
-    resolve_cfg_paths(
-        cfg,
-        base_dir,
-        keys=[
-            'paths.segy_files',
-            'paths.phase_pick_files',
-            'paths.infer_segy_files',
-            'paths.infer_phase_pick_files',
-        ],
-    )
     expand_cfg_listfiles(
         cfg,
         keys=[

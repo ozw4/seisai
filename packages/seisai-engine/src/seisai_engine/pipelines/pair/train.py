@@ -13,7 +13,6 @@ from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
     expand_cfg_listfiles,
     load_cfg_with_base_dir,
-    resolve_cfg_paths,
     resolve_device,
     resolve_out_dir,
     run_train_skeleton,
@@ -43,16 +42,6 @@ def main(argv: list[str] | None = None) -> None:
 
     cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
     augment_cfg = cfg.get('augment')
-    resolve_cfg_paths(
-        cfg,
-        base_dir,
-        keys=[
-            'paths.input_segy_files',
-            'paths.target_segy_files',
-            'paths.infer_input_segy_files',
-            'paths.infer_target_segy_files',
-        ],
-    )
     expand_cfg_listfiles(
         cfg,
         keys=[

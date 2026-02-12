@@ -1,12 +1,12 @@
 paths:
   segy_files:
-    - ../data/20200623002546.sgy
+    - ../../test_data/ridgecrest_das/20200623002546.sgy
   phase_pick_files:
-    - ../data/20200623002546_fb_dummy.npy
+    - ../data/ridgecrest_das/20200623002546_fb_dummy.npy
   infer_segy_files:
-    - ../data/20200623002546.sgy
+    - ../../test_data/ridgecrest_das/20200623002546.sgy
   infer_phase_pick_files:
-    - ../data/20200623002546_fb_dummy.npy
+    - ../data/ridgecrest_das/20200623002546_fb_dummy.npy
   out_dir: ./_blindtrace_out
 
 dataset:

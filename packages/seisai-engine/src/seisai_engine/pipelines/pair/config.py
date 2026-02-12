@@ -21,7 +21,6 @@ from seisai_utils.config import (
 from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
 from seisai_engine.pipelines.common.config_io import (
     load_config,
-    resolve_cfg_paths,
     resolve_relpath,
 )
 from seisai_engine.pipelines.common.listfiles import expand_cfg_listfiles
@@ -365,17 +364,6 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
 def load_train_config(config_path: str | Path) -> PairTrainConfig:
     cfg = load_config(str(config_path))
 
-    base_dir = Path(config_path).expanduser().resolve().parent
-    resolve_cfg_paths(
-        cfg,
-        base_dir,
-        keys=[
-            'paths.input_segy_files',
-            'paths.target_segy_files',
-            'paths.infer_input_segy_files',
-            'paths.infer_target_segy_files',
-        ],
-    )
     expand_cfg_listfiles(
         cfg,
         keys=[
@@ -392,11 +380,6 @@ def load_infer_config(config_path: str | Path) -> PairInferConfig:
     cfg = load_config(str(config_path))
 
     base_dir = Path(config_path).expanduser().resolve().parent
-    resolve_cfg_paths(
-        cfg,
-        base_dir,
-        keys=['paths.input_segy_files', 'paths.target_segy_files'],
-    )
     expand_cfg_listfiles(
         cfg,
         keys=['paths.input_segy_files', 'paths.target_segy_files'],

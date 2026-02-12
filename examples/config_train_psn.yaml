@@ -1,8 +1,8 @@
 paths:
-  segy_files: [/workspace/tests/data/20200623002546.sgy]
-  phase_pick_files: [/workspace/tests/data/20200623002546_phase_picks.npz]
-  infer_segy_files: [/workspace/tests/data/20200623002546.sgy]
-  infer_phase_pick_files: [/workspace/tests/data/20200623002546_phase_picks.npz]
+  segy_files: [../test_data/20200623002546.sgy]
+  phase_pick_files: [../test_data//20200623002546_phase_picks.npz]
+  infer_segy_files: [../test_data//20200623002546.sgy]
+  infer_phase_pick_files: [../test_data//20200623002546_phase_picks.npz]
   out_dir: ./_psn_out
 
 dataset:

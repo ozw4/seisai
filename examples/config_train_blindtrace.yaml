@@ -10,7 +10,7 @@ paths:
   out_dir: ./_blindtrace_out
 
 dataset:
-  primary_keys: [ffid,chno,cmp]
+  primary_keys: [cmp]
   max_trials: 2048
   use_header_cache: true
   verbose: true

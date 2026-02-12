@@ -53,7 +53,5 @@ code_snippet/
 mlruns/
 tracking/
 proc/
+test_data/
 !tests/
-!tests/data
-!tests/data/*sgy
-!tests/data/*segy
