@@ -151,7 +151,7 @@ class EncDec2D(nn.Module):
             list(reversed(extra_out_channels)) if extra_out_channels else []
         ) + ecs_base
         if self.pre_out_channels:
-            ecs = ecs + self.pre_out_channels
+            ecs = ecs + self.pre_out_channels[::-1]
         # Decoder
         self.decoder = UnetDecoder2d(
             encoder_channels=ecs,
@@ -189,7 +189,6 @@ class EncDec2D(nn.Module):
 
         # ★pre_down 出力を浅い側(末尾)に積む
         return feats + pre_feats[::-1]
-
 
     @torch.inference_mode()
     def _proc_flip(self, x_in):
