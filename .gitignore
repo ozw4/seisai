@@ -53,4 +53,5 @@ code_snippet/
 mlruns/
 tracking/
 proc/
-!tests/
+!test_data/
+!test_data/marmousi/**sgy
