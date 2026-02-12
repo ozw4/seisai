@@ -53,5 +53,4 @@ code_snippet/
 mlruns/
 tracking/
 proc/
-test_data/
 !tests/
