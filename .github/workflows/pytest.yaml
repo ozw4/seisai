@@ -53,4 +53,4 @@ jobs:
         env:
           MPLBACKEND: Agg
         run: |
-          python -m pytest -c /dev/null --cache-dir .pytest_cache
+          python -m pytest -q

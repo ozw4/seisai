@@ -84,7 +84,7 @@ vis:
   dpi: 200
 
 model:
-  backbone: resnet50 # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
+  backbone: caformer_b36.sail_in22k_ft_in1k # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
   # pretrained: false # default
   in_chans: 1
   out_chans: 1
