@@ -18,7 +18,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import segyio
 import torch
 from seisai_dataset import (
     BuildPlan,
@@ -147,44 +146,31 @@ def _save_wave_with_picks(
 
 def main() -> None:
     # ====== Edit parameters ======
-    segy_files = [
-        '/home/dcuser/data/ridgecrest_das/event/20200623002546.sgy',
-    ]
-    phase_pick_files = [
-        '/home/dcuser/data/ridgecrest_das/event/npz/20200623002546_phase_picks.npz',
-    ]
+    REPO_ROOT = Path(__file__).resolve().parents[3]
+    DATA_DIR = REPO_ROOT / 'test_data' / 'ridgecrest_das'
+
+    segy = DATA_DIR / '20200623002546.sgy'
+    picks = DATA_DIR / '20200623002546_phase_picks.npz'
+
+    segy_files = [str(segy)]
+    phase_pick_files = [str(picks)]
+
     target_len = 6000
     subset_traces = 128
     include_empty_gathers = True
     use_header_cache = False
     seed = 0
 
-    # where to save PNGs
     out_dir = Path('/tmp/phase_dataset_quick_check')
     # ============================
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for p in segy_files:
-        if not Path(p).exists():
-            msg = f'SEGY not found: {p}'
-            raise FileNotFoundError(msg)
-
-    # Create an empty CSR pick file if missing (useful for smoke checks).
-    pick_path = Path(phase_pick_files[0])
-    if not pick_path.exists():
-        pick_path.parent.mkdir(parents=True, exist_ok=True)
-        with segyio.open(segy_files[0], 'r', ignore_geometry=True) as f:
-            n_traces = int(f.tracecount)
-        _write_empty_phase_picks_npz(pick_path, n_traces=n_traces)
+    if not segy.exists():
+        raise FileNotFoundError(f'SEGY not found: {segy}')
 
     transform = ViewCompose([DeterministicCropOrPad(target_len), PerTraceStandardize()])
-    fbgate = FirstBreakGate(
-        FirstBreakGateConfig(
-            apply_on='off',
-            min_pick_ratio=0.0,
-        )
-    )
+    fbgate = FirstBreakGate(FirstBreakGateConfig(apply_on='off', min_pick_ratio=0.0))
     plan = BuildPlan(
         wave_ops=[IdentitySignal(src='x_view', dst='x', copy=False)],
         label_ops=[PhasePSNMap(dst='psn_map', sigma=1.5)],
@@ -207,7 +193,6 @@ def main() -> None:
         max_trials=256,
     )
     ds._rng = np.random.default_rng(int(seed))
-
     try:
         sample = ds[0]
     finally:

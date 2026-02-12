@@ -5,14 +5,22 @@ from pathlib import Path
 import numpy as np
 import segyio
 import torch
-
-from seisai_dataset import BuildPlan, LoaderConfig, SegyGatherPairDataset, TraceSubsetLoader
+from seisai_dataset import (
+    BuildPlan,
+    LoaderConfig,
+    SegyGatherPairDataset,
+    TraceSubsetLoader,
+)
 from seisai_dataset.builder.builder import IdentitySignal, SelectStack
 from seisai_dataset.file_info import build_file_info_dataclass
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def _data_dir() -> Path:
-    return Path(__file__).resolve().parents[3] / 'tests' / 'data'
+    return _repo_root() / 'test_data' / 'ridgecrest_das'
 
 
 class IdentityTransform:
