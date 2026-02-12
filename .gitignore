@@ -54,4 +54,4 @@ mlruns/
 tracking/
 proc/
 !test_data/
-!test_data/marmousi/**sgy
+!test_data/*/*.sgy
