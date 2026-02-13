@@ -36,6 +36,7 @@ ruff.toml
 *.png
 *.pth
 *.csv
+*.json
 data/
 result/
 tmp_code/
@@ -53,5 +54,4 @@ code_snippet/
 mlruns/
 tracking/
 proc/
-!test_data/
-!test_data/*/*.sgy
+test_data/
