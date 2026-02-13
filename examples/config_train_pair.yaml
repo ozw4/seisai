@@ -22,7 +22,7 @@ train:
   batch_size: 32
   # gradient_accumulation_steps: 1
   epochs: 50
-  lr: 1.0e-4
+  lr: 3.0e-4
   subset_traces: 128
   time_len: 1280
   samples_per_epoch: 4096
@@ -84,17 +84,17 @@ vis:
   dpi: 150
 
 model:
-  backbone: edgenext_small.usi_in1k # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
-  # pretrained: false # default
+  backbone: resnet18 # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
+  pretrained: true # default
   in_chans: 1
   out_chans: 1
   stage_strides:
   - - 2
-    - 4
+    - 2
   - - 2
     - 2
   - - 2
-    - 4
+    - 2
   - - 2
     - 2
   # extra_stages: 0
