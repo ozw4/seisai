@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import getpass
 import json
-from pathlib import Path
 import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import torch
-from torch.utils.data import DataLoader, Subset
 import yaml
-
 from seisai_utils.config import (
     optional_bool,
     optional_float,
@@ -23,14 +21,15 @@ from seisai_utils.config import (
     optional_str,
     require_dict,
 )
+from torch.utils.data import DataLoader, Subset
 
 from seisai_engine.ema_controller import EmaConfig, EmaController
-from seisai_engine.train_loop import train_one_epoch
 from seisai_engine.schedulers import build_lr_scheduler, load_lr_scheduler_cfg
 from seisai_engine.tracking.config import load_tracking_config
 from seisai_engine.tracking.data_id import build_data_manifest, calc_data_id
 from seisai_engine.tracking.factory import build_tracker
 from seisai_engine.tracking.sanitize import sanitize_key
+from seisai_engine.train_loop import train_one_epoch
 
 from .skeleton_helpers import (
     ensure_fixed_infer_num_workers,
@@ -311,9 +310,7 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                     if float(group['weight_decay']) != float(group0['weight_decay']):
                         has_groupwise_weight_decay = True
             params['optimizer/has_groupwise_lr'] = has_groupwise_lr
-            params['optimizer/has_groupwise_weight_decay'] = (
-                has_groupwise_weight_decay
-            )
+            params['optimizer/has_groupwise_weight_decay'] = has_groupwise_weight_decay
 
             optimizer_groups: list[dict[str, object]] = []
             for idx, group in enumerate(spec.optimizer.param_groups):
@@ -375,8 +372,7 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                     if is_overlong:
                         stored[safe_key] = value_str
                         ref = (
-                            f'<stored:tracking/overlong_values.json#'
-                            f'{label}.{safe_key}>'
+                            f'<stored:tracking/overlong_values.json#{label}.{safe_key}>'
                         )
                         sanitized[safe_key] = ref
                     else:
@@ -495,7 +491,7 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 if lr_sched_spec.monitor is None:
                     lr_sched_spec.scheduler.step()
             print(
-                f'epoch={epoch} loss={stats["loss"]:.6f} steps={int(stats["steps"])} '
+                f'epoch={epoch} loss={stats["loss"]:.4E} steps={int(stats["steps"])} '
                 f'samples={int(stats["samples"])}'
             )
             global_step += int(stats['steps'])
@@ -538,7 +534,7 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 spec.vis_n,
                 spec.infer_max_batches,
             )
-            print(f'epoch={epoch} infer_loss={infer_loss:.6f}')
+            print(f'epoch={epoch} infer_loss={infer_loss:.6E}')
 
             if lr_sched_spec is not None and lr_sched_spec.interval == 'epoch':
                 if lr_sched_spec.monitor is not None:

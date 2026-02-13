@@ -4,7 +4,7 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 
 import torch
-from seisai_utils.logging import MetricLogger
+from seisai_utils.logging import MetricLogger, SmoothedValue
 from torch import nn
 
 if TYPE_CHECKING:
@@ -137,6 +137,8 @@ def train_one_epoch(
 
     model.train()
     meter = MetricLogger(delimiter='\t')
+    meter.add_meter('loss', SmoothedValue(fmt='{median:.4E} ({global_avg:.4E})'))
+    meter.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.4E}'))
 
     total_samples = 0
     step = step_offset
