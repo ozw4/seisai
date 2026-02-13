@@ -36,7 +36,7 @@ def _clip_window(n_samples: int, center: int, half_width: int) -> tuple[int, int
     return left, right, center - left
 
 
-def cor_pick(
+def snap_picks_to_phase(
     max_index: NDArray[np.integer],
     seis: NDArray[np.floating],
     mode: PickMode = 'peak',
@@ -45,21 +45,21 @@ def cor_pick(
     """予測されたピックを近傍の特定phaseへシフトさせる。.
 
     Args:
-        max_index: 予測ピック位置（サンプル番号）の1次元配列 (n_traces,)。
+        max_index: 予測ピック位置(サンプル番号)の1次元配列 (n_traces,)。
             0 はピック無しとして扱う。
         seis: 地震波形セクションの2次元配列 (n_traces, n_samples)。
         mode: 移動させるphaseの指定。
-            - "peak": 近傍の相対最大（ピーク）
-            - "trough": 近傍の相対最小（トラフ）
-            - "rising": 立ち上がり（符号が負→正になる境界側へ寄せる発想）
-            - "trailing": 立下がり（符号が正→負になる境界側へ寄せる発想）
-        ltcor: 最大補正量（サンプル数）。
+            - "peak": 近傍の相対最大(ピーク)
+            - "trough": 近傍の相対最小(トラフ)
+            - "rising": 立ち上がり(符号が負→正になる境界側へ寄せる発想)
+            - "trailing": 立下がり(符号が正→負になる境界側へ寄せる発想)
+        ltcor: 最大補正量(サンプル数)。
             "peak"/"trough" の探索窓にのみ使用。
             "rising"/"trailing" では元仕様通り考慮しない。
 
     Returns:
-        補正後のピック位置（サンプル番号）の配列 (n_traces,) を int32 で返す。
-        入力が 0（ピック無し）のトレースは 0 のまま。
+        補正後のピック位置(サンプル番号)の配列 (n_traces,) を int32 で返す。
+        入力が 0(ピック無し)のトレースは 0 のまま。
 
     Raises:
         ValueError: seis が2次元でない、max_index の長さが一致しない、
@@ -70,17 +70,13 @@ def cor_pick(
     seis_arr = np.asarray(seis)
     if seis_arr.ndim != 2:
         msg = f'seis must be 2D (n_traces, n_samples), got shape={seis_arr.shape}'
-        raise ValueError(
-            msg
-        )
+        raise ValueError(msg)
 
     n_traces, n_samples = seis_arr.shape
     picks = np.asarray(max_index)
     if picks.ndim != 1 or picks.shape[0] != n_traces:
         msg = f'max_index must be 1D with length n_traces={n_traces}, got shape={picks.shape}'
-        raise ValueError(
-            msg
-        )
+        raise ValueError(msg)
 
     if ltcor < 0:
         msg = 'ltcor must be >= 0.'
@@ -99,9 +95,7 @@ def cor_pick(
 
         if not (0 <= p0 < n_samples):
             msg = f'pick out of bounds: trace={tr}, pick={p0}, n_samples={n_samples}'
-            raise ValueError(
-                msg
-            )
+            raise ValueError(msg)
 
         if mode in ('peak', 'trough'):
             left, right, center_in_win = _clip_window(n_samples, p0, ltcor)
@@ -118,7 +112,7 @@ def cor_pick(
                 else:
                     # fallback: no local maxima found -> choose max(|x|) in window?
                     # 元仕様は「ピーク検出」だが、空になるケースがあるため
-                    # 「最大値（そのまま）」でfallback（同距離なら時間マイナス優先）
+                    # 「最大値(そのまま)」でfallback(同距離なら時間マイナス優先)
                     score = win
                     best = (
                         np.flatnonzero(score == score.max()).astype(np.int32)
