@@ -1,7 +1,7 @@
 paths:
-  input_segy_files: [../test_data/marmousi/marmousi_shot401_chno401_fieldnoise002.sgy]
+  input_segy_files: [../test_data/marmousi/marmousi_shot401_chno401_fieldnoise004.sgy]
   target_segy_files:  [../test_data/marmousi/marmousi_shot401_chno401.sgy]
-  infer_input_segy_files: [../test_data/marmousi/marmousi_shot401_chno401_fieldnoise002.sgy]
+  infer_input_segy_files: [../test_data/marmousi/marmousi_shot401_chno401_fieldnoise004.sgy]
   infer_target_segy_files: [../test_data/marmousi/marmousi_shot401_chno401.sgy]
   out_dir: ./_pair_out
 
@@ -9,7 +9,7 @@ dataset:
   max_trials: 2048
   use_header_cache: true
   verbose: true
-  primary_keys: [ffid]
+  primary_keys: [ffid, chno]
   secondary_key_fixed: true
   standardize_from_input: true
   train_input_endian: little
@@ -18,7 +18,7 @@ dataset:
   infer_target_endian: little
 
 train:
-  device: cuda:1 # auto | cpu | cuda | cuda:N
+  device: cuda # auto | cpu | cuda | cuda:N
   batch_size: 32
   # gradient_accumulation_steps: 1
   epochs: 50
@@ -26,29 +26,28 @@ train:
   subset_traces: 128
   time_len: 1280
   samples_per_epoch: 4096
-  loss_kind: mse            # l1 or mse
+  loss_kind: l1            # l1 or mse
   seed: 42
   use_amp: true
   max_norm: 1.0
   num_workers: 0
 
-#ema:
-#  enabled: true
-#  decay: 0.999
-#  start_step: 0
-#  update_every: 1
-#  use_for_infer: true
-#  device: cuda  # omit -> same device as model; "cpu" saves VRAM but is slower
+ema:
+  enabled: true
+  decay: 0.995
+  start_step: 128 # recomend samples_per_epoch / batch_size
+  update_every: 1
+  use_for_infer: true
+  device: cuda  # omit -> same device as model; "cpu" saves VRAM but is slower
 
 augment:
   hflip_prob: 0.5
-  polarity_prob: 0
+  polarity_prob: 0.5
   space:
-    prob: 0
+    prob: 0.3
     factor_range: [0.90, 1.10]
   time:
-
-    prob: 0
+    prob: 0.3
     factor_range: [0.95, 1.05]
   freq:
     prob: 0.0
@@ -85,16 +84,24 @@ vis:
   dpi: 150
 
 model:
-  backbone: resnet18 # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
+  backbone: edgenext_small.usi_in1k # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
   # pretrained: false # default
   in_chans: 1
   out_chans: 1
-  # stage_strides: null
+  stage_strides:
+  - - 2
+    - 4
+  - - 2
+    - 2
+  - - 2
+    - 4
+  - - 2
+    - 2
   # extra_stages: 0
   # extra_stage_strides: null
   # extra_stage_channels: null
   # extra_stage_use_bn: true
-  pre_stages: 2
+  pre_stages: 3
   pre_stage_strides:
   - - 1
     - 1
