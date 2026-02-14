@@ -42,7 +42,7 @@ ema:
 
 augment:
   hflip_prob: 0.5
-  polarity_prob: 0.5
+  polarity_prob: 0
   space:
     prob: 0.3
     factor_range: [0.90, 1.10]
@@ -88,20 +88,12 @@ model:
   pretrained: true # default
   in_chans: 1
   out_chans: 1
-  stage_strides:
-  - - 2
-    - 2
-  - - 2
-    - 2
-  - - 2
-    - 2
-  - - 2
-    - 2
+  stage_strides: null
   # extra_stages: 0
   # extra_stage_strides: null
   # extra_stage_channels: null
   # extra_stage_use_bn: true
-  pre_stages: 3
+  pre_stages: 2
   pre_stage_strides:
   - - 1
     - 1

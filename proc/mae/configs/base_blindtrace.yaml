@@ -1,0 +1,142 @@
+paths:
+  segy_files: sgy_list_train_site54.txt
+  phase_pick_files: fb_list_train_site54.txt
+  infer_segy_files: sgy_list_valid_site54.txt
+  infer_phase_pick_files: fb_list_valid_site54.txt
+  out_dir: ../runs/BASE
+
+dataset:
+  primary_keys: [ffid,chno,cmp]
+  max_trials: 2048
+  use_header_cache: true
+  verbose: true
+  include_empty_gathers: false
+  secondary_key_fixed: true
+  waveform_mode: mmap
+
+transform:
+  time_len: 6016
+  per_trace_standardize: true
+
+augment:
+  hflip_prob: 0.0
+  polarity_prob: 0.0
+  space:
+    prob: 0.0
+    factor_range: [0.90, 1.10]
+  time:
+    prob: 0.0
+    factor_range: [0.95, 1.05]
+  freq:
+    prob: 0.0
+    kinds: [bandpass, lowpass, highpass]
+    band: [0.05, 0.45]
+    width: [0.10, 0.35]
+    roll: 0.02
+    restandardize: false
+
+fbgate:
+  apply_on: "on"
+  min_pick_ratio: 0.1
+
+mask:
+  ratio: 0.5
+  mode: replace
+  noise_std: 1.0
+
+input:
+  use_offset_ch: false
+  offset_normalize: true
+  use_time_ch: false
+
+train:
+  device: auto # auto | cpu | cuda | cuda:N
+  seed: 42
+  loss_scope: masked_only # masked_only | all
+  losses:
+    - kind: mse
+      weight: 1.0
+      scope: masked_only
+
+  time_len: 6016
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  num_workers: 0
+  use_amp: true
+  max_norm: 1.0
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  epochs: 50
+  samples_per_epoch: 4096
+  subset_traces: 128
+
+eval:
+  loss_scope: masked_only
+  losses:
+    - kind: mse
+      weight: 1.0
+      scope: all
+
+ema:
+  enabled: true
+  decay: 0.999
+  start_step: 0
+  update_every: 1
+  use_for_infer: true
+
+infer:
+  seed: 43
+  batch_size: 4
+  num_workers: 0
+  max_batches: 64
+  subset_traces: 128
+
+tile:
+  tile_h: 128
+  overlap_h: 64
+  tiles_per_batch: 16
+  amp: true
+  use_tqdm: false
+
+vis:
+  n: 5
+  out_subdir: vis
+  cmap: seismic
+  vmin: -3
+  vmax: 3
+  transpose_for_trace_time: true
+  per_trace_norm: true
+  per_trace_eps: 1.0e-8
+  figsize: [13.0, 9.0]
+  dpi: 150
+
+model:
+  backbone: resnet18 #resnet18, edgenext_small.usi_in1k
+  pretrained: false # default
+  # stage_strides: null
+  # extra_stages: 0
+  # extra_stage_strides: null
+  # extra_stage_channels: null
+  # extra_stage_use_bn: true
+  # pre_stages: 0
+  # pre_stage_strides: null
+  # pre_stage_kernels: null
+  # pre_stage_channels: null
+  # pre_stage_use_bn: true
+  # decoder_channels: [256, 128, 64, 32]
+  # decoder_scales: [2, 2, 2, 2]
+  # upsample_mode: bilinear
+  # attention_type: scse # or null
+  # intermediate_conv: true
+
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min
+
+tracking:
+  enabled: true
+  exp_name: prestage_BASE
+  tracking_uri: file:../mlruns
+  vis_best_only: true
+  vis_max_files: 50

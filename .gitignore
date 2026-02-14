@@ -49,9 +49,9 @@ debug_*/
 *patch
 *.db
 
-workflow/
+
 code_snippet/
 mlruns/
 tracking/
-proc/
+
 test_data/

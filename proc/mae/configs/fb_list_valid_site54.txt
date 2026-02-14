@@ -1,0 +1,5 @@
+/home/dcuser/data/ActiveSeisField/aso19-6/fb_Aso19-6_okuda0205.npy
+/home/dcuser/data/ActiveSeisField/jtsanage_L2K/L2K_SNG_fb_1217.npy
+/home/dcuser/data/ActiveSeisField/noto21-3/fb_Noto21-3_add.npy
+/home/dcuser/data/ActiveSeisField/okinawa2022_OH11-0B/OH11-B_fbtime.npy
+/home/dcuser/data/ActiveSeisField/TSTKRES/fb_time_all_1341ch.crd.0613.ReMerge.npy

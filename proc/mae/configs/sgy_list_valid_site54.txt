@@ -1,0 +1,5 @@
+/home/dcuser/data/ActiveSeisField/aso19-6/input_TRCTAB_ml_fbpick_Aso19-6_wolmo.sgy
+/home/dcuser/data/ActiveSeisField/jtsanage_L2K/AIRAS_TRCTAB_L2K-SNG_wolmo.sgy
+/home/dcuser/data/ActiveSeisField/noto21-3/AIRAS_TRCTAB_Noto21-3_wolmo.sgy
+/home/dcuser/data/ActiveSeisField/okinawa2022_OH11-0B/OH11-0B_shot_rec_geom_set.sgy
+/home/dcuser/data/ActiveSeisField/TSTKRES/shotgath.sgy
