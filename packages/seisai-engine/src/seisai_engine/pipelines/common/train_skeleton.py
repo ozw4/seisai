@@ -40,8 +40,16 @@ from .skeleton_helpers import (
     set_dataset_rng,
 )
 
+
+@dataclass
+class InferEpochResult:
+    loss: float
+    metrics: dict[str, float]
+
+
 InferEpochFn = Callable[
-    [torch.nn.Module, DataLoader, torch.device, Path, int, int], float
+    [torch.nn.Module, DataLoader, torch.device, Path, int, int],
+    float | InferEpochResult,
 ]
 
 
@@ -123,6 +131,39 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
         if idx is None:
             idx = torch.cuda.current_device()
         return int(idx)
+
+    def _normalize_infer_epoch_output(
+        output: float | InferEpochResult,
+    ) -> tuple[float, dict[str, float]]:
+        if isinstance(output, InferEpochResult):
+            raw_loss = output.loss
+            raw_metrics = output.metrics
+        else:
+            raw_loss = output
+            raw_metrics = {}
+
+        if isinstance(raw_loss, bool) or not isinstance(raw_loss, (int, float)):
+            msg = (
+                'infer_epoch_fn must return float '
+                'or InferEpochResult(loss=<numeric>, metrics=<dict>)'
+            )
+            raise TypeError(msg)
+        infer_loss = float(raw_loss)
+
+        if not isinstance(raw_metrics, dict):
+            msg = 'InferEpochResult.metrics must be dict[str, float]'
+            raise TypeError(msg)
+
+        metrics: dict[str, float] = {}
+        for key, value in raw_metrics.items():
+            if not isinstance(key, str) or not key:
+                msg = 'InferEpochResult.metrics keys must be non-empty str'
+                raise TypeError(msg)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                msg = f'InferEpochResult.metrics[{key!r}] must be numeric'
+                raise TypeError(msg)
+            metrics[key] = float(value)
+        return infer_loss, metrics
 
     wall_start = time.perf_counter()
     total_train_steps = 0
@@ -526,7 +567,7 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
             vis_epoch_dir = epoch_vis_dir(vis_root, epoch)
 
             infer_model.eval()
-            infer_loss = spec.infer_epoch_fn(
+            infer_output = spec.infer_epoch_fn(
                 infer_model,
                 infer_loader,
                 infer_device,
@@ -534,7 +575,15 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 spec.vis_n,
                 spec.infer_max_batches,
             )
+            infer_loss, infer_extra_metrics = _normalize_infer_epoch_output(
+                infer_output
+            )
             print(f'epoch={epoch} infer_loss={infer_loss:.6E}')
+            if infer_extra_metrics:
+                metric_parts: list[str] = []
+                for key in sorted(infer_extra_metrics):
+                    metric_parts.append(f'{key}={infer_extra_metrics[key]:.6E}')
+                print(f'epoch={epoch} infer_metrics {" ".join(metric_parts)}')
 
             if lr_sched_spec is not None and lr_sched_spec.interval == 'epoch':
                 if lr_sched_spec.monitor is not None:
@@ -599,11 +648,14 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
             )
 
             if tracking_enabled and run_started:
+                tracked_metrics = {
+                    'train/loss': float(stats['loss']),
+                    'infer/loss': float(infer_loss),
+                }
+                if infer_extra_metrics:
+                    tracked_metrics.update(infer_extra_metrics)
                 tracker.log_metrics(
-                    {
-                        'train/loss': float(stats['loss']),
-                        'infer/loss': float(infer_loss),
-                    },
+                    tracked_metrics,
                     step=int(epoch),
                 )
                 if did_update:

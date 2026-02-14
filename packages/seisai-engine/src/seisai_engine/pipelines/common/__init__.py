@@ -9,6 +9,7 @@ from .config_schema import (
     TrainLoopConfig,
 )
 from .device import resolve_device
+from .init_weights import maybe_load_init_weights
 from .listfiles import expand_cfg_listfiles, load_path_listfile
 from .seed import seed_all
 from .skeleton_helpers import (
@@ -21,19 +22,24 @@ from .skeleton_helpers import (
     resolve_out_dir,
     set_dataset_rng,
 )
-from .train_skeleton import InferEpochFn, TrainSkeletonSpec, run_train_skeleton
+from .train_skeleton import (
+    InferEpochFn,
+    InferEpochResult,
+    TrainSkeletonSpec,
+    run_train_skeleton,
+)
 from .validate_files import validate_files_exist
 from .validate_primary_keys import validate_primary_keys
 
 __all__ = [
     'CommonTrainConfig',
     'InferEpochFn',
+    'InferEpochResult',
     'InferLoopConfig',
     'OutputConfig',
     'SeedsConfig',
     'TrainLoopConfig',
     'TrainSkeletonSpec',
-    'resolve_device',
     'ensure_fixed_infer_num_workers',
     'epoch_vis_dir',
     'expand_cfg_listfiles',
@@ -43,9 +49,11 @@ __all__ = [
     'load_config',
     'load_path_listfile',
     'make_train_worker_init_fn',
+    'maybe_load_init_weights',
     'maybe_save_best_min',
     'prepare_output_dirs',
     'resolve_cfg_paths',
+    'resolve_device',
     'resolve_out_dir',
     'resolve_relpath',
     'run_train_skeleton',

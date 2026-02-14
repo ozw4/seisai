@@ -2,18 +2,26 @@ from __future__ import annotations
 
 import argparse
 import copy
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
-from seisai_utils.config import optional_bool, optional_str, require_dict, require_list_str
+from seisai_utils.config import (
+    optional_bool,
+    optional_str,
+    require_dict,
+    require_list_str,
+)
 from seisai_utils.viz_phase import make_title_from_batch_meta, save_psn_debug_png
 
 from seisai_engine.pipelines.common import (
+    InferEpochResult,
     TrainSkeletonSpec,
     expand_cfg_listfiles,
     load_cfg_with_base_dir,
+    maybe_load_init_weights,
     resolve_device,
     resolve_out_dir,
     run_train_skeleton,
@@ -62,6 +70,63 @@ def _build_dataset_for_subset(
     return build_dataset(cfg_copy, transform=transform, segy_endian=segy_endian)
 
 
+def _to_tensor_bh(*, value, name: str, device: torch.device) -> torch.Tensor:
+    tensor = value if isinstance(value, torch.Tensor) else torch.as_tensor(value)
+    if int(tensor.ndim) != 2:
+        msg = f'{name} must be (B,H), got shape={tuple(tensor.shape)}'
+        raise ValueError(msg)
+    return tensor.to(device=device, non_blocking=True)
+
+
+def _phase_metrics(
+    prefix: str,
+    pred: torch.Tensor,
+    gt: torch.Tensor,
+    valid: torch.Tensor,
+) -> dict[str, float]:
+    if not isinstance(prefix, str) or not prefix:
+        msg = 'prefix must be non-empty str'
+        raise TypeError(msg)
+    if not isinstance(pred, torch.Tensor) or int(pred.ndim) != 2:
+        msg = 'pred must be torch.Tensor with shape (B,H)'
+        raise ValueError(msg)
+    if not isinstance(gt, torch.Tensor) or int(gt.ndim) != 2:
+        msg = 'gt must be torch.Tensor with shape (B,H)'
+        raise ValueError(msg)
+    if not isinstance(valid, torch.Tensor) or int(valid.ndim) != 2:
+        msg = 'valid must be torch.Tensor with shape (B,H)'
+        raise ValueError(msg)
+    if valid.dtype is not torch.bool:
+        msg = f'valid must be bool tensor, got dtype={valid.dtype}'
+        raise TypeError(msg)
+    if tuple(pred.shape) != tuple(gt.shape) or tuple(pred.shape) != tuple(valid.shape):
+        msg = (
+            'shape mismatch: '
+            f'pred={tuple(pred.shape)} gt={tuple(gt.shape)} valid={tuple(valid.shape)}'
+        )
+        raise ValueError(msg)
+
+    n = int(valid.sum().item())
+    if n == 0:
+        return {}
+
+    err = pred.to(dtype=torch.float32) - gt.to(
+        dtype=torch.float32, device=pred.device, non_blocking=True
+    )
+    err_valid = err[valid]
+    abs_err = err_valid.abs()
+    rmse = torch.sqrt((err_valid * err_valid).mean())
+
+    return {
+        f'infer/{prefix}_rmse': float(rmse.item()),
+        f'infer/{prefix}_within_0': float((abs_err <= 0.0).float().mean().item()),
+        f'infer/{prefix}_within_2': float((abs_err <= 2.0).float().mean().item()),
+        f'infer/{prefix}_within_4': float((abs_err <= 4.0).float().mean().item()),
+        f'infer/{prefix}_within_6': float((abs_err <= 6.0).float().mean().item()),
+        f'infer/{prefix}_n': float(n),
+    }
+
+
 def _run_infer_epoch(
     *,
     model: torch.nn.Module,
@@ -70,10 +135,16 @@ def _run_infer_epoch(
     vis_out_dir: str,
     vis_n: int,
     max_batches: int,
-) -> float:
+) -> InferEpochResult:
     non_blocking = bool(device.type == 'cuda')
     infer_loss_sum = 0.0
     infer_samples = 0
+    p_pred_chunks: list[torch.Tensor] = []
+    p_gt_chunks: list[torch.Tensor] = []
+    p_valid_chunks: list[torch.Tensor] = []
+    s_pred_chunks: list[torch.Tensor] = []
+    s_gt_chunks: list[torch.Tensor] = []
+    s_valid_chunks: list[torch.Tensor] = []
 
     Path(vis_out_dir).mkdir(parents=True, exist_ok=True)
 
@@ -94,11 +165,89 @@ def _run_infer_epoch(
             x_tg = batch_dev['target']
 
             logits = model(x_in)
+            if int(logits.ndim) != 4 or int(logits.shape[1]) != 3:
+                msg = f'logits must have shape (B,3,H,W), got {tuple(logits.shape)}'
+                raise ValueError(msg)
             loss = criterion(logits, x_tg, batch_dev)
 
             bsize = int(x_in.shape[0])
             infer_loss_sum += float(loss.detach().item()) * bsize
             infer_samples += bsize
+
+            if 'trace_valid' not in batch_dev:
+                msg = "batch must contain 'trace_valid'"
+                raise KeyError(msg)
+            if 'label_valid' not in batch_dev:
+                msg = "batch must contain 'label_valid'"
+                raise KeyError(msg)
+            if 'meta' not in batch:
+                msg = "batch must contain 'meta'"
+                raise KeyError(msg)
+            meta = batch['meta']
+            if not isinstance(meta, Mapping):
+                msg = "batch['meta'] must be mapping"
+                raise TypeError(msg)
+            if 'p_idx_view' not in meta:
+                msg = "batch['meta'] must contain 'p_idx_view'"
+                raise KeyError(msg)
+            if 's_idx_view' not in meta:
+                msg = "batch['meta'] must contain 's_idx_view'"
+                raise KeyError(msg)
+
+            trace_valid = _to_tensor_bh(
+                value=batch_dev['trace_valid'],
+                name='trace_valid',
+                device=logits.device,
+            )
+            label_valid = _to_tensor_bh(
+                value=batch_dev['label_valid'],
+                name='label_valid',
+                device=logits.device,
+            )
+            if trace_valid.dtype is not torch.bool:
+                msg = f"batch['trace_valid'] must be bool, got {trace_valid.dtype}"
+                raise TypeError(msg)
+            if label_valid.dtype is not torch.bool:
+                msg = f"batch['label_valid'] must be bool, got {label_valid.dtype}"
+                raise TypeError(msg)
+
+            p_gt = _to_tensor_bh(
+                value=meta['p_idx_view'],
+                name="meta['p_idx_view']",
+                device=logits.device,
+            ).to(dtype=torch.int64)
+            s_gt = _to_tensor_bh(
+                value=meta['s_idx_view'],
+                name="meta['s_idx_view']",
+                device=logits.device,
+            ).to(dtype=torch.int64)
+
+            probs = torch.softmax(logits, dim=1)
+            pred_p = torch.argmax(probs[:, 0], dim=-1).to(dtype=torch.int64)
+            pred_s = torch.argmax(probs[:, 1], dim=-1).to(dtype=torch.int64)
+            if tuple(pred_p.shape) != tuple(p_gt.shape):
+                msg = (
+                    'pred_p and p_gt shape mismatch: '
+                    f'pred_p={tuple(pred_p.shape)} p_gt={tuple(p_gt.shape)}'
+                )
+                raise ValueError(msg)
+            if tuple(pred_s.shape) != tuple(s_gt.shape):
+                msg = (
+                    'pred_s and s_gt shape mismatch: '
+                    f'pred_s={tuple(pred_s.shape)} s_gt={tuple(s_gt.shape)}'
+                )
+                raise ValueError(msg)
+
+            valid_common = trace_valid & label_valid
+            valid_p = valid_common & (p_gt > 0)
+            valid_s = valid_common & (s_gt > 0)
+
+            p_pred_chunks.append(pred_p)
+            p_gt_chunks.append(p_gt)
+            p_valid_chunks.append(valid_p)
+            s_pred_chunks.append(pred_s)
+            s_gt_chunks.append(s_gt)
+            s_valid_chunks.append(valid_s)
 
             if step < int(vis_n):
                 title = make_title_from_batch_meta(batch, b=0)
@@ -116,7 +265,25 @@ def _run_infer_epoch(
         msg = 'no inference samples were processed'
         raise RuntimeError(msg)
 
-    return infer_loss_sum / float(infer_samples)
+    if not p_pred_chunks or not s_pred_chunks:
+        msg = 'no inference batches were processed'
+        raise RuntimeError(msg)
+
+    p_pred = torch.cat(p_pred_chunks, dim=0)
+    p_gt = torch.cat(p_gt_chunks, dim=0)
+    p_valid = torch.cat(p_valid_chunks, dim=0)
+    s_pred = torch.cat(s_pred_chunks, dim=0)
+    s_gt = torch.cat(s_gt_chunks, dim=0)
+    s_valid = torch.cat(s_valid_chunks, dim=0)
+
+    metrics: dict[str, float] = {}
+    metrics.update(_phase_metrics(prefix='p', pred=p_pred, gt=p_gt, valid=p_valid))
+    metrics.update(_phase_metrics(prefix='s', pred=s_pred, gt=s_gt, valid=s_valid))
+
+    return InferEpochResult(
+        loss=infer_loss_sum / float(infer_samples),
+        metrics=metrics,
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -219,17 +386,23 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     model = build_model(typed.model).to(device)
+    maybe_load_init_weights(
+        cfg=cfg,
+        base_dir=base_dir,
+        model=model,
+        model_sig=model_sig,
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(typed.train.lr))
 
     def infer_epoch_fn(model, loader, device, vis_epoch_dir, vis_n, max_batches):
-        return (_run_infer_epoch(
-                model=model,
-                loader=loader,
-                device=device,
-                vis_out_dir=str(vis_epoch_dir),
-                vis_n=vis_n,
-                max_batches=max_batches,
-            ))
+        return _run_infer_epoch(
+            model=model,
+            loader=loader,
+            device=device,
+            vis_out_dir=str(vis_epoch_dir),
+            vis_n=vis_n,
+            max_batches=max_batches,
+        )
 
     spec = TrainSkeletonSpec(
         pipeline='psn',

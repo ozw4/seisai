@@ -25,6 +25,7 @@ from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
     expand_cfg_listfiles,
     load_cfg_with_base_dir,
+    maybe_load_init_weights,
     resolve_device,
     resolve_out_dir,
     run_train_skeleton,
@@ -455,6 +456,12 @@ def main(argv: list[str] | None = None) -> None:
 
     model = build_model(encdec_kwargs)
     model.to(device)
+    maybe_load_init_weights(
+        cfg=cfg,
+        base_dir=base_dir,
+        model=model,
+        model_sig=model_sig,
+    )
 
     optimizer = torch.optim.AdamW(
         model.parameters(),

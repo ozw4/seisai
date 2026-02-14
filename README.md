@@ -15,6 +15,14 @@ PyTorch で扱いやすい **SEG-Y gather データセット群 + 学習/推論�
 - `docs/` : 仕様・メモ・テスト補助ドキュメント
 - `tests/` : ルートの e2e テスト（同梱サンプル `tests/data` を使用）
 
+## Init checkpoint (`train.init_ckpt`)
+
+- `blindtrace` / `psn` / `pair` の全タスクで `train.init_ckpt` を共通利用できます。
+- 想定する重みファイルは `train_skeleton` が保存する `best.pt` です。
+- `in_chans` が不一致の場合は即時エラーで停止します（部分ロードしません）。
+- `out_chans` が不一致の場合は `seg_head.*` を除外してロードします。
+- 上記以外の重みは完全一致を要求し、`missing/unexpected` があればエラーで停止します。
+
 ## パッケージ構成
 
 | package | import | 役割 |
