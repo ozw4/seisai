@@ -12,7 +12,6 @@ import numpy as np
 import segyio
 import torch
 from _model import NetAE as EncDec2D
-from matplotlib.collections import PolyCollection
 from seisai_dataset.config import LoaderConfig
 from seisai_dataset.file_info import build_file_info_dataclass
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
@@ -22,10 +21,12 @@ from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 from seisai_transforms.signal_ops.scaling.standardize import standardize_per_trace_torch
 
+# Wiggle (あなたの実装がここにある前提)
+from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
+
 BuildFileInfoFn = Callable[..., Any]
 SnapPicksFn = Callable[..., Any]
 Numpy2FbCrdFn = Callable[..., Any]
-StdPerTraceFn = Callable[..., torch.Tensor]
 
 # =========================
 # CONFIG (ここだけ直書き)
@@ -49,7 +50,7 @@ HEADER_CACHE_DIR: str | None = None
 VIZ_EVERY_N_SHOTS = 50
 VIZ_DIRNAME = 'viz'
 
-# velocity mask params
+# velocity mask params (inference)
 VMIN_MASK = 100.0
 VMAX_MASK = 8000.0
 T0_LO_MS = -10.0
@@ -62,11 +63,15 @@ TILE_W = 6016
 OVERLAP_H = 96  # stride_h = 32
 TILES_PER_BATCH = 8
 
-# sampling rate x2 (upsample) before inference, then downsample prob back
-UPSAMPLE_X2 = True
+# ---- LMO for visualization (display only) ----
+# TODO: ここはユーザーが調整する前提。とりあえず適当な値。
+LMO_VEL_MPS = 3200.0
+LMO_BULK_SHIFT_SAMPLES = 50.0  # LMO-corrected traces will be shifted by this much (positive shifts later samples)
+
+PLOT_START = 0
+PLOT_END = 350
 
 
-# ---- velocity mask allowing vmin==0 ----
 def _cos_ramp01(s: torch.Tensor) -> torch.Tensor:
     s = s.clamp(0.0, 1.0)
     return 0.5 - 0.5 * torch.cos(torch.pi * s)
@@ -83,78 +88,6 @@ def _valid_pick_mask(p: np.ndarray) -> np.ndarray:
     return m & np.isfinite(p)
 
 
-def _shift_1d_noroll(x: np.ndarray, shift: int, fill: float = 0.0) -> np.ndarray:
-    """Non-circular shift. shift>0: move left (earlier), shift<0: move right (later)."""
-    n = x.shape[0]
-    out = np.full((n,), fill, dtype=x.dtype)
-    if shift == 0:
-        out[:] = x
-        return out
-    if shift > 0:
-        if shift < n:
-            out[: n - shift] = x[shift:]
-        return out
-    s = -shift
-    if s < n:
-        out[s:] = x[: n - s]
-    return out
-
-
-def align_by_picks_for_viz(
-    seis: np.ndarray,  # (H,W)
-    prob: np.ndarray | None,  # (H,W) or None
-    pred: np.ndarray,  # (H,)
-    pred2: np.ndarray | None = None,
-    *,
-    ref: int | None = None,  # None -> median of valid pred2 if exists else pred
-    fill_seis: float = 0.0,
-    fill_prob: float = 0.0,
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray | None, int]:
-    """Align traces so that pred_align becomes 'ref' (sample index).
-    Returns aligned (seis, prob, pred, pred2, ref_used).
-    """
-    seis = np.asarray(seis)
-    H, W = seis.shape
-
-    pred = np.asarray(pred).astype(np.int64, copy=False)
-    pred2a = None if pred2 is None else np.asarray(pred2).astype(np.int64, copy=False)
-
-    pred_align = pred2a if pred2a is not None else pred
-    m = _valid_pick_mask(pred_align)
-    if not m.any():
-        return seis, prob, pred, pred2a, 0
-
-    ref_used = int(np.median(pred_align[m])) if ref is None else int(ref)
-
-    shift = np.zeros((H,), dtype=np.int64)
-    shift[m] = pred_align[m] - ref_used
-
-    seis_al = np.empty_like(seis)
-    prob_al = None if prob is None else np.empty_like(prob)
-
-    pred_al = pred.astype(np.float32, copy=True)
-    pred2_al = None if pred2a is None else pred2a.astype(np.float32, copy=True)
-
-    for i in range(H):
-        s = int(shift[i])
-        seis_al[i] = _shift_1d_noroll(seis[i], s, fill=fill_seis)
-        if prob_al is not None:
-            prob_al[i] = _shift_1d_noroll(prob[i], s, fill=fill_prob)
-
-        if _valid_pick_mask(pred[i]):
-            pred_al[i] = float(pred[i] - s)
-        else:
-            pred_al[i] = np.nan
-
-        if pred2_al is not None:
-            if _valid_pick_mask(pred2a[i]):
-                pred2_al[i] = float(pred2a[i] - s)
-            else:
-                pred2_al[i] = np.nan
-
-    return seis_al, prob_al, pred_al, pred2_al, ref_used
-
-
 def make_velocity_feasible_filt_allow_vmin0(
     *,
     offsets_m: torch.Tensor,  # (B,H)
@@ -167,19 +100,25 @@ def make_velocity_feasible_filt_allow_vmin0(
     taper_ms: float = 0.0,
 ) -> torch.Tensor:
     if vmax <= 0.0:
-        raise ValueError(f'vmax must be positive, got {vmax}')
+        msg = f'vmax must be positive, got {vmax}'
+        raise ValueError(msg)
     if vmin < 0.0:
-        raise ValueError(f'vmin must be >=0, got {vmin}')
+        msg = f'vmin must be >=0, got {vmin}'
+        raise ValueError(msg)
     if W <= 0:
-        raise ValueError(f'W must be positive, got {W}')
+        msg = f'W must be positive, got {W}'
+        raise ValueError(msg)
     if vmin > 0.0 and vmax < vmin:
-        raise ValueError(f'vmax must be >= vmin. got vmin={vmin}, vmax={vmax}')
+        msg = f'vmax must be >= vmin. got vmin={vmin}, vmax={vmax}'
+        raise ValueError(msg)
     if offsets_m.ndim != 2:
-        raise ValueError(f'offsets_m must be (B,H), got {tuple(offsets_m.shape)}')
+        msg = f'offsets_m must be (B,H), got {tuple(offsets_m.shape)}'
+        raise ValueError(msg)
 
     dt = float(dt_sec)
     if dt <= 0.0:
-        raise ValueError(f'dt_sec must be positive, got {dt_sec}')
+        msg = f'dt_sec must be positive, got {dt_sec}'
+        raise ValueError(msg)
 
     B, H = offsets_m.shape
     dev = offsets_m.device
@@ -215,73 +154,6 @@ def make_velocity_feasible_filt_allow_vmin0(
     return m  # (B,H,W)
 
 
-def plot(seis, pred, ax=None, title=None, pred2=None):
-    amp = 2
-
-    tmp = seis.copy()
-    n_tr, n_samp = tmp.shape
-
-    y = np.arange(n_samp)
-
-    tmp_max = tmp.max()
-    trace_idx = np.arange(n_tr, dtype=tmp.dtype)[:, None]
-    xs = (tmp / tmp_max) * amp + trace_idx
-
-    segs = np.zeros((n_tr, n_samp, 2))
-    segs[:, :, 0] = xs
-    segs[:, :, 1] = y
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(12, 12))
-
-    ax.set_xlim(xs.min(), xs.max())
-    ax.set_ylim(y.max(), y.min())
-
-    line_segments = PolyCollection(
-        segs,
-        linewidths=(0.01, 0.02, 0.02, 0.04),
-        facecolors='k',
-        edgecolors='k',
-        linestyle='solid',
-    )
-    ax.add_collection(line_segments)
-
-    tr = np.arange(n_tr)
-    ax.scatter(
-        tr,
-        pred,
-        s=5,
-        marker='o',
-        linewidths=0.5,
-        facecolor='None',
-        edgecolor='r',
-        alpha=0.9,
-        label='Prediction',
-    )
-
-    if pred2 is not None:
-        pred2 = pred2.astype('f')
-        ax.scatter(
-            tr,
-            pred2,
-            s=5,
-            marker='o',
-            linewidths=0.5,
-            facecolor='None',
-            edgecolor='b',
-            alpha=0.9,
-            label='snapped',
-        )
-
-    ax.set_ylabel('Sample')
-    ax.legend(loc='upper left')
-
-    plt.subplots_adjust(hspace=0.01)
-    plt.tight_layout()
-    plt.savefig(title, dpi=200)
-
-
-# ---- tile transform: wave std only ----
 @dataclass(frozen=True)
 class TileWaveStdOnly:
     eps_std: float = 1e-10
@@ -296,10 +168,12 @@ def pad_samples_to_6016(
     x_hw: np.ndarray, w_target: int = 6016
 ) -> tuple[np.ndarray, int]:
     if x_hw.ndim != 2:
-        raise ValueError(f'x_hw must be (H,W), got {x_hw.shape}')
+        msg = f'x_hw must be (H,W), got {x_hw.shape}'
+        raise ValueError(msg)
     h, w0 = x_hw.shape
     if w0 > w_target:
-        raise ValueError(f'n_samples={w0} exceeds w_target={w_target}')
+        msg = f'n_samples={w0} exceeds w_target={w_target}'
+        raise ValueError(msg)
     if w0 == w_target:
         return x_hw.astype(np.float32, copy=False), w0
     out = np.zeros((h, w_target), dtype=np.float32)
@@ -307,20 +181,72 @@ def pad_samples_to_6016(
     return out, w0
 
 
-def upsample_time_x2_linear(wave_hw: np.ndarray) -> np.ndarray:
-    """Time upsample x2 (dt -> dt/2) by inserting midpoints.
-    Output length = 2*W0. Original samples align to even indices.
-    """
-    if wave_hw.ndim != 2:
-        raise ValueError(f'wave_hw must be (H,W), got {wave_hw.shape}')
-    H, W0 = wave_hw.shape
-    wave_hw = wave_hw.astype(np.float32, copy=False)
+def _lmo_shift_samples(
+    offsets_m: np.ndarray, *, dt_sec: float, vel_mps: float
+) -> np.ndarray:
+    if vel_mps <= 0.0:
+        msg = f'LMO velocity must be positive, got {vel_mps}'
+        raise ValueError(msg)
+    if dt_sec <= 0.0:
+        msg = f'dt_sec must be positive, got {dt_sec}'
+        raise ValueError(msg)
+    off = np.asarray(offsets_m, dtype=np.float32)
+    return (np.abs(off) / float(vel_mps)) / float(dt_sec)  # (H,) float samples
 
-    out = np.empty((H, 2 * W0), dtype=np.float32)
-    out[:, 0::2] = wave_hw
-    if W0 > 1:
-        out[:, 1:-1:2] = 0.5 * (wave_hw[:, :-1] + wave_hw[:, 1:])
-    out[:, -1] = wave_hw[:, -1]
+
+def apply_lmo_linear(
+    wave_hw: np.ndarray,  # (H,W)
+    offsets_m: np.ndarray,  # (H,)
+    *,
+    dt_sec: float,
+    vel_mps: float,
+    bulk_shift_samples: float = 0.0,  # add to all traces (positive shifts later samples)
+    fill: float = 0.0,
+) -> np.ndarray:
+    """Linear moveout correction (display only).
+    corrected(t') = original(t' + |x|/v)
+    => output sample i reads input at (i + shift_samples).
+    """
+    w = np.asarray(wave_hw, dtype=np.float32)
+    if w.ndim != 2:
+        msg = f'wave_hw must be 2D (H,W), got {w.shape}'
+        raise ValueError(msg)
+    H, W = w.shape
+
+    shifts = _lmo_shift_samples(offsets_m, dt_sec=dt_sec, vel_mps=vel_mps)
+    if shifts.shape != (H,):
+        msg = f'offsets_m must be (H,), got {np.asarray(offsets_m).shape}, H={H}'
+        raise ValueError(msg)
+
+    xi = np.arange(W, dtype=np.float32)
+    out = np.empty_like(w)
+
+    for i in range(H):
+        src = xi - float(shifts[i]) + float(bulk_shift_samples)
+        out[i] = np.interp(xi, src, w[i], left=fill, right=fill)
+
+    return out
+
+
+def lmo_correct_picks(
+    picks: np.ndarray,  # (H,) sample index
+    offsets_m: np.ndarray,  # (H,)
+    *,
+    dt_sec: float,
+    vel_mps: float,
+) -> np.ndarray:
+    """Pick correction consistent with apply_lmo_linear.
+    t' = t - |x|/v  => sample' = sample - shift_samples.
+    """
+    p = np.asarray(picks, dtype=np.float32)
+    shifts = _lmo_shift_samples(offsets_m, dt_sec=dt_sec, vel_mps=vel_mps).astype(
+        np.float32, copy=False
+    )
+    if p.shape != shifts.shape:
+        msg = f'picks must be (H,), got {p.shape}, shifts={shifts.shape}'
+        raise ValueError(msg)
+    out = p - shifts
+    out[~np.isfinite(p)] = np.nan
     return out
 
 
@@ -332,30 +258,28 @@ def infer_gather_prob(
     offsets_m: np.ndarray,  # (H,)
     dt_sec: float,  # original dt
 ) -> tuple[np.ndarray, int]:
+    """Predict at the original sampling rate (NO upsample/downsample)."""
     device = next(model.parameters()).device
 
     if wave_hw.ndim != 2:
-        raise ValueError(f'wave_hw must be (H,W0), got {wave_hw.shape}')
+        msg = f'wave_hw must be (H,W0), got {wave_hw.shape}'
+        raise ValueError(msg)
     H0, W0 = wave_hw.shape
     if offsets_m.shape != (H0,):
-        raise ValueError(f'offsets_m must be (H,), got {offsets_m.shape}, H={H0}')
+        msg = f'offsets_m must be (H,), got {offsets_m.shape}, H={H0}'
+        raise ValueError(msg)
 
     n_samples_orig = int(W0)
 
-    if UPSAMPLE_X2:
-        wave_in = upsample_time_x2_linear(wave_hw)  # (H, 2*W0)
-        dt_in = float(dt_sec) * 0.5
-        n_samples_in_orig = int(wave_in.shape[1])  # 2*W0
-    else:
-        wave_in = wave_hw.astype(np.float32, copy=False)
-        dt_in = float(dt_sec)
-        n_samples_in_orig = int(wave_in.shape[1])
+    wave_in = wave_hw.astype(np.float32, copy=False)
+    dt_in = float(dt_sec)
 
     wave_pad, n_samples_in = pad_samples_to_6016(wave_in, w_target=TILE_W)  # (H,6016)
-    wave_pad = -wave_pad  # polarity flip
+    wave_pad = -wave_pad  # polarity flip (as in original script)
     H, W = wave_pad.shape
     if H != H0 or W != TILE_W:
-        raise ValueError(f'unexpected padded shape: {wave_pad.shape}')
+        msg = f'unexpected padded shape: {wave_pad.shape}'
+        raise ValueError(msg)
 
     tile_h = min(TILE_H, H)
     ov_h = OVERLAP_H if H >= TILE_H else 0
@@ -382,16 +306,17 @@ def infer_gather_prob(
     )
 
     if logits.shape[1] != 1:
-        raise ValueError(f'expected out_chans=1, got {logits.shape[1]}')
+        msg = f'expected out_chans=1, got {logits.shape[1]}'
+        raise ValueError(msg)
 
-    prob = torch.softmax(logits, dim=-1)  # (1,1,H,6016) on dt_in grid
+    prob = torch.softmax(logits, dim=-1)  # (1,1,H,6016) on original dt grid
 
     offs_t = (
         torch.from_numpy(offsets_m).to(device=device, dtype=torch.float32).view(1, H)
     )
     mask = make_velocity_feasible_filt_allow_vmin0(
         offsets_m=offs_t,
-        dt_sec=float(dt_in),  # ★dt/2 when upsampled
+        dt_sec=dt_in,
         W=W,
         vmin=float(VMIN_MASK),
         vmax=float(VMAX_MASK),
@@ -402,27 +327,13 @@ def infer_gather_prob(
 
     prob = apply_velocity_filt_prob(prob, mask, renorm=False, time_dim=-1)
 
-    # upsampled-pad領域は pick対象外
     if n_samples_in < W:
         prob[:, :, :, n_samples_in:] = 0.0
 
-    prob_up = prob[0, 0].detach().to('cpu', dtype=torch.float32).numpy()  # (H,6016)
+    prob_np = prob[0, 0].detach().to('cpu', dtype=torch.float32).numpy()  # (H,6016)
 
-    if UPSAMPLE_X2:
-        # downsample (dt/2 -> dt): take even indices aligned to original samples
-        prob_ds = prob_up[:, :n_samples_in_orig:2]  # -> (H, W0)
-        if prob_ds.shape[1] != n_samples_orig:
-            raise ValueError(
-                f'downsample length mismatch: got {prob_ds.shape[1]}, expected {n_samples_orig}'
-            )
-
-        prob_out = np.zeros((H, TILE_W), dtype=np.float32)
-        prob_out[:, :n_samples_orig] = prob_ds
-        return prob_out, n_samples_orig
-
-    # no upsample: output already on original dt grid
     prob_out = np.zeros((H, TILE_W), dtype=np.float32)
-    prob_out[:, :n_samples_orig] = prob_up[:, :n_samples_orig]
+    prob_out[:, :n_samples_orig] = prob_np[:, :n_samples_orig]
     return prob_out, n_samples_orig
 
 
@@ -440,7 +351,8 @@ def _strip_prefix(sd: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
 
 def build_model() -> torch.nn.Module:
     if DEVICE == 'cuda' and not torch.cuda.is_available():
-        raise RuntimeError('CUDA requested but not available')
+        msg = 'CUDA requested but not available'
+        raise RuntimeError(msg)
 
     model = EncDec2D(
         backbone=BACKBONE,
@@ -462,7 +374,8 @@ def build_model() -> torch.nn.Module:
         or not sd
         or not all(isinstance(v, torch.Tensor) for v in sd.values())
     ):
-        raise ValueError("ckpt['model_ema'] is not a state_dict")
+        msg = "ckpt['model_ema'] is not a state_dict"
+        raise ValueError(msg)
 
     sd = _strip_prefix(sd)
     print('[CKPT] load from: model_ema (direct state_dict)')
@@ -479,7 +392,8 @@ def find_segy_files(in_dir: Path) -> list[Path]:
     for e in exts:
         files.extend(sorted(in_dir.glob(f'*{e}')))
     if not files:
-        raise FileNotFoundError(f'no SEGY files found in {in_dir}')
+        msg = f'no SEGY files found in {in_dir}'
+        raise FileNotFoundError(msg)
     return sorted(set(files))
 
 
@@ -488,16 +402,15 @@ def process_one_segy(
     segy_path: Path,
     out_dir: Path,
     model: torch.nn.Module,
-    build_file_info_dataclass: BuildFileInfoFn = build_file_info_dataclass,
+    build_file_info_dataclass_fn: BuildFileInfoFn = build_file_info_dataclass,
     TraceSubsetLoaderCls: type[TraceSubsetLoader] = TraceSubsetLoader,
     LoaderConfigCls: type[LoaderConfig] = LoaderConfig,
     snap_picks_to_phase_fn: SnapPicksFn = snap_picks_to_phase,
     numpy2fbcrd_fn: Numpy2FbCrdFn = numpy2fbcrd,
-    standardize_per_trace_torch_fn: StdPerTraceFn = standardize_per_trace_torch,
     viz_every_n_shots: int = 0,
     viz_dirname: str = 'viz',
 ) -> None:
-    info = build_file_info_dataclass(
+    info = build_file_info_dataclass_fn(
         str(segy_path),
         ffid_byte=segyio.TraceField.FieldRecord,
         chno_byte=segyio.TraceField.TraceNumber,
@@ -523,10 +436,12 @@ def process_one_segy(
             or chno_values.shape != (n_traces,)
             or offsets.shape != (n_traces,)
         ):
-            raise ValueError('header arrays must be length n_traces')
+            msg = 'header arrays must be length n_traces'
+            raise ValueError(msg)
 
         if info.ffid_key_to_indices is None:
-            raise ValueError('ffid_key_to_indices is None (cannot group by ffid)')
+            msg = 'ffid_key_to_indices is None (cannot group by ffid)'
+            raise ValueError(msg)
 
         prob_all = np.zeros((n_traces, TILE_W), dtype=np.float16)
         trace_indices_all = np.arange(n_traces, dtype=np.int64)
@@ -567,37 +482,42 @@ def process_one_segy(
                 wave_hw=wave_hw,
                 offsets_m=offs_m,
                 dt_sec=dt_sec,
-            )  # (H,6016) at original dt
+            )  # (H,6016) on original dt
 
             if invalid.any():
                 prob_hw[invalid, :] = 0.0
 
-            pick = np.argmax(prob_hw, axis=1).astype(np.int32, copy=False)
+            pick_argmax = np.argmax(prob_hw, axis=1).astype(np.int32, copy=False)
             pmax = np.max(prob_hw, axis=1).astype(np.float32, copy=False)
 
             nopick = (pmax < float(PMAX_TH)) | invalid
-            pick = pick.copy()
-            pick[nopick] = 0
+            pick_snap = pick_argmax.copy()
+            pick_snap[nopick] = 0
 
             wave_pad = np.zeros((wave_hw.shape[0], TILE_W), dtype=np.float32)
             wave_pad[:, :n_samples_orig] = wave_hw.astype(np.float32, copy=False)
-            pick = snap_picks_to_phase_fn(
-                pick, wave_pad, mode='trough', ltcor=int(LTCOR)
+
+            # phase snap (trough)
+            pick_snap = snap_picks_to_phase_fn(
+                pick_snap, wave_pad, mode='trough', ltcor=int(LTCOR)
             )
 
-            too_late = pick >= int(n_samples_orig)
+            too_late = pick_snap >= int(n_samples_orig)
             if np.any(too_late):
-                pick = pick.copy()
-                pick[too_late] = 0
+                pick_snap = pick_snap.copy()
+                pick_snap[too_late] = 0
 
             prob_all[idx, :] = prob_hw.astype(np.float16, copy=False)
 
             row = ffid_to_row[int(ffid)]
-            for j in range(pick.shape[0]):
+            for j in range(pick_snap.shape[0]):
                 cno = int(chno_g[j])
                 if 1 <= cno <= max_chno:
-                    fb_mat[row, cno - 1] = int(pick[j])
+                    fb_mat[row, cno - 1] = int(pick_snap[j])
 
+            # -----------------
+            # Visualization (LMO instead of pick-shift)
+            # -----------------
             if viz_ffids and int(ffid) in viz_ffids:
                 if float(np.max(np.abs(wave_pad))) <= 0.0:
                     continue
@@ -606,24 +526,104 @@ def process_one_segy(
                 viz_dir.mkdir(parents=True, exist_ok=True)
                 png_path = viz_dir / f'{segy_path.stem}.ffid{int(ffid)}.png'
 
-                pred_argmax = np.argmax(prob_hw, axis=1).astype(np.int64, copy=False)
-                pred_snap = pick.astype(np.int64, copy=False)
+                # LMO-correct waveform for display
+                seis_lmo = apply_lmo_linear(
+                    wave_pad[:, :n_samples_orig],
+                    offs_m,
+                    dt_sec=dt_sec,
+                    vel_mps=float(LMO_VEL_MPS),
+                    fill=0.0,
+                    bulk_shift_samples=float(LMO_BULK_SHIFT_SAMPLES),
+                )  # (H, n_samples_orig)
 
-                seis_al, prob_al, pred1_al, pred2_al, ref_used = align_by_picks_for_viz(
-                    wave_pad, prob_hw, pred_argmax, pred2=pred_snap
+                # LMO-correct picks for overlay (no shifting of traces by pick)
+                p1_lmo = lmo_correct_picks(
+                    pick_argmax.astype(np.float32, copy=False),
+                    offs_m,
+                    dt_sec=dt_sec,
+                    vel_mps=float(LMO_VEL_MPS),
+                )
+                p2_lmo = lmo_correct_picks(
+                    pick_snap.astype(np.float32, copy=False),
+                    offs_m,
+                    dt_sec=dt_sec,
+                    vel_mps=float(LMO_VEL_MPS),
                 )
 
-                seis_al = (seis_al - np.mean(seis_al, axis=1, keepdims=True)) / (
-                    np.std(seis_al, axis=1, keepdims=True) + 1e-10
+                # ---- window ----
+                seis_win = seis_lmo[:, PLOT_START:PLOT_END].astype(
+                    np.float32, copy=False
                 )
 
-                plot(
-                    seis_al[:, ref_used - 128 : ref_used + 128],
-                    pred1_al - ref_used + 128,
-                    pred2=pred2_al - ref_used + 128 if pred2_al is not None else None,
-                    title=str(png_path),
+                # picks (window-relative)
+                pred1_win = (
+                    p1_lmo - float(PLOT_START) + float(LMO_BULK_SHIFT_SAMPLES)
+                ).astype(np.float32, copy=False)
+                pred2_win = (
+                    p2_lmo - float(PLOT_START) + float(LMO_BULK_SHIFT_SAMPLES)
+                ).astype(np.float32, copy=False)
+
+                # ---- drop all-zero traces (in this display window) ----
+                keep = np.max(np.abs(seis_win), axis=1) > 0.0
+                if not np.any(keep):
+                    continue
+
+                # keep original trace index as x positions (so gaps remain visible)
+                x_keep = np.flatnonzero(keep).astype(np.float32)
+
+                seis_win = seis_win[keep]
+                pred1_win = pred1_win[keep]
+                pred2_win = pred2_win[keep]
+
+                # ---- standardize for display (after dropping zeros) ----
+                seis_win = (seis_win - np.mean(seis_win, axis=1, keepdims=True)) / (
+                    np.std(seis_win, axis=1, keepdims=True) + 1e-10
                 )
-                plt.close()
+
+                pick_overlays = (
+                    PickOverlay(
+                        pred1_win,
+                        unit='sample',
+                        label='argmax',
+                        marker='o',
+                        size=14.0,
+                        color='r',
+                        alpha=0.9,
+                    ),
+                    PickOverlay(
+                        pred2_win,
+                        unit='sample',
+                        label='snapped',
+                        marker='x',
+                        size=18.0,
+                        color='b',
+                        alpha=0.9,
+                    ),
+                )
+
+                fig, ax = plt.subplots(figsize=(15, 10))
+                plot_wiggle(
+                    seis_win,
+                    ax=ax,
+                    cfg=WiggleConfig(
+                        dt=float(dt_sec),
+                        t0=float(PLOT_START) * float(dt_sec),
+                        time_axis=1,  # seis_win: (n_traces, n_samples)
+                        x=x_keep,  # ★元のトレース位置を維持（ギャップが残る）
+                        normalize='trace',
+                        gain=2.0,
+                        fill_positive=True,
+                        picks=pick_overlays,
+                        show_legend=True,
+                    ),
+                )
+
+                ax.set_title(
+                    f'{segy_path.stem} ffid={int(ffid)} (LMO v={LMO_VEL_MPS:.1f} m/s)'
+                )
+                fig.tight_layout()
+                fig.savefig(png_path, dpi=200)
+                plt.close(fig)
                 print(f'[VIZ] saved {png_path}')
 
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -661,15 +661,15 @@ def process_one_segy(
 
 def main() -> None:
     model = build_model()
-    segy_files = find_segy_files(INPUT_DIR)
-    for segy_path in segy_files:
-        process_one_segy(
-            segy_path=segy_path,
-            out_dir=OUT_DIR,
-            model=model,
-            viz_every_n_shots=VIZ_EVERY_N_SHOTS,
-            viz_dirname=VIZ_DIRNAME,
-        )
+    segy_path = find_segy_files(INPUT_DIR)[0]  # 最初の1ファイルのみ
+    print(f'[RUN] using first SEGY: {segy_path}')
+    process_one_segy(
+        segy_path=segy_path,
+        out_dir=OUT_DIR,
+        model=model,
+        viz_every_n_shots=VIZ_EVERY_N_SHOTS,
+        viz_dirname=VIZ_DIRNAME,
+    )
 
 
 if __name__ == '__main__':
