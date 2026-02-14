@@ -2,7 +2,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -62,6 +62,9 @@ TILE_W = 6016
 OVERLAP_H = 96  # stride_h = 32
 TILES_PER_BATCH = 8
 
+# sampling rate x2 (upsample) before inference, then downsample prob back
+UPSAMPLE_X2 = True
+
 
 # ---- velocity mask allowing vmin==0 ----
 def _cos_ramp01(s: torch.Tensor) -> torch.Tensor:
@@ -91,7 +94,6 @@ def _shift_1d_noroll(x: np.ndarray, shift: int, fill: float = 0.0) -> np.ndarray
         if shift < n:
             out[: n - shift] = x[shift:]
         return out
-    # shift < 0
     s = -shift
     if s < n:
         out[s:] = x[: n - s]
@@ -117,20 +119,15 @@ def align_by_picks_for_viz(
     pred = np.asarray(pred).astype(np.int64, copy=False)
     pred2a = None if pred2 is None else np.asarray(pred2).astype(np.int64, copy=False)
 
-    # align pick: prefer pred2 (snap) if provided, else pred
     pred_align = pred2a if pred2a is not None else pred
     m = _valid_pick_mask(pred_align)
     if not m.any():
-        # 何も整列できないのでそのまま返す（refは0扱い）
         return seis, prob, pred, pred2a, 0
 
-    if ref is None:
-        ref_used = int(np.median(pred_align[m]))
-    else:
-        ref_used = int(ref)
+    ref_used = int(np.median(pred_align[m])) if ref is None else int(ref)
 
     shift = np.zeros((H,), dtype=np.int64)
-    shift[m] = pred_align[m] - ref_used  # pickをrefに寄せるための左シフト量
+    shift[m] = pred_align[m] - ref_used
 
     seis_al = np.empty_like(seis)
     prob_al = None if prob is None else np.empty_like(prob)
@@ -144,7 +141,6 @@ def align_by_picks_for_viz(
         if prob_al is not None:
             prob_al[i] = _shift_1d_noroll(prob[i], s, fill=fill_prob)
 
-        # pickも同じだけ座標変換（シフト後の座標系）
         if _valid_pick_mask(pred[i]):
             pred_al[i] = float(pred[i] - s)
         else:
@@ -219,27 +215,19 @@ def make_velocity_feasible_filt_allow_vmin0(
     return m  # (B,H,W)
 
 
-def _pick_valid_mask(p: np.ndarray) -> np.ndarray:
-    p = np.asarray(p)
-    return (p != -9999) & (p != -1) & (p != 0) & np.isfinite(p)
-
-
 def plot(seis, pred, ax=None, title=None, pred2=None):
     amp = 2
 
-    tmp = seis.copy()  # 元コード通り
+    tmp = seis.copy()
     n_tr, n_samp = tmp.shape
 
-    y = np.arange(n_samp)  # 元コード通り (int)
+    y = np.arange(n_samp)
 
-    # 元コードの tmp[i] / tmp.max() * amp + i をベクトル化
-    tmp_max = tmp.max()  # 元コードではループ内で毎回評価されるが値は同じなので1回に集約
-    trace_idx = np.arange(n_tr, dtype=tmp.dtype)[
-        :, None
-    ]  # float側に寄せて dtype の挙動を合わせる
-    xs = (tmp / tmp_max) * amp + trace_idx  # (n_tr, n_samp)
+    tmp_max = tmp.max()
+    trace_idx = np.arange(n_tr, dtype=tmp.dtype)[:, None]
+    xs = (tmp / tmp_max) * amp + trace_idx
 
-    segs = np.zeros((n_tr, n_samp, 2))  # 元コード通り float64
+    segs = np.zeros((n_tr, n_samp, 2))
     segs[:, :, 0] = xs
     segs[:, :, 1] = y
 
@@ -272,7 +260,7 @@ def plot(seis, pred, ax=None, title=None, pred2=None):
     )
 
     if pred2 is not None:
-        pred2 = pred2.astype('f')  # 元コード通り
+        pred2 = pred2.astype('f')
         ax.scatter(
             tr,
             pred2,
@@ -293,14 +281,13 @@ def plot(seis, pred, ax=None, title=None, pred2=None):
     plt.savefig(title, dpi=200)
 
 
-# ---- tile transform: wave std only + offset robust norm per tile ----
+# ---- tile transform: wave std only ----
 @dataclass(frozen=True)
 class TileWaveStdOnly:
     eps_std: float = 1e-10
 
     @torch.no_grad()
     def __call__(self, patch: torch.Tensor, *, return_meta: bool = False):
-        # patch: (B,1,H,W)
         out = standardize_per_trace_torch(patch, eps=self.eps_std)
         return (out, {}) if return_meta else out
 
@@ -320,21 +307,55 @@ def pad_samples_to_6016(
     return out, w0
 
 
+def upsample_time_x2_linear(wave_hw: np.ndarray) -> np.ndarray:
+    """Time upsample x2 (dt -> dt/2) by inserting midpoints.
+    Output length = 2*W0. Original samples align to even indices.
+    """
+    if wave_hw.ndim != 2:
+        raise ValueError(f'wave_hw must be (H,W), got {wave_hw.shape}')
+    H, W0 = wave_hw.shape
+    wave_hw = wave_hw.astype(np.float32, copy=False)
+
+    out = np.empty((H, 2 * W0), dtype=np.float32)
+    out[:, 0::2] = wave_hw
+    if W0 > 1:
+        out[:, 1:-1:2] = 0.5 * (wave_hw[:, :-1] + wave_hw[:, 1:])
+    out[:, -1] = wave_hw[:, -1]
+    return out
+
+
 @torch.no_grad()
 def infer_gather_prob(
     *,
     model: torch.nn.Module,
-    wave_hw: np.ndarray,  # (H,W0)
+    wave_hw: np.ndarray,  # (H,W0) original dt
     offsets_m: np.ndarray,  # (H,)
-    dt_sec: float,
+    dt_sec: float,  # original dt
 ) -> tuple[np.ndarray, int]:
     device = next(model.parameters()).device
 
-    wave_pad, n_samples_orig = pad_samples_to_6016(wave_hw, w_target=TILE_W)
+    if wave_hw.ndim != 2:
+        raise ValueError(f'wave_hw must be (H,W0), got {wave_hw.shape}')
+    H0, W0 = wave_hw.shape
+    if offsets_m.shape != (H0,):
+        raise ValueError(f'offsets_m must be (H,), got {offsets_m.shape}, H={H0}')
+
+    n_samples_orig = int(W0)
+
+    if UPSAMPLE_X2:
+        wave_in = upsample_time_x2_linear(wave_hw)  # (H, 2*W0)
+        dt_in = float(dt_sec) * 0.5
+        n_samples_in_orig = int(wave_in.shape[1])  # 2*W0
+    else:
+        wave_in = wave_hw.astype(np.float32, copy=False)
+        dt_in = float(dt_sec)
+        n_samples_in_orig = int(wave_in.shape[1])
+
+    wave_pad, n_samples_in = pad_samples_to_6016(wave_in, w_target=TILE_W)  # (H,6016)
     wave_pad = -wave_pad  # polarity flip
     H, W = wave_pad.shape
-    if offsets_m.shape != (H,):
-        raise ValueError(f'offsets_m must be (H,), got {offsets_m.shape}, H={H}')
+    if H != H0 or W != TILE_W:
+        raise ValueError(f'unexpected padded shape: {wave_pad.shape}')
 
     tile_h = min(TILE_H, H)
     ov_h = OVERLAP_H if H >= TILE_H else 0
@@ -363,14 +384,14 @@ def infer_gather_prob(
     if logits.shape[1] != 1:
         raise ValueError(f'expected out_chans=1, got {logits.shape[1]}')
 
-    prob = torch.softmax(logits, dim=-1)  # softmax axis: W
+    prob = torch.softmax(logits, dim=-1)  # (1,1,H,6016) on dt_in grid
 
     offs_t = (
         torch.from_numpy(offsets_m).to(device=device, dtype=torch.float32).view(1, H)
     )
     mask = make_velocity_feasible_filt_allow_vmin0(
         offsets_m=offs_t,
-        dt_sec=float(dt_sec),
+        dt_sec=float(dt_in),  # ★dt/2 when upsampled
         W=W,
         vmin=float(VMIN_MASK),
         vmax=float(VMAX_MASK),
@@ -381,14 +402,28 @@ def infer_gather_prob(
 
     prob = apply_velocity_filt_prob(prob, mask, renorm=False, time_dim=-1)
 
-    if n_samples_orig < W:
-        prob[:, :, :, n_samples_orig:] = 0.0
+    # upsampled-pad領域は pick対象外
+    if n_samples_in < W:
+        prob[:, :, :, n_samples_in:] = 0.0
 
-    prob_np = prob[0, 0].detach().to('cpu', dtype=torch.float32).numpy()
-    return prob_np, n_samples_orig
+    prob_up = prob[0, 0].detach().to('cpu', dtype=torch.float32).numpy()  # (H,6016)
 
+    if UPSAMPLE_X2:
+        # downsample (dt/2 -> dt): take even indices aligned to original samples
+        prob_ds = prob_up[:, :n_samples_in_orig:2]  # -> (H, W0)
+        if prob_ds.shape[1] != n_samples_orig:
+            raise ValueError(
+                f'downsample length mismatch: got {prob_ds.shape[1]}, expected {n_samples_orig}'
+            )
 
-from collections.abc import Mapping
+        prob_out = np.zeros((H, TILE_W), dtype=np.float32)
+        prob_out[:, :n_samples_orig] = prob_ds
+        return prob_out, n_samples_orig
+
+    # no upsample: output already on original dt grid
+    prob_out = np.zeros((H, TILE_W), dtype=np.float32)
+    prob_out[:, :n_samples_orig] = prob_up[:, :n_samples_orig]
+    return prob_out, n_samples_orig
 
 
 def _strip_prefix(sd: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -419,10 +454,9 @@ def build_model() -> torch.nn.Module:
     model.out_chans = 1
     model.use_tta = bool(USE_TTA)
 
-    # PyTorch 2.6 対応：このckptは辞書/DictConfig等を含むので weights_only=False（信頼できる前提）
     ckpt = torch.load(WEIGHTS_PATH, map_location='cpu', weights_only=False)
+    sd = ckpt['model_ema']
 
-    sd = ckpt['model_ema']  # ★直 state_dict
     if (
         not isinstance(sd, Mapping)
         or not sd
@@ -502,10 +536,9 @@ def process_one_segy(
         ffid_to_row = {ff: i for i, ff in enumerate(ffids_sorted)}
         fb_mat = np.zeros((len(ffids_sorted), max_chno), dtype=np.int32)
 
-        if viz_every_n_shots > 0:
-            viz_ffids = set(ffids_sorted[::viz_every_n_shots])
-        else:
-            viz_ffids = set()
+        viz_ffids = (
+            set(ffids_sorted[::viz_every_n_shots]) if viz_every_n_shots > 0 else set()
+        )
 
         loader = TraceSubsetLoaderCls(LoaderConfigCls(pad_traces_to=1))
 
@@ -534,7 +567,7 @@ def process_one_segy(
                 wave_hw=wave_hw,
                 offsets_m=offs_m,
                 dt_sec=dt_sec,
-            )
+            )  # (H,6016) at original dt
 
             if invalid.any():
                 prob_hw[invalid, :] = 0.0
@@ -566,29 +599,6 @@ def process_one_segy(
                     fb_mat[row, cno - 1] = int(pick[j])
 
             if viz_ffids and int(ffid) in viz_ffids:
-                device = next(model.parameters()).device
-
-                wave_t = torch.from_numpy(wave_pad).to(
-                    device=device, dtype=torch.float32
-                )
-                x_vis = wave_t.unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
-                x_vis = standardize_per_trace_torch_fn(x_vis, eps=1e-10)
-
-                prob_vis = (
-                    torch.from_numpy(prob_hw)
-                    .to(device=device, dtype=torch.float32)
-                    .unsqueeze(0)
-                )  # (1,H,W)
-
-                fb_idx = np.full((pick.shape[0],), -1, dtype=np.int64)
-                valid_pick = (pick > 0) & (~nopick)
-                fb_idx[valid_pick] = pick[valid_pick].astype(np.int64, copy=False)
-                fb_vis = (
-                    torch.from_numpy(fb_idx)
-                    .to(device=device, dtype=torch.long)
-                    .unsqueeze(0)
-                )  # (1,H)
-
                 if float(np.max(np.abs(wave_pad))) <= 0.0:
                     continue
 
@@ -602,20 +612,17 @@ def process_one_segy(
                 seis_al, prob_al, pred1_al, pred2_al, ref_used = align_by_picks_for_viz(
                     wave_pad, prob_hw, pred_argmax, pred2=pred_snap
                 )
-                # normalize
+
                 seis_al = (seis_al - np.mean(seis_al, axis=1, keepdims=True)) / (
                     np.std(seis_al, axis=1, keepdims=True) + 1e-10
                 )
-                # plotは -9999/0/-1 を消す仕様じゃないので、NaNにして散布を消す（挙動は散布点だけ）
-                # ※ plot本体は変更しない
+
                 plot(
                     seis_al[:, ref_used - 128 : ref_used + 128],
                     pred1_al - ref_used + 128,
                     pred2=pred2_al - ref_used + 128 if pred2_al is not None else None,
                     title=str(png_path),
                 )
-
-                # plot() は fig を返さないので、直近の図を閉じる
                 plt.close()
                 print(f'[VIZ] saved {png_path}')
 
@@ -625,7 +632,7 @@ def process_one_segy(
         npz_path = out_dir / f'{stem}.prob.npz'
         np.savez_compressed(
             npz_path,
-            prob=prob_all,  # float16 (n_traces,6016)
+            prob=prob_all,  # float16 (n_traces,6016) at original dt
             dt_sec=np.float32(dt_sec),
             n_samples_orig=np.int32(n_samples),
             ffid_values=ffid_values,
@@ -639,7 +646,7 @@ def process_one_segy(
         numpy2fbcrd_fn(
             dt=float(dt_ms),
             fbnum=fb_mat,
-            gather_range=ffids_sorted,  # * rec.no.= 実ffid
+            gather_range=ffids_sorted,
             output_name=str(crd_path),
             original=None,
             mode='gather',
