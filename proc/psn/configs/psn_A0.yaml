@@ -1,0 +1,13 @@
+base: base_psn.yaml
+
+paths:
+  out_dir: ../runs/psn_A0
+
+tracking:
+  exp_name: psn_A0
+
+model:
+  pre_stages: 0
+
+train:
+  init_ckpt: ../../mae/runs/prestage_A0/ckpt/best.pt

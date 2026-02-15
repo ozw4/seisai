@@ -1,0 +1,19 @@
+base: base_psn.yaml
+
+paths:
+  out_dir: ../runs/psn_D3-random
+
+tracking:
+  exp_name: psn_D3-random
+
+model:
+  pre_stages: 3
+  pre_stage_strides:
+    - [1, 2]
+    - [1, 1]
+    - [1, 2]
+  pre_stage_channels: [16, 32, 32]
+  pre_stage_kernels: [3, 3]
+  pre_stage_antialias: true
+  pre_stage_aa_taps: 3
+  pre_stage_aa_pad_mode: zeros

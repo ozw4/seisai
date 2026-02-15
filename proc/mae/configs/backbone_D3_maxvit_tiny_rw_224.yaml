@@ -1,0 +1,10 @@
+base: prestage_D3.yaml
+
+paths:
+  out_dir: ../runs/backbone_D3_maxvit_tiny_rw_224
+
+tracking:
+  exp_name: backbone_D3_maxvit_tiny_rw_224
+
+model:
+  backbone: maxvit_tiny_rw_224

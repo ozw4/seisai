@@ -1,0 +1,10 @@
+base: prestage_D3.yaml
+
+paths:
+  out_dir: ../runs/backbone_D3_tf_efficientnetv2_m
+
+tracking:
+  exp_name: backbone_D3_tf_efficientnetv2_m
+
+model:
+  backbone: tf_efficientnetv2_m

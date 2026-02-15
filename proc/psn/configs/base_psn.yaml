@@ -1,0 +1,89 @@
+paths:
+  segy_files: sgy_list_train_site54.txt
+  phase_pick_files: fb_list_train_site54.txt
+  infer_segy_files: sgy_list_valid_site54.txt
+  infer_phase_pick_files: fb_list_valid_site54.txt
+  out_dir: ../runs/psn_base
+
+dataset:
+  max_trials: 2048
+  use_header_cache: true
+  verbose: true
+  primary_keys: [ffid, chno, cmp]
+  include_empty_gathers: false
+  secondary_key_fixed: true
+  waveform_mode: mmap
+  train_endian: big
+  infer_endian: big
+
+
+fbgate:
+  apply_on: "on"
+  min_pick_ratio: 0.2
+
+train:
+  device: auto
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  epochs: 50
+  lr: 1.0e-4
+  subset_traces: 128
+  time_len: 6016
+  samples_per_epoch: 4096
+  psn_sigma: 1.5
+  seed: 42
+  use_amp: true
+  max_norm: 1.0
+  num_workers: 0
+
+transform:
+  target_len: 6016
+  standardize_eps: 1.0e-8
+
+augment:
+  hflip_prob: 0.0
+  polarity_prob: 0.0
+  space:
+    prob: 0.0
+    factor_range: [0.90, 1.10]
+  time:
+    prob: 0.0
+    factor_range: [0.95, 1.05]
+  freq:
+    prob: 0.0
+    kinds: [bandpass, lowpass, highpass]
+    band: [0.05, 0.45]
+    width: [0.10, 0.35]
+    roll: 0.02
+    restandardize: false
+
+vis:
+  out_subdir: vis
+  n: 5
+
+infer:
+  batch_size: 4
+  max_batches: 64
+  subset_traces: 128
+  seed: 43
+  num_workers: 0
+
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min
+
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 1
+  out_chans: 3
+  pre_stage_use_bn: true
+  pre_stages: 0
+
+tracking:
+  enabled: true
+  exp_name: psn_base
+  tracking_uri: file:../mlruns
+  vis_best_only: true
+  vis_max_files: 50

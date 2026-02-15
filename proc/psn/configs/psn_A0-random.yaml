@@ -1,0 +1,10 @@
+base: base_psn.yaml
+
+paths:
+  out_dir: ../runs/psn_A0-random
+
+tracking:
+  exp_name: psn_A0-random
+
+model:
+  pre_stages: 0

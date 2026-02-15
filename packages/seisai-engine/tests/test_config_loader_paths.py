@@ -85,3 +85,101 @@ def test_load_config_keeps_str_listfile_then_expand_works_from_other_cwd(
 
     expand_cfg_listfiles(cfg, keys=['paths.segy_files'])
     assert cfg['paths']['segy_files'] == [str(data_file.resolve())]
+
+
+def test_load_config_merges_base_yaml_with_recursive_dict_override(
+    tmp_path: Path,
+) -> None:
+    cfg_dir = tmp_path / 'configs'
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    base_cfg = cfg_dir / 'base.yaml'
+    base_cfg.write_text(
+        '\n'.join(
+            [
+                'root:',
+                '  one: 1',
+                '  nested:',
+                '    left: a',
+                '    right: b',
+                'arr:',
+                '  - 1',
+                '  - 2',
+            ]
+        ),
+        encoding='utf-8',
+    )
+
+    child_cfg = cfg_dir / 'child.yaml'
+    child_cfg.write_text(
+        '\n'.join(
+            [
+                'base: base.yaml',
+                'root:',
+                '  nested:',
+                '    right: c',
+                '  two: 2',
+            ]
+        ),
+        encoding='utf-8',
+    )
+
+    cfg = load_config(child_cfg)
+
+    assert 'base' not in cfg
+    assert cfg['root']['one'] == 1
+    assert cfg['root']['nested']['left'] == 'a'
+    assert cfg['root']['nested']['right'] == 'c'
+    assert cfg['root']['two'] == 2
+    assert cfg['arr'] == [1, 2]
+
+
+def test_load_config_base_resolves_target_paths_relative_to_base_yaml(
+    tmp_path: Path,
+) -> None:
+    cfg_dir = tmp_path / 'configs'
+    base_dir = cfg_dir / 'base'
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    base_cfg = base_dir / 'base.yaml'
+    base_cfg.write_text(
+        '\n'.join(
+            [
+                'paths:',
+                '  segy_files:',
+                '    - data/base.sgy',
+                '  phase_pick_files:',
+                '    - data/base.npz',
+                '  infer_segy_files:',
+                '    - data/infer.sgy',
+                '  infer_phase_pick_files:',
+                '    - data/infer.npz',
+                '  out_dir: ./out_base',
+            ]
+        ),
+        encoding='utf-8',
+    )
+
+    child_cfg = cfg_dir / 'child.yaml'
+    child_cfg.write_text(
+        '\n'.join(
+            [
+                'base: base/base.yaml',
+                'paths:',
+                '  out_dir: ./out_child',
+            ]
+        ),
+        encoding='utf-8',
+    )
+
+    cfg = load_config(child_cfg)
+
+    assert cfg['paths']['segy_files'] == [str((base_dir / 'data/base.sgy').resolve())]
+    assert cfg['paths']['phase_pick_files'] == [str((base_dir / 'data/base.npz').resolve())]
+    assert cfg['paths']['infer_segy_files'] == [
+        str((base_dir / 'data/infer.sgy').resolve())
+    ]
+    assert cfg['paths']['infer_phase_pick_files'] == [
+        str((base_dir / 'data/infer.npz').resolve())
+    ]
+    assert cfg['paths']['out_dir'] == './out_child'

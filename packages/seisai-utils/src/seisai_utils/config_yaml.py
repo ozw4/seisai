@@ -19,6 +19,14 @@ _TARGET_PATH_KEYS = frozenset(
 )
 
 
+def _load_yaml_doc(yaml_path: Path) -> dict:
+    cfg = yaml.safe_load(yaml_path.read_text())
+    if not isinstance(cfg, dict):
+        msg = 'config root must be a dict'
+        raise TypeError(msg)
+    return cfg
+
+
 def _resolve_path_str(base_dir: Path, value: str) -> str:
     path = Path(value).expanduser()
     if not path.is_absolute():
@@ -55,6 +63,67 @@ def _resolve_target_paths(node: Any, *, base_dir: Path) -> None:
             _resolve_target_paths(item, base_dir=base_dir)
 
 
+def _normalize_base_list(base: Any) -> list[str]:
+    if isinstance(base, str):
+        if not base.strip():
+            msg = 'config.base must be non-empty str or list[str]'
+            raise ValueError(msg)
+        return [base]
+    if isinstance(base, list):
+        if len(base) == 0:
+            msg = 'config.base must be non-empty str or list[str]'
+            raise ValueError(msg)
+        if not all(isinstance(item, str) and item.strip() for item in base):
+            msg = 'config.base must be non-empty str or list[str]'
+            raise TypeError(msg)
+        return list(base)
+    msg = 'config.base must be str or list[str]'
+    raise TypeError(msg)
+
+
+def _resolve_base_yaml_path(*, yaml_path: Path, base: str) -> Path:
+    base_path = Path(base).expanduser()
+    if not base_path.is_absolute():
+        base_path = yaml_path.parent / base_path
+    base_path = base_path.resolve()
+    if not base_path.is_file():
+        msg = f'base config file not found: {base_path}'
+        raise ValueError(msg)
+    return base_path
+
+
+def _merge_cfg(base: dict, override: dict) -> dict:
+    merged = dict(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_cfg(merged[key], value)
+            continue
+        merged[key] = value
+    return merged
+
+
+def _load_yaml_recursive(yaml_path: Path, *, stack: tuple[Path, ...]) -> dict:
+    if yaml_path in stack:
+        chain = ' -> '.join(str(p) for p in (*stack, yaml_path))
+        msg = f'circular base reference: {chain}'
+        raise ValueError(msg)
+
+    cfg = _load_yaml_doc(yaml_path)
+    _resolve_target_paths(cfg, base_dir=yaml_path.parent)
+
+    base = cfg.pop('base', None)
+    if base is None:
+        return cfg
+
+    merged_base: dict = {}
+    for base_entry in _normalize_base_list(base):
+        base_yaml_path = _resolve_base_yaml_path(yaml_path=yaml_path, base=base_entry)
+        base_cfg = _load_yaml_recursive(base_yaml_path, stack=(*stack, yaml_path))
+        merged_base = _merge_cfg(merged_base, base_cfg)
+
+    return _merge_cfg(merged_base, cfg)
+
+
 def load_yaml(path: str | Path) -> dict:
     yaml_path = Path(path).expanduser()
     if not yaml_path.is_file():
@@ -62,10 +131,4 @@ def load_yaml(path: str | Path) -> dict:
         raise ValueError(msg)
     yaml_path = yaml_path.resolve()
 
-    cfg = yaml.safe_load(yaml_path.read_text())
-    if not isinstance(cfg, dict):
-        msg = 'config root must be a dict'
-        raise TypeError(msg)
-
-    _resolve_target_paths(cfg, base_dir=yaml_path.parent)
-    return cfg
+    return _load_yaml_recursive(yaml_path, stack=())
