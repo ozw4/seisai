@@ -42,8 +42,8 @@ def select_pick_by_confidence(
 
     p0 = to_torch(pick0_i)
     p1 = to_torch(pick1_i, like=p0)
-    c0 = to_torch(conf0, like=p0)
-    c1 = to_torch(conf1, like=p0)
+    c0 = to_torch(conf0).to(device=p0.device, dtype=torch.float32)
+    c1 = to_torch(conf1).to(device=p0.device, dtype=torch.float32)
 
     validate_array(
         p0, allowed_ndims=(1, 2), name='pick0_i', backend='torch', shape_hint='(B,H)'
