@@ -34,18 +34,35 @@ def _shift_robust_l2_pertrace_vec(
     gt: torch.Tensor,  # (B, C, H, W)
     max_shift: int,
 ) -> torch.Tensor:
-    """W軸の±max_shift の範囲で per-(b,h) の MSE を最小化した値を返す。
-    返り値: (B, H).
+    """W軸の±max_shift の範囲で per-(b,h) の MSE を最小化した値を返す。"""
+    return _shift_robust_pertrace_vec(pred, gt, max_shift=max_shift, metric='l2')
 
-    外側で行う前提のチェック(重複排除):
-      - pred/gt の 4D 形状一致・device/dtype 整合
-      - gt の dtype/device を pred に合わせる
-    この関数でのみ保持する最小限の前提:
-      - 0 <= max_shift < W
-    """
+
+def _shift_robust_l1_pertrace_vec(
+    pred: torch.Tensor,  # (B, C, H, W)  ※外側で dtype/device/shape 検証・整合は済み
+    gt: torch.Tensor,  # (B, C, H, W)
+    max_shift: int,
+) -> torch.Tensor:
+    """W軸の±max_shift の範囲で per-(b,h) の MAE を最小化した値を返す。"""
+    return _shift_robust_pertrace_vec(pred, gt, max_shift=max_shift, metric='l1')
+
+
+def _shift_robust_pertrace_vec(
+    pred: torch.Tensor,
+    gt: torch.Tensor,
+    *,
+    max_shift: int,
+    metric: Literal['l1', 'l2'],
+) -> torch.Tensor:
+    """W軸の±max_shiftで shift-robust per-trace 損失を返す。返り値: (B,H)."""
     B, C, H, W = pred.shape
     S = int(max_shift)
-    assert S >= 0 and W > S, 'need 0 <= max_shift < W'
+    if S < 0:
+        raise ValueError(f'max_shift must be >= 0 (got {S})')
+    if S >= W:
+        raise ValueError(f'max_shift must be < W (got max_shift={S}, W={W})')
+    if metric not in ('l1', 'l2'):
+        raise ValueError(f'metric must be "l1" or "l2" (got {metric!r})')
 
     K = 2 * S + 1
     minW = W - S
@@ -70,24 +87,34 @@ def _shift_robust_l2_pertrace_vec(
         gt.unsqueeze(0).expand(K, -1, -1, -1, -1).gather(dim=-1, index=idxg)
     )  # (K,B,C,H,minW)
 
-    diff2 = (pred_g - gt_g) ** 2
-    loss_kbh = diff2.mean(dim=(2, 4))  # (K,B,H)
+    if metric == 'l2':
+        diff = (pred_g - gt_g) ** 2
+    else:
+        diff = (pred_g - gt_g).abs()
+    loss_kbh = diff.mean(dim=(2, 4))  # (K,B,H)
     return loss_kbh.min(dim=0).values  # (B,H)
 
 
-class ShiftRobustPerTraceMSE:
-    """W 軸のずれに頑健な per-trace MSE。
-    IF: loss = ShiftRobustPerTraceMSE(max_shift)(pred, batch, reduction='mean')
-      - pred: (B,C,H,W)
-      - batch['target']: (B,C,H,W)
-      - 優先: batch.get('trace_mask'): (B,H) bool
-      - 代替: batch.get('mask_bool'): (B,H) or (B,C,H,W) → (B,H) に正規化.
-    """
+def _validate_max_shift(max_shift: Any) -> int:
+    if isinstance(max_shift, bool) or not isinstance(max_shift, int):
+        raise TypeError('max_shift must be int')
+    if max_shift < 0:
+        raise ValueError('max_shift must be >= 0')
+    return int(max_shift)
 
-    def __init__(self, max_shift: int = 8, *, ch_reduce: Literal['all', 'any'] = 'all') -> None:
-        assert max_shift >= 0
-        self.max_shift = int(max_shift)
+
+class _ShiftRobustPerTraceBase:
+    def __init__(
+        self,
+        max_shift: int = 8,
+        *,
+        ch_reduce: Literal['all', 'any'] = 'all',
+    ) -> None:
+        self.max_shift = _validate_max_shift(max_shift)
         self.ch_reduce = ch_reduce
+
+    def _per_trace_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
 
     def __call__(
         self,
@@ -109,7 +136,6 @@ class ShiftRobustPerTraceMSE:
         if gt.device != pred.device:
             gt = gt.to(device=pred.device, non_blocking=True)
 
-        # trace 選択
         trace_mask = batch.get('trace_mask', None)
         if trace_mask is None:
             mask_bool = batch.get('mask_bool', None)
@@ -120,7 +146,6 @@ class ShiftRobustPerTraceMSE:
                 mask_bool, pred, ch_reduce=self.ch_reduce
             )
 
-        # FIX: デバイス不一致の是正(直接渡された trace_mask を pred.device へ移動)
         if trace_mask.device != pred.device:
             trace_mask = trace_mask.to(device=pred.device, non_blocking=True)
 
@@ -129,17 +154,37 @@ class ShiftRobustPerTraceMSE:
         )
         B, _C, H, _W = pred.shape
         assert trace_mask.shape == (B, H), 'trace_mask must be (B,H)'
+        if self.max_shift >= _W:
+            raise ValueError(
+                f'max_shift must be < W (got max_shift={self.max_shift}, W={_W})'
+            )
 
-        # per-(b,h) の最小MSE
-        per_trace = _shift_robust_l2_pertrace_vec(pred, gt, self.max_shift)  # (B,H)
-
-        # 選択を適用
+        per_trace = self._per_trace_loss(pred, gt)  # (B,H)
         sel_vals = per_trace[trace_mask]
         assert sel_vals.numel() > 0, 'no traces selected'
 
         if reduction == 'none':
-            # FIX: 非連続テンソルで view が失敗し得る問題を reshape で解消
             return sel_vals.reshape(-1)
         if reduction == 'sum':
             return sel_vals.sum()
         return sel_vals.mean()
+
+
+class ShiftRobustPerTraceMSE(_ShiftRobustPerTraceBase):
+    """W 軸のずれに頑健な per-trace MSE。
+    IF: loss = ShiftRobustPerTraceMSE(max_shift)(pred, batch, reduction='mean')
+      - pred: (B,C,H,W)
+      - batch['target']: (B,C,H,W)
+      - 優先: batch.get('trace_mask'): (B,H) bool
+      - 代替: batch.get('mask_bool'): (B,H) or (B,C,H,W) → (B,H) に正規化.
+    """
+
+    def _per_trace_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+        return _shift_robust_l2_pertrace_vec(pred, gt, self.max_shift)
+
+
+class ShiftRobustPerTraceL1(_ShiftRobustPerTraceBase):
+    """W 軸のずれに頑健な per-trace MAE。"""
+
+    def _per_trace_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+        return _shift_robust_l1_pertrace_vec(pred, gt, self.max_shift)

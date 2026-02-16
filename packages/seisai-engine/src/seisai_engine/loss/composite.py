@@ -7,7 +7,7 @@ import torch
 
 from .fx_mag import FxMagPerTraceMSE
 from .pixelwise_loss import build_criterion
-from .shift_pertrace_mse import ShiftRobustPerTraceMSE
+from .shift_pertrace_mse import ShiftRobustPerTraceL1, ShiftRobustPerTraceMSE
 
 __all__ = [
     'LossSpec',
@@ -156,6 +156,29 @@ def build_loss_term(
 
         return _term
 
+    if kind_norm == 'shift_robust_l1':
+        _validate_params_keys(
+            params, allowed=('shift_max',), required=('shift_max',), label=label
+        )
+        shift_max = _int_like(params['shift_max'], label=f'{label}.params.shift_max')
+        if shift_max < 0:
+            raise ValueError(f'{label}.params.shift_max must be >= 0')
+        shift_loss = ShiftRobustPerTraceL1(max_shift=shift_max, ch_reduce='all')
+
+        def _term(
+            pred: torch.Tensor,
+            target: torch.Tensor,
+            trace_mask: torch.Tensor,
+            _batch: dict[str, Any],
+        ) -> torch.Tensor:
+            if not isinstance(target, torch.Tensor):
+                raise TypeError(f'{label}: target must be torch.Tensor')
+            return shift_loss(
+                pred, {'target': target, 'trace_mask': trace_mask}, reduction='mean'
+            )
+
+        return _term
+
     if kind_norm == 'fx_mag_mse':
         _validate_params_keys(
             params,
@@ -207,6 +230,7 @@ def build_loss_term(
         'huber',
         'shift_mse',
         'shift_robust_mse',
+        'shift_robust_l1',
         'fx_mag_mse',
     )
     msg = f'unknown loss kind "{kind}"; supported: {", ".join(supported)}'

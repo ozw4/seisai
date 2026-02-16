@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from seisai_engine.loss import composite
@@ -76,3 +77,54 @@ def test_batch_not_mutated() -> None:
     _ = criterion(pred, target, batch)
 
     assert set(batch.keys()) == keys_before
+
+
+def test_shift_robust_l1_build_and_run_for_scopes() -> None:
+    pred = torch.randn(1, 1, 2, 8)
+    target = torch.roll(pred, shifts=1, dims=-1)
+    mask_bh = torch.tensor([[True, False]])
+    batch = {'mask_bool': mask_bh}
+
+    loss_specs_masked = composite.parse_loss_specs(
+        [
+            {
+                'kind': 'shift_robust_l1',
+                'weight': 1.0,
+                'scope': 'masked_only',
+                'params': {'shift_max': 1},
+            }
+        ],
+        default_scope='masked_only',
+    )
+    loss_specs_all = composite.parse_loss_specs(
+        [
+            {
+                'kind': 'shift_robust_l1',
+                'weight': 1.0,
+                'scope': 'all',
+                'params': {'shift_max': 1},
+            }
+        ],
+        default_scope='masked_only',
+    )
+
+    loss_masked = composite.build_weighted_criterion(loss_specs_masked)(pred, target, batch)
+    loss_all = composite.build_weighted_criterion(loss_specs_all)(pred, target, batch)
+
+    assert loss_masked.ndim == 0
+    assert loss_all.ndim == 0
+
+
+def test_shift_robust_l1_invalid_shift_max_raises() -> None:
+    with pytest.raises(ValueError, match='shift_max must be >= 0'):
+        composite.build_loss_term(
+            'shift_robust_l1',
+            params={'shift_max': -1},
+            label='train.losses[0]',
+        )
+    with pytest.raises(TypeError, match='shift_max must be int-like'):
+        composite.build_loss_term(
+            'shift_robust_l1',
+            params={'shift_max': 'x'},
+            label='train.losses[0]',
+        )

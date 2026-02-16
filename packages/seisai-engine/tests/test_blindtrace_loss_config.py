@@ -19,6 +19,24 @@ def test_legacy_shift_loss_specs() -> None:
     assert spec.params == {'shift_max': 4}
 
 
+def test_legacy_shift_l1_loss_specs() -> None:
+    cfg = {
+        'loss_kind': 'shift_robust_l1',
+        'shift_max': 3,
+        'loss_scope': 'all',
+    }
+    specs = blindtrace_train._build_loss_specs_from_cfg(
+        cfg, label_prefix='train', default_scope='masked_only'
+    )
+
+    assert len(specs) == 1
+    spec = specs[0]
+    assert spec.kind == 'shift_robust_l1'
+    assert spec.weight == 1.0
+    assert spec.scope == 'all'
+    assert spec.params == {'shift_max': 3}
+
+
 def test_legacy_fx_weight_adds_term() -> None:
     cfg = {
         'loss_kind': 'mse',

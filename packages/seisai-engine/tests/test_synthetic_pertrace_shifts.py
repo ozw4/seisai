@@ -1,10 +1,14 @@
 # test_synthetic_pertrace_shifts.py
 import math
 
+import pytest
 import torch
 from seisai_engine.loss.shift_pertrace_mse import (
+    ShiftRobustPerTraceL1,
     ShiftRobustPerTraceMSE,
+    _shift_robust_l1_pertrace_vec,
     _shift_robust_l2_pertrace_vec,
+    _shift_robust_pertrace_vec,
 )
 
 # ===========================================================
@@ -95,6 +99,28 @@ def test_shift_robust_insufficient_max_shift_yields_positive_loss() -> None:
     assert per_trace.mean().item() > 0.0
 
 
+def test_shift_robust_l1_near_zero_on_pertrace_random_shifts() -> None:
+    B, C, H, W, S_true = 2, 3, 40, 256, 4
+    pred, gt, _ = make_synthetic_stack(
+        B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=555
+    )
+
+    out_bh = _shift_robust_l1_pertrace_vec(pred, gt, max_shift=S_true)
+    assert out_bh.shape == (B, H)
+    assert torch.allclose(out_bh, torch.zeros_like(out_bh), atol=1e-6, rtol=0)
+
+
+def test_shift_robust_l1_insufficient_shift_positive() -> None:
+    B, C, H, W, S_true = 1, 2, 20, 128, 5
+    pred, gt, _ = make_synthetic_stack(
+        B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=202
+    )
+
+    per_trace = _shift_robust_l1_pertrace_vec(pred, gt, max_shift=2)
+    assert (per_trace > 1e-8).any()
+    assert per_trace.mean().item() > 0.0
+
+
 def test_ShiftRobustPerTraceMSE_with_trace_mask_preselection() -> None:
     B, C, H, W, S_true = 2, 2, 30, 128, 3
     pred, gt, _ = make_synthetic_stack(
@@ -138,6 +164,59 @@ def test_ShiftRobustPerTraceMSE_with_pixel_mask_uniform_W() -> None:
     loss_cls = crit(pred, batch, reduction='mean')
 
     assert torch.allclose(loss_cls, loss_ref, atol=1e-6, rtol=0)
+
+
+def test_ShiftRobustPerTraceL1_mask_behavior_matches_reference() -> None:
+    B, C, H, W, S_true = 2, 2, 24, 96, 4
+    pred, gt, _ = make_synthetic_stack(
+        B, C, H, W, max_true_shift=S_true, noise_std=0.0, seed=1701
+    )
+    torch.manual_seed(11)
+    mask_bh = torch.rand(B, H) > 0.6
+    pixel_mask = mask_bh[:, None, :, None].expand(-1, C, -1, W).clone()
+
+    per_trace = _shift_robust_l1_pertrace_vec(pred, gt, max_shift=S_true)
+    loss_ref = per_trace[mask_bh].mean()
+
+    crit = ShiftRobustPerTraceL1(max_shift=S_true, ch_reduce='all')
+    loss_bh = crit(pred, {'target': gt, 'mask_bool': mask_bh}, reduction='mean')
+    loss_px = crit(pred, {'target': gt, 'mask_bool': pixel_mask}, reduction='mean')
+
+    assert torch.allclose(loss_bh, loss_ref, atol=1e-6, rtol=0)
+    assert torch.allclose(loss_px, loss_ref, atol=1e-6, rtol=0)
+
+
+def test_shift_robust_l1_invalid_shift_max_raises() -> None:
+    with pytest.raises(ValueError, match='max_shift must be >= 0'):
+        ShiftRobustPerTraceL1(max_shift=-1)
+    with pytest.raises(TypeError, match='max_shift must be int'):
+        ShiftRobustPerTraceL1(max_shift=1.5)
+
+
+def test_shift_robust_mse_invalid_shift_max_raises() -> None:
+    with pytest.raises(ValueError, match='max_shift must be >= 0'):
+        ShiftRobustPerTraceMSE(max_shift=-1)
+    with pytest.raises(TypeError, match='max_shift must be int'):
+        ShiftRobustPerTraceMSE(max_shift=1.5)
+
+
+def test_shift_robust_loss_max_shift_must_be_less_than_width() -> None:
+    pred = torch.randn(1, 1, 2, 8)
+    gt = pred.clone()
+    mask_bh = torch.ones((1, 2), dtype=torch.bool)
+    batch = {'target': gt, 'mask_bool': mask_bh}
+
+    with pytest.raises(ValueError, match='max_shift must be < W'):
+        ShiftRobustPerTraceMSE(max_shift=8)(pred, batch, reduction='mean')
+    with pytest.raises(ValueError, match='max_shift must be < W'):
+        ShiftRobustPerTraceL1(max_shift=8)(pred, batch, reduction='mean')
+
+
+def test_shift_robust_metric_must_be_known_value() -> None:
+    pred = torch.randn(1, 1, 2, 8)
+    gt = pred.clone()
+    with pytest.raises(ValueError, match='metric must be "l1" or "l2"'):
+        _shift_robust_pertrace_vec(pred, gt, max_shift=1, metric='l3')  # type: ignore[arg-type]
 
 
 def test_noise_tolerance_small_noise_yields_small_loss() -> None:

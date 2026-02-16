@@ -88,16 +88,22 @@ def _build_loss_specs_from_cfg(
         )
 
     loss_kind = optional_str(cfg, 'loss_kind', 'l1').lower()
-    if loss_kind not in ('l1', 'mse', 'shift_mse', 'shift_robust_mse'):
+    if loss_kind not in (
+        'l1',
+        'mse',
+        'shift_mse',
+        'shift_robust_mse',
+        'shift_robust_l1',
+    ):
         msg = (
             f'{label_prefix}.loss_kind must be "l1", "mse", "shift_mse", '
-            'or "shift_robust_mse"'
+            '"shift_robust_mse", or "shift_robust_l1"'
         )
         raise ValueError(msg)
 
     loss_items: list[dict[str, Any]] = []
     loss_params: dict[str, Any] = {}
-    if loss_kind in ('shift_mse', 'shift_robust_mse'):
+    if loss_kind in ('shift_mse', 'shift_robust_mse', 'shift_robust_l1'):
         shift_max = optional_int(cfg, 'shift_max', 8)
         loss_params = {'shift_max': int(shift_max)}
 
