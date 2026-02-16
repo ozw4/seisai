@@ -49,7 +49,7 @@ BACKBONE = 'caformer_b36.sail_in22k_ft_in1k'
 DEVICE = 'cuda'  # "cpu" も可
 USE_TTA = True
 
-PMAX_TH = 0.06
+PMAX_TH = 0.0
 LTCOR = 5  # legacy snap (comparison / fallback)
 
 SEGY_ENDIAN = 'big'  # "big" or "little"

@@ -19,10 +19,10 @@ dataset:
 
 train:
   device: cuda # auto | cpu | cuda | cuda:N
-  batch_size: 32
+  batch_size: 16
   # gradient_accumulation_steps: 1
   epochs: 50
-  lr: 3.0e-4
+  lr: 1.0e-4
   subset_traces: 128
   time_len: 1280
   samples_per_epoch: 4096
@@ -42,7 +42,7 @@ ema:
 
 augment:
   hflip_prob: 0.5
-  polarity_prob: 0
+  polarity_prob: 0.5
   space:
     prob: 0.3
     factor_range: [0.90, 1.10]
@@ -60,7 +60,7 @@ augment:
 infer:
   batch_size: 1
   max_batches: 12
-  subset_traces: 161
+  subset_traces: 128
   seed: 43
   num_workers: 0
 
@@ -84,29 +84,28 @@ vis:
   dpi: 150
 
 model:
-  backbone: resnet18 # edgenext_small.usi_in1k  caformer_b36.sail_in22k_ft_in1k, resnet18
-  pretrained: true # default
-  in_chans: 1
-  out_chans: 1
-  stage_strides: null
-  # extra_stages: 0
-  # extra_stage_strides: null
-  # extra_stage_channels: null
-  # extra_stage_use_bn: true
-  pre_stages: 2
+  backbone: resnet18
+  pretrained: false
+  pre_stage_use_bn: true
+  pre_stages: 3
   pre_stage_strides:
+  - - 1
+    - 2
   - - 1
     - 1
   - - 1
     - 2
   pre_stage_channels:
   - 16
-  - 16
+  - 32
+  - 32
   pre_stage_kernels:
   - 3
   - 3
-  pre_stage_use_bn: true
-  pre_stage_antialias: false
+  - 3
+  pre_stage_antialias: true
+  pre_stage_aa_taps: 3
+  pre_stage_aa_pad_mode: zeros
   # decoder_channels: [256, 128, 64, 32]
   # decoder_scales: [2, 2, 2, 2]
   # upsample_mode: bilinear
