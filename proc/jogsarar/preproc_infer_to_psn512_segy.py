@@ -12,7 +12,7 @@ import segyio
 # =========================
 IN_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
 IN_INFER_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_out')
-OUT_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512')
+OUT_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_drop003')
 
 SEGY_EXTS = ('.sgy', '.segy', '.SGY', '.SEGY')
 
@@ -21,12 +21,12 @@ UP_FACTOR = 2  # 256 -> 512
 OUT_NS = 2 * HALF_WIN * UP_FACTOR  # 512
 
 # 下位除外（p10）
-DROP_LOW_FRAC = 0.10  # 下位10%除外
+DROP_LOW_FRAC = 0.03  # 下位除外
 SCORE_KEYS = (
     'conf_prob1',
     'conf_trend1',
     'conf_rs1',
-)  # infer npz側にある前提（p1成分）
+)
 PICK_KEY = 'pick_final'  # infer npz側の最終pick（p1）
 
 # 閾値モード
@@ -56,12 +56,17 @@ def infer_npz_path_for_segy(segy_path: Path) -> Path:
 
 def out_segy_path_for_in(segy_path: Path) -> Path:
     rel = segy_path.relative_to(IN_SEGY_ROOT)
-    out_rel = rel.with_suffix('')  # drop ext
+    out_rel = rel.with_suffix('')
     return OUT_SEGY_ROOT / out_rel.parent / f'{out_rel.name}.win512.sgy'
 
 
 def out_sidecar_npz_path_for_out(out_segy_path: Path) -> Path:
     return out_segy_path.with_suffix('.sidecar.npz')
+
+
+def out_pick_csr_npz_path_for_out(out_segy_path: Path) -> Path:
+    # PSN dataset (load_phase_pick_csr_npz) が読む用
+    return out_segy_path.with_suffix('.phase_pick.csr.npz')
 
 
 def _npz_must_have(z: np.lib.npyio.NpzFile, key: str) -> np.ndarray:
@@ -88,14 +93,6 @@ def _valid_pick_mask(pick_i: np.ndarray, *, n_samples: int) -> np.ndarray:
 def _load_trend_center_i(
     z: np.lib.npyio.NpzFile, *, n_traces: int, dt_sec_from_segy: float
 ) -> np.ndarray:
-    """Return per-trace trend center in ORIGINAL sample index (float32), shape (n_traces,).
-
-    Accepted keys:
-      - 'trend_center_i' : sample index (recommended)
-      - 'trend_t_sec'    : trend time in seconds
-      - 't_trend_sec'    : same meaning (alt name)
-      - 'trend_center_sec' : same meaning (alt name)
-    """
     keys = set(z.files)
 
     if 'trend_center_i' in keys:
@@ -141,15 +138,6 @@ def _load_trend_center_i(
 
 
 def _fill_trend_center_i(trend_center_i: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Fill missing/invalid trend center with nearest valid value along trace index.
-
-    Valid condition: finite and > 0.
-
-    Returns:
-      - filled_center_i (float32) shape (n_traces,)
-      - filled_mask (bool): True where original was invalid and got filled
-
-    """
     c0 = np.asarray(trend_center_i, dtype=np.float32)
     if c0.ndim != 1:
         msg = f'trend_center_i must be 1D, got {c0.shape}'
@@ -246,8 +234,8 @@ def _base_valid_mask(
     """Return (base_valid, reason_mask_partial)
     reason bits:
       bit0: invalid pick
-      bit1: trend missing (even after fill)
-      bit2: pick outside ±128 window
+      bit1: trend missing (after fill)
+      bit2: pick outside window (strict, to avoid 0/512 labels)
     """
     n_tr = int(pick_final_i.shape[0])
     if trend_center_i.shape != (n_tr,):
@@ -266,7 +254,8 @@ def _base_valid_mask(
     reason[~trend_ok] |= 1 << 1
 
     c_round = np.rint(c).astype(np.int64, copy=False)
-    win_ok = pick_ok & trend_ok & (np.abs(p - c_round) <= int(HALF_WIN))
+    # strict "< HALF_WIN" to keep pick_win_512 in (0, OUT_NS)
+    win_ok = pick_ok & trend_ok & (np.abs(p - c_round) < int(HALF_WIN))
     reason[~win_ok] |= 1 << 2
 
     return win_ok, reason
@@ -285,7 +274,7 @@ def build_keep_mask(
     reason bits:
       bit0: invalid pick
       bit1: trend missing
-      bit2: pick outside ±128 window
+      bit2: pick outside window
       bit3: conf_prob low
       bit4: conf_trend low
       bit5: conf_rs low
@@ -340,17 +329,6 @@ def _load_minimal_inputs_for_thresholds(
     np.ndarray,
     np.ndarray,
 ]:
-    """Load only what we need to compute base_valid and score arrays.
-
-    Returns:
-      n_traces, ns_in, dt_sec_in,
-      pick_final (int64),
-      trend_center_i_raw (float32),
-      scores dict,
-      trend_center_i_filled (float32),
-      trend_filled_mask (bool)
-
-    """
     infer_npz = infer_npz_path_for_segy(segy_path)
     if not infer_npz.exists():
         msg = f'infer npz not found for segy: {segy_path} expected={infer_npz}'
@@ -402,7 +380,6 @@ def _load_minimal_inputs_for_thresholds(
 
 
 def compute_global_thresholds(segys: list[Path]) -> dict[str, float]:
-    """Compute global p10 thresholds over ALL SEGY files, using base_valid traces only."""
     vals: dict[str, list[np.ndarray]] = {k: [] for k in SCORE_KEYS}
 
     n_files_used = 0
@@ -414,7 +391,7 @@ def compute_global_thresholds(segys: list[Path]) -> dict[str, float]:
             continue
 
         (
-            n_traces,
+            _n_traces,
             ns_in,
             _dt_sec_in,
             pick_final,
@@ -454,17 +431,64 @@ def compute_global_thresholds(segys: list[Path]) -> dict[str, float]:
             msg = f'no values accumulated for score={k}'
             raise RuntimeError(msg)
         v = np.concatenate(vals[k]).astype(np.float32, copy=False)
-        thresholds[k] = _percentile_threshold(v, frac=DROP_LOW_FRAC)
-
-        if np.isnan(thresholds[k]):
+        th = _percentile_threshold(v, frac=DROP_LOW_FRAC)
+        if np.isnan(th):
             msg = f'global threshold became NaN for score={k}'
             raise RuntimeError(msg)
+        thresholds[k] = th
 
     print(
         f'[GLOBAL_TH] files_used={n_files_used} base_valid_total={n_base_total} '
         f'p10 prob={thresholds["conf_prob1"]:.6g} trend={thresholds["conf_trend1"]:.6g} rs={thresholds["conf_rs1"]:.6g}'
     )
     return thresholds
+
+
+def _build_phase_pick_csr_npz(
+    *,
+    out_path: Path,
+    pick_win_512: np.ndarray,
+    keep_mask: np.ndarray,
+    n_traces: int,
+) -> int:
+    """Write CSR pick npz required by seisai_dataset.load_phase_pick_csr_npz.
+
+    P picks: 1 per trace at most (int sample index in [1, OUT_NS-1])
+    S picks: empty
+    """
+    pw = np.asarray(pick_win_512, dtype=np.float32)
+    km = np.asarray(keep_mask, dtype=bool)
+    if pw.shape != (n_traces,) or km.shape != (n_traces,):
+        msg = f'pick_win_512/keep_mask must be (n_traces,), got {pw.shape}, {km.shape}, n_traces={n_traces}'
+        raise ValueError(msg)
+
+    p_indptr = np.zeros(n_traces + 1, dtype=np.int64)
+
+    pick_i = np.rint(pw).astype(np.int64, copy=False)
+    valid = km & np.isfinite(pw) & (pick_i > 0) & (pick_i < int(OUT_NS))
+
+    nnz = int(np.count_nonzero(valid))
+    p_data = np.empty(nnz, dtype=np.int64)
+
+    j = 0
+    for i in range(n_traces):
+        if bool(valid[i]):
+            p_data[j] = int(pick_i[i])
+            j += 1
+        p_indptr[i + 1] = j
+
+    s_indptr = np.zeros(n_traces + 1, dtype=np.int64)
+    s_data = np.zeros(0, dtype=np.int64)
+
+    np.savez_compressed(
+        out_path,
+        n_traces=np.int32(n_traces),
+        p_indptr=p_indptr,
+        p_data=p_data,
+        s_indptr=s_indptr,
+        s_data=s_data,
+    )
+    return nnz
 
 
 # =========================
@@ -480,7 +504,9 @@ def process_one_segy(
 
     out_segy = out_segy_path_for_in(segy_path)
     out_segy.parent.mkdir(parents=True, exist_ok=True)
+
     side_npz = out_sidecar_npz_path_for_out(out_segy)
+    pick_csr_npz = out_pick_csr_npz_path_for_out(out_segy)
 
     with segyio.open(str(segy_path), 'r', ignore_geometry=True) as src:
         n_traces = int(src.tracecount)
@@ -513,7 +539,6 @@ def process_one_segy(
             msg = f'{PICK_KEY} must be (n_traces,), got {pick_final.shape}, n_traces={n_traces}'
             raise ValueError(msg)
 
-        # trend: load -> fill (flatten用はfilledを使う)
         trend_center_i_raw = _load_trend_center_i(
             z, n_traces=n_traces, dt_sec_from_segy=dt_sec_in
         )
@@ -543,15 +568,14 @@ def process_one_segy(
             thresholds=thresholds_arg,
         )
 
-        # pick position in new 512 coordinate (float32; for later CSR creation)
         c_round = np.rint(trend_center_i).astype(np.int64, copy=False)
         win_start_i = c_round - int(HALF_WIN)
+
         pick_win_512 = (
             pick_final.astype(np.float32) - win_start_i.astype(np.float32)
         ) * float(UP_FACTOR)
         pick_win_512[~keep_mask] = np.nan
 
-        # SEGY output spec
         spec = segyio.spec()
         spec.tracecount = n_traces
         spec.samples = np.arange(OUT_NS, dtype=np.int32)
@@ -585,11 +609,19 @@ def process_one_segy(
 
             dst.flush()
 
+    nnz_p = _build_phase_pick_csr_npz(
+        out_path=pick_csr_npz,
+        pick_win_512=pick_win_512,
+        keep_mask=keep_mask,
+        n_traces=n_traces,
+    )
+
     np.savez_compressed(
         side_npz,
         src_segy=str(segy_path),
         src_infer_npz=str(infer_npz),
         out_segy=str(out_segy),
+        out_pick_csr_npz=str(pick_csr_npz),
         thresh_mode=str(THRESH_MODE),
         drop_low_frac=np.float32(DROP_LOW_FRAC),
         dt_sec_in=np.float32(dt_sec_in),
@@ -622,6 +654,7 @@ def process_one_segy(
     print(
         f'[OK] {segy_path.name} -> {out_segy.name}  keep={n_keep}/{n_traces} '
         f'filled_trend={n_fill}/{n_traces} '
+        f'labels_written(P)={nnz_p} '
         f'th({tag} p10) prob={thresholds_used["conf_prob1"]:.6g} '
         f'trend={thresholds_used["conf_trend1"]:.6g} rs={thresholds_used["conf_rs1"]:.6g}'
     )
@@ -631,7 +664,6 @@ def main() -> None:
     segys = find_segy_files(IN_SEGY_ROOT)
     print(f'[RUN] found {len(segys)} segy files under {IN_SEGY_ROOT}')
 
-    # infer npzがあるやつだけ対象
     segys2: list[Path] = []
     for p in segys:
         infer_npz = infer_npz_path_for_segy(p)
