@@ -158,6 +158,17 @@ def project_fb_idx_view(fb_idx: np.ndarray, H: int, W: int, meta: dict) -> np.nd
         np.round(fb * factor).astype(np.int64) - start
     )  # 0-based mapping; 0 is treated as invalid
     fb[(fb <= 0) | (fb >= W)] = -1
+
+    tshift = meta.get('trace_tshift_view')
+    if tshift is not None:
+        s = np.asarray(tshift, dtype=np.int64)
+        if s.ndim != 1 or s.shape[0] != fb.shape[0]:
+            msg = f"meta['trace_tshift_view'] must be (H,), got {s.shape}, H={fb.shape[0]}"
+            raise ValueError(msg)
+        ok = fb >= 0
+        fb = fb + s
+        fb[~ok] = -1
+        fb[(fb <= 0) | (fb >= W)] = -1
     return fb
 
 
@@ -239,9 +250,7 @@ def project_pick_csr_view(
         raise ValueError(msg)
     if int(ip_in[-1]) != int(d_in.size):
         msg = f'indptr[-1] must equal len(data)={d_in.size}, got {int(ip_in[-1])}'
-        raise ValueError(
-            msg
-        )
+        raise ValueError(msg)
 
     ip = ip_in.astype(np.int64, copy=False)
     d = d_in.astype(np.int64, copy=False)
@@ -283,6 +292,13 @@ def project_pick_csr_view(
             continue
 
         vv = np.round(v * factor).astype(np.int64) - start
+        shift_view = meta.get('trace_tshift_view')
+        if shift_view is not None:
+            shift_view = np.asarray(shift_view, dtype=np.int64)
+            if shift_view.ndim != 1 or shift_view.shape[0] != H:
+                msg = f"meta['trace_tshift_view'] must be (H,), got {shift_view.shape}, H={H}"
+                raise ValueError(msg)
+            vv = vv + int(shift_view[t])
         vv = vv[(vv > 0) & (vv < W)]
         if vv.size == 0:
             out_indptr[t + 1] = nnz

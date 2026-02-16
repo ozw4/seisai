@@ -278,3 +278,101 @@ class ViewCompose:
             else:
                 x_hw = y
         return (x_hw, meta) if return_meta else x_hw
+
+
+class RandomSparseTraceTimeShift:
+    """Randomly time-shift a small subset of traces with zero padding.
+
+    Intended to simulate sparse site-effect-like local misalignment:
+    only a few traces per gather shift by a few samples.
+
+    Meta:
+      - meta_key (default: 'trace_tshift_view') stores int16 array (H,)
+        containing per-trace shift in view sample units.
+    """
+
+    def __init__(
+        self,
+        *,
+        p_apply: float = 0.3,
+        p_trace: float = 0.02,
+        min_abs_shift: int = 1,
+        max_abs_shift: int = 3,
+        force_one: bool = True,
+        ignore_zero: bool = True,
+        fill: float = 0.0,
+        meta_key: str = 'trace_tshift_view',
+    ):
+        if not (0.0 <= float(p_apply) <= 1.0):
+            raise ValueError(f'p_apply must be in [0,1], got {p_apply}')
+        if not (0.0 <= float(p_trace) <= 1.0):
+            raise ValueError(f'p_trace must be in [0,1], got {p_trace}')
+
+        min_s = int(min_abs_shift)
+        max_s = int(max_abs_shift)
+        if min_s <= 0:
+            raise ValueError(f'min_abs_shift must be positive, got {min_abs_shift}')
+        if max_s < min_s:
+            raise ValueError(
+                f'max_abs_shift must be >= min_abs_shift, got {max_abs_shift} < {min_abs_shift}'
+            )
+
+        self.p_apply = float(p_apply)
+        self.p_trace = float(p_trace)
+        self.min_abs_shift = min_s
+        self.max_abs_shift = max_s
+        self.force_one = bool(force_one)
+        self.ignore_zero = bool(ignore_zero)
+        self.fill = float(fill)
+        self.meta_key = str(meta_key)
+
+    def __call__(self, x_hw: np.ndarray, rng: np.random.Generator, return_meta=False):
+        if float(rng.random()) > self.p_apply:
+            meta = {self.meta_key: np.zeros((int(x_hw.shape[0]),), dtype=np.int16)}
+            return (x_hw, meta) if return_meta else x_hw
+
+        x_hw = np.asarray(x_hw)
+        if x_hw.ndim != 2:
+            raise ValueError(f'x_hw must be 2D (H,W), got {x_hw.shape}')
+
+        H, W = int(x_hw.shape[0]), int(x_hw.shape[1])
+
+        if self.ignore_zero:
+            nz = np.max(np.abs(x_hw), axis=1) > 0.0
+            eligible = np.flatnonzero(nz).astype(np.int64, copy=False)
+        else:
+            eligible = np.arange(H, dtype=np.int64)
+
+        tshift = np.zeros((H,), dtype=np.int16)
+        if eligible.size == 0:
+            meta = {self.meta_key: tshift}
+            return (x_hw, meta) if return_meta else x_hw
+
+        sel = rng.random(eligible.size) < self.p_trace
+        if self.force_one and (not np.any(sel)):
+            j = int(rng.integers(0, eligible.size))
+            sel[j] = True
+
+        idx_shift = eligible[sel]
+        if idx_shift.size == 0:
+            meta = {self.meta_key: tshift}
+            return (x_hw, meta) if return_meta else x_hw
+
+        out = np.array(x_hw, copy=True)
+
+        for i in idx_shift:
+            sign = -1 if float(rng.random()) < 0.5 else 1
+            mag = int(rng.integers(self.min_abs_shift, self.max_abs_shift + 1))
+            s = int(sign * mag)
+            tshift[int(i)] = s
+
+            if s > 0:
+                out[int(i), :s] = self.fill
+                out[int(i), s:] = x_hw[int(i), : W - s]
+            else:
+                ss = -s
+                out[int(i), : W - ss] = x_hw[int(i), ss:]
+                out[int(i), W - ss :] = self.fill
+
+        meta = {self.meta_key: tshift}
+        return (out, meta) if return_meta else out
