@@ -29,9 +29,8 @@ from seisai_pick.score.confidence_from_trend_resid import (
     trace_confidence_from_trend_resid_gaussian,
     trace_confidence_from_trend_resid_var,
 )
-from seisai_pick.score.confidence_select import select_pick_by_confidence
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
-from seisai_pick.trend.trend_fit_strategy import TwoPieceRansacAutoBreakStrategy
+from seisai_pick.trend.trend_fit import robust_linear_trend
 from seisai_transforms.signal_ops.scaling.standardize import standardize_per_trace_torch
 from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
 
@@ -50,7 +49,7 @@ BACKBONE = 'caformer_b36.sail_in22k_ft_in1k'
 DEVICE = 'cuda'  # "cpu" も可
 USE_TTA = True
 
-PMAX_TH = 0.07
+PMAX_TH = 0.06
 LTCOR = 5  # legacy snap (comparison / fallback)
 
 SEGY_ENDIAN = 'big'  # "big" or "little"
@@ -74,7 +73,7 @@ TILE_W = 6016
 OVERLAP_H = 96  # stride_h = 32
 TILES_PER_BATCH = 8
 
-POLARITY_FLIP = False  # model input only
+POLARITY_FLIP = True  # model input only
 
 # ---- LMO for visualization (display only) ----
 LMO_VEL_MPS = 3200.0
@@ -82,6 +81,28 @@ LMO_BULK_SHIFT_SAMPLES = 50.0  # positive shifts later samples
 
 PLOT_START = 0
 PLOT_END = 350
+
+VIZ_SCORE_COMPONENTS = True
+VIZ_SCORE_STYLE = 'bar'  # 'bar' or 'line'
+
+# ---- prob_conf 可視化スケーリング（保存値は生のまま） ----
+VIZ_CONF_PROB_SCALE_ENABLE = True
+VIZ_CONF_PROB_PCT_LO = 5.0
+VIZ_CONF_PROB_PCT_HI = 99.0
+VIZ_CONF_PROB_PCT_EPS = 1e-12
+
+# y軸上限（None なら自動）
+# conf_prob は percentile で 0..1 にして描く前提なので、基本は 1.0 推奨
+VIZ_YMAX_CONF_PROB = 1.0
+VIZ_YMAX_CONF_TREND = 1.0
+VIZ_YMAX_CONF_RS = 1.0
+
+# ---- trend line overlay on wiggle ----
+VIZ_TREND_LINE_ENABLE = True
+VIZ_TREND_LINE_LW = 1.6
+VIZ_TREND_LINE_ALPHA = 0.9
+VIZ_TREND_LINE_LABEL = 'trend'
+VIZ_TREND_LINE_COLOR = 'g'
 
 # --- residual statics refine ---
 USE_RESIDUAL_STATICS = True
@@ -92,7 +113,7 @@ USE_RESIDUAL_STATICS = True
 RS_BASE_PICK = 'snap'  # 'pre' or 'snap'
 
 # RS_BASE_PICK='snap' のときに使う “事前snap” 設定（refine前のsnap）
-RS_PRE_SNAP_MODE = 'peak'
+RS_PRE_SNAP_MODE = 'trough'
 RS_PRE_SNAP_LTCOR = 3
 
 # 窓切り出し（RS_BASE_PICKで選んだpickを基準に窓を作る）
@@ -102,7 +123,7 @@ RS_POST_SAMPLES = 20
 # residual statics params
 RS_MAX_LAG = 8
 RS_K_NEIGHBORS = 5
-RS_N_ITER = 3
+RS_N_ITER = 2
 RS_MODE = 'diff'  # 'diff' or 'raw'
 RS_C_TH = 0.5
 RS_SMOOTH_METHOD = 'wls'
@@ -116,7 +137,7 @@ RS_LAG_PENALTY_POWER = 1.0
 
 # --- optional final snap (after refine) ---
 USE_FINAL_SNAP = True
-FINAL_SNAP_MODE = 'peak'
+FINAL_SNAP_MODE = 'trough'
 FINAL_SNAP_LTCOR = 3
 
 # --- confidence scoring ---
@@ -124,11 +145,29 @@ CONF_ENABLE = True
 CONF_VIZ_ENABLE = True
 CONF_VIZ_FFID = 2007
 CONF_HALF_WIN = 20
-CONF_KEEP_TH = 0.05
 
-# trend confidence (TwoPiece RANSAC over abs(offset))
-TREND_RANSAC_ITERS = 200
-TREND_INLIER_MS = 10.0
+# ---- local trend (方針A: windowed IRLS) ----
+TREND_LOCAL_ENABLE = True
+
+# 重要: 左右分け（擬似符号付きoffset）を使うため abs は使わない
+TREND_LOCAL_USE_ABS_OFFSET = False
+
+# 重要: window は trace順で切りたいので、offsetで並べ替えない
+TREND_LOCAL_SORT_OFFSETS = False
+
+# 重要: 左右分割を有効化（ヘッダーが |offset| のみでもOK）
+TREND_SIDE_SPLIT_ENABLE = True
+
+TREND_LOCAL_USE_ABS_OFFSET_HEADER = True  # ヘッダーが絶対値なら True（通常 True）
+TREND_LOCAL_SECTION_LEN = 16  # 小さいほどローカル
+TREND_LOCAL_STRIDE = 4  # section_len/2 くらいが無難
+TREND_LOCAL_HUBER_C = 1.345
+TREND_LOCAL_ITERS = 3
+TREND_LOCAL_VMIN_MPS = 300.0
+TREND_LOCAL_VMAX_MPS = 8000.0
+TREND_LOCAL_WEIGHT_MODE = 'uniform'  # 'uniform' or 'pmax'
+
+# trend residual scoring
 TREND_SIGMA_MS = 6.0
 TREND_MIN_PTS = 12
 
@@ -140,6 +179,69 @@ TREND_VAR_MIN_COUNT = 3
 # RS confidence
 RS_CMAX_TH = RS_C_TH
 RS_ABS_LAG_SOFT = float(RS_MAX_LAG)
+
+# ---- trend 保存（npzに残す） ----
+SAVE_TREND_TO_NPZ = True
+TREND_SOURCE_LABEL = 'pick_final'
+TREND_METHOD_LABEL = 'local_irls_split_sides'
+
+
+def _plot_score_panel_1d(
+    *,
+    ax: plt.Axes,
+    x: np.ndarray,
+    y: np.ndarray,
+    title: str,
+    ymax: float | None,
+    style: str,
+) -> None:
+    xx = np.asarray(x, dtype=np.float32)
+    yy = np.asarray(y, dtype=np.float32)
+
+    if xx.ndim != 1 or yy.ndim != 1 or xx.shape != yy.shape:
+        msg = f'x/y must be (N,), got x={xx.shape}, y={yy.shape}'
+        raise ValueError(msg)
+
+    st = str(style).lower()
+    if st not in ('bar', 'line'):
+        msg = f"style must be 'bar' or 'line', got {style!r}"
+        raise ValueError(msg)
+
+    if st == 'bar':
+        ax.bar(xx, yy, width=1.0, alpha=0.8)
+    else:
+        ax.plot(xx, yy, lw=1.2)
+
+    ax.set_title(title, fontsize=10)
+    ax.grid(alpha=0.2)
+
+    if ymax is not None:
+        ax.set_ylim(0.0, float(ymax))
+    else:
+        ax.set_ylim(bottom=0.0)
+
+
+def _scale01_by_percentile(
+    y: np.ndarray,
+    *,
+    pct_lo: float,
+    pct_hi: float,
+    eps: float,
+) -> tuple[np.ndarray, tuple[float, float]]:
+    yy = np.asarray(y, dtype=np.float32)
+    finite = np.isfinite(yy)
+    if not np.any(finite):
+        return np.zeros_like(yy, dtype=np.float32), (float('nan'), float('nan'))
+
+    plo = float(np.percentile(yy[finite], float(pct_lo)))
+    phi = float(np.percentile(yy[finite], float(pct_hi)))
+    denom = float(phi - plo)
+    denom = max(float(eps), denom)
+
+    out = (yy - plo) / denom
+    out = np.clip(out, 0.0, 1.0).astype(np.float32, copy=False)
+    out[~finite] = 0.0
+    return out, (plo, phi)
 
 
 def _cos_ramp01(s: torch.Tensor) -> torch.Tensor:
@@ -229,13 +331,13 @@ def pad_samples_to_6016(
     if x_hw.ndim != 2:
         msg = f'x_hw must be (H,W), got {x_hw.shape}'
         raise ValueError(msg)
-    h, w0 = x_hw.shape
+    _, w0 = x_hw.shape
     if w0 > w_target:
         msg = f'n_samples={w0} exceeds w_target={w_target}'
         raise ValueError(msg)
     if w0 == w_target:
         return x_hw.astype(np.float32, copy=False), w0
-    out = np.zeros((h, w_target), dtype=np.float32)
+    out = np.zeros((x_hw.shape[0], w_target), dtype=np.float32)
     out[:, :w0] = x_hw.astype(np.float32, copy=False)
     return out, w0
 
@@ -506,10 +608,9 @@ def _save_conf_scatter(
     x_abs: np.ndarray,
     picks_i: np.ndarray,
     dt_ms: float,
-    conf_prob: np.ndarray,
+    conf_prob_viz01: np.ndarray,
     conf_rs: np.ndarray,
     conf_trend: np.ndarray,
-    conf_total: np.ndarray,
     title: str,
     trend_hat_ms: np.ndarray | None = None,
 ) -> None:
@@ -522,12 +623,11 @@ def _save_conf_scatter(
     y_ms = pk.astype(np.float32, copy=False) * float(dt_ms)
     valid = _valid_pick_mask(pk)
 
-    fig, axes = plt.subplots(2, 2, figsize=(13, 10), sharex=True, sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharex=True, sharey=True)
     panels = [
-        ('conf_prob', np.asarray(conf_prob, dtype=np.float32)),
-        ('conf_rs', np.asarray(conf_rs, dtype=np.float32)),
+        ('conf_prob(viz01)', np.asarray(conf_prob_viz01, dtype=np.float32)),
         ('conf_trend', np.asarray(conf_trend, dtype=np.float32)),
-        ('conf_total', np.asarray(conf_total, dtype=np.float32)),
+        ('conf_rs', np.asarray(conf_rs, dtype=np.float32)),
     ]
 
     for ax, (name, cval) in zip(axes.ravel(), panels, strict=True):
@@ -561,17 +661,174 @@ def _save_conf_scatter(
                         alpha=0.8,
                     )
             fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+
         ax.set_title(name)
         ax.grid(alpha=0.2)
 
-    axes[1, 0].set_xlabel('|offset| [m]')
-    axes[1, 1].set_xlabel('|offset| [m]')
-    axes[0, 0].set_ylabel('pick [ms]')
-    axes[1, 0].set_ylabel('pick [ms]')
+    axes[0].set_xlabel('|offset| [m]')
+    axes[1].set_xlabel('|offset| [m]')
+    axes[2].set_xlabel('|offset| [m]')
+    axes[0].set_ylabel('pick [ms]')
     fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
     plt.close(fig)
+
+
+def _fit_local_trend_sec(
+    *,
+    offsets_m: np.ndarray,  # (H,)
+    t_pick_sec: np.ndarray,  # (H,)
+    valid_mask: np.ndarray,  # (H,) bool
+    pmax: np.ndarray,  # (H,) float32
+) -> tuple[np.ndarray, np.ndarray]:
+    x0 = np.asarray(offsets_m, dtype=np.float32)
+    x = np.abs(x0) if TREND_LOCAL_USE_ABS_OFFSET else x0
+    y = np.asarray(t_pick_sec, dtype=np.float32)
+
+    if x.ndim != 1 or y.ndim != 1 or x.shape != y.shape:
+        msg = f'offsets/t_pick_sec must be (H,), got x={x.shape}, y={y.shape}'
+        raise ValueError(msg)
+
+    v = np.asarray(valid_mask, dtype=bool)
+    if v.shape != x.shape:
+        msg = f'valid_mask must be (H,), got {v.shape}, expected {x.shape}'
+        raise ValueError(msg)
+
+    if TREND_LOCAL_WEIGHT_MODE == 'pmax':
+        w = np.asarray(pmax, dtype=np.float32)
+        if w.shape != x.shape:
+            msg = f'pmax must be (H,), got {w.shape}, expected {x.shape}'
+            raise ValueError(msg)
+        w = w * v.astype(np.float32)
+    elif TREND_LOCAL_WEIGHT_MODE == 'uniform':
+        w = v.astype(np.float32)
+    else:
+        msg = f'unknown TREND_LOCAL_WEIGHT_MODE={TREND_LOCAL_WEIGHT_MODE!r}'
+        raise ValueError(msg)
+
+    trend_t_bh, _, _, _, covered_bh = robust_linear_trend(
+        x,
+        y,
+        v.astype(np.uint8),
+        w_conf=w,
+        section_len=int(TREND_LOCAL_SECTION_LEN),
+        stride=int(TREND_LOCAL_STRIDE),
+        huber_c=float(TREND_LOCAL_HUBER_C),
+        iters=int(TREND_LOCAL_ITERS),
+        vmin=float(TREND_LOCAL_VMIN_MPS) if TREND_LOCAL_VMIN_MPS is not None else None,
+        vmax=float(TREND_LOCAL_VMAX_MPS) if TREND_LOCAL_VMAX_MPS is not None else None,
+        sort_offsets=bool(TREND_LOCAL_SORT_OFFSETS),
+        use_taper=True,
+        abs_velocity=False,
+    )
+
+    tt = np.asarray(trend_t_bh, dtype=np.float32)
+    cc = np.asarray(covered_bh, dtype=bool)
+
+    if tt.ndim != 2 or cc.ndim != 2 or tt.shape != cc.shape or tt.shape[0] != 1:
+        msg = f'unexpected trend shape: trend_t={tt.shape}, covered={cc.shape}'
+        raise ValueError(msg)
+
+    t_trend_sec = tt[0].copy()
+    covered = cc[0].copy()
+
+    t_trend_sec[~covered] = np.nan
+    return t_trend_sec, covered
+
+
+def _fit_local_trend_split_sides_sec(
+    *,
+    offsets_abs_m: np.ndarray,  # (H,) ここは |offset| でOK（ヘッダーが絶対値でもOK）
+    t_pick_sec: np.ndarray,  # (H,)
+    valid_mask: np.ndarray,  # (H,) bool
+    pmax: np.ndarray,  # (H,) float32
+    invalid: np.ndarray,  # (H,) bool
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    x_abs = np.asarray(offsets_abs_m, dtype=np.float32)
+    y = np.asarray(t_pick_sec, dtype=np.float32)
+    v = np.asarray(valid_mask, dtype=bool)
+    inv = np.asarray(invalid, dtype=bool)
+    pm = np.asarray(pmax, dtype=np.float32)
+
+    if x_abs.ndim != 1 or y.ndim != 1 or v.ndim != 1 or inv.ndim != 1 or pm.ndim != 1:
+        msg = (
+            'offsets_abs_m/t_pick_sec/valid_mask/invalid/pmax must be 1D, '
+            f'got {x_abs.shape},{y.shape},{v.shape},{inv.shape},{pm.shape}'
+        )
+        raise ValueError(msg)
+    if not (x_abs.shape == y.shape == v.shape == inv.shape == pm.shape):
+        msg = (
+            'shape mismatch: '
+            f'x={x_abs.shape}, y={y.shape}, v={v.shape}, inv={inv.shape}, pm={pm.shape}'
+        )
+        raise ValueError(msg)
+
+    H = x_abs.shape[0]
+    cand = x_abs.copy()
+    cand[inv | (~v)] = np.inf
+
+    if not np.isfinite(cand).any():
+        return (
+            np.full(H, np.nan, np.float32),
+            np.zeros(H, bool),
+            np.full(H, np.nan, np.float32),
+            -1,
+        )
+
+    split = int(np.argmin(cand))
+    if not np.isfinite(cand[split]):
+        return (
+            np.full(H, np.nan, np.float32),
+            np.zeros(H, bool),
+            np.full(H, np.nan, np.float32),
+            -1,
+        )
+
+    # 擬似符号付きoffset（保存用）：splitより前を負、split以降を正
+    offset_signed_proxy = x_abs.astype(np.float32, copy=True)
+    offset_signed_proxy[:split] *= -1.0
+
+    t_trend = np.full(H, np.nan, dtype=np.float32)
+    covered = np.zeros(H, dtype=bool)
+
+    # split を両側に含めて重ね、予測は平均でつなぐ（段差抑制）
+    sides = (
+        (slice(0, split + 1), -1.0),
+        (slice(split, H), +1.0),
+    )
+
+    for sl, sign in sides:
+        vv = v[sl]
+        if int(np.count_nonzero(vv)) < int(TREND_MIN_PTS):
+            continue
+
+        x_side = x_abs[sl] * float(sign)
+        y_side = y[sl]
+        p_side = pm[sl]
+
+        t_side, cov_side = _fit_local_trend_sec(
+            offsets_m=x_side,
+            t_pick_sec=y_side,
+            valid_mask=vv,
+            pmax=p_side,
+        )
+
+        cur = t_trend[sl]
+        both = np.isfinite(cur) & np.isfinite(t_side)
+        only_new = (~np.isfinite(cur)) & np.isfinite(t_side)
+
+        out = cur.copy()
+        out[both] = 0.5 * (cur[both] + t_side[both])
+        out[only_new] = t_side[only_new]
+
+        t_trend[sl] = out
+        covered[sl] = covered[sl] | cov_side
+
+    t_trend[inv] = np.nan
+    covered[inv] = False
+    offset_signed_proxy[inv] = np.nan
+    return t_trend, covered, offset_signed_proxy, split
 
 
 def process_one_segy(
@@ -632,17 +889,18 @@ def process_one_segy(
         cmax_all = np.zeros(n_traces, dtype=np.float32)
         score_all = np.zeros(n_traces, dtype=np.float32)
         rs_valid_mask_all = np.zeros(n_traces, dtype=bool)
+
         conf_prob0_all = np.zeros(n_traces, dtype=np.float32)
         conf_prob1_all = np.zeros(n_traces, dtype=np.float32)
         conf_trend0_all = np.zeros(n_traces, dtype=np.float32)
         conf_trend1_all = np.zeros(n_traces, dtype=np.float32)
         conf_rs1_all = np.ones(n_traces, dtype=np.float32)
-        conf_total0_all = np.zeros(n_traces, dtype=np.float32)
-        conf_total1_all = np.zeros(n_traces, dtype=np.float32)
-        pick_keep_all = np.zeros(n_traces, dtype=np.int32)
-        conf_keep_all = np.zeros(n_traces, dtype=np.float32)
-        keep_is_p1_all = np.zeros(n_traces, dtype=bool)
-        keep_mask_all = np.zeros(n_traces, dtype=bool)
+
+        # ---- trend 保存（npz） ----
+        trend_t_sec_all = np.full(n_traces, np.nan, dtype=np.float32)
+        trend_covered_all = np.zeros(n_traces, dtype=bool)
+        trend_offset_signed_proxy_all = np.full(n_traces, np.nan, dtype=np.float32)
+        trend_split_index_all = np.full(n_traces, -1, dtype=np.int32)
 
         max_chno = int(chno_values.max(initial=0))
         ffids_sorted = sorted(int(x) for x in info.ffid_key_to_indices)
@@ -824,47 +1082,65 @@ def process_one_segy(
                     f'mean_cmax={mean_cmax:.3f} mean_abs_update={mean_abs_update:.3f}'
                 )
 
+            # -----------------
+            # Confidence + Trend
+            # -----------------
             if CONF_ENABLE:
                 dt_ms = float(dt_sec) * 1000.0
-                x_abs = np.abs(offs_m).astype(np.float32, copy=False)
 
-                # ---- fit TwoPiece trend on pick0 (valid only) ----
-                trend_fit_mask = _valid_pick_mask(pick0, n_samples_orig) & (~invalid)
-                trend = None
-                t_trend_sec = None
+                # ---- trend: pick_out_i から作成（RS+snap後） ----
+                trend_fit_mask = _valid_pick_mask(pick_out_i, n_samples_orig) & (
+                    ~invalid
+                )
+                t_trend_sec: np.ndarray | None = None
+                trend_covered = np.zeros(idx.shape[0], dtype=bool)
+                trend_offset_signed_proxy = np.full(
+                    idx.shape[0], np.nan, dtype=np.float32
+                )
+                trend_split_index = -1
 
-                if int(np.count_nonzero(trend_fit_mask)) >= int(TREND_MIN_PTS):
-                    strat = TwoPieceRansacAutoBreakStrategy(
-                        n_iter=int(TREND_RANSAC_ITERS),
-                        inlier_th_ms=float(TREND_INLIER_MS),
-                        min_pts=int(TREND_MIN_PTS),
+                if TREND_LOCAL_ENABLE and int(np.count_nonzero(trend_fit_mask)) >= int(
+                    TREND_MIN_PTS
+                ):
+                    t_pick_fit_sec = pick_out_i.astype(np.float32, copy=False) * float(
+                        dt_sec
                     )
-                    x_fit_t = torch.from_numpy(x_abs[trend_fit_mask]).to(
-                        dtype=torch.float32
-                    )
-                    t_fit_t = torch.from_numpy(
-                        pick0[trend_fit_mask].astype(np.float32, copy=False)
-                        * float(dt_sec)
-                    ).to(dtype=torch.float32)
-                    trend = strat.fit(x_fit_t, t_fit_t)
 
-                if trend is not None:
-                    # trend.predict の入力型に合わせて分岐（try/except は使わない）
-                    edges = getattr(trend, 'edges', None)
-                    if isinstance(edges, torch.Tensor):
-                        x_all_t = torch.from_numpy(x_abs).to(dtype=edges.dtype)
-                        y_pred = trend.predict(x_all_t)
-                        if not isinstance(y_pred, torch.Tensor):
-                            msg = f'trend.predict returned non-tensor while edges is tensor: {type(y_pred)}'
-                            raise TypeError(msg)
-                        t_trend_sec = (
-                            y_pred.detach().cpu().to(dtype=torch.float32).numpy()
+                    x_abs = (
+                        np.abs(offs_m).astype(np.float32, copy=False)
+                        if TREND_LOCAL_USE_ABS_OFFSET_HEADER
+                        else offs_m.astype(np.float32, copy=False)
+                    )
+
+                    if TREND_SIDE_SPLIT_ENABLE:
+                        t_trend_fit, cov_fit, off_proxy, split = (
+                            _fit_local_trend_split_sides_sec(
+                                offsets_abs_m=np.abs(x_abs).astype(
+                                    np.float32, copy=False
+                                ),
+                                t_pick_sec=t_pick_fit_sec,
+                                valid_mask=trend_fit_mask,
+                                pmax=pmax,
+                                invalid=invalid,
+                            )
                         )
+                        t_trend_sec = t_trend_fit
+                        trend_covered = cov_fit
+                        trend_offset_signed_proxy = off_proxy
+                        trend_split_index = int(split)
                     else:
-                        y_pred_np = trend.predict(x_abs)
-                        t_trend_sec = np.asarray(y_pred_np, dtype=np.float32)
+                        t_trend_fit, cov_fit = _fit_local_trend_sec(
+                            offsets_m=x_abs,
+                            t_pick_sec=t_pick_fit_sec,
+                            valid_mask=trend_fit_mask,
+                            pmax=pmax,
+                        )
+                        t_trend_sec = t_trend_fit
+                        trend_covered = cov_fit
+                        trend_offset_signed_proxy = x_abs.astype(np.float32, copy=False)
+                        trend_split_index = -1
 
-                # ---- conf_prob: pick近傍の局所形状 ----
+                # ---- conf_prob: pick近傍の局所形状（保存は生） ----
                 conf_prob0 = trace_confidence_from_prob_local_window(
                     prob_hw,
                     pick_pre_snap,
@@ -886,16 +1162,9 @@ def process_one_segy(
                     )
                     t1_sec = pick_out_i.astype(np.float32, copy=False) * float(dt_sec)
 
-                    valid0 = (
-                        _valid_pick_mask(pick_pre_snap, n_samples_orig)
-                        & (~invalid)
-                        & np.isfinite(t_trend_sec)
-                    )
-                    valid1 = (
-                        _valid_pick_mask(pick_out_i, n_samples_orig)
-                        & (~invalid)
-                        & np.isfinite(t_trend_sec)
-                    )
+                    trend_ok = (~invalid) & np.isfinite(t_trend_sec)
+                    valid0 = _valid_pick_mask(pick_pre_snap, n_samples_orig) & trend_ok
+                    valid1 = _valid_pick_mask(pick_out_i, n_samples_orig) & trend_ok
 
                     conf0_g = trace_confidence_from_trend_resid_gaussian(
                         t0_sec,
@@ -948,24 +1217,7 @@ def process_one_segy(
                 else:
                     conf_rs1 = np.ones(idx.shape[0], dtype=np.float32)
 
-                conf_total0 = (
-                    np.asarray(conf_prob0, dtype=np.float32)
-                    * np.asarray(conf_trend0, dtype=np.float32)
-                ).astype(np.float32, copy=False)
-                conf_total1 = (
-                    np.asarray(conf_prob1, dtype=np.float32)
-                    * np.asarray(conf_trend1, dtype=np.float32)
-                    * np.asarray(conf_rs1, dtype=np.float32)
-                ).astype(np.float32, copy=False)
-
-                pick_keep, conf_keep, keep_is_p1, keep_mask = select_pick_by_confidence(
-                    pick_pre_snap,
-                    pick_out_i,
-                    conf_total0,
-                    conf_total1,
-                    keep_th=float(CONF_KEEP_TH),
-                )
-
+                # ---- conf_viz scatter（conf_probのみ percentile scaling で 0..1） ----
                 if CONF_VIZ_ENABLE and int(ffid) == int(CONF_VIZ_FFID):
                     conf_viz_dir = out_dir / 'conf_viz'
                     conf_viz_dir.mkdir(parents=True, exist_ok=True)
@@ -975,6 +1227,35 @@ def process_one_segy(
                         trend_hat_ms = (
                             np.asarray(t_trend_sec, dtype=np.float32) * 1000.0
                         ).astype(np.float32, copy=False)
+
+                    conf_prob0_viz01 = np.asarray(conf_prob0, dtype=np.float32)
+                    conf_prob1_viz01 = np.asarray(conf_prob1, dtype=np.float32)
+                    if VIZ_CONF_PROB_SCALE_ENABLE:
+                        conf_prob0_viz01, (plo0, phi0) = _scale01_by_percentile(
+                            conf_prob0_viz01,
+                            pct_lo=float(VIZ_CONF_PROB_PCT_LO),
+                            pct_hi=float(VIZ_CONF_PROB_PCT_HI),
+                            eps=float(VIZ_CONF_PROB_PCT_EPS),
+                        )
+                        conf_prob1_viz01, (plo1, phi1) = _scale01_by_percentile(
+                            conf_prob1_viz01,
+                            pct_lo=float(VIZ_CONF_PROB_PCT_LO),
+                            pct_hi=float(VIZ_CONF_PROB_PCT_HI),
+                            eps=float(VIZ_CONF_PROB_PCT_EPS),
+                        )
+                        title0 = (
+                            f'{segy_path.stem} ffid={int(ffid)} p0 (pick_pre_snap) '
+                            f'prob_pct[{VIZ_CONF_PROB_PCT_LO:.0f},{VIZ_CONF_PROB_PCT_HI:.0f}]={plo0:.3g},{phi0:.3g}'
+                        )
+                        title1 = (
+                            f'{segy_path.stem} ffid={int(ffid)} p1 (pick_final) '
+                            f'prob_pct[{VIZ_CONF_PROB_PCT_LO:.0f},{VIZ_CONF_PROB_PCT_HI:.0f}]={plo1:.3g},{phi1:.3g}'
+                        )
+                    else:
+                        title0 = f'{segy_path.stem} ffid={int(ffid)} p0 (pick_pre_snap)'
+                        title1 = f'{segy_path.stem} ffid={int(ffid)} p1 (pick_final)'
+
+                    x_abs = np.abs(offs_m).astype(np.float32, copy=False)
 
                     p0_png = (
                         conf_viz_dir / f'{segy_path.stem}.ffid{int(ffid)}.p0.conf.png'
@@ -988,11 +1269,10 @@ def process_one_segy(
                         x_abs=x_abs,
                         picks_i=pick_pre_snap,
                         dt_ms=dt_ms,
-                        conf_prob=np.asarray(conf_prob0, dtype=np.float32),
+                        conf_prob_viz01=conf_prob0_viz01,
                         conf_rs=np.ones(idx.shape[0], dtype=np.float32),
                         conf_trend=np.asarray(conf_trend0, dtype=np.float32),
-                        conf_total=np.asarray(conf_total0, dtype=np.float32),
-                        title=f'{segy_path.stem} ffid={int(ffid)} p0 (pick_pre_snap)',
+                        title=title0,
                         trend_hat_ms=trend_hat_ms,
                     )
                     _save_conf_scatter(
@@ -1000,11 +1280,10 @@ def process_one_segy(
                         x_abs=x_abs,
                         picks_i=pick_out_i,
                         dt_ms=dt_ms,
-                        conf_prob=np.asarray(conf_prob1, dtype=np.float32),
+                        conf_prob_viz01=conf_prob1_viz01,
                         conf_rs=np.asarray(conf_rs1, dtype=np.float32),
                         conf_trend=np.asarray(conf_trend1, dtype=np.float32),
-                        conf_total=np.asarray(conf_total1, dtype=np.float32),
-                        title=f'{segy_path.stem} ffid={int(ffid)} p1 (pick_final)',
+                        title=title1,
                         trend_hat_ms=trend_hat_ms,
                     )
                     print(f'[CONF_VIZ] saved {p0_png}')
@@ -1015,13 +1294,17 @@ def process_one_segy(
                 conf_trend0 = np.zeros(idx.shape[0], dtype=np.float32)
                 conf_trend1 = np.zeros(idx.shape[0], dtype=np.float32)
                 conf_rs1 = np.ones(idx.shape[0], dtype=np.float32)
-                conf_total0 = np.zeros(idx.shape[0], dtype=np.float32)
-                conf_total1 = np.zeros(idx.shape[0], dtype=np.float32)
-                pick_keep = np.zeros(idx.shape[0], dtype=np.int32)
-                conf_keep = np.zeros(idx.shape[0], dtype=np.float32)
-                keep_is_p1 = np.zeros(idx.shape[0], dtype=bool)
-                keep_mask = np.zeros(idx.shape[0], dtype=bool)
 
+                t_trend_sec = None
+                trend_covered = np.zeros(idx.shape[0], dtype=bool)
+                trend_offset_signed_proxy = np.full(
+                    idx.shape[0], np.nan, dtype=np.float32
+                )
+                trend_split_index = -1
+
+            # -----------------
+            # store per-trace outputs
+            # -----------------
             prob_all[idx, :] = prob_hw.astype(np.float16, copy=False)
             pick0_all[idx] = pick0.astype(np.int32, copy=False)
             pick_pre_snap_all[idx] = pick_pre_snap.astype(np.int32, copy=False)
@@ -1032,18 +1315,28 @@ def process_one_segy(
             cmax_all[idx] = cmax_rs
             score_all[idx] = score_rs
             rs_valid_mask_all[idx] = valid_rs
+
             conf_prob0_all[idx] = np.asarray(conf_prob0, dtype=np.float32)
             conf_prob1_all[idx] = np.asarray(conf_prob1, dtype=np.float32)
             conf_trend0_all[idx] = np.asarray(conf_trend0, dtype=np.float32)
             conf_trend1_all[idx] = np.asarray(conf_trend1, dtype=np.float32)
             conf_rs1_all[idx] = np.asarray(conf_rs1, dtype=np.float32)
-            conf_total0_all[idx] = np.asarray(conf_total0, dtype=np.float32)
-            conf_total1_all[idx] = np.asarray(conf_total1, dtype=np.float32)
-            pick_keep_all[idx] = np.asarray(pick_keep, dtype=np.int32)
-            conf_keep_all[idx] = np.asarray(conf_keep, dtype=np.float32)
-            keep_is_p1_all[idx] = np.asarray(keep_is_p1, dtype=bool)
-            keep_mask_all[idx] = np.asarray(keep_mask, dtype=bool)
 
+            # ---- trend 保存（per-trace） ----
+            if SAVE_TREND_TO_NPZ:
+                if 't_trend_sec' in locals() and t_trend_sec is not None:
+                    trend_t_sec_all[idx] = np.asarray(t_trend_sec, dtype=np.float32)
+                else:
+                    trend_t_sec_all[idx] = np.nan
+                trend_covered_all[idx] = np.asarray(trend_covered, dtype=bool)
+                trend_offset_signed_proxy_all[idx] = np.asarray(
+                    trend_offset_signed_proxy, dtype=np.float32
+                )
+                trend_split_index_all[idx] = int(trend_split_index)
+
+            # -----------------
+            # fb_mat (output: pick_out_i)
+            # -----------------
             row = ffid_to_row[int(ffid)]
             for j in range(pick_out_i.shape[0]):
                 cno = int(chno_g[j])
@@ -1130,10 +1423,22 @@ def process_one_segy(
                     ),
                 )
 
-                fig, ax = plt.subplots(figsize=(15, 10))
+                if VIZ_SCORE_COMPONENTS:
+                    fig, axes = plt.subplots(
+                        4,
+                        1,
+                        figsize=(15, 13),
+                        sharex=True,
+                        gridspec_kw={'height_ratios': [3.2, 1.0, 1.0, 1.0]},
+                    )
+                    ax_wiggle, ax_prob, ax_trend, ax_rs = axes
+                else:
+                    fig, ax_wiggle = plt.subplots(figsize=(15, 10))
+                    ax_prob = ax_trend = ax_rs = None
+
                 plot_wiggle(
                     seis_win,
-                    ax=ax,
+                    ax=ax_wiggle,
                     cfg=WiggleConfig(
                         dt=float(dt_sec),
                         t0=float(PLOT_START) * float(dt_sec),
@@ -1147,9 +1452,97 @@ def process_one_segy(
                     ),
                 )
 
-                ax.set_title(
+                # ---- trend line overlay ----
+                if (
+                    VIZ_TREND_LINE_ENABLE
+                    and ('t_trend_sec' in locals())
+                    and (t_trend_sec is not None)
+                ):
+                    dt = float(dt_sec)
+                    if dt <= 0.0:
+                        msg = f'dt_sec must be positive, got {dt_sec}'
+                        raise ValueError(msg)
+
+                    trend_i = (np.asarray(t_trend_sec, dtype=np.float32) / dt).astype(
+                        np.float32, copy=False
+                    )
+                    trend_i = trend_i.copy()
+                    trend_i[invalid] = np.nan
+
+                    trend_lmo = lmo_correct_picks(
+                        trend_i, offs_m, dt_sec=dt, vel_mps=float(LMO_VEL_MPS)
+                    )
+
+                    trend_win = (
+                        trend_lmo - float(PLOT_START) + float(LMO_BULK_SHIFT_SAMPLES)
+                    ).astype(np.float32, copy=False)
+                    trend_win = trend_win[keep]
+
+                    y_trend_sec = float(PLOT_START) * dt + trend_win * dt
+
+                    ax_wiggle.plot(
+                        x_keep,
+                        y_trend_sec,
+                        lw=float(VIZ_TREND_LINE_LW),
+                        alpha=float(VIZ_TREND_LINE_ALPHA),
+                        color=str(VIZ_TREND_LINE_COLOR),
+                        label=str(VIZ_TREND_LINE_LABEL),
+                        zorder=7,
+                    )
+                    ax_wiggle.legend(loc='best')
+
+                # ---- p1成分スコア（conf_prob1 は percentile scaling で 0..1 描画） ----
+                if ax_prob is not None:
+                    s_prob_raw = np.asarray(conf_prob1, dtype=np.float32)[keep]
+                    if VIZ_CONF_PROB_SCALE_ENABLE:
+                        s_prob_viz01, (plo, phi) = _scale01_by_percentile(
+                            s_prob_raw,
+                            pct_lo=float(VIZ_CONF_PROB_PCT_LO),
+                            pct_hi=float(VIZ_CONF_PROB_PCT_HI),
+                            eps=float(VIZ_CONF_PROB_PCT_EPS),
+                        )
+                        prob_title = (
+                            f'conf_prob (p1) viz01 pct[{VIZ_CONF_PROB_PCT_LO:.0f},{VIZ_CONF_PROB_PCT_HI:.0f}] '
+                            f'raw={plo:.3g}..{phi:.3g}'
+                        )
+                        s_prob_plot = s_prob_viz01
+                    else:
+                        prob_title = 'conf_prob (p1) raw'
+                        s_prob_plot = s_prob_raw
+
+                    s_trend = np.asarray(conf_trend1, dtype=np.float32)[keep]
+                    s_rs = np.asarray(conf_rs1, dtype=np.float32)[keep]
+
+                    _plot_score_panel_1d(
+                        ax=ax_prob,
+                        x=x_keep,
+                        y=s_prob_plot,
+                        title=prob_title,
+                        ymax=VIZ_YMAX_CONF_PROB,
+                        style=VIZ_SCORE_STYLE,
+                    )
+                    _plot_score_panel_1d(
+                        ax=ax_trend,
+                        x=x_keep,
+                        y=s_trend,
+                        title='conf_trend (p1)',
+                        ymax=VIZ_YMAX_CONF_TREND,
+                        style=VIZ_SCORE_STYLE,
+                    )
+                    _plot_score_panel_1d(
+                        ax=ax_rs,
+                        x=x_keep,
+                        y=s_rs,
+                        title='conf_rs (p1)',
+                        ymax=VIZ_YMAX_CONF_RS,
+                        style=VIZ_SCORE_STYLE,
+                    )
+                    ax_rs.set_xlabel('trace index')
+
+                ax_wiggle.set_title(
                     f'{segy_path.stem} ffid={int(ffid)} (LMO v={LMO_VEL_MPS:.1f} m/s)'
                 )
+
                 fig.tight_layout()
                 fig.savefig(png_path, dpi=200)
                 plt.close(fig)
@@ -1177,17 +1570,25 @@ def process_one_segy(
             cmax=cmax_all,
             score=score_all,
             rs_valid_mask=rs_valid_mask_all,
+            # 保存は “生”
             conf_prob0=conf_prob0_all,
             conf_prob1=conf_prob1_all,
             conf_trend0=conf_trend0_all,
             conf_trend1=conf_trend1_all,
             conf_rs1=conf_rs1_all,
-            conf_total0=conf_total0_all,
-            conf_total1=conf_total1_all,
-            pick_keep=pick_keep_all,
-            conf_keep=conf_keep_all,
-            keep_is_p1=keep_is_p1_all,
-            keep_mask=keep_mask_all,
+            # trend 保存
+            trend_t_sec=trend_t_sec_all,
+            trend_covered=trend_covered_all,
+            trend_offset_signed_proxy=trend_offset_signed_proxy_all,
+            trend_split_index=trend_split_index_all,
+            trend_source=np.asarray(TREND_SOURCE_LABEL),
+            trend_method=np.asarray(TREND_METHOD_LABEL),
+            trend_cfg=np.asarray(
+                f'section_len={TREND_LOCAL_SECTION_LEN},stride={TREND_LOCAL_STRIDE},'
+                f'huber_c={TREND_LOCAL_HUBER_C},iters={TREND_LOCAL_ITERS},'
+                f'vmin={TREND_LOCAL_VMIN_MPS},vmax={TREND_LOCAL_VMAX_MPS},'
+                f'sort_offsets={TREND_LOCAL_SORT_OFFSETS},side_split={TREND_SIDE_SPLIT_ENABLE}'
+            ),
         )
 
         crd_path = out_dir / f'{stem}.fb.crd'
@@ -1210,15 +1611,16 @@ def process_one_segy(
 
 def main() -> None:
     model = build_model()
-    segy_path = find_segy_files(INPUT_DIR)[0]
-    print(f'[RUN] using first SEGY: {segy_path}')
-    process_one_segy(
-        segy_path=segy_path,
-        out_dir=OUT_DIR,
-        model=model,
-        viz_every_n_shots=VIZ_EVERY_N_SHOTS,
-        viz_dirname=VIZ_DIRNAME,
-    )
+    segys = find_segy_files(INPUT_DIR)
+    for segy_path in segys:
+        print(f'[RUN] using first SEGY: {segys}')
+        process_one_segy(
+            segy_path=segy_path,
+            out_dir=OUT_DIR,
+            model=model,
+            viz_every_n_shots=VIZ_EVERY_N_SHOTS,
+            viz_dirname=VIZ_DIRNAME,
+        )
 
 
 if __name__ == '__main__':
