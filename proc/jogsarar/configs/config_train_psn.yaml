@@ -1,0 +1,110 @@
+paths:
+  segy_files: train_sgy.txt
+  phase_pick_files: train_fb.txt
+  infer_segy_files: train_sgy.txt
+  infer_phase_pick_files: train_fb.txt
+  out_dir: ./out_jogsarar_psn512_convnext_base
+
+dataset:
+  max_trials: 2048
+  use_header_cache: true
+  verbose: true
+  primary_keys: [ffid]
+  include_empty_gathers: false
+  secondary_key_fixed: True
+  train_endian: big
+  infer_endian: big
+
+train:
+  device: auto # auto | cpu | cuda | cuda:N
+  batch_size: 32
+  # gradient_accumulation_steps: 1
+  epochs: 50
+  lr: 1.0e-4
+  subset_traces: 128
+  time_len: 512
+  samples_per_epoch: 4096
+  psn_sigma: 1.5
+  seed: 42
+  use_amp: true
+  max_norm: 1.0
+  num_workers: 0
+
+
+ema:
+  enabled: true
+  decay: 0.999
+  start_step: 128 # recomend samples_per_epoch / batch_size
+  update_every: 1
+  use_for_infer: true
+
+transform:
+  target_len: 512
+  standardize_eps: 1.0e-8
+
+augment:
+  hflip_prob: 0.5
+  polarity_prob: 0.0
+  space:
+    prob: 0.3
+    factor_range: [0.90, 1.10]
+  time:
+    prob: 0.3
+    factor_range: [0.95, 1.05]
+  trace_tshift:
+    p_apply: 0.3
+    p_trace: 0.02
+    min_abs_shift: 1
+    max_abs_shift: 3
+    force_one: true
+  freq:
+    prob: 0.0
+    kinds: [bandpass, lowpass, highpass]
+    band: [0.05, 0.45]
+    width: [0.10, 0.35]
+    roll: 0.02
+    restandardize: false
+
+vis:
+  out_subdir: vis
+  n: 1
+
+infer:
+  batch_size: 1
+  max_batches: 12
+  subset_traces: 128
+  seed: 43
+  num_workers: 0
+
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min
+
+model:
+  backbone: convnext_base
+  # pretrained: false # default
+  in_chans: 1
+  out_chans: 3
+  # stage_strides: null
+  # extra_stages: 0
+  # extra_stage_strides: null
+  # extra_stage_channels: null
+  # extra_stage_use_bn: true
+  pre_stages: 0
+  # pre_stage_strides: null
+  # pre_stage_kernels: null
+  # pre_stage_channels: null
+  # pre_stage_use_bn: true
+  # decoder_channels: [256, 128, 64, 32]
+  # decoder_scales: [2, 2, 2, 2]
+  # upsample_mode: bilinear
+  # attention_type: scse # or null
+  # intermediate_conv: true
+
+tracking:
+  enabled: true
+  exp_name: baseline
+  tracking_uri: file:./mlruns
+  vis_best_only: true
+  vis_max_files: 50
