@@ -3,7 +3,7 @@ paths:
   phase_pick_files: train_fb.txt
   infer_segy_files: train_sgy.txt
   infer_phase_pick_files: train_fb.txt
-  out_dir: ./out_jogsarar_psn512_convnext_base
+  out_dir: ./out_jogsarar_psn512_convnext_base_prestage2
 
 dataset:
   max_trials: 2048
@@ -70,7 +70,7 @@ augment:
 
 vis:
   out_subdir: vis
-  n: 1
+  n: 5
 
 infer:
   batch_size: 1
@@ -94,11 +94,20 @@ model:
   # extra_stage_strides: null
   # extra_stage_channels: null
   # extra_stage_use_bn: true
-  pre_stages: 0
-  # pre_stage_strides: null
-  # pre_stage_kernels: null
-  # pre_stage_channels: null
-  # pre_stage_use_bn: true
+  pre_stage_use_bn: true
+  pre_stages: 2
+  pre_stage_strides:
+  - - 1
+    - 1
+  - - 1
+    - 1
+  pre_stage_channels:
+  - 16
+  - 16
+  pre_stage_kernels:
+  - 3
+  - 3
+  pre_stage_antialias: false
   # decoder_channels: [256, 128, 64, 32]
   # decoder_scales: [2, 2, 2, 2]
   # upsample_mode: bilinear
