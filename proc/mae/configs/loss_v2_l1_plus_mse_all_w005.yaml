@@ -1,0 +1,16 @@
+base: base_mae_v2.yaml
+
+paths:
+  out_dir: ../runs/loss_v2_l1_plus_mse_all_w005
+
+tracking:
+  exp_name: loss_v2_l1_plus_mse_all_w005
+
+train:
+  losses:
+    - kind: l1
+      weight: 1.0
+      scope: masked_only
+    - kind: mse
+      weight: 0.05
+      scope: all

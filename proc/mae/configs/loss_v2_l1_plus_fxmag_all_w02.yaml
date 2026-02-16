@@ -1,0 +1,21 @@
+base: base_mae_v2.yaml
+
+paths:
+  out_dir: ../runs/loss_v2_l1_plus_fxmag_all_w02
+
+tracking:
+  exp_name: loss_v2_l1_plus_fxmag_all_w02
+
+train:
+  losses:
+    - kind: l1
+      weight: 1.0
+      scope: masked_only
+    - kind: fx_mag_mse
+      weight: 0.2
+      scope: all
+      params:
+        use_log: true
+        eps: 1.0e-6
+        f_lo: 1
+        f_hi: null
