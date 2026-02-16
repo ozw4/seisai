@@ -1,0 +1,10 @@
+base: prestage_D3.yaml
+
+model:
+  backbone: resnet18
+
+paths:
+  out_dir: ../runs/mae_base_v2
+
+tracking:
+  exp_name: mae_base_v2

@@ -1,0 +1,15 @@
+base: base_mae_v2.yaml
+
+paths:
+  out_dir: ../runs/loss_v2_huber_masked_d1
+
+tracking:
+  exp_name: loss_v2_huber_masked_d1
+
+train:
+  losses:
+    - kind: huber
+      weight: 1.0
+      scope: masked_only
+      params:
+        huber_delta: 1.0

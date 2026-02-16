@@ -1,0 +1,15 @@
+base: base_mae_v2.yaml
+
+paths:
+  out_dir: ../runs/loss_v2_shift8_masked
+
+tracking:
+  exp_name: loss_v2_shift8_masked
+
+train:
+  losses:
+    - kind: shift_robust_mse
+      weight: 1.0
+      scope: masked_only
+      params:
+        shift_max: 8

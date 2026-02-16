@@ -1,4 +1,2 @@
-CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_convnext_base.yaml
-CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_resnet18d.yaml
-CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_resnet26d.yaml
-
+CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/loss_v2_l1_masked.yaml
+CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/loss_v2_huber_masked_d1.yaml
