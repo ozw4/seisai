@@ -112,3 +112,45 @@ def first_or_self(v: T | list[T]) -> T | None:
     if isinstance(v, list):
         return v[0] if len(v) > 0 else None
     return v
+
+
+def to_bool_mask_torch(
+    valid: np.ndarray | Tensor, *, like: torch.Tensor
+) -> torch.Tensor:
+    """Convert a validity array/tensor into a boolean mask on the same device as a reference tensor.
+
+    Parameters
+    ----------
+    valid : numpy.ndarray | torch.Tensor
+        A NumPy array or torch Tensor containing either boolean values or numeric values
+        interpretable as a mask (0/1 or generally nonzero/zero).
+    like : torch.Tensor
+        Reference tensor that determines the target device for the returned mask.
+
+    Returns
+    -------
+    torch.Tensor
+        A tensor of dtype ``torch.bool`` on ``like.device`` where True indicates valid
+        (nonzero) entries.
+
+    Raises
+    ------
+    TypeError
+        If ``valid`` has a dtype that is neither boolean, integer, nor floating point.
+
+    """
+    v = torch.as_tensor(valid, device=like.device)
+    if v.dtype == torch.bool:
+        return v
+    if v.dtype in (
+        torch.int8,
+        torch.int16,
+        torch.int32,
+        torch.int64,
+        torch.uint8,
+    ):
+        return v != 0
+    if v.is_floating_point():
+        return v != 0
+    msg = f'valid must be bool or 0/1 numeric array/tensor, got dtype={v.dtype}'
+    raise TypeError(msg)

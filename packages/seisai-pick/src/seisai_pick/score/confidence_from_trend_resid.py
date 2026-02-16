@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 import torch.nn.functional as F
-from seisai_utils.convert import to_numpy, to_torch
+from seisai_utils.convert import to_bool_mask_torch, to_numpy, to_torch
 from seisai_utils.validator import (
     require_all_numpy,
     require_boolint_array,
@@ -130,6 +130,7 @@ def trace_confidence_from_trend_resid_gaussian(
         v = torch.isfinite(t_pick) & torch.isfinite(t_trend)
     else:
         t_valid = to_torch(valid, like=t_pick)
+        t_valid = to_bool_mask_torch(valid, like=t_pick)
         validate_array(
             t_valid,
             allowed_ndims=(1, 2),
@@ -224,6 +225,7 @@ def trace_confidence_from_trend_resid_var(
         v = torch.isfinite(t_pick) & torch.isfinite(t_trend)
     else:
         t_valid = to_torch(valid, like=t_pick)
+        t_valid = to_bool_mask_torch(valid, like=t_pick)
         validate_array(
             t_valid,
             allowed_ndims=(1, 2),

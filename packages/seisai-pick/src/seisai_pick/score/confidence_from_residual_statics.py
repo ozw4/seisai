@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-from seisai_utils.convert import to_numpy, to_torch
+from seisai_utils.convert import to_bool_mask_torch, to_numpy, to_torch
 from seisai_utils.validator import (
     require_all_finite,
     require_all_numpy,
@@ -45,7 +45,7 @@ def trace_confidence_from_residual_statics(
     d = to_torch(delta_pick).to(dtype=torch.float32)
     c = to_torch(cmax, like=d).to(dtype=torch.float32)
     v = to_torch(valid, like=d)
-
+    v = to_bool_mask_torch(v, like=d)
     validate_array(
         d, allowed_ndims=(1, 2), name='delta_pick', backend='torch', shape_hint='(B,H)'
     )
