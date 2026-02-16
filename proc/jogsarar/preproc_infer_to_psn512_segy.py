@@ -124,6 +124,20 @@ def _load_trend_center_i(
     return c.astype(np.float32, copy=False)
 
 
+def _field_key_to_int(key: object) -> int:
+    """Convert segyio field keys/enums to plain int for broad segyio compatibility."""
+    if isinstance(key, (int, np.integer)):
+        return int(key)
+    v = getattr(key, 'value', None)
+    if isinstance(v, (int, np.integer)):
+        return int(v)
+    try:
+        return int(key)
+    except (TypeError, ValueError) as e:
+        msg = f'cannot convert segy field key to int: {key!r} (type={type(key)})'
+        raise TypeError(msg) from e
+
+
 def _extract_256(trace: np.ndarray, *, center_i: float) -> tuple[np.ndarray, int]:
     """Return (win256, start_orig_i)
     start_orig_i is the original sample index corresponding to win256[0].
@@ -331,21 +345,27 @@ def process_one_segy(segy_path: Path) -> None:
         spec.tracecount = n_traces
         spec.samples = np.arange(OUT_NS, dtype=np.int32)
         spec.format = 5  # IEEE float32
-        spec.sorting = int(getattr(src, 'sorting', 1))
+        sorting_val = getattr(src, 'sorting', 1)
+        try:
+            spec.sorting = int(1 if sorting_val is None else sorting_val)
+        except (TypeError, ValueError):
+            spec.sorting = 1
 
         with segyio.create(str(out_segy), spec) as dst:
             dst.text[0] = src.text[0]
 
             for k in src.bin:
-                dst.bin[k] = src.bin[k]
-            dst.bin[segyio.BinField.Interval] = dt_us_out
-            dst.bin[segyio.BinField.Samples] = OUT_NS
+                dst.bin[_field_key_to_int(k)] = src.bin[k]
+            dst.bin[_field_key_to_int(segyio.BinField.Interval)] = dt_us_out
+            dst.bin[_field_key_to_int(segyio.BinField.Samples)] = OUT_NS
 
             # per trace
             for i in range(n_traces):
-                h = dict(src.header[i])
-                h[segyio.TraceField.TRACE_SAMPLE_INTERVAL] = dt_us_out
-                h[segyio.TraceField.TRACE_SAMPLE_COUNT] = OUT_NS
+                h = {
+                    _field_key_to_int(k): v for k, v in dict(src.header[i]).items()
+                }
+                h[_field_key_to_int(segyio.TraceField.TRACE_SAMPLE_INTERVAL)] = dt_us_out
+                h[_field_key_to_int(segyio.TraceField.TRACE_SAMPLE_COUNT)] = OUT_NS
                 dst.header[i] = h
 
                 tr = np.asarray(src.trace[i], dtype=np.float32)
