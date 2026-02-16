@@ -344,14 +344,18 @@ class TwoPieceRansacAutoBreakStrategy:
             if not (a1 > a2 + float(self.slope_eps)):
                 continue
 
+            # ---- enforce continuity at break: y1(xb) == y2(xb) ----
+            yb = a1 * xb + b1
+            b2c = yb - a2 * xb
+
             r1 = y[s1] - (a1 * x[s1] + b1)
-            r2 = y[s2] - (a2 * x[s2] + b2)
+            r2 = y[s2] - (a2 * x[s2] + b2c)
             cost = _robust_cost_abs(r1) + _robust_cost_abs(r2)
             if cost < best_cost:
                 best_cost = float(cost)
                 best_xb = float(xb)
                 best_coef = torch.tensor(
-                    [[a1, b1], [a2, b2]], device=x.device, dtype=torch.float32
+                    [[a1, b1], [a2, b2c]], device=x.device, dtype=torch.float32
                 )
 
         if best_xb is None or best_coef is None:
