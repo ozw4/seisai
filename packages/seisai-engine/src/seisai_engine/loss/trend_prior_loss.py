@@ -16,8 +16,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 import torch
+from seisai_pick.score.confidence_from_prob import trace_confidence_from_prob
 from seisai_pick.trend._time_pick import _argmax_time_parabolic
-from seisai_pick.trend.confidence_from_prob import trace_confidence_from_prob
 from seisai_pick.trend.gaussian_prior_from_trend import gaussian_prior_from_trend
 from torch import Tensor
 

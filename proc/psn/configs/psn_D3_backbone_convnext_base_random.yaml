@@ -1,0 +1,13 @@
+base: psn_D3.yaml
+
+paths:
+  out_dir: ../runs/psn_D3_backbone_convnext_base_random
+
+tracking:
+  exp_name: psn_D3_backbone_convnext_base_random
+
+model:
+  backbone: convnext_base
+
+train:
+  init_ckpt: null

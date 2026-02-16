@@ -1,0 +1,13 @@
+base: psn_D3.yaml
+
+paths:
+  out_dir: ../runs/psn_D3_backbone_convnext_base_frommae
+
+tracking:
+  exp_name: psn_D3_backbone_convnext_base_frommae
+
+model:
+  backbone: convnext_base
+
+train:
+  init_ckpt: ../../mae/runs/backbone_D3_convnext_base/ckpt/best.pt

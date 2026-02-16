@@ -1,0 +1,10 @@
+base: prestage_D3.yaml
+
+paths:
+  out_dir: ../runs/backbone_D3_resnet18d
+
+tracking:
+  exp_name: backbone_D3_resnet18d
+
+model:
+  backbone: resnet18d

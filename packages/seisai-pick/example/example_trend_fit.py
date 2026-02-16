@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
-from seisai_pick.trend.confidence_from_prob import trace_confidence_from_prob
+from seisai_pick.score.confidence_from_prob import trace_confidence_from_prob
 from seisai_pick.trend.trend_fit import (
     robust_linear_trend,
     robust_linear_trend_sections_ransac,

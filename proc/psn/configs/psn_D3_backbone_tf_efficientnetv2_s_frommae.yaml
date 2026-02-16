@@ -1,0 +1,13 @@
+base: psn_D3.yaml
+
+paths:
+  out_dir: ../runs/psn_D3_backbone_tf_efficientnetv2_s_frommae
+
+tracking:
+  exp_name: psn_D3_backbone_tf_efficientnetv2_s_frommae
+
+model:
+  backbone: tf_efficientnetv2_s
+
+train:
+  init_ckpt: ../../mae/runs/backbone_D3_tf_efficientnetv2_s/ckpt/best.pt

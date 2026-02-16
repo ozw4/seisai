@@ -19,7 +19,19 @@ from seisai_engine.postprocess.velocity_filter_op import apply_velocity_filt_pro
 from seisai_engine.predict import _run_tiled
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.residual_statics import refine_firstbreak_residual_statics
+from seisai_pick.score.confidence_from_prob import (
+    trace_confidence_from_prob_local_window,
+)
+from seisai_pick.score.confidence_from_residual_statics import (
+    trace_confidence_from_residual_statics,
+)
+from seisai_pick.score.confidence_from_trend_resid import (
+    trace_confidence_from_trend_resid_gaussian,
+    trace_confidence_from_trend_resid_var,
+)
+from seisai_pick.score.confidence_select import select_pick_by_confidence
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
+from seisai_pick.trend.trend_fit_strategy import TwoPieceRansacAutoBreakStrategy
 from seisai_transforms.signal_ops.scaling.standardize import standardize_per_trace_torch
 from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
 
@@ -110,18 +122,20 @@ FINAL_SNAP_LTCOR = 3
 # --- confidence scoring ---
 CONF_ENABLE = True
 CONF_VIZ_ENABLE = True
-CONF_VIZ_FFID = 0
+CONF_VIZ_FFID = 2007
 CONF_HALF_WIN = 20
-CONF_KEEP_TH = 0.5
-CONF_CENTER_P0 = 0.02
-CONF_MASS0 = 0.08
+CONF_KEEP_TH = 0.05
 
-# trend confidence (piecewise RANSAC over abs(offset))
-TREND_N_BINS = 4
+# trend confidence (TwoPiece RANSAC over abs(offset))
 TREND_RANSAC_ITERS = 200
-TREND_INLIER_MS = 4.0
+TREND_INLIER_MS = 10.0
 TREND_SIGMA_MS = 6.0
-TREND_MIN_PTS = 8
+TREND_MIN_PTS = 12
+
+# trend residual local-variance scoring (trace-direction)
+TREND_VAR_HALF_WIN_TRACES = 8
+TREND_VAR_SIGMA_STD_MS = 6.0
+TREND_VAR_MIN_COUNT = 3
 
 # RS confidence
 RS_CMAX_TH = RS_C_TH
@@ -486,310 +500,6 @@ def _valid_pick_mask(picks: np.ndarray, n_samples: int | None = None) -> np.ndar
     return mask
 
 
-def _prob_local_conf(prob_1d: np.ndarray, center: int, half_win: int) -> float:
-    p = np.asarray(prob_1d, dtype=np.float32)
-    if p.ndim != 1:
-        msg = f'prob_1d must be 1D, got {p.shape}'
-        raise ValueError(msg)
-    if half_win < 0:
-        msg = f'half_win must be >= 0, got {half_win}'
-        raise ValueError(msg)
-    if center <= 0 or center >= p.shape[0]:
-        return 0.0
-
-    l = max(0, int(center) - int(half_win))
-    r = min(p.shape[0], int(center) + int(half_win) + 1)
-    if l >= r:
-        return 0.0
-
-    w_raw = p[l:r].astype(np.float64, copy=False)
-    s = float(np.sum(w_raw))
-    if s <= 0.0:
-        return 0.0
-    p_center = float(p[int(center)])
-    mass = float(np.clip(s / float(CONF_MASS0), 0.0, 1.0))
-    pc = float(np.clip(p_center / float(CONF_CENTER_P0), 0.0, 1.0))
-
-    w = w_raw / s
-
-    n = int(w.size)
-    if n <= 0:
-        return 0.0
-    if n == 1:
-        h_norm = 0.0
-    else:
-        eps = 1e-12
-        h = -float(np.sum(w * np.log(w + eps)))
-        h_norm = h / float(np.log(float(n)))
-
-    if n == 1:
-        margin = float(w[0])
-    else:
-        top2 = np.partition(w, -2)[-2:]
-        p1 = float(np.max(top2))
-        p2 = float(np.min(top2))
-        margin = p1 - p2
-
-    m0 = 0.2
-    conf_shape = (1.0 - h_norm) * float(np.clip(margin / m0, 0.0, 1.0))
-    conf = conf_shape * mass * pc
-    return float(np.clip(conf, 0.0, 1.0))
-
-
-def compute_conf_prob(
-    prob_hw: np.ndarray, picks_i: np.ndarray, half_win: int
-) -> np.ndarray:
-    prob = np.asarray(prob_hw, dtype=np.float32)
-    picks = np.asarray(picks_i)
-    if prob.ndim != 2:
-        msg = f'prob_hw must be (H,W), got {prob.shape}'
-        raise ValueError(msg)
-    if picks.ndim != 1 or picks.shape[0] != prob.shape[0]:
-        msg = f'picks_i must be (H,), got {picks.shape}, H={prob.shape[0]}'
-        raise ValueError(msg)
-
-    out = np.zeros(prob.shape[0], dtype=np.float32)
-    for i in range(prob.shape[0]):
-        c = int(picks[i])
-        out[i] = np.float32(_prob_local_conf(prob[i], c, int(half_win)))
-    return out
-
-
-def _fit_line_ls(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    xx = np.asarray(x, dtype=np.float64)
-    yy = np.asarray(y, dtype=np.float64)
-    if xx.ndim != 1 or yy.ndim != 1 or xx.shape[0] != yy.shape[0]:
-        msg = f'x/y must be 1D with same length, got {xx.shape}, {yy.shape}'
-        raise ValueError(msg)
-    if xx.shape[0] < 2:
-        msg = f'need at least 2 points, got {xx.shape[0]}'
-        raise ValueError(msg)
-
-    A = np.stack([xx, np.ones_like(xx)], axis=1)
-    coef, *_ = np.linalg.lstsq(A, yy, rcond=None)
-    a = float(coef[0])
-    b = float(coef[1])
-    return a, b
-
-
-def _ransac_line(
-    x: np.ndarray, y: np.ndarray, n_iter: int, inlier_th: float
-) -> tuple[float, float, np.ndarray]:
-    xx = np.asarray(x, dtype=np.float64)
-    yy = np.asarray(y, dtype=np.float64)
-    if xx.ndim != 1 or yy.ndim != 1 or xx.shape[0] != yy.shape[0]:
-        msg = f'x/y must be 1D with same length, got {xx.shape}, {yy.shape}'
-        raise ValueError(msg)
-    n = xx.shape[0]
-    if n < 2:
-        msg = f'need at least 2 points, got {n}'
-        raise ValueError(msg)
-    if n_iter <= 0:
-        msg = f'n_iter must be > 0, got {n_iter}'
-        raise ValueError(msg)
-    if inlier_th <= 0.0:
-        msg = f'inlier_th must be > 0, got {inlier_th}'
-        raise ValueError(msg)
-
-    if float(np.ptp(xx)) <= 1e-12:
-        b0 = float(np.median(yy))
-        resid0 = np.abs(yy - b0)
-        in0 = resid0 <= float(inlier_th)
-        if int(np.count_nonzero(in0)) < 2:
-            in0 = np.ones(n, dtype=bool)
-        return 0.0, float(np.mean(yy[in0])), in0
-
-    rng = np.random.default_rng(0)
-    best_in: np.ndarray | None = None
-    best_n = -1
-    best_err = float('inf')
-
-    for _ in range(int(n_iter)):
-        i0, i1 = rng.choice(n, size=2, replace=False)
-        dx = float(xx[i1] - xx[i0])
-        if abs(dx) <= 1e-12:
-            continue
-        a = float((yy[i1] - yy[i0]) / dx)
-        b = float(yy[i0] - a * xx[i0])
-        resid = np.abs(yy - (a * xx + b))
-        inlier = resid <= float(inlier_th)
-        nin = int(np.count_nonzero(inlier))
-        if nin < 2:
-            continue
-        med = float(np.median(resid[inlier]))
-        if nin > best_n or (nin == best_n and med < best_err):
-            best_n = nin
-            best_err = med
-            best_in = inlier
-
-    if best_in is None:
-        best_in = np.ones(n, dtype=bool)
-
-    if int(np.count_nonzero(best_in)) >= 2:
-        a_ref, b_ref = _fit_line_ls(xx[best_in], yy[best_in])
-    else:
-        a_ref, b_ref = _fit_line_ls(xx, yy)
-    return a_ref, b_ref, best_in
-
-
-def fit_piecewise_ransac(
-    x_abs: np.ndarray,
-    y_ms: np.ndarray,
-    n_bins: int,
-    *,
-    n_iter: int,
-    inlier_th: float,
-    min_pts: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    xa = np.asarray(x_abs, dtype=np.float32)
-    yy = np.asarray(y_ms, dtype=np.float32)
-    if xa.ndim != 1 or yy.ndim != 1 or xa.shape[0] != yy.shape[0]:
-        msg = f'x_abs/y_ms must be 1D same length, got {xa.shape}, {yy.shape}'
-        raise ValueError(msg)
-    if n_bins <= 0:
-        msg = f'n_bins must be > 0, got {n_bins}'
-        raise ValueError(msg)
-    if min_pts < 2:
-        msg = f'min_pts must be >= 2, got {min_pts}'
-        raise ValueError(msg)
-    if xa.size == 0:
-        msg = 'x_abs is empty'
-        raise ValueError(msg)
-
-    q = np.linspace(0.0, 1.0, int(n_bins) + 1)
-    edges = np.quantile(xa, q).astype(np.float32, copy=False)
-
-    if not np.isfinite(edges).all():
-        msg = 'non-finite quantile edges'
-        raise ValueError(msg)
-    if float(edges[-1] - edges[0]) <= 1e-6:
-        x0 = float(edges[0])
-        eps = 1e-3
-        edges = np.linspace(
-            x0 - eps, x0 + eps, int(n_bins) + 1, dtype=np.float32, endpoint=True
-        )
-
-    coef = np.full((int(n_bins), 2), np.nan, dtype=np.float32)
-
-    for k in range(int(n_bins)):
-        lo = float(edges[k])
-        hi = float(edges[k + 1])
-        if k < int(n_bins) - 1:
-            mk = (xa >= lo) & (xa < hi)
-        else:
-            mk = (xa >= lo) & (xa <= hi)
-        if int(np.count_nonzero(mk)) < int(min_pts):
-            continue
-        a, b, _ = _ransac_line(
-            xa[mk], yy[mk], n_iter=int(n_iter), inlier_th=float(inlier_th)
-        )
-        coef[k, 0] = np.float32(a)
-        coef[k, 1] = np.float32(b)
-
-    return edges, coef
-
-
-def predict_piecewise(x_abs: np.ndarray, edges: np.ndarray, coef: np.ndarray) -> np.ndarray:
-    xa = np.asarray(x_abs, dtype=np.float32)
-    ed = np.asarray(edges, dtype=np.float32)
-    cf = np.asarray(coef, dtype=np.float32)
-    if xa.ndim != 1:
-        msg = f'x_abs must be 1D, got {xa.shape}'
-        raise ValueError(msg)
-    if ed.ndim != 1:
-        msg = f'edges must be 1D, got {ed.shape}'
-        raise ValueError(msg)
-    if cf.ndim != 2 or cf.shape[1] != 2:
-        msg = f'coef must be (n_bins,2), got {cf.shape}'
-        raise ValueError(msg)
-    if ed.shape[0] != cf.shape[0] + 1:
-        msg = f'edges length must be n_bins+1, got edges={ed.shape[0]}, bins={cf.shape[0]}'
-        raise ValueError(msg)
-
-    out = np.full(xa.shape, np.nan, dtype=np.float32)
-    valid_bin = np.isfinite(cf[:, 0]) & np.isfinite(cf[:, 1])
-    valid_idx = np.flatnonzero(valid_bin)
-    if valid_idx.size == 0:
-        return out
-
-    bins = np.searchsorted(ed, xa, side='right') - 1
-    bins = np.clip(bins, 0, cf.shape[0] - 1)
-
-    for i in range(xa.shape[0]):
-        xv = float(xa[i])
-        if not np.isfinite(xv):
-            continue
-        k = int(bins[i])
-        if not valid_bin[k]:
-            k = int(valid_idx[np.argmin(np.abs(valid_idx - k))])
-        a = float(cf[k, 0])
-        b = float(cf[k, 1])
-        out[i] = np.float32(a * xv + b)
-    return out
-
-
-def compute_conf_trend(
-    picks_i: np.ndarray,
-    x_abs: np.ndarray,
-    dt_ms: float,
-    edges: np.ndarray | None,
-    coef: np.ndarray | None,
-    sigma_ms: float,
-) -> np.ndarray:
-    picks = np.asarray(picks_i)
-    xa = np.asarray(x_abs, dtype=np.float32)
-    if picks.ndim != 1 or xa.ndim != 1 or picks.shape[0] != xa.shape[0]:
-        msg = f'picks_i/x_abs must be (H,), got {picks.shape}, {xa.shape}'
-        raise ValueError(msg)
-    if sigma_ms <= 0.0:
-        msg = f'sigma_ms must be > 0, got {sigma_ms}'
-        raise ValueError(msg)
-
-    out = np.zeros(picks.shape[0], dtype=np.float32)
-    if edges is None or coef is None:
-        return out
-
-    t_hat_ms = predict_piecewise(xa, edges, coef)
-    t_ms = picks.astype(np.float32, copy=False) * float(dt_ms)
-    valid = _valid_pick_mask(picks) & np.isfinite(t_hat_ms)
-    if not np.any(valid):
-        return out
-    resid = t_ms[valid] - t_hat_ms[valid]
-    out[valid] = np.exp(-((resid / float(sigma_ms)) ** 2)).astype(np.float32, copy=False)
-    return out
-
-
-def compute_conf_rs(
-    delta_pick: np.ndarray,
-    cmax: np.ndarray,
-    *,
-    c_th: float,
-    max_lag: float,
-    valid_rs: np.ndarray,
-) -> np.ndarray:
-    d = np.asarray(delta_pick, dtype=np.float32)
-    c = np.asarray(cmax, dtype=np.float32)
-    v = np.asarray(valid_rs, dtype=bool)
-    if d.ndim != 1 or c.ndim != 1 or v.ndim != 1:
-        msg = f'inputs must be 1D, got delta={d.shape}, cmax={c.shape}, valid={v.shape}'
-        raise ValueError(msg)
-    if d.shape[0] != c.shape[0] or d.shape[0] != v.shape[0]:
-        msg = f'input lengths mismatch: {d.shape[0]}, {c.shape[0]}, {v.shape[0]}'
-        raise ValueError(msg)
-
-    denom = max(1.0 - float(c_th), 1e-6)
-    conf_c = np.clip((c - float(c_th)) / denom, 0.0, 1.0).astype(np.float32, copy=False)
-    conf_c = conf_c * v.astype(np.float32, copy=False)
-
-    if max_lag > 0.0:
-        conf_l = np.exp(-((np.abs(d) / float(max_lag)) ** 2)).astype(
-            np.float32, copy=False
-        )
-    else:
-        conf_l = np.ones(d.shape[0], dtype=np.float32)
-    return (conf_c * conf_l).astype(np.float32, copy=False)
-
-
 def _save_conf_scatter(
     *,
     out_png: Path,
@@ -1003,13 +713,11 @@ def process_one_segy(
             wave_pad[:, :n_samples_orig] = wave_hw.astype(np.float32, copy=False)
 
             # ========
-            # RS 無効時は、snapも一切しない（ここが今回の修正点）
+            # RS 無効時は、snapも一切しない
             # ========
             if not USE_RESIDUAL_STATICS:
                 rs_label = 'pick0'
-                pick_pre_snap = (
-                    pick0.copy()
-                )  # 保存用の箱としては入れておく（意味的には=pick0）
+                pick_pre_snap = pick0.copy()
                 delta = np.zeros(pick0.shape[0], dtype=np.float32)
                 cmax_rs = np.zeros(pick0.shape[0], dtype=np.float32)
                 score_rs = np.zeros(pick0.shape[0], dtype=np.float32)
@@ -1038,7 +746,7 @@ def process_one_segy(
                     pick_base = pick_pre_snap
                     base_label = 'snap'
                 elif RS_BASE_PICK == 'pre':
-                    pick_pre_snap = pick0.copy()  # 保存用（snapしてない）
+                    pick_pre_snap = pick0.copy()
                     pick_base = pick0
                     base_label = 'pre'
                 else:
@@ -1120,90 +828,170 @@ def process_one_segy(
                 dt_ms = float(dt_sec) * 1000.0
                 x_abs = np.abs(offs_m).astype(np.float32, copy=False)
 
+                # ---- fit TwoPiece trend on pick0 (valid only) ----
                 trend_fit_mask = _valid_pick_mask(pick0, n_samples_orig) & (~invalid)
+                trend = None
+                t_trend_sec = None
+
                 if int(np.count_nonzero(trend_fit_mask)) >= int(TREND_MIN_PTS):
-                    trend_edges, trend_coef = fit_piecewise_ransac(
-                        x_abs[trend_fit_mask],
-                        pick0[trend_fit_mask].astype(np.float32, copy=False) * dt_ms,
-                        n_bins=int(TREND_N_BINS),
+                    strat = TwoPieceRansacAutoBreakStrategy(
                         n_iter=int(TREND_RANSAC_ITERS),
-                        inlier_th=float(TREND_INLIER_MS),
+                        inlier_th_ms=float(TREND_INLIER_MS),
                         min_pts=int(TREND_MIN_PTS),
                     )
-                else:
-                    trend_edges, trend_coef = None, None
+                    x_fit_t = torch.from_numpy(x_abs[trend_fit_mask]).to(
+                        dtype=torch.float32
+                    )
+                    t_fit_t = torch.from_numpy(
+                        pick0[trend_fit_mask].astype(np.float32, copy=False)
+                        * float(dt_sec)
+                    ).to(dtype=torch.float32)
+                    trend = strat.fit(x_fit_t, t_fit_t)
 
-                conf_prob0 = compute_conf_prob(
-                    prob_hw, pick_pre_snap, half_win=int(CONF_HALF_WIN)
-                )
-                conf_prob1 = compute_conf_prob(
-                    prob_hw, pick_out_i, half_win=int(CONF_HALF_WIN)
-                )
+                if trend is not None:
+                    # trend.predict の入力型に合わせて分岐（try/except は使わない）
+                    edges = getattr(trend, 'edges', None)
+                    if isinstance(edges, torch.Tensor):
+                        x_all_t = torch.from_numpy(x_abs).to(dtype=edges.dtype)
+                        y_pred = trend.predict(x_all_t)
+                        if not isinstance(y_pred, torch.Tensor):
+                            msg = f'trend.predict returned non-tensor while edges is tensor: {type(y_pred)}'
+                            raise TypeError(msg)
+                        t_trend_sec = (
+                            y_pred.detach().cpu().to(dtype=torch.float32).numpy()
+                        )
+                    else:
+                        y_pred_np = trend.predict(x_abs)
+                        t_trend_sec = np.asarray(y_pred_np, dtype=np.float32)
 
-                conf_trend0 = compute_conf_trend(
+                # ---- conf_prob: pick近傍の局所形状 ----
+                conf_prob0 = trace_confidence_from_prob_local_window(
+                    prob_hw,
                     pick_pre_snap,
-                    x_abs,
-                    dt_ms,
-                    trend_edges,
-                    trend_coef,
-                    sigma_ms=float(TREND_SIGMA_MS),
+                    half_win=int(CONF_HALF_WIN),
                 )
-                conf_trend1 = compute_conf_trend(
+                conf_prob1 = trace_confidence_from_prob_local_window(
+                    prob_hw,
                     pick_out_i,
-                    x_abs,
-                    dt_ms,
-                    trend_edges,
-                    trend_coef,
-                    sigma_ms=float(TREND_SIGMA_MS),
+                    half_win=int(CONF_HALF_WIN),
                 )
 
+                # ---- conf_trend: 予測-トレンド（gauss）×（トレース方向局所分散） ----
+                if t_trend_sec is None:
+                    conf_trend0 = np.zeros(idx.shape[0], dtype=np.float32)
+                    conf_trend1 = np.zeros(idx.shape[0], dtype=np.float32)
+                else:
+                    t0_sec = pick_pre_snap.astype(np.float32, copy=False) * float(
+                        dt_sec
+                    )
+                    t1_sec = pick_out_i.astype(np.float32, copy=False) * float(dt_sec)
+
+                    valid0 = (
+                        _valid_pick_mask(pick_pre_snap, n_samples_orig)
+                        & (~invalid)
+                        & np.isfinite(t_trend_sec)
+                    )
+                    valid1 = (
+                        _valid_pick_mask(pick_out_i, n_samples_orig)
+                        & (~invalid)
+                        & np.isfinite(t_trend_sec)
+                    )
+
+                    conf0_g = trace_confidence_from_trend_resid_gaussian(
+                        t0_sec,
+                        t_trend_sec,
+                        valid0,
+                        sigma_ms=float(TREND_SIGMA_MS),
+                    )
+                    conf1_g = trace_confidence_from_trend_resid_gaussian(
+                        t1_sec,
+                        t_trend_sec,
+                        valid1,
+                        sigma_ms=float(TREND_SIGMA_MS),
+                    )
+
+                    conf0_v = trace_confidence_from_trend_resid_var(
+                        t0_sec,
+                        t_trend_sec,
+                        valid0,
+                        half_win_traces=int(TREND_VAR_HALF_WIN_TRACES),
+                        sigma_std_ms=float(TREND_VAR_SIGMA_STD_MS),
+                        min_count=int(TREND_VAR_MIN_COUNT),
+                    )
+                    conf1_v = trace_confidence_from_trend_resid_var(
+                        t1_sec,
+                        t_trend_sec,
+                        valid1,
+                        half_win_traces=int(TREND_VAR_HALF_WIN_TRACES),
+                        sigma_std_ms=float(TREND_VAR_SIGMA_STD_MS),
+                        min_count=int(TREND_VAR_MIN_COUNT),
+                    )
+
+                    conf_trend0 = (
+                        np.asarray(conf0_g, dtype=np.float32)
+                        * np.asarray(conf0_v, dtype=np.float32)
+                    ).astype(np.float32, copy=False)
+                    conf_trend1 = (
+                        np.asarray(conf1_g, dtype=np.float32)
+                        * np.asarray(conf1_v, dtype=np.float32)
+                    ).astype(np.float32, copy=False)
+
+                # ---- conf_rs: residual statics の信頼度 ----
                 if USE_RESIDUAL_STATICS:
-                    conf_rs1 = compute_conf_rs(
+                    conf_rs1 = trace_confidence_from_residual_statics(
                         delta,
                         cmax_rs,
+                        valid_rs,
                         c_th=float(RS_CMAX_TH),
                         max_lag=float(RS_ABS_LAG_SOFT),
-                        valid_rs=valid_rs,
                     )
                 else:
                     conf_rs1 = np.ones(idx.shape[0], dtype=np.float32)
 
-                conf_total0 = (conf_prob0 * conf_trend0).astype(np.float32, copy=False)
-                conf_total1 = (conf_prob1 * conf_trend1 * conf_rs1).astype(
-                    np.float32, copy=False
-                )
+                conf_total0 = (
+                    np.asarray(conf_prob0, dtype=np.float32)
+                    * np.asarray(conf_trend0, dtype=np.float32)
+                ).astype(np.float32, copy=False)
+                conf_total1 = (
+                    np.asarray(conf_prob1, dtype=np.float32)
+                    * np.asarray(conf_trend1, dtype=np.float32)
+                    * np.asarray(conf_rs1, dtype=np.float32)
+                ).astype(np.float32, copy=False)
 
-                keep_is_p1 = conf_total1 >= conf_total0
-                conf_keep = np.where(keep_is_p1, conf_total1, conf_total0).astype(
-                    np.float32, copy=False
+                pick_keep, conf_keep, keep_is_p1, keep_mask = select_pick_by_confidence(
+                    pick_pre_snap,
+                    pick_out_i,
+                    conf_total0,
+                    conf_total1,
+                    keep_th=float(CONF_KEEP_TH),
                 )
-                pick_keep = np.where(keep_is_p1, pick_out_i, pick_pre_snap).astype(
-                    np.int32, copy=False
-                )
-                keep_mask = conf_keep >= float(CONF_KEEP_TH)
-                pick_keep = pick_keep.copy()
-                pick_keep[~keep_mask] = 0
 
                 if CONF_VIZ_ENABLE and int(ffid) == int(CONF_VIZ_FFID):
                     conf_viz_dir = out_dir / 'conf_viz'
                     conf_viz_dir.mkdir(parents=True, exist_ok=True)
-                    trend_hat_ms = (
-                        None
-                        if trend_edges is None or trend_coef is None
-                        else predict_piecewise(x_abs, trend_edges, trend_coef)
+
+                    trend_hat_ms = None
+                    if t_trend_sec is not None:
+                        trend_hat_ms = (
+                            np.asarray(t_trend_sec, dtype=np.float32) * 1000.0
+                        ).astype(np.float32, copy=False)
+
+                    p0_png = (
+                        conf_viz_dir / f'{segy_path.stem}.ffid{int(ffid)}.p0.conf.png'
+                    )
+                    p1_png = (
+                        conf_viz_dir / f'{segy_path.stem}.ffid{int(ffid)}.p1.conf.png'
                     )
 
-                    p0_png = conf_viz_dir / f'{segy_path.stem}.ffid{int(ffid)}.p0.conf.png'
-                    p1_png = conf_viz_dir / f'{segy_path.stem}.ffid{int(ffid)}.p1.conf.png'
                     _save_conf_scatter(
                         out_png=p0_png,
                         x_abs=x_abs,
                         picks_i=pick_pre_snap,
                         dt_ms=dt_ms,
-                        conf_prob=conf_prob0,
+                        conf_prob=np.asarray(conf_prob0, dtype=np.float32),
                         conf_rs=np.ones(idx.shape[0], dtype=np.float32),
-                        conf_trend=conf_trend0,
-                        conf_total=conf_total0,
+                        conf_trend=np.asarray(conf_trend0, dtype=np.float32),
+                        conf_total=np.asarray(conf_total0, dtype=np.float32),
                         title=f'{segy_path.stem} ffid={int(ffid)} p0 (pick_pre_snap)',
                         trend_hat_ms=trend_hat_ms,
                     )
@@ -1212,10 +1000,10 @@ def process_one_segy(
                         x_abs=x_abs,
                         picks_i=pick_out_i,
                         dt_ms=dt_ms,
-                        conf_prob=conf_prob1,
-                        conf_rs=conf_rs1,
-                        conf_trend=conf_trend1,
-                        conf_total=conf_total1,
+                        conf_prob=np.asarray(conf_prob1, dtype=np.float32),
+                        conf_rs=np.asarray(conf_rs1, dtype=np.float32),
+                        conf_trend=np.asarray(conf_trend1, dtype=np.float32),
+                        conf_total=np.asarray(conf_total1, dtype=np.float32),
                         title=f'{segy_path.stem} ffid={int(ffid)} p1 (pick_final)',
                         trend_hat_ms=trend_hat_ms,
                     )
@@ -1244,17 +1032,17 @@ def process_one_segy(
             cmax_all[idx] = cmax_rs
             score_all[idx] = score_rs
             rs_valid_mask_all[idx] = valid_rs
-            conf_prob0_all[idx] = conf_prob0
-            conf_prob1_all[idx] = conf_prob1
-            conf_trend0_all[idx] = conf_trend0
-            conf_trend1_all[idx] = conf_trend1
-            conf_rs1_all[idx] = conf_rs1
-            conf_total0_all[idx] = conf_total0
-            conf_total1_all[idx] = conf_total1
-            pick_keep_all[idx] = pick_keep
-            conf_keep_all[idx] = conf_keep
-            keep_is_p1_all[idx] = keep_is_p1
-            keep_mask_all[idx] = keep_mask
+            conf_prob0_all[idx] = np.asarray(conf_prob0, dtype=np.float32)
+            conf_prob1_all[idx] = np.asarray(conf_prob1, dtype=np.float32)
+            conf_trend0_all[idx] = np.asarray(conf_trend0, dtype=np.float32)
+            conf_trend1_all[idx] = np.asarray(conf_trend1, dtype=np.float32)
+            conf_rs1_all[idx] = np.asarray(conf_rs1, dtype=np.float32)
+            conf_total0_all[idx] = np.asarray(conf_total0, dtype=np.float32)
+            conf_total1_all[idx] = np.asarray(conf_total1, dtype=np.float32)
+            pick_keep_all[idx] = np.asarray(pick_keep, dtype=np.int32)
+            conf_keep_all[idx] = np.asarray(conf_keep, dtype=np.float32)
+            keep_is_p1_all[idx] = np.asarray(keep_is_p1, dtype=bool)
+            keep_mask_all[idx] = np.asarray(keep_mask, dtype=bool)
 
             row = ffid_to_row[int(ffid)]
             for j in range(pick_out_i.shape[0]):
@@ -1283,13 +1071,10 @@ def process_one_segy(
                 )
 
                 p1_viz = pick_argmax.astype(np.float32, copy=False).copy()
-                p1_viz[nopick] = (
-                    np.nan
-                )  # pmax<th や invalid は表示しない(argmax側も揃えるな)
+                p1_viz[nopick] = np.nan
 
                 p2_viz = pick_out_i.astype(np.float32, copy=False).copy()
-                p2_viz[pick_out_i == 0] = np.nan  # 出力pickの no-pick は表示しない
-                # もし invalid をさらに落とすなら:
+                p2_viz[pick_out_i == 0] = np.nan
                 p2_viz[invalid] = np.nan
 
                 p1_lmo = lmo_correct_picks(

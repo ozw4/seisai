@@ -1,0 +1,10 @@
+base: prestage_D3.yaml
+
+paths:
+  out_dir: ../runs/backbone_D3_resnext26d_32x4d
+
+tracking:
+  exp_name: backbone_D3_resnext26d_32x4d
+
+model:
+  backbone: resnext26d_32x4d
