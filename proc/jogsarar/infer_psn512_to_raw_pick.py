@@ -25,7 +25,7 @@ from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
 # CONFIG (fixed constants)
 # =========================
 IN_RAW_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
-IN_WIN512_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512')
+IN_WIN512_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_drop005')
 OUT_PRED_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_pred')
 
 CFG_YAML = Path('configs/config_convnext_prestage2.yaml')
@@ -75,7 +75,7 @@ LOG_GATHER_RS = True
 DT_TOL_SEC = 1e-9
 
 # visualization (like run_fbp_infer.py)
-VIZ_EVERY_N_SHOTS = 25
+VIZ_EVERY_N_SHOTS = 1
 VIZ_DIRNAME = 'viz'
 VIZ_PLOT_START = 0
 VIZ_PLOT_END = 350

@@ -34,11 +34,6 @@ train:
       weight: 1.0
       scope: all
       params: {}
-    - kind: prob_mse
-      weight: 0.1
-      scope: all
-      params: {}
-
 
 # ema:
 #   enabled: true

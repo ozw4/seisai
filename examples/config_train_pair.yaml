@@ -49,7 +49,7 @@ transform:
 
 ema:
   enabled: true
-  decay: 0.995
+  decay: 0.999
   start_step: 128 # recomend samples_per_epoch / batch_size
   update_every: 1
   use_for_infer: true

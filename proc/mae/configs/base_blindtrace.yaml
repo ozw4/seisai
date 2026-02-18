@@ -57,8 +57,6 @@ train:
     - kind: mse
       weight: 1.0
       scope: masked_only
-
-  time_len: 6016
   batch_size: 16
   gradient_accumulation_steps: 2
   num_workers: 0
@@ -80,7 +78,7 @@ eval:
 ema:
   enabled: true
   decay: 0.999
-  start_step: 128
+  start_step: 256
   update_every: 1
   use_for_infer: true
 
