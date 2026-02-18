@@ -38,6 +38,7 @@ __all__ = [
     'PairModelCfg',
     'PairPaths',
     'PairTileCfg',
+    'PairTransformCfg',
     'PairTrainCfg',
     'PairTrainConfig',
     'PairVisCfg',
@@ -75,13 +76,17 @@ class PairTrainCfg:
     epochs: int
     lr: float
     subset_traces: int
-    time_len: int
     samples_per_epoch: int
     loss_kind: str
     seed: int
     use_amp: bool
     max_norm: float
     num_workers: int
+
+
+@dataclass(frozen=True)
+class PairTransformCfg:
+    time_len: int
 
 
 @dataclass(frozen=True)
@@ -156,6 +161,7 @@ class PairTrainConfig:
     infer_paths: PairPaths
     dataset: PairDatasetCfg
     train: PairTrainCfg
+    transform: PairTransformCfg
     infer: PairInferCfg
     tile: PairTileCfg
     vis: PairVisCfg
@@ -202,6 +208,27 @@ def _normalize_endian(*, value: str, key_name: str) -> str:
         msg = f'{key_name} must be "big" or "little"'
         raise ValueError(msg)
     return endian
+
+
+def _format_key(section: str, key: str) -> str:
+    return f'{section}.{key}'
+
+
+def _require_pair_time_len(cfg: dict, *, train_cfg: dict) -> int:
+    if 'time_len' in train_cfg:
+        msg = (
+            f'deprecated key: {_format_key("train", "time_len")}; '
+            f'use {_format_key("transform", "time_len")}'
+        )
+        raise ValueError(msg)
+    transform_cfg = require_dict(cfg, 'transform')
+    if 'target_len' in transform_cfg:
+        msg = (
+            f'deprecated key: {_format_key("transform", "target_len")}; '
+            f'use {_format_key("transform", "time_len")}'
+        )
+        raise ValueError(msg)
+    return int(require_int(transform_cfg, 'time_len'))
 
 
 def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
@@ -288,7 +315,7 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
 
     lr = require_float(train_cfg, 'lr')
     train_subset_traces = require_int(train_cfg, 'subset_traces')
-    time_len = require_int(train_cfg, 'time_len')
+    time_len = _require_pair_time_len(cfg, train_cfg=train_cfg)
     loss_kind = require_value(
         train_cfg,
         'loss_kind',
@@ -350,7 +377,6 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
             epochs=int(common.train.epochs),
             lr=float(lr),
             subset_traces=int(train_subset_traces),
-            time_len=int(time_len),
             samples_per_epoch=int(common.train.samples_per_epoch),
             loss_kind=str(loss_kind),
             seed=int(common.seeds.seed_train),
@@ -358,6 +384,7 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
             max_norm=float(common.train.max_norm),
             num_workers=int(common.train.train_num_workers),
         ),
+        transform=PairTransformCfg(time_len=int(time_len)),
         infer=PairInferCfg(
             batch_size=int(common.infer.infer_batch_size),
             max_batches=int(common.infer.infer_max_batches),

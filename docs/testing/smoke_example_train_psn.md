@@ -16,7 +16,7 @@
 2. 速く回すために、まずは以下を推奨（任意）。
    - `train.epochs = 1`
    - `train.samples_per_epoch = train.batch_size`（1バッチだけ確実に回す）
-   - （重ければ）`train.time_len` や `train.subset_traces` を小さめにする
+   - （重ければ）`transform.time_len` や `train.subset_traces` を小さめにする
 
 ---
 

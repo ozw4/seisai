@@ -22,7 +22,6 @@ train:
   epochs: 10
   lr: 1.0e-4
   subset_traces: 128
-  time_len: 6016
   samples_per_epoch: 256
   psn_sigma: 1.5
   seed: 42
@@ -40,7 +39,7 @@ train:
 #   device: cpu  # omit -> same device as model; "cpu" saves VRAM but is slower
 
 transform:
-  target_len: 6016
+  time_len: 6016
   standardize_eps: 1.0e-8
 
 augment:

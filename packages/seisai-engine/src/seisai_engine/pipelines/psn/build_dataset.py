@@ -30,6 +30,33 @@ from .build_plan import build_plan
 __all__ = ['build_dataset', 'build_infer_transform', 'build_train_transform']
 
 
+def _format_key(section: str, key: str) -> str:
+    return f'{section}.{key}'
+
+
+def _raise_if_deprecated_time_len_keys(*, cfg: dict) -> None:
+    train_cfg = cfg.get('train')
+    if isinstance(train_cfg, dict) and 'time_len' in train_cfg:
+        msg = (
+            f'deprecated key: {_format_key("train", "time_len")}; '
+            f'use {_format_key("transform", "time_len")}'
+        )
+        raise ValueError(msg)
+    transform_cfg = cfg.get('transform')
+    if isinstance(transform_cfg, dict) and 'target_len' in transform_cfg:
+        msg = (
+            f'deprecated key: {_format_key("transform", "target_len")}; '
+            f'use {_format_key("transform", "time_len")}'
+        )
+        raise ValueError(msg)
+
+
+def _resolve_time_len(cfg: dict) -> tuple[dict, int]:
+    _raise_if_deprecated_time_len_keys(cfg=cfg)
+    transform_cfg = require_dict(cfg, 'transform')
+    return transform_cfg, int(require_int(transform_cfg, 'time_len'))
+
+
 def _build_fbgate(fbgate_cfg: dict | None) -> FirstBreakGate:
     if fbgate_cfg is None:
         return FirstBreakGate(
@@ -65,15 +92,14 @@ def build_train_transform(cfg: dict) -> ViewCompose:
     if not isinstance(cfg, dict):
         msg = 'cfg must be dict'
         raise TypeError(msg)
-    transform_cfg = require_dict(cfg, 'transform')
+    transform_cfg, time_len = _resolve_time_len(cfg)
     augment_cfg = cfg.get('augment')
-    target_len = require_int(transform_cfg, 'target_len')
     standardize_eps = optional_float(transform_cfg, 'standardize_eps', 1.0e-8)
     geom_ops, post_ops = build_train_augment_ops(augment_cfg)
     return ViewCompose(
         [
             *geom_ops,
-            RandomCropOrPad(target_len=int(target_len)),
+            RandomCropOrPad(target_len=int(time_len)),
             *post_ops,
             PerTraceStandardize(eps=float(standardize_eps)),
         ]
@@ -84,12 +110,11 @@ def build_infer_transform(cfg: dict) -> ViewCompose:
     if not isinstance(cfg, dict):
         msg = 'cfg must be dict'
         raise TypeError(msg)
-    transform_cfg = require_dict(cfg, 'transform')
-    target_len = require_int(transform_cfg, 'target_len')
+    transform_cfg, time_len = _resolve_time_len(cfg)
     standardize_eps = optional_float(transform_cfg, 'standardize_eps', 1.0e-8)
     return ViewCompose(
         [
-            DeterministicCropOrPad(target_len=int(target_len)),
+            DeterministicCropOrPad(target_len=int(time_len)),
             PerTraceStandardize(eps=float(standardize_eps)),
         ]
     )

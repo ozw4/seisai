@@ -104,20 +104,16 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
     def _extract_time_len(cfg: dict) -> int | None:
         if not isinstance(cfg, dict):
             return None
-        for section_key, value_key in (
-            ('transform', 'time_len'),
-            ('train', 'time_len'),
-        ):
-            section = cfg.get(section_key)
-            if not isinstance(section, dict):
-                continue
-            val = section.get(value_key)
-            if isinstance(val, bool):
-                continue
-            if isinstance(val, int):
-                return int(val)
-            if isinstance(val, float) and val.is_integer():
-                return int(val)
+        section = cfg.get('transform')
+        if not isinstance(section, dict):
+            return None
+        val = section.get('time_len')
+        if isinstance(val, bool):
+            return None
+        if isinstance(val, int):
+            return int(val)
+        if isinstance(val, float) and val.is_integer():
+            return int(val)
         return None
 
     def _resolve_device_index(device: torch.device) -> int | None:

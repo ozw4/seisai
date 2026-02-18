@@ -229,7 +229,7 @@ def test_e2e_train_pair_with_augment(tmp_path: Path) -> None:
     )
     from seisai_transforms import RandomPolarityFlip
 
-    time_len = int(cfg_data['train']['time_len'])
+    time_len = int(cfg_data['transform']['time_len'])
     train_tf = build_train_transform(
         time_len=time_len,
         augment_cfg=cfg_data.get('augment'),

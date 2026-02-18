@@ -73,7 +73,6 @@ train:
       weight: 0.02
       scope: all
       params: {}
-  time_len: 5024
   batch_size: 8
   # gradient_accumulation_steps: 1
   num_workers: 0

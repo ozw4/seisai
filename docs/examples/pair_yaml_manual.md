@@ -67,13 +67,15 @@ train:
   epochs: 100
   lr: 1.0e-4
   subset_traces: 128
-  time_len: 6016
   samples_per_epoch: 256
   loss_kind: l1            # l1 or mse
   seed: 42
   use_amp: true
   max_norm: 1.0
   num_workers: 0
+
+transform:
+  time_len: 6016
 
 
 # ema:
@@ -238,12 +240,12 @@ tracking:
 |---|---:|:---:|---|
 | `train.lr` | `float` | Yes | AdamW の学習率。 |
 | `train.subset_traces` | `int` | Yes | 学習データセットで切り出すトレース本数（H）。 |
-| `train.time_len` | `int` | Yes | 学習時の時間長（W）。`RandomCropOrPad` により W を調整。 |
+| `transform.time_len` | `int` | Yes | 学習時の時間長（W）。`RandomCropOrPad` により W を調整。 |
 | `train.loss_kind` | `str` | Yes | `l1` / `mse` のみ。pixel-wise 損失に対応。 |
 
-### 5.3 `train.time_len` の挙動
-- `train.time_len < 元W` は **ランダム crop**
-- `train.time_len > 元W` は **右側ゼロパディング**
+### 5.3 `transform.time_len` の挙動
+- `transform.time_len < 元W` は **ランダム crop**
+- `transform.time_len > 元W` は **右側ゼロパディング**
 - 推論側は **時間方向の crop/pad を行わない**（元の W のまま）
 - 変換は input/target に同期適用され、学習/推論ともに `PerTraceStandardize(eps=1e-8)` が固定で入る
 - 実効バッチサイズは `train.batch_size × train.gradient_accumulation_steps`。

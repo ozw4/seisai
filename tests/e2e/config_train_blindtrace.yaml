@@ -41,7 +41,6 @@ train:
       weight: 1.0
       scope: masked_only
       params: {}
-  time_len: 6000
   batch_size: 1
   num_workers: 0
   use_amp: false

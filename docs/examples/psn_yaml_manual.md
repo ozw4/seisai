@@ -43,7 +43,6 @@ train:
   epochs: 10
   lr: 1.0e-4
   subset_traces: 128
-  time_len: 6016
   samples_per_epoch: 256
   psn_sigma: 1.5
   seed: 42
@@ -61,7 +60,7 @@ train:
 #   device: cpu  # omit -> same device as model; "cpu" saves VRAM but is slower
 
 transform:
-  target_len: 6016
+  time_len: 6016
   standardize_eps: 1.0e-8
 
 augment:
@@ -202,11 +201,11 @@ tracking:
 
 ## 6. `transform` セクション
 
-PSN は `transform.target_len` を用いて **時間方向（W）**を crop/pad する。
+PSN は `transform.time_len` を用いて **時間方向（W）**を crop/pad する。
 
 | key | 型 | 必須 | デフォルト | 意味 / 制約 |
 |---|---:|:---:|---:|---|
-| `transform.target_len` | `int` | Yes | - | 出力する時間長（W）。`W > 元W` は右側ゼロパディング、`W < 元W` は crop。学習はランダム crop、推論は中央 crop。 |
+| `transform.time_len` | `int` | Yes | - | 出力する時間長（W）。`W > 元W` は右側ゼロパディング、`W < 元W` は crop。学習はランダム crop、推論は中央 crop。 |
 | `transform.standardize_eps` | `float` | No | `1.0e-8` | Per-trace 標準化の分母安定化 epsilon。 |
 
 補足:
@@ -239,10 +238,9 @@ PSN は `transform.target_len` を用いて **時間方向（W）**を crop/pad 
 | `train.subset_traces` | `int` | Yes | 学習データセットで切り出すトレース本数（H）。 |
 | `train.psn_sigma` | `float` | No | `1.5` | `PhasePSNMap` のガウシアン sigma（サンプルbin単位）。大きいほどラベルが太る。 |
 
-### 7.3 `train.time_len` について（重要）
-`examples/config_train_psn.yaml` には `train.time_len` が存在するが、PSN パイプライン実装では参照されない。
-- PSN で時間長（W）を決めるのは `transform.target_len`
-- `train.time_len` は現状 **無効パラメータ**（残置の可能性が高い）
+### 7.3 時間長の指定（重要）
+- 時間長（W）は `transform.time_len` で指定する。
+- 廃止キーが混在している設定はエラーとして扱われる。
 - 実効バッチサイズは `train.batch_size × train.gradient_accumulation_steps`。
 
 ---

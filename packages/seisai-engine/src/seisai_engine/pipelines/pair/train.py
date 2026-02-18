@@ -89,7 +89,7 @@ def main(argv: list[str] | None = None) -> None:
 
     standardize_eps = 1e-8
     train_transform = build_train_transform(
-        int(typed.train.time_len),
+        int(typed.transform.time_len),
         eps=standardize_eps,
         augment_cfg=augment_cfg,
     )

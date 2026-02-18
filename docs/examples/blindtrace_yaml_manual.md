@@ -96,7 +96,6 @@ train:
       weight: 0.02
       scope: all
       params: {}
-  time_len: 5024
   batch_size: 8
   num_workers: 0
   use_amp: true
@@ -321,10 +320,10 @@ FB pick を使ったゲート。`phase_pick_files` が未指定の場合は **�
 | `train.fx_eps` | `float` | No | **legacy**。`fx_mag_mse` の epsilon（`>0`）。 |
 | `train.fx_f_lo` | `int` | No | **legacy**。`fx_mag_mse` の下限周波数 bin。 |
 | `train.fx_f_hi` | `int` / `null` | No | **legacy**。`fx_mag_mse` の上限周波数 bin。 |
-| `train.time_len` | `int` | No | **現行実装では未使用**（`transform.time_len` が有効）。 |
 
 補足:
 - `train.losses` がある場合は **優先**され、legacy キーは無視される。
+- 時間長（W）は `transform.time_len` のみ有効。
 - 実効バッチサイズは `train.batch_size × train.gradient_accumulation_steps`。
 
 ---
@@ -450,4 +449,3 @@ python examples/examples_train_blindtrace.py --config examples/config_train_blin
 - `dataset.waveform_mode="mmap"` で `train.num_workers` / `infer.num_workers` が 0 以外（即エラー）
 - `tile.tile_h > infer.subset_traces` または `overlap_h >= tile_h`
 - `model.out_chans!=1`（タイル推論で即エラー）
-- `train.time_len` を変えても挙動が変わらない（`transform.time_len` が有効）
