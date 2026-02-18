@@ -1,3 +1,4 @@
-CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/loss_v2_l1_plus_mse_all_w005.yaml
-CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/loss_v2_l1_plus_mse_all_w01.yaml
-CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/loss_v2_l1_plus_mse_all_w02.yaml
+CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_convnext_small.yaml &
+CUDA_VISIBLE_DEVICES=1 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_convnext_base.yaml &
+
+

@@ -57,12 +57,12 @@ WAVEFORM_MODE = 'mmap'  # "mmap" or "eager"
 HEADER_CACHE_DIR: str | None = None
 
 # 可視化: 各SEGYファイル内で「50ショットおき」に可視化（0なら無効）
-VIZ_EVERY_N_SHOTS = 50
+VIZ_EVERY_N_SHOTS = 100
 VIZ_DIRNAME = 'viz'
 
 # velocity mask params (inference)
 VMIN_MASK = 100.0
-VMAX_MASK = 8000.0
+VMAX_MASK = 5000.0
 T0_LO_MS = -10.0
 T0_HI_MS = 100.0
 TAPER_MS = 10.0
@@ -143,7 +143,7 @@ FINAL_SNAP_LTCOR = 3
 # --- confidence scoring ---
 CONF_ENABLE = True
 CONF_VIZ_ENABLE = True
-CONF_VIZ_FFID = 2007
+CONF_VIZ_FFID = 2147
 CONF_HALF_WIN = 20
 
 # ---- local trend (方針A: windowed IRLS) ----

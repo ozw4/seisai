@@ -51,7 +51,7 @@ debug_*/
 
 
 code_snippet/
-mlruns/
+mlruns*/
 tracking/
 
 test_data/

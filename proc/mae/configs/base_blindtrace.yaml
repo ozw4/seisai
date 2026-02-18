@@ -75,12 +75,12 @@ eval:
   losses:
     - kind: mse
       weight: 1.0
-      scope: all
+      scope: masked_only
 
 ema:
   enabled: true
   decay: 0.999
-  start_step: 0
+  start_step: 128
   update_every: 1
   use_for_infer: true
 

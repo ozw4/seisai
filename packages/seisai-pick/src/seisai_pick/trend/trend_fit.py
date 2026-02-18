@@ -37,7 +37,9 @@ def _apply_speed_bounds_on_slowness(
     return b_slope.clamp(min=min_s, max=max_s)
 
 
-def _validation(offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, iters) -> None:
+def _validation(
+    offsets, t_sec, valid, w_conf, vmax, vmin, section_len, stride, iters
+) -> None:
     validate_array(
         offsets, allowed_ndims=(2,), name='offsets', backend='torch', shape_hint='(B,H)'
     )
