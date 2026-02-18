@@ -22,11 +22,16 @@ train:
   lr: 1.0e-4
   subset_traces: 32
   samples_per_epoch: 4
-  loss_kind: l1
   seed: 42
   use_amp: false
   max_norm: 1.0
   num_workers: 0
+  loss_scope: all
+  losses:
+    - kind: l1
+      weight: 1.0
+      scope: all
+      params: {}
 
 transform:
   time_len: 6000

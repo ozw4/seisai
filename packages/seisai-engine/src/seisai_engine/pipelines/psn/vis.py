@@ -7,18 +7,30 @@ import numpy as np
 import torch
 from seisai_utils.viz_phase import make_title_from_batch_meta, save_psn_debug_png
 
+from seisai_engine.loss import composite
 from seisai_engine.loss.soft_label_ce import (
     build_pixel_mask_from_batch,
     soft_label_ce_masked_mean,
 )
 from seisai_engine.metrics.phase_pick_metrics import compute_ps_metrics_from_batch
 
-from .loss import criterion
+from .loss import build_psn_criterion
 
 if TYPE_CHECKING:
     from torch.utils.data import DataLoader
 
 __all__ = ['run_epoch_debug']
+
+_DEBUG_CRITERION = build_psn_criterion(
+    [
+        composite.LossSpec(
+            kind='soft_label_ce',
+            weight=1.0,
+            scope='masked_only',
+            params={},
+        )
+    ]
+)
 
 
 @torch.no_grad()
@@ -62,7 +74,7 @@ def run_epoch_debug(
     pixel_mask = build_pixel_mask_from_batch(batch)
     pixel_mask_sum = int(pixel_mask.sum().item())
     y_dev = y.to(device=device, non_blocking=(device.type == 'cuda'))
-    loss_masked = criterion(logits_dev, y_dev, batch)
+    loss_masked = _DEBUG_CRITERION(logits_dev, y_dev, batch)
     loss_empty = soft_label_ce_masked_mean(
         logits_dev, y_dev, torch.zeros_like(pixel_mask, dtype=torch.bool)
     )

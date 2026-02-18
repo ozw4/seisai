@@ -18,6 +18,7 @@ from seisai_utils.config import (
     require_value,
 )
 
+from seisai_engine.loss import composite
 from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
 from seisai_engine.pipelines.common.config_io import (
     load_config,
@@ -77,7 +78,6 @@ class PairTrainCfg:
     lr: float
     subset_traces: int
     samples_per_epoch: int
-    loss_kind: str
     seed: int
     use_amp: bool
     max_norm: float
@@ -161,6 +161,8 @@ class PairTrainConfig:
     infer_paths: PairPaths
     dataset: PairDatasetCfg
     train: PairTrainCfg
+    loss_specs_train: tuple[composite.LossSpec, ...]
+    loss_specs_eval: tuple[composite.LossSpec, ...]
     transform: PairTransformCfg
     infer: PairInferCfg
     tile: PairTileCfg
@@ -229,6 +231,45 @@ def _require_pair_time_len(cfg: dict, *, train_cfg: dict) -> int:
         )
         raise ValueError(msg)
     return int(require_int(transform_cfg, 'time_len'))
+
+
+def _require_pair_loss_specs(
+    cfg: dict, *, train_cfg: dict
+) -> tuple[tuple[composite.LossSpec, ...], tuple[composite.LossSpec, ...]]:
+    if 'loss_kind' in train_cfg:
+        msg = (
+            f'deprecated key: {_format_key("train", "loss_kind")}; '
+            f'use {_format_key("train", "losses")}'
+        )
+        raise ValueError(msg)
+
+    train_loss_scope = optional_str(train_cfg, 'loss_scope', 'all')
+    train_loss_specs = composite.parse_loss_specs(
+        train_cfg.get('losses', None),
+        default_scope=train_loss_scope,
+        label='train.losses',
+        scope_label='train.loss_scope',
+    )
+
+    eval_cfg = cfg.get('eval')
+    if eval_cfg is None:
+        eval_loss_specs = train_loss_specs
+    else:
+        if not isinstance(eval_cfg, dict):
+            raise TypeError('eval must be dict')
+        eval_losses = eval_cfg.get('losses', None)
+        if eval_losses is None:
+            eval_loss_specs = train_loss_specs
+        else:
+            eval_loss_scope = optional_str(eval_cfg, 'loss_scope', train_loss_scope)
+            eval_loss_specs = composite.parse_loss_specs(
+                eval_losses,
+                default_scope=eval_loss_scope,
+                label='eval.losses',
+                scope_label='eval.loss_scope',
+            )
+
+    return tuple(train_loss_specs), tuple(eval_loss_specs)
 
 
 def _load_dataset_cfg(ds_cfg: dict) -> PairDatasetCfg:
@@ -316,12 +357,9 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
     lr = require_float(train_cfg, 'lr')
     train_subset_traces = require_int(train_cfg, 'subset_traces')
     time_len = _require_pair_time_len(cfg, train_cfg=train_cfg)
-    loss_kind = require_value(
-        train_cfg,
-        'loss_kind',
-        str,
-        type_message='config.train.loss_kind must be str',
-    ).lower()
+    loss_specs_train, loss_specs_eval = _require_pair_loss_specs(
+        cfg, train_cfg=train_cfg
+    )
 
     infer_subset_traces = require_int(infer_cfg, 'subset_traces')
 
@@ -378,12 +416,13 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
             lr=float(lr),
             subset_traces=int(train_subset_traces),
             samples_per_epoch=int(common.train.samples_per_epoch),
-            loss_kind=str(loss_kind),
             seed=int(common.seeds.seed_train),
             use_amp=bool(common.train.use_amp_train),
             max_norm=float(common.train.max_norm),
             num_workers=int(common.train.train_num_workers),
         ),
+        loss_specs_train=loss_specs_train,
+        loss_specs_eval=loss_specs_eval,
         transform=PairTransformCfg(time_len=int(time_len)),
         infer=PairInferCfg(
             batch_size=int(common.infer.infer_batch_size),

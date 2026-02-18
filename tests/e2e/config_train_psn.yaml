@@ -28,6 +28,12 @@ train:
   use_amp: true
   max_norm: 1.0
   num_workers: 0
+  loss_scope: all
+  losses:
+    - kind: soft_label_ce
+      weight: 1.0
+      scope: all
+      params: {}
 
 transform:
   time_len: 6016

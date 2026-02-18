@@ -9,6 +9,7 @@ from seisai_utils.config import optional_str, require_dict
 from seisai_utils.viz_pair import PairTriptychVisConfig
 
 from seisai_engine.infer.runner import TiledHConfig
+from seisai_engine.loss import composite
 from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
     expand_cfg_listfiles,
@@ -29,7 +30,6 @@ from .build_model import build_model
 from .build_plan import build_plan
 from .config import PairPaths, load_pair_train_config
 from .infer import run_infer_epoch
-from .loss import build_criterion
 
 __all__ = ['main']
 
@@ -70,10 +70,6 @@ def main(argv: list[str] | None = None) -> None:
         msg = 'ckpt.mode must be "min"'
         raise ValueError(msg)
 
-    if typed.train.loss_kind not in ('l1', 'mse'):
-        msg = 'train.loss_kind must be "l1" or "mse"'
-        raise ValueError(msg)
-
     if typed.tile.tile_h > typed.infer.subset_traces:
         msg = 'tile.tile_h must be <= infer.subset_traces'
         raise ValueError(msg)
@@ -96,7 +92,8 @@ def main(argv: list[str] | None = None) -> None:
     infer_transform = build_infer_transform(eps=standardize_eps)
 
     plan = build_plan()
-    criterion = build_criterion(typed.train.loss_kind)
+    criterion_train = composite.build_weighted_criterion(list(typed.loss_specs_train))
+    criterion_eval = composite.build_weighted_criterion(list(typed.loss_specs_eval))
 
     paths_cfg = PairPaths(
         input_segy_files=list(typed.paths.input_segy_files),
@@ -172,17 +169,17 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     def infer_epoch_fn(model, loader, device, vis_epoch_dir, vis_n, max_batches):
-        return (run_infer_epoch(
-                model=model,
-                loader=loader,
-                device=device,
-                criterion=criterion,
-                tiled_cfg=tiled_cfg,
-                vis_cfg=triptych_cfg,
-                vis_out_dir=str(vis_epoch_dir),
-                vis_n=vis_n,
-                max_batches=max_batches,
-            ))
+        return run_infer_epoch(
+            model=model,
+            loader=loader,
+            device=device,
+            criterion=criterion_eval,
+            tiled_cfg=tiled_cfg,
+            vis_cfg=triptych_cfg,
+            vis_out_dir=str(vis_epoch_dir),
+            vis_n=vis_n,
+            max_batches=max_batches,
+        )
 
     spec = TrainSkeletonSpec(
         pipeline='pair',
@@ -193,7 +190,7 @@ def main(argv: list[str] | None = None) -> None:
         model_sig=model_sig,
         model=model,
         optimizer=optimizer,
-        criterion=criterion,
+        criterion=criterion_train,
         ds_train_full=ds_train_full,
         ds_infer_full=ds_infer_full,
         device=device,

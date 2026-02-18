@@ -13,7 +13,7 @@ PSN（P/S/Noise）タスクは、CSR 形式の位相ピック（P/S）から **(
 
 - 入力: SEG-Y gather window（`(H,W)` を `(1,H,W)` としてモデル入力へ）
 - 教師: `PhasePSNMap` により `(3,H,W)` の soft-label（P/S/Noise の確率分布）
-- 損失: soft-label CE（`trace_valid` と `label_valid` 等で画素マスク）
+- 損失: `train.losses` で指定する複数lossの加重和（`soft_label_ce` / `prob_*`）
 
 ---
 
@@ -49,6 +49,16 @@ train:
   use_amp: true
   max_norm: 1.0
   num_workers: 0
+  loss_scope: all
+  losses:
+    - kind: soft_label_ce
+      weight: 1.0
+      scope: all
+      params: {}
+    - kind: prob_mse
+      weight: 0.1
+      scope: all
+      params: {}
 
 
 # ema:
@@ -237,8 +247,19 @@ PSN は `transform.time_len` を用いて **時間方向（W）**を crop/pad �
 | `train.lr` | `float` | Yes | AdamW の学習率。 |
 | `train.subset_traces` | `int` | Yes | 学習データセットで切り出すトレース本数（H）。 |
 | `train.psn_sigma` | `float` | No | `1.5` | `PhasePSNMap` のガウシアン sigma（サンプルbin単位）。大きいほどラベルが太る。 |
+| `train.losses` | `list[dict]` | Yes | 損失のリスト。`kind`/`weight`/`scope`/`params` を持つ。 |
+| `train.loss_scope` | `str` | No | `all` / `masked_only`。`losses[*].scope` 未指定時のデフォルト。 |
 
-### 7.3 時間長の指定（重要）
+### 7.3 loss 指定（重要）
+- `train.losses` は必須（空は不可）。
+- `eval.losses` は任意。未指定時は `train.losses` をそのまま使う。
+- `eval.loss_scope` は `eval.losses` の `scope` 省略項目にだけ適用される。
+- 対応 `kind`: `soft_label_ce` / `prob_l1` / `prob_mse` / `prob_huber`。
+- scope の解釈:
+  - `all`: `trace_valid` と `label_valid` のみを使用し、`mask_bool` は無視。
+  - `masked_only`: `trace_valid` と `label_valid` に加え、`mask_bool` があれば反映（`mask_bool` が無くてもエラーにしない）。
+
+### 7.4 時間長の指定（重要）
 - 時間長（W）は `transform.time_len` で指定する。
 - 廃止キーが混在している設定はエラーとして扱われる。
 - 実効バッチサイズは `train.batch_size × train.gradient_accumulation_steps`。

@@ -13,7 +13,7 @@ Pair タスクは、入力 SEG-Y とターゲット SEG-Y を 1:1 対応させ�
 
 - 入力: input SEG-Y gather window（`(H,W)` → `(1,H,W)`）
 - 教師: target SEG-Y gather window（`(H,W)` → `(1,H,W)`）
-- 損失: pixel-wise `l1` / `mse`
+- 損失: `train.losses` で定義する複数lossの加重和
 - 推論: H 方向タイル（`tile` セクション）で分割推論し、可視化は triptych（Input/Target/Pred）
 
 ---
@@ -68,7 +68,20 @@ train:
   lr: 1.0e-4
   subset_traces: 128
   samples_per_epoch: 256
-  loss_kind: l1            # l1 or mse
+  loss_scope: all
+  losses:
+    - kind: l1
+      weight: 1.0
+      scope: all
+      params: {}
+    - kind: fx_mag_mse
+      weight: 0.1
+      scope: all
+      params:
+        use_log: true
+        eps: 1.0e-6
+        f_lo: 1
+        f_hi: null
   seed: 42
   use_amp: true
   max_norm: 1.0
@@ -241,9 +254,17 @@ tracking:
 | `train.lr` | `float` | Yes | AdamW の学習率。 |
 | `train.subset_traces` | `int` | Yes | 学習データセットで切り出すトレース本数（H）。 |
 | `transform.time_len` | `int` | Yes | 学習時の時間長（W）。`RandomCropOrPad` により W を調整。 |
-| `train.loss_kind` | `str` | Yes | `l1` / `mse` のみ。pixel-wise 損失に対応。 |
+| `train.losses` | `list[dict]` | Yes | 損失のリスト。`kind`/`weight`/`scope`/`params` を持つ。 |
+| `train.loss_scope` | `str` | No | `all` / `masked_only`。`losses[*].scope` 未指定時のデフォルト。 |
 
-### 5.3 `transform.time_len` の挙動
+### 5.3 loss 指定（重要）
+- `train.losses` は必須（空は不可）。
+- `train.loss_kind` は廃止。含まれていると `deprecated key: train.loss_kind; use train.losses` で即エラー。
+- `eval.losses` は任意。未指定時は `train.losses` をそのまま使う。
+- `eval.loss_scope` は `eval.losses` 内で `scope` を省略した項目にだけ適用される。
+- `masked_only` を使う場合、pair では `batch['mask_bool']` が必須（未提供なら即エラー）。
+
+### 5.4 `transform.time_len` の挙動
 - `transform.time_len < 元W` は **ランダム crop**
 - `transform.time_len > 元W` は **右側ゼロパディング**
 - 推論側は **時間方向の crop/pad を行わない**（元の W のまま）

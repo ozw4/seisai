@@ -38,7 +38,15 @@ def _make_pair_cfg() -> dict:
             'max_norm': 1.0,
             'lr': 1.0e-4,
             'subset_traces': 8,
-            'loss_kind': 'l1',
+            'loss_scope': 'all',
+            'losses': [
+                {
+                    'kind': 'l1',
+                    'weight': 1.0,
+                    'scope': 'all',
+                    'params': {},
+                }
+            ],
         },
         'transform': {
             'time_len': 32,

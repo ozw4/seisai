@@ -3,8 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from seisai_utils.config import require_bool, require_dict, require_float, require_int, require_value
+from seisai_utils.config import (
+    optional_str,
+    require_bool,
+    require_dict,
+    require_float,
+    require_int,
+    require_value,
+)
 
+from seisai_engine.loss import composite
 from seisai_engine.pipelines.common.config_loaders import load_common_train_config
 from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
 
@@ -62,9 +70,43 @@ class PsnCkptCfg:
 class PsnTrainConfig:
     common: CommonTrainConfig
     train: PsnTrainCfg
+    loss_specs_train: tuple[composite.LossSpec, ...]
+    loss_specs_eval: tuple[composite.LossSpec, ...]
     infer: PsnInferCfg
     model: PsnModelCfg
     ckpt: PsnCkptCfg
+
+
+def _load_psn_loss_specs(
+    cfg: dict, *, train_cfg: dict
+) -> tuple[tuple[composite.LossSpec, ...], tuple[composite.LossSpec, ...]]:
+    train_loss_scope = optional_str(train_cfg, 'loss_scope', 'all')
+    train_loss_specs = composite.parse_loss_specs(
+        train_cfg.get('losses', None),
+        default_scope=train_loss_scope,
+        label='train.losses',
+        scope_label='train.loss_scope',
+    )
+
+    eval_cfg = cfg.get('eval')
+    if eval_cfg is None:
+        eval_loss_specs = train_loss_specs
+    else:
+        if not isinstance(eval_cfg, dict):
+            raise TypeError('eval must be dict')
+        eval_losses = eval_cfg.get('losses', None)
+        if eval_losses is None:
+            eval_loss_specs = train_loss_specs
+        else:
+            eval_loss_scope = optional_str(eval_cfg, 'loss_scope', train_loss_scope)
+            eval_loss_specs = composite.parse_loss_specs(
+                eval_losses,
+                default_scope=eval_loss_scope,
+                label='eval.losses',
+                scope_label='eval.loss_scope',
+            )
+
+    return tuple(train_loss_specs), tuple(eval_loss_specs)
 
 
 def load_psn_train_config(cfg: dict) -> PsnTrainConfig:
@@ -78,6 +120,7 @@ def load_psn_train_config(cfg: dict) -> PsnTrainConfig:
     lr = require_float(train_cfg, 'lr')
     train_subset_traces = require_int(train_cfg, 'subset_traces')
     infer_subset_traces = require_int(infer_cfg, 'subset_traces')
+    loss_specs_train, loss_specs_eval = _load_psn_loss_specs(cfg, train_cfg=train_cfg)
 
     save_best_only = require_bool(ckpt_cfg, 'save_best_only')
     metric = require_value(
@@ -108,6 +151,8 @@ def load_psn_train_config(cfg: dict) -> PsnTrainConfig:
             lr=float(lr),
             subset_traces=int(train_subset_traces),
         ),
+        loss_specs_train=loss_specs_train,
+        loss_specs_eval=loss_specs_eval,
         infer=PsnInferCfg(
             subset_traces=int(infer_subset_traces),
         ),

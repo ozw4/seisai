@@ -31,7 +31,7 @@ from seisai_engine.pipelines.common import (
 from .build_dataset import build_dataset, build_infer_transform, build_train_transform
 from .build_model import build_model
 from .config import load_psn_train_config
-from .loss import criterion
+from .loss import build_psn_criterion
 
 if TYPE_CHECKING:
     from torch.utils.data import DataLoader
@@ -132,6 +132,7 @@ def _run_infer_epoch(
     model: torch.nn.Module,
     loader: DataLoader,
     device: torch.device,
+    criterion,
     vis_out_dir: str,
     vis_n: int,
     max_batches: int,
@@ -326,6 +327,8 @@ def main(argv: list[str] | None = None) -> None:
 
     train_transform = build_train_transform(cfg)
     infer_transform = build_infer_transform(cfg)
+    criterion_train = build_psn_criterion(list(typed.loss_specs_train))
+    criterion_eval = build_psn_criterion(list(typed.loss_specs_eval))
 
     paths_cfg = require_dict(cfg, 'paths')
     train_segy_files = require_list_str(paths_cfg, 'segy_files')
@@ -399,6 +402,7 @@ def main(argv: list[str] | None = None) -> None:
             model=model,
             loader=loader,
             device=device,
+            criterion=criterion_eval,
             vis_out_dir=str(vis_epoch_dir),
             vis_n=vis_n,
             max_batches=max_batches,
@@ -413,7 +417,7 @@ def main(argv: list[str] | None = None) -> None:
         model_sig=model_sig,
         model=model,
         optimizer=optimizer,
-        criterion=criterion,
+        criterion=criterion_train,
         ds_train_full=ds_train_full,
         ds_infer_full=ds_infer_full,
         device=device,
