@@ -77,6 +77,14 @@ POST_TROUGH_MAX_SHIFT = 16
 POST_TROUGH_SCAN_AHEAD = 32
 POST_TROUGH_SMOOTH_WIN = 5
 
+# post-trough refinement offset gating (ABS offset in meters).
+# Set to None to disable each bound.
+# Example:
+#   POST_TROUGH_OFFS_ABS_MIN_M = 200.0
+#   POST_TROUGH_OFFS_ABS_MAX_M = 2200.0
+POST_TROUGH_OFFS_ABS_MIN_M: float | None = None
+POST_TROUGH_OFFS_ABS_MAX_M: float | None = 1500
+
 # Peak threshold on positive amplitude after per-trace normalization (max(|amp|)=1).
 # Example: 0.05 means "accept the first local MAXIMUM with amp >= 0.05".
 POST_TROUGH_A_TH = 0.03
@@ -95,7 +103,7 @@ POST_TROUGH_DEBUG_EVERY_N_GATHERS = 10
 DT_TOL_SEC = 1e-9
 
 # visualization (like run_fbp_infer.py)
-VIZ_EVERY_N_SHOTS = 1
+VIZ_EVERY_N_SHOTS = 20
 VIZ_DIRNAME = 'viz'
 VIZ_PLOT_START = 0
 VIZ_PLOT_END = 350
@@ -290,6 +298,16 @@ class _PostTroughTraceDebug:
     reason: str
 
 
+def _post_trough_apply_mask_from_offsets(offsets_m: np.ndarray) -> np.ndarray:
+    off = np.asarray(offsets_m, dtype=np.float32)
+    m = np.isfinite(off)
+    if POST_TROUGH_OFFS_ABS_MIN_M is not None:
+        m &= np.abs(off) >= float(POST_TROUGH_OFFS_ABS_MIN_M)
+    if POST_TROUGH_OFFS_ABS_MAX_M is not None:
+        m &= np.abs(off) <= float(POST_TROUGH_OFFS_ABS_MAX_M)
+    return m
+
+
 def _shift_pick_to_preceding_trough_1d(
     x: np.ndarray,
     p: int,
@@ -299,7 +317,7 @@ def _shift_pick_to_preceding_trough_1d(
     smooth_win: int,
     a_th: float,
 ) -> tuple[int, int, int, float, float, float, str]:
-    """Return (p_out, peak_i, trough_i, a_th, peak_amp, trough_amp, reason)."""
+    # "Return (p_out, peak_i, trough_i, a_th, peak_amp, trough_amp, reason).
     n = int(x.size)
     if p <= 0 or p >= n - 2:
         return p, -1, -1, float(a_th), 0.0, 0.0, 'p_oob'
@@ -400,6 +418,7 @@ def _post_trough_adjust_picks(
     scan_ahead: int,
     smooth_win: int,
     a_th: float,
+    apply_mask: np.ndarray | None,
     debug: bool,
     debug_label: str,
     debug_max_examples: int,
@@ -413,9 +432,19 @@ def _post_trough_adjust_picks(
         msg = f'picks_i shape mismatch: picks={p.shape}, raw_hw={x.shape}'
         raise ValueError(msg)
 
+    if apply_mask is None:
+        m = np.ones((x.shape[0],), dtype=bool)
+    else:
+        m = np.asarray(apply_mask, dtype=bool)
+        if m.shape != (x.shape[0],):
+            msg = f'apply_mask must be (H,), got {m.shape}, H={x.shape[0]}'
+            raise ValueError(msg)
+
     out = p.copy()
     if not bool(debug):
         for j in range(int(out.size)):
+            if not bool(m[j]):
+                continue
             pj = int(out[j])
             if pj <= 0:
                 continue
@@ -436,6 +465,9 @@ def _post_trough_adjust_picks(
     shifts: list[int] = []
 
     for j in range(int(out.size)):
+        if not bool(m[j]):
+            reason_counts['skip_mask'] = reason_counts.get('skip_mask', 0) + 1
+            continue
         pj = int(out[j])
         if pj <= 0:
             reason_counts['p<=0'] = reason_counts.get('p<=0', 0) + 1
@@ -502,6 +534,7 @@ def _align_post_trough_shifts_to_neighbors(
     max_dev: int,
     max_shift: int,
     propagate_zero: bool,
+    apply_mask: np.ndarray | None,
     debug: bool,
     debug_label: str,
 ) -> np.ndarray:
@@ -511,8 +544,18 @@ def _align_post_trough_shifts_to_neighbors(
         msg = f'p_in/p_post shape mismatch: {pin.shape} vs {ppo.shape}'
         raise ValueError(msg)
 
+    if apply_mask is None:
+        mask_apply = np.ones(pin.shape, dtype=bool)
+    else:
+        mask_apply = np.asarray(apply_mask, dtype=bool)
+        if mask_apply.shape != pin.shape:
+            msg = (
+                f'apply_mask must match picks shape: {mask_apply.shape} vs {pin.shape}'
+            )
+            raise ValueError(msg)
+
     d = (ppo - pin).astype(np.int32, copy=False)
-    valid = (pin > 0) & (ppo > 0)
+    valid = (pin > 0) & (ppo > 0) & mask_apply
     d[~valid] = 0
 
     r = int(radius)
@@ -533,6 +576,8 @@ def _align_post_trough_shifts_to_neighbors(
     n_propagate = 0
     h = int(d.size)
     for i in range(h):
+        if not bool(mask_apply[i]):
+            continue
         di = int(d[i])
         if (not bool(propagate_zero)) and di == 0:
             continue
@@ -546,8 +591,8 @@ def _align_post_trough_shifts_to_neighbors(
         cand = nb[mask]
         if int(cand.size) < ms:
             continue
-        m = float(np.median(cand.astype(np.float32)))
-        m_round = int(np.rint(m))
+        med = float(np.median(cand.astype(np.float32)))
+        m_round = int(np.rint(med))
         m_round = max(0, min(int(max_shift), m_round))
 
         if di == 0:
@@ -555,7 +600,7 @@ def _align_post_trough_shifts_to_neighbors(
             n_propagate += 1
             continue
 
-        if abs(float(di) - m) > float(md):
+        if abs(float(di) - med) > float(md):
             out[i] = np.int32(int(pin[i]) + int(m_round))
             n_correct_dev += 1
 
@@ -1194,7 +1239,6 @@ def process_one_pair(
             ) / float(UP_FACTOR)
             pick_orig_i_g = np.rint(pick_orig_f_g).astype(np.int32, copy=False)
             valid_map = (pick_orig_f_g >= 0.0) & (pick_orig_f_g < float(n_samples_raw))
-            pick_orig_i_g = np.rint(pick_orig_f_g).astype(np.int32, copy=False)
 
             # 範囲外は no-pick (0)
             if np.any(~valid_map):
@@ -1274,6 +1318,11 @@ def process_one_pair(
             )
             dbg_label = f'{raw_path.name} ffid={ffid}'
 
+            # apply post-trough refinement only within offset window
+            pt_mask = _post_trough_apply_mask_from_offsets(offs_m)
+            if np.any(invalid_trace_g):
+                pt_mask = pt_mask & (~invalid_trace_g)
+
             pick_final_g = _post_trough_adjust_picks(
                 pick_rs_i_g.copy(),
                 raw_g,
@@ -1281,6 +1330,7 @@ def process_one_pair(
                 scan_ahead=int(POST_TROUGH_SCAN_AHEAD),
                 smooth_win=int(POST_TROUGH_SMOOTH_WIN),
                 a_th=float(POST_TROUGH_A_TH),
+                apply_mask=pt_mask,
                 debug=dbg,
                 debug_label=dbg_label,
                 debug_max_examples=int(POST_TROUGH_DEBUG_MAX_EXAMPLES),
@@ -1294,6 +1344,7 @@ def process_one_pair(
                 max_dev=int(POST_TROUGH_OUTLIER_MAX_DEV),
                 max_shift=int(POST_TROUGH_MAX_SHIFT),
                 propagate_zero=bool(POST_TROUGH_ALIGN_PROPAGATE_ZERO),
+                apply_mask=pt_mask,
                 debug=dbg,
                 debug_label=dbg_label,
             ).astype(np.int32, copy=False)
@@ -1306,7 +1357,10 @@ def process_one_pair(
                 mode=str(SNAP_MODE),
                 ltcor=int(SNAP_LTCOR),
             ).astype(np.int32, copy=False)
-
+            # ensure out-of-range offsets are not modified by snap either
+            if np.any(~pt_mask):
+                pick_final_g = pick_final_g.copy()
+                pick_final_g[~pt_mask] = pick_rs_i_g[~pt_mask]
             zero_in = pick_rs_i_g <= 0
             if np.any(zero_in):
                 pick_final_g = pick_final_g.copy()
@@ -1446,3 +1500,5 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
+# %%

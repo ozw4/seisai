@@ -1,5 +1,5 @@
-CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_caformer_s18.yaml &
-CUDA_VISIBLE_DEVICES=1 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_convnext_base.yaml
+#CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_caformer_s18.yaml &
+#CUDA_VISIBLE_DEVICES=1 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_convnext_base.yaml
 CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_convnext_small.yaml &
 CUDA_VISIBLE_DEVICES=1 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_convnext_tiny.yaml
 CUDA_VISIBLE_DEVICES=0 python examples/examples_train_blindtrace.py --config proc/mae/configs/backbone_D3_densenet121.yaml &

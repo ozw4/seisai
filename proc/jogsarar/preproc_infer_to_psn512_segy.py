@@ -1001,6 +1001,128 @@ def _build_trend_with_optional_semi(
     )
 
 
+def _build_semi_global_trend_center_i_from_picks(
+    *,
+    pick_final_i: np.ndarray,
+    n_samples_in: int,
+    trend_offset_signed_proxy: np.ndarray,
+    ffid_groups: list[np.ndarray],
+    shot_x_ffid: np.ndarray,
+    shot_y_ffid: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Build semi-global trend center (sample index) from picks.
+
+    - Build per-FFID bin-median maps from valid pick_final_i.
+    - For each FFID and bin, take median of neighbor-FFID bin medians.
+    - Assign semi-global value to each trace based on its bin_id.
+    - Return (trend_center_i_semi, semi_used_ffid_mask, semi_missing_count).
+
+    Notes:
+        - This path does NOT use infer-provided trend arrays.
+        - Traces that cannot be assigned by semi (missing proxy/bin or missing neighbor bin)
+          remain NaN and are expected to be filled by global trend.
+
+    """
+    p = np.asarray(pick_final_i, dtype=np.float32)
+    off_proxy = np.asarray(trend_offset_signed_proxy, dtype=np.float32)
+    if p.ndim != 1 or off_proxy.ndim != 1 or p.shape != off_proxy.shape:
+        msg = (
+            'pick_final_i/proxy must be 1D and same shape, '
+            f'got {p.shape}, {off_proxy.shape}'
+        )
+        raise ValueError(msg)
+
+    n_traces = int(p.shape[0])
+    if n_samples_in < 2:
+        msg = f'n_samples_in must be >= 2, got {n_samples_in}'
+        raise ValueError(msg)
+
+    pick_valid = np.isfinite(p) & (p > 0.0) & (p < float(n_samples_in))
+    bin_valid = np.isfinite(off_proxy)
+
+    bin_id = np.zeros(n_traces, dtype=np.int64)
+    bin_id[bin_valid] = np.rint(off_proxy[bin_valid] / float(SEMI_BIN_W_M)).astype(
+        np.int64, copy=False
+    )
+
+    local_bin_maps: list[dict[int, float]] = []
+    for idx in ffid_groups:
+        valid = bin_valid[idx] & pick_valid[idx]
+        idx_use = idx[valid]
+        if idx_use.size == 0:
+            local_bin_maps.append({})
+            continue
+        local_bin_maps.append(_build_bin_median_map(bin_id[idx_use], p[idx_use]))
+
+    neighbors = _build_neighbor_indices(
+        shot_x_ffid,
+        shot_y_ffid,
+        k=int(SEMI_NEI_K),
+    )
+
+    semi_bin_maps: list[dict[int, float]] = []
+    for g, idx in enumerate(ffid_groups):
+        nei = neighbors[g]
+        if nei.size < int(SEMI_MIN_NEI):
+            semi_bin_maps.append({})
+            continue
+        idx_bin = idx[bin_valid[idx]]
+        if idx_bin.size > 0:
+            bins = [int(x) for x in np.unique(bin_id[idx_bin]).tolist()]
+        else:
+            bins = []
+        if len(bins) == 0:
+            semi_bin_maps.append({})
+            continue
+
+        semi_map: dict[int, float] = {}
+        for b in bins:
+            vals: list[float] = []
+            for n in nei:
+                v = local_bin_maps[int(n)].get(int(b), np.nan)
+                if np.isfinite(v):
+                    vals.append(float(v))
+            if vals:
+                semi_map[int(b)] = float(np.median(np.asarray(vals, dtype=np.float64)))
+            else:
+                semi_map[int(b)] = float('nan')
+        semi_bin_maps.append(semi_map)
+
+    semi_used_ffid_mask = np.zeros(len(ffid_groups), dtype=bool)
+    for g in range(len(ffid_groups)):
+        semi_map = semi_bin_maps[g]
+        semi_has_1 = _count_finite_bins(semi_map) >= 1
+        semi_used_ffid_mask[g] = bool(
+            semi_has_1 and _is_physically_ok_bin_map(semi_map)
+        )
+
+    trend_center_i_semi = np.full(n_traces, np.nan, dtype=np.float32)
+    missing_count = 0
+    for g, idx in enumerate(ffid_groups):
+        if not bool(semi_used_ffid_mask[g]):
+            missing_count += int(idx.size)
+            continue
+
+        semi_map = semi_bin_maps[g]
+        bins_g = bin_id[idx]
+        bins_valid_g = bin_valid[idx]
+        for j, tr_idx in enumerate(idx):
+            tr = int(tr_idx)
+            v = float('nan')
+            if bool(bins_valid_g[j]):
+                v = semi_map.get(int(bins_g[j]), float('nan'))
+            if np.isfinite(v) and v > 0.0:
+                trend_center_i_semi[tr] = np.float32(v)
+            else:
+                missing_count += 1
+
+    return (
+        trend_center_i_semi.astype(np.float32, copy=False),
+        semi_used_ffid_mask.astype(bool, copy=False),
+        int(missing_count),
+    )
+
+
 def _build_trend_result(
     *,
     src: segyio.SegyFile,
@@ -1025,60 +1147,53 @@ def _build_trend_result(
         shot_y_by_trace=shot_y_trace,
     )
 
-    trend_center_i_raw = _load_trend_center_i(
-        z, n_traces=n_traces, dt_sec_from_segy=dt_sec_in
-    )
+    # NOTE: This pipeline variant does not use infer-provided per-trace trend arrays.
+    # Trend centers used for window extraction are built as:
+    #   semi-global (from neighbor FFIDs, based on pick_final) -> global fallback (offset-time fit)
+    trend_center_i_raw = np.full(n_traces, np.nan, dtype=np.float32)
+    trend_center_i_local = np.full(n_traces, np.nan, dtype=np.float32)
 
     offset_abs_m = _load_offset_abs_from_segy(src)
     if offset_abs_m.shape != (n_traces,):
         msg = f'offset_abs_m must be (n_traces,), got {offset_abs_m.shape}, n_traces={n_traces}'
         raise ValueError(msg)
 
-    if SEMI_GLOBAL_ENABLE:
-        trend_offset_signed_proxy = _npz_must_have(
-            z, 'trend_offset_signed_proxy'
-        ).astype(np.float32, copy=False)
-        if (
-            trend_offset_signed_proxy.ndim == 2
-            and trend_offset_signed_proxy.shape[0] == 1
-        ):
-            trend_offset_signed_proxy = trend_offset_signed_proxy[0]
-        if (
-            trend_offset_signed_proxy.ndim != 1
-            or trend_offset_signed_proxy.shape[0] != n_traces
-        ):
-            msg = (
-                'trend_offset_signed_proxy must be (n_traces,), '
-                f'got {trend_offset_signed_proxy.shape}, n_traces={n_traces}'
-            )
-            raise ValueError(msg)
-        trend_center_i_local, trend_filled_mask = _fill_trend_center_i_by_ffid(
-            trend_center_i_raw,
-            ffid_values,
-            trend_offset_signed_proxy=trend_offset_signed_proxy,
+    if not bool(SEMI_GLOBAL_ENABLE):
+        msg = 'SEMI_GLOBAL_ENABLE must be True for semi-global -> global trend build'
+        raise ValueError(msg)
+
+    trend_offset_signed_proxy = _npz_must_have(z, 'trend_offset_signed_proxy').astype(
+        np.float32, copy=False
+    )
+    if trend_offset_signed_proxy.ndim == 2 and trend_offset_signed_proxy.shape[0] == 1:
+        trend_offset_signed_proxy = trend_offset_signed_proxy[0]
+    if (
+        trend_offset_signed_proxy.ndim != 1
+        or trend_offset_signed_proxy.shape[0] != n_traces
+    ):
+        msg = (
+            'trend_offset_signed_proxy must be (n_traces,), '
+            f'got {trend_offset_signed_proxy.shape}, n_traces={n_traces}'
         )
-        (
-            trend_center_i_semi,
-            trend_center_i_used,
-            semi_used_ffid_mask,
-            semi_fallback_count,
-        ) = _build_trend_with_optional_semi(
-            trend_center_i_local=trend_center_i_local,
-            trend_offset_signed_proxy=trend_offset_signed_proxy,
-            ffid_groups=ffid_groups,
-            shot_x_ffid=shot_x_ffid,
-            shot_y_ffid=shot_y_ffid,
-            trend_filled_mask=trend_filled_mask,
-        )
-    else:
-        trend_offset_signed_proxy = np.zeros(n_traces, dtype=np.float32)
-        trend_center_i_local, trend_filled_mask = _fill_trend_center_i(
-            trend_center_i_raw
-        )
-        trend_center_i_semi = np.full(n_traces, np.nan, dtype=np.float32)
-        trend_center_i_used = trend_center_i_local.copy()
-        semi_used_ffid_mask = np.zeros(ffid_unique_values.shape[0], dtype=bool)
-        semi_fallback_count = 0
+        raise ValueError(msg)
+
+    (
+        trend_center_i_semi,
+        semi_used_ffid_mask,
+        semi_fallback_count,
+    ) = _build_semi_global_trend_center_i_from_picks(
+        pick_final_i=pick_final_i,
+        n_samples_in=int(n_samples_in),
+        trend_offset_signed_proxy=trend_offset_signed_proxy,
+        ffid_groups=ffid_groups,
+        shot_x_ffid=shot_x_ffid,
+        shot_y_ffid=shot_y_ffid,
+    )
+
+    trend_center_i_used = trend_center_i_semi.astype(np.float32, copy=True)
+    trend_filled_mask = (
+        (~np.isfinite(trend_center_i_used)) | (trend_center_i_used <= 0.0)
+    ).astype(bool, copy=False)
 
     (
         trend_center_i_global,
@@ -1104,21 +1219,14 @@ def _build_trend_result(
     if bool(deg_right):
         print('[WARN] globaltrend(right) used degenerate 1-line representation')
 
-    (
-        trend_center_i_used2,
-        nn_replaced_mask,
-        global_replaced_mask,
-    ) = _fill_missing_trend_center_i_nn_then_global(
-        trend_center_i_used=trend_center_i_used,
-        trend_center_i_global=trend_center_i_global,
-        pick_final_i=pick_final_i,
-        offset_abs_m=offset_abs_m,
-        trend_offset_signed_proxy=trend_offset_signed_proxy,
-        ffid_groups=ffid_groups,
-        n_samples_in=int(n_samples_in),
-    )
+    missing = (~np.isfinite(trend_center_i_used)) | (trend_center_i_used <= 0.0)
+    global_ok = np.isfinite(trend_center_i_global) & (trend_center_i_global > 0.0)
+    global_replaced_mask = missing & global_ok
+    trend_center_i_used[global_replaced_mask] = trend_center_i_global[
+        global_replaced_mask
+    ]
 
-    trend_center_i_used = trend_center_i_used2
+    nn_replaced_mask = np.zeros(n_traces, dtype=bool)
 
     return _TrendBuildResult(
         trend_center_i_raw=trend_center_i_raw.astype(np.float32, copy=False),
@@ -1685,11 +1793,11 @@ def process_one_segy(
         print(
             f'[SEMI] {segy_path.name} ffids_total={ffids_total} '
             f'ffids_used_semi={ffids_used_semi} '
-            f'semi_fallback_traces={semi_fallback_count}'
+            f'semi_missing_traces={semi_fallback_count}'
         )
         if semi_fallback_count > 0:
             print(
-                f'[WARN] {segy_path.name} semi fallback to local for '
+                f'[WARN] {segy_path.name} semi missing (filled by global) for '
                 f'{semi_fallback_count} traces'
             )
 

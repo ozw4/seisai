@@ -23,16 +23,16 @@ WIN512_SEGY_PATH = Path(
 # 省略可: 通常は win512 と同名で .sidecar.npz がある
 SIDECAR_NPZ_PATH = WIN512_SEGY_PATH.with_suffix('.sidecar.npz')
 
-FFID = 2013
+FFID = 2100
 
 # raw 側の表示窓（サンプル index）
 RAW_SAMPLE_START = 0
-RAW_SAMPLE_END = 300  # endは含まない
+RAW_SAMPLE_END = 1000  # endは含まない
 
 X_MODE = 'trace'  # "trace" | "offset" | "chno"
 ENDIAN = 'big'  # "big" | "little"
 
-OUT_PNG = None  # 例: Path("/tmp/ffid2013_psn512_trend.png")。Noneなら表示
+OUT_PNG = Path('./tmp.png')  # 例: Path("/tmp/ffid2013_psn512_trend.png")。Noneなら表示
 FIGSIZE = (18, 12)
 
 
@@ -160,11 +160,15 @@ def plot_ffid_psn512_trendlines(
 
         # trend centers (sample index in raw time base)
         c_raw = np.asarray(z['trend_center_i_raw'], dtype=np.float32)
-        c_local = np.asarray(z['trend_center_i_local'], dtype=np.float32)
         c_semi = np.asarray(
             z['trend_center_i_semi'], dtype=np.float32
         )  # NaN if not replaced
         c_used = np.asarray(z['trend_center_i_used'], dtype=np.float32)
+        if 'trend_center_i_global' not in z.files:
+            raise ValueError(
+                "sidecar missing 'trend_center_i_global' (regenerate sidecar with newer preproc)"
+            )
+        c_global = np.asarray(z['trend_center_i_global'], dtype=np.float32)
 
         window_start_i = np.asarray(z['window_start_i'], dtype=np.int64)
 
@@ -212,9 +216,9 @@ def plot_ffid_psn512_trendlines(
 
     # subset arrays
     c_raw_g = c_raw[m]
-    c_local_g = c_local[m]
     c_semi_g = c_semi[m]
     c_used_g = c_used[m]
+    c_global_g = c_global[m]
     w0_g = window_start_i[m]
     pick_final_g = pick_final_i[m]
     pick_win512_g = pick_win_512[m]
@@ -241,14 +245,14 @@ def plot_ffid_psn512_trendlines(
     raw_sec = _sec_in_raw_window(
         c_raw_g.astype(np.float32) * dt_sec_in, t0=t0_sec, t1=t1_sec
     )
-    local_sec = _sec_in_raw_window(
-        c_local_g.astype(np.float32) * dt_sec_in, t0=t0_sec, t1=t1_sec
-    )
     semi_sec = _sec_in_raw_window(
         c_semi_g.astype(np.float32) * dt_sec_in, t0=t0_sec, t1=t1_sec
     )
     used_sec = _sec_in_raw_window(
         c_used_g.astype(np.float32) * dt_sec_in, t0=t0_sec, t1=t1_sec
+    )
+    global_sec = _sec_in_raw_window(
+        c_global_g.astype(np.float32) * dt_sec_in, t0=t0_sec, t1=t1_sec
     )
 
     # -------- win512 panel --------
@@ -259,15 +263,15 @@ def plot_ffid_psn512_trendlines(
 
     # map trend centers to win512 sample coordinates
     y_raw_512 = _to_win512_sample(c_raw_g, w0_g, up_factor=up_factor)
-    y_local_512 = _to_win512_sample(c_local_g, w0_g, up_factor=up_factor)
     y_semi_512 = _to_win512_sample(c_semi_g, w0_g, up_factor=up_factor)
     y_used_512 = _to_win512_sample(c_used_g, w0_g, up_factor=up_factor)
+    y_global_512 = _to_win512_sample(c_global_g, w0_g, up_factor=up_factor)
 
     # convert to seconds (win512 time base)
     raw_512_sec = y_raw_512 * dt_sec_out
-    local_512_sec = y_local_512 * dt_sec_out
     semi_512_sec = y_semi_512 * dt_sec_out
     used_512_sec = y_used_512 * dt_sec_out
+    global_512_sec = y_global_512 * dt_sec_out
 
     # pick overlay already in win512 sample coordinates
     pick_win512_plot = np.asarray(pick_win512_g, dtype=np.float32)
@@ -305,10 +309,9 @@ def plot_ffid_psn512_trendlines(
             show_legend=False,
         ),
     )
-    ax0.plot(
-        x, raw_sec, lw=1.2, ls='--', alpha=0.85, label='trend_raw (from infer npz)'
-    )
-    ax0.plot(x, local_sec, lw=1.4, ls='-', alpha=0.9, label='trend_local (filled)')
+    # ax0.plot(
+    #    x, raw_sec, lw=1.2, ls='--', alpha=0.85, label='trend_raw (from infer npz)'
+    # )
     ax0.plot(
         x,
         semi_sec,
@@ -318,6 +321,14 @@ def plot_ffid_psn512_trendlines(
         label='trend_semi (semi-global, NaN if not used)',
     )
     ax0.plot(x, used_sec, lw=2.2, ls='-', alpha=0.95, label='trend_used (final)')
+    ax0.plot(
+        x,
+        global_sec,
+        lw=1.4,
+        ls='-.',
+        alpha=0.9,
+        label='trend_global (offset-time fit fallback)',
+    )
 
     # markers: filled traces / dropped traces (raw panel)
     if np.any(filled_g):
@@ -378,18 +389,18 @@ def plot_ffid_psn512_trendlines(
         x, raw_512_sec, lw=1.2, ls='--', alpha=0.85, label='trend_raw mapped to win512'
     )
     ax1.plot(
-        x,
-        local_512_sec,
-        lw=1.4,
-        ls='-',
-        alpha=0.9,
-        label='trend_local mapped to win512',
-    )
-    ax1.plot(
         x, semi_512_sec, lw=1.6, ls='-', alpha=0.9, label='trend_semi mapped to win512'
     )
     ax1.plot(
         x, used_512_sec, lw=2.2, ls='-', alpha=0.95, label='trend_used mapped to win512'
+    )
+    ax1.plot(
+        x,
+        global_512_sec,
+        lw=1.4,
+        ls='-.',
+        alpha=0.9,
+        label='trend_global mapped to win512',
     )
 
     # reference line: crop center (should be near 256 samples => 256*dt_out sec)
