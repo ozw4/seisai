@@ -7,6 +7,8 @@ from pathlib import Path
 
 import numpy as np
 import segyio
+import torch
+from seisai_pick.trend.trend_fit_strategy import TwoPieceIRLSAutoBreakStrategy
 
 # =========================
 # CONFIG（ここだけ触ればOK）
@@ -42,6 +44,12 @@ SEMI_NEI_K = 8
 SEMI_MIN_NEI = 3
 SEMI_PHYS_MAX_NONPOS_FRAC = 0.0
 
+# global trendline (proxy sign split)
+GLOBAL_VMIN_M_S = 300.0
+GLOBAL_VMAX_M_S = 8000.0
+GLOBAL_SLOPE_EPS = 1e-6
+GLOBAL_SIDE_MIN_PTS = 16  # 2*min_pts of TwoPieceIRLSAutoBreakStrategy default
+
 
 # =========================
 # Utility
@@ -52,6 +60,15 @@ class _TrendBuildResult:
     trend_center_i_local: np.ndarray
     trend_center_i_semi: np.ndarray
     trend_center_i_used: np.ndarray
+    trend_center_i_global: np.ndarray
+    nn_replaced_mask: np.ndarray
+    global_replaced_mask: np.ndarray
+    global_edges_all: np.ndarray
+    global_coef_all: np.ndarray
+    global_edges_left: np.ndarray
+    global_coef_left: np.ndarray
+    global_edges_right: np.ndarray
+    global_coef_right: np.ndarray
     trend_filled_mask: np.ndarray
     ffid_values: np.ndarray
     ffid_unique_values: np.ndarray
@@ -467,6 +484,396 @@ def _load_ffid_and_shot_xy_from_segy(
     )
 
 
+def _load_offset_abs_from_segy(src: segyio.SegyFile) -> np.ndarray:
+    off = _read_trace_field(
+        src,
+        segyio.TraceField.offset,
+        dtype=np.float64,
+        name='offset',
+    )
+    return np.abs(off).astype(np.float64, copy=False)
+
+
+def _fit_line_wls(
+    x: np.ndarray,
+    y: np.ndarray,
+    w: np.ndarray,
+) -> tuple[float, float]:
+    xx = np.asarray(x, dtype=np.float64)
+    yy = np.asarray(y, dtype=np.float64)
+    ww = np.asarray(w, dtype=np.float64)
+    if xx.shape != yy.shape or xx.shape != ww.shape or xx.ndim != 1:
+        msg = f'x/y/w must be 1D and same shape, got {xx.shape}, {yy.shape}, {ww.shape}'
+        raise ValueError(msg)
+
+    v = np.isfinite(xx) & np.isfinite(yy) & np.isfinite(ww) & (ww > 0.0)
+    xx = xx[v]
+    yy = yy[v]
+    ww = ww[v]
+    if int(xx.size) < 2:
+        if int(yy.size) == 0:
+            return 0.0, 0.0
+        return 0.0, float(np.nanmedian(yy))
+
+    wsum = float(ww.sum())
+    if not np.isfinite(wsum) or wsum <= 0.0:
+        ww = np.ones_like(xx, dtype=np.float64)
+        wsum = float(ww.sum())
+
+    xm = float((ww * xx).sum() / wsum)
+    ym = float((ww * yy).sum() / wsum)
+    dx = xx - xm
+    den = float((ww * dx * dx).sum())
+    if not np.isfinite(den) or den <= 1e-12:
+        return 0.0, float(ym)
+
+    a = float((ww * dx * (yy - ym)).sum() / den)
+    b = float(ym - a * xm)
+    return a, b
+
+
+def _project_two_piece_coef(
+    *,
+    xb: float,
+    a1: float,
+    b1: float,
+    a2: float,
+    b2: float,
+    a_min: float,
+    a_max: float,
+    slope_eps: float,
+) -> tuple[float, float, float, float]:
+    aa1 = float(np.clip(a1, a_min, a_max))
+    aa2 = float(np.clip(a2, a_min, a_max))
+
+    if not (aa1 > aa2 + float(slope_eps)):
+        a2_try = float(min(aa2, aa1 - float(slope_eps)))
+        if a2_try >= float(a_min):
+            aa2 = a2_try
+        else:
+            a1_try = float(max(aa1, aa2 + float(slope_eps)))
+            if a1_try <= float(a_max):
+                aa1 = a1_try
+            else:
+                aa1 = float(a_max)
+                aa2 = float(a_min)
+
+    yb = aa1 * float(xb) + float(b1)
+    bb2 = float(yb - aa2 * float(xb))
+    return aa1, float(b1), aa2, bb2
+
+
+def _predict_piecewise_linear(
+    x_abs: np.ndarray,
+    *,
+    edges: np.ndarray,
+    coef: np.ndarray,
+) -> np.ndarray:
+    x = np.asarray(x_abs, dtype=np.float32)
+    e = np.asarray(edges, dtype=np.float32)
+    c = np.asarray(coef, dtype=np.float32)
+    if x.ndim != 1:
+        msg = f'x_abs must be 1D, got {x.shape}'
+        raise ValueError(msg)
+    if e.shape != (3,):
+        msg = f'edges must be (3,), got {e.shape}'
+        raise ValueError(msg)
+    if c.shape != (2, 2):
+        msg = f'coef must be (2,2), got {c.shape}'
+        raise ValueError(msg)
+
+    xb = float(e[1])
+    a1 = float(c[0, 0])
+    b1 = float(c[0, 1])
+    a2 = float(c[1, 0])
+    b2 = float(c[1, 1])
+
+    y = np.full(x.shape, np.nan, dtype=np.float32)
+    v = np.isfinite(x)
+    if not bool(np.any(v)):
+        return y
+
+    s1 = v & (x <= float(xb))
+    s2 = v & (x > float(xb))
+    if bool(np.any(s1)):
+        y[s1] = (a1 * x[s1] + b1).astype(np.float32, copy=False)
+    if bool(np.any(s2)):
+        y[s2] = (a2 * x[s2] + b2).astype(np.float32, copy=False)
+    return y
+
+
+def _fit_two_piece_projected(
+    x_abs_m: np.ndarray,
+    y_sec: np.ndarray,
+    w_conf: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Return (edges, coef, used_deg_line).
+
+    - Try TwoPieceIRLSAutoBreakStrategy.fit (deterministic).
+    - If it returns None or data is too thin, fall back to a single WLS line
+      and represent it as 2-piece with a midpoint break.
+    - Apply projected slope constraints (vmin/vmax + monotonic a1>a2).
+    """
+    x = np.asarray(x_abs_m, dtype=np.float64)
+    y = np.asarray(y_sec, dtype=np.float64)
+    w = np.asarray(w_conf, dtype=np.float64)
+    if x.shape != y.shape or x.shape != w.shape or x.ndim != 1:
+        msg = f'x/y/w must be 1D and same shape, got {x.shape}, {y.shape}, {w.shape}'
+        raise ValueError(msg)
+
+    v = np.isfinite(x) & np.isfinite(y) & np.isfinite(w) & (w > 0.0) & (x > 0.0)
+    if int(np.count_nonzero(v)) == 0:
+        xmin = 0.0
+        xmax = 1.0
+        xb = 0.5
+        a, b = 0.0, 0.0
+        used_deg = True
+    else:
+        xv = x[v]
+        yv = y[v]
+        wv = w[v]
+        xmin = float(np.nanmin(xv))
+        xmax = float(np.nanmax(xv))
+        if not np.isfinite(xmin) or not np.isfinite(xmax):
+            xmin = 0.0
+            xmax = 1.0
+        if float(xmax - xmin) <= 1e-6:
+            xb = float(xmin)
+        else:
+            xb = float(0.5 * (xmin + xmax))
+
+        tr = TwoPieceIRLSAutoBreakStrategy().fit(
+            torch.from_numpy(xv.astype(np.float32, copy=False)),
+            torch.from_numpy(yv.astype(np.float32, copy=False)),
+            torch.from_numpy(wv.astype(np.float32, copy=False)),
+        )
+
+        if tr is None:
+            a, b = _fit_line_wls(xv, yv, wv)
+            used_deg = True
+        else:
+            edges_t = tr.edges.detach().cpu().numpy().astype(np.float32, copy=False)
+            coef_t = tr.coef.detach().cpu().numpy().astype(np.float32, copy=False)
+            if edges_t.shape != (3,) or coef_t.shape != (2, 2):
+                msg = f'unexpected two-piece shape edges={edges_t.shape} coef={coef_t.shape}'
+                raise ValueError(msg)
+            xmin = float(edges_t[0])
+            xb = float(edges_t[1])
+            xmax = float(edges_t[2])
+            a1, b1 = float(coef_t[0, 0]), float(coef_t[0, 1])
+            a2, b2 = float(coef_t[1, 0]), float(coef_t[1, 1])
+            a_min = 1.0 / float(GLOBAL_VMAX_M_S)
+            a_max = 1.0 / float(GLOBAL_VMIN_M_S)
+            a1p, b1p, a2p, b2p = _project_two_piece_coef(
+                xb=xb,
+                a1=a1,
+                b1=b1,
+                a2=a2,
+                b2=b2,
+                a_min=a_min,
+                a_max=a_max,
+                slope_eps=float(GLOBAL_SLOPE_EPS),
+            )
+            edges = np.asarray([xmin, xb, xmax], dtype=np.float32)
+            coef = np.asarray([[a1p, b1p], [a2p, b2p]], dtype=np.float32)
+            return edges, coef, False
+
+    a_min = 1.0 / float(GLOBAL_VMAX_M_S)
+    a_max = 1.0 / float(GLOBAL_VMIN_M_S)
+    a1p, b1p, a2p, b2p = _project_two_piece_coef(
+        xb=xb,
+        a1=a,
+        b1=b,
+        a2=a,
+        b2=b,
+        a_min=a_min,
+        a_max=a_max,
+        slope_eps=float(GLOBAL_SLOPE_EPS),
+    )
+    edges = np.asarray([xmin, xb, xmax], dtype=np.float32)
+    coef = np.asarray([[a1p, b1p], [a2p, b2p]], dtype=np.float32)
+    return edges, coef, bool(used_deg)
+
+
+def _build_global_trend_center_i(
+    *,
+    offset_abs_m: np.ndarray,
+    trend_offset_signed_proxy: np.ndarray,
+    pick_final_i: np.ndarray,
+    scores: dict[str, np.ndarray],
+    n_samples_in: int,
+    dt_sec_in: float,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    bool,
+    bool,
+]:
+    off = np.asarray(offset_abs_m, dtype=np.float64)
+    proxy = np.asarray(trend_offset_signed_proxy, dtype=np.float32)
+    p = np.asarray(pick_final_i, dtype=np.int64)
+    if off.shape != proxy.shape or off.shape != p.shape or off.ndim != 1:
+        msg = f'offset/proxy/pick must be 1D and same shape, got {off.shape}, {proxy.shape}, {p.shape}'
+        raise ValueError(msg)
+
+    w = np.ones_like(off, dtype=np.float64)
+    for k in SCORE_KEYS:
+        s = np.asarray(scores[k], dtype=np.float64)
+        if s.shape != w.shape:
+            msg = f'score shape mismatch {k}: {s.shape} vs {w.shape}'
+            raise ValueError(msg)
+        w *= np.where(np.isfinite(s) & (s > 0.0), s, 0.0)
+
+    pick_ok = _valid_pick_mask(p, n_samples=int(n_samples_in))
+    v_all = pick_ok & np.isfinite(off) & (off > 0.0) & np.isfinite(w) & (w > 0.0)
+    y_sec = p.astype(np.float64) * float(dt_sec_in)
+
+    edges_all, coef_all, deg_all = _fit_two_piece_projected(
+        off[v_all], y_sec[v_all], w[v_all]
+    )
+
+    left_mask = v_all & np.isfinite(proxy) & (proxy < 0.0)
+    right_mask = v_all & np.isfinite(proxy) & (proxy > 0.0)
+
+    if int(np.count_nonzero(left_mask)) >= int(GLOBAL_SIDE_MIN_PTS):
+        edges_left, coef_left, deg_left = _fit_two_piece_projected(
+            off[left_mask], y_sec[left_mask], w[left_mask]
+        )
+    else:
+        edges_left, coef_left, deg_left = edges_all, coef_all, True
+
+    if int(np.count_nonzero(right_mask)) >= int(GLOBAL_SIDE_MIN_PTS):
+        edges_right, coef_right, deg_right = _fit_two_piece_projected(
+            off[right_mask], y_sec[right_mask], w[right_mask]
+        )
+    else:
+        edges_right, coef_right, deg_right = edges_all, coef_all, True
+
+    y_hat_all = _predict_piecewise_linear(
+        off.astype(np.float32, copy=False), edges=edges_all, coef=coef_all
+    )
+    y_hat_left = _predict_piecewise_linear(
+        off.astype(np.float32, copy=False), edges=edges_left, coef=coef_left
+    )
+    y_hat_right = _predict_piecewise_linear(
+        off.astype(np.float32, copy=False), edges=edges_right, coef=coef_right
+    )
+
+    y_hat = y_hat_all
+    use_l = np.isfinite(proxy) & (proxy < 0.0)
+    use_r = np.isfinite(proxy) & (proxy > 0.0)
+    y_hat = np.where(use_l, y_hat_left, y_hat)
+    y_hat = np.where(use_r, y_hat_right, y_hat)
+
+    center = (y_hat.astype(np.float64) / float(dt_sec_in)).astype(
+        np.float32, copy=False
+    )
+    if int(n_samples_in) > 2:
+        c2 = center.copy()
+        v = np.isfinite(c2)
+        c2[v] = np.clip(c2[v], 1.0, float(int(n_samples_in) - 1))
+        center = c2
+    return (
+        center,
+        edges_all,
+        coef_all,
+        edges_left,
+        coef_left,
+        edges_right,
+        coef_right,
+        bool(deg_left or deg_all),
+        bool(deg_right or deg_all),
+    )
+
+
+def _fill_missing_trend_center_i_nn_then_global(
+    *,
+    trend_center_i_used: np.ndarray,
+    trend_center_i_global: np.ndarray,
+    pick_final_i: np.ndarray,
+    offset_abs_m: np.ndarray,
+    trend_offset_signed_proxy: np.ndarray,
+    ffid_groups: list[np.ndarray],
+    n_samples_in: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    c = np.asarray(trend_center_i_used, dtype=np.float32)
+    cg = np.asarray(trend_center_i_global, dtype=np.float32)
+    p = np.asarray(pick_final_i, dtype=np.int64)
+    off = np.asarray(offset_abs_m, dtype=np.float64)
+    proxy = np.asarray(trend_offset_signed_proxy, dtype=np.float32)
+
+    if (
+        c.shape != cg.shape
+        or c.shape != p.shape
+        or c.shape != off.shape
+        or c.shape != proxy.shape
+    ):
+        msg = (
+            'shape mismatch in fill: '
+            f'c={c.shape} cg={cg.shape} p={p.shape} off={off.shape} proxy={proxy.shape}'
+        )
+        raise ValueError(msg)
+
+    missing = (~np.isfinite(c)) | (c <= 0.0)
+    out = c.copy()
+    nn_mask = np.zeros(c.shape[0], dtype=bool)
+
+    pick_ok = _valid_pick_mask(p, n_samples=int(n_samples_in))
+
+    for idx in ffid_groups:
+        idx = np.asarray(idx, dtype=np.int64)
+        miss_g = idx[missing[idx]]
+        if miss_g.size == 0:
+            continue
+
+        cand_g = idx[~missing[idx]]
+        if cand_g.size == 0:
+            continue
+
+        cand_off = off[cand_g]
+        cand_proxy = proxy[cand_g]
+
+        for tr in miss_g:
+            if not bool(pick_ok[int(tr)]):
+                continue
+
+            pv = float(proxy[int(tr)])
+            cand_use = cand_g
+            if np.isfinite(pv) and float(pv) != 0.0:
+                if pv < 0.0:
+                    same = cand_g[np.isfinite(cand_proxy) & (cand_proxy < 0.0)]
+                else:
+                    same = cand_g[np.isfinite(cand_proxy) & (cand_proxy > 0.0)]
+                if same.size > 0:
+                    cand_use = same
+
+            d = np.abs(off[cand_use] - float(off[int(tr)]))
+            j = int(np.argmin(d))
+            tr_nn = int(cand_use[j])
+            c_nn = float(out[tr_nn])
+            if np.isfinite(c_nn) and float(abs(float(p[int(tr)]) - c_nn)) < float(
+                HALF_WIN
+            ):
+                out[int(tr)] = np.float32(c_nn)
+                nn_mask[int(tr)] = True
+
+    missing2 = ((~np.isfinite(out)) | (out <= 0.0)) & (~nn_mask)
+    global_ok = np.isfinite(cg) & (cg > 0.0)
+    global_mask = missing2 & global_ok
+    out[global_mask] = cg[global_mask]
+
+    return (
+        out.astype(np.float32, copy=False),
+        nn_mask.astype(bool, copy=False),
+        global_mask.astype(bool, copy=False),
+    )
+
+
 def _build_trend_with_optional_semi(
     *,
     trend_center_i_local: np.ndarray,
@@ -599,7 +1006,10 @@ def _build_trend_result(
     src: segyio.SegyFile,
     z: np.lib.npyio.NpzFile,
     n_traces: int,
+    n_samples_in: int,
     dt_sec_in: float,
+    pick_final_i: np.ndarray,
+    scores: dict[str, np.ndarray],
 ) -> _TrendBuildResult:
     _validate_semi_config()
 
@@ -618,6 +1028,11 @@ def _build_trend_result(
     trend_center_i_raw = _load_trend_center_i(
         z, n_traces=n_traces, dt_sec_from_segy=dt_sec_in
     )
+
+    offset_abs_m = _load_offset_abs_from_segy(src)
+    if offset_abs_m.shape != (n_traces,):
+        msg = f'offset_abs_m must be (n_traces,), got {offset_abs_m.shape}, n_traces={n_traces}'
+        raise ValueError(msg)
 
     if SEMI_GLOBAL_ENABLE:
         trend_offset_signed_proxy = _npz_must_have(
@@ -656,6 +1071,7 @@ def _build_trend_result(
             trend_filled_mask=trend_filled_mask,
         )
     else:
+        trend_offset_signed_proxy = np.zeros(n_traces, dtype=np.float32)
         trend_center_i_local, trend_filled_mask = _fill_trend_center_i(
             trend_center_i_raw
         )
@@ -664,11 +1080,60 @@ def _build_trend_result(
         semi_used_ffid_mask = np.zeros(ffid_unique_values.shape[0], dtype=bool)
         semi_fallback_count = 0
 
+    (
+        trend_center_i_global,
+        global_edges_all,
+        global_coef_all,
+        global_edges_left,
+        global_coef_left,
+        global_edges_right,
+        global_coef_right,
+        deg_left,
+        deg_right,
+    ) = _build_global_trend_center_i(
+        offset_abs_m=offset_abs_m,
+        trend_offset_signed_proxy=trend_offset_signed_proxy,
+        pick_final_i=pick_final_i,
+        scores=scores,
+        n_samples_in=int(n_samples_in),
+        dt_sec_in=float(dt_sec_in),
+    )
+
+    if bool(deg_left):
+        print('[WARN] globaltrend(left) used degenerate 1-line representation')
+    if bool(deg_right):
+        print('[WARN] globaltrend(right) used degenerate 1-line representation')
+
+    (
+        trend_center_i_used2,
+        nn_replaced_mask,
+        global_replaced_mask,
+    ) = _fill_missing_trend_center_i_nn_then_global(
+        trend_center_i_used=trend_center_i_used,
+        trend_center_i_global=trend_center_i_global,
+        pick_final_i=pick_final_i,
+        offset_abs_m=offset_abs_m,
+        trend_offset_signed_proxy=trend_offset_signed_proxy,
+        ffid_groups=ffid_groups,
+        n_samples_in=int(n_samples_in),
+    )
+
+    trend_center_i_used = trend_center_i_used2
+
     return _TrendBuildResult(
         trend_center_i_raw=trend_center_i_raw.astype(np.float32, copy=False),
         trend_center_i_local=trend_center_i_local.astype(np.float32, copy=False),
         trend_center_i_semi=trend_center_i_semi.astype(np.float32, copy=False),
         trend_center_i_used=trend_center_i_used.astype(np.float32, copy=False),
+        trend_center_i_global=trend_center_i_global.astype(np.float32, copy=False),
+        nn_replaced_mask=nn_replaced_mask.astype(bool, copy=False),
+        global_replaced_mask=global_replaced_mask.astype(bool, copy=False),
+        global_edges_all=global_edges_all.astype(np.float32, copy=False),
+        global_coef_all=global_coef_all.astype(np.float32, copy=False),
+        global_edges_left=global_edges_left.astype(np.float32, copy=False),
+        global_coef_left=global_coef_left.astype(np.float32, copy=False),
+        global_edges_right=global_edges_right.astype(np.float32, copy=False),
+        global_coef_right=global_coef_right.astype(np.float32, copy=False),
         trend_filled_mask=trend_filled_mask.astype(bool, copy=False),
         ffid_values=ffid_values.astype(np.int64, copy=False),
         ffid_unique_values=ffid_unique_values.astype(np.int64, copy=False),
@@ -863,16 +1328,19 @@ def _load_minimal_inputs_for_thresholds(
                 msg = f'{PICK_KEY} must be (n_traces,), got {pick_final.shape}, n_traces={n_traces}'
                 raise ValueError(msg)
 
+            scores: dict[str, np.ndarray] = {}
+            for k in SCORE_KEYS:
+                scores[k] = _npz_must_have(z, k).astype(np.float32, copy=False)
+
             trend_res = _build_trend_result(
                 src=src,
                 z=z,
                 n_traces=n_traces,
+                n_samples_in=ns_in,
                 dt_sec_in=dt_sec_in,
+                pick_final_i=pick_final,
+                scores=scores,
             )
-
-            scores: dict[str, np.ndarray] = {}
-            for k in SCORE_KEYS:
-                scores[k] = _npz_must_have(z, k).astype(np.float32, copy=False)
 
             return (
                 n_traces,
@@ -1041,11 +1509,18 @@ def process_one_segy(
                 msg = f'{PICK_KEY} must be (n_traces,), got {pick_final.shape}, n_traces={n_traces}'
                 raise ValueError(msg)
 
+            scores: dict[str, np.ndarray] = {}
+            for k in SCORE_KEYS:
+                scores[k] = _npz_must_have(z, k).astype(np.float32, copy=False)
+
             trend_res = _build_trend_result(
                 src=src,
                 z=z,
                 n_traces=n_traces,
+                n_samples_in=ns_in,
                 dt_sec_in=dt_sec_in,
+                pick_final_i=pick_final,
+                scores=scores,
             )
             trend_center_i_raw = trend_res.trend_center_i_raw
             trend_center_i_local = trend_res.trend_center_i_local
@@ -1059,9 +1534,15 @@ def process_one_segy(
             semi_used_ffid_mask = trend_res.semi_used_ffid_mask
             semi_fallback_count = int(trend_res.semi_fallback_count)
 
-            scores: dict[str, np.ndarray] = {}
-            for k in SCORE_KEYS:
-                scores[k] = _npz_must_have(z, k).astype(np.float32, copy=False)
+            nn_replaced_mask = trend_res.nn_replaced_mask
+            global_replaced_mask = trend_res.global_replaced_mask
+            trend_center_i_global = trend_res.trend_center_i_global
+            global_edges_all = trend_res.global_edges_all
+            global_coef_all = trend_res.global_coef_all
+            global_edges_left = trend_res.global_edges_left
+            global_coef_left = trend_res.global_coef_left
+            global_edges_right = trend_res.global_edges_right
+            global_coef_right = trend_res.global_coef_right
 
         thresholds_arg = None
         if THRESH_MODE == 'global':
@@ -1154,6 +1635,15 @@ def process_one_segy(
         trend_center_i_local=trend_center_i_local.astype(np.float32, copy=False),
         trend_center_i_semi=trend_center_i_semi.astype(np.float32, copy=False),
         trend_center_i_used=trend_center_i_used.astype(np.float32, copy=False),
+        trend_center_i_global=trend_center_i_global.astype(np.float32, copy=False),
+        nn_replaced_mask=nn_replaced_mask.astype(bool, copy=False),
+        global_replaced_mask=global_replaced_mask.astype(bool, copy=False),
+        global_edges_all=global_edges_all.astype(np.float32, copy=False),
+        global_coef_all=global_coef_all.astype(np.float32, copy=False),
+        global_edges_left=global_edges_left.astype(np.float32, copy=False),
+        global_coef_left=global_coef_left.astype(np.float32, copy=False),
+        global_edges_right=global_edges_right.astype(np.float32, copy=False),
+        global_coef_right=global_coef_right.astype(np.float32, copy=False),
         trend_center_i=trend_center_i_used.astype(np.float32, copy=False),
         trend_filled_mask=trend_filled_mask.astype(bool, copy=False),
         trend_center_i_round=c_round.astype(np.int64, copy=False),
@@ -1178,10 +1668,13 @@ def process_one_segy(
 
     n_keep = int(np.count_nonzero(keep_mask))
     n_fill = int(np.count_nonzero(trend_filled_mask))
+    n_nn = int(np.count_nonzero(nn_replaced_mask))
+    n_gl = int(np.count_nonzero(global_replaced_mask))
     tag = 'global' if THRESH_MODE == 'global' else 'per_segy'
     print(
         f'[OK] {segy_path.name} -> {out_segy.name}  keep={n_keep}/{n_traces} '
         f'filled_trend={n_fill}/{n_traces} '
+        f'fill_nn={n_nn} fill_global={n_gl} '
         f'labels_written(P)={nnz_p} '
         f'th({tag} p10) prob={thresholds_used["conf_prob1"]:.6g} '
         f'trend={thresholds_used["conf_trend1"]:.6g} rs={thresholds_used["conf_rs1"]:.6g}'

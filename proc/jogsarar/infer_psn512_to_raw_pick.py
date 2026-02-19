@@ -16,7 +16,6 @@ from seisai_engine.pipelines.psn.config import load_psn_train_config
 from seisai_engine.predict import infer_tiled_chw
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.residual_statics import refine_firstbreak_residual_statics
-from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 from seisai_transforms.signal_ops.scaling.standardize import standardize_per_trace_torch
 from seisai_utils import config_yaml
 from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
@@ -71,6 +70,20 @@ RS_LAG_PENALTY_POWER = 1.0
 SNAP_MODE = 'trough'
 SNAP_LTCOR = 2
 LOG_GATHER_RS = True
+
+# post-snap replacement: scan forward from pick, find first peak (relative threshold),
+# then snap to its preceding trough within max_shift.
+POST_TROUGH_MAX_SHIFT = 8
+POST_TROUGH_SCAN_AHEAD = 12
+POST_TROUGH_SMOOTH_WIN = 5
+# Peak threshold on absolute amplitude after per-trace normalization (max(|amp|)=1).
+# Example: 0.05 means "accept the first local extremum with |amp| >= 0.05".
+POST_TROUGH_A_TH = 0.03
+
+# debug prints for post-trough
+POST_TROUGH_DEBUG = True
+POST_TROUGH_DEBUG_MAX_EXAMPLES = 5
+POST_TROUGH_DEBUG_EVERY_N_GATHERS = 1
 
 DT_TOL_SEC = 1e-9
 
@@ -255,6 +268,258 @@ def _build_ffid_to_indices(ffid_values: np.ndarray) -> dict[int, np.ndarray]:
         int(k): np.asarray(g, dtype=np.int64)
         for k, g in zip(uniq.tolist(), groups, strict=False)
     }
+
+
+@dataclass(frozen=True)
+class _PostTroughTraceDebug:
+    tr_in_gather: int
+    p_in: int
+    p_out: int
+    peak_i: int
+    trough_i: int
+    peak_is_max: bool
+    a_th: float
+    peak_amp: float
+    trough_amp: float
+    reason: str
+
+
+def _shift_pick_to_preceding_trough_1d(
+    x: np.ndarray,
+    p: int,
+    *,
+    max_shift: int,
+    scan_ahead: int,
+    smooth_win: int,
+    a_th: float,
+) -> tuple[int, int, int, bool, float, float, float, str]:
+    """Return (p_out, peak_i, trough_i, peak_is_max, a_th, peak_amp, trough_amp, reason)."""
+    n = int(x.size)
+    if p <= 0 or p >= n - 2:
+        return p, -1, -1, True, float(a_th), 0.0, 0.0, 'p_oob'
+
+    # Normalize by per-trace max(|amp|) so the peak threshold is based on absolute amplitude
+    # in a scale-invariant way.
+    scale = float(np.max(np.abs(x)))
+    if (not np.isfinite(scale)) or scale <= 0.0:
+        return p, -1, -1, True, float(a_th), 0.0, 0.0, 'scale0'
+
+    end = min(n - 2, p + int(scan_ahead))
+    if end <= p + 1:
+        return p, -1, -1, True, float(a_th), 0.0, 0.0, 'scan_empty'
+
+    sw = int(smooth_win)
+    if sw <= 0 or (sw % 2) != 1:
+        msg = f'smooth_win must be positive odd, got {smooth_win}'
+        raise ValueError(msg)
+
+    ath = float(a_th)
+    if (not np.isfinite(ath)) or ath < 0.0:
+        msg = f'a_th must be finite and >= 0, got {a_th}'
+        raise ValueError(msg)
+
+    seg0 = max(0, int(p) - sw)
+    seg1 = min(n, int(end) + sw + 2)
+    seg = (np.asarray(x[seg0:seg1], dtype=np.float32) / np.float32(scale)).astype(
+        np.float32, copy=False
+    )
+    if seg.size < 3:
+        return p, -1, -1, True, ath, 0.0, 0.0, 'seg_too_short'
+
+    if sw == 1:
+        xs = seg
+    else:
+        pad = sw // 2
+        k = np.full((sw,), 1.0 / float(sw), dtype=np.float32)
+        seg_pad = np.pad(seg, pad_width=pad, mode='edge')
+        xs = np.convolve(seg_pad, k, mode='valid').astype(np.float32, copy=False)
+
+    def v_at(i: int) -> float:
+        return float(xs[int(i) - int(seg0)])
+
+    def is_local_max(i: int) -> bool:
+        return bool((v_at(i - 1) < v_at(i)) and (v_at(i) >= v_at(i + 1)))
+
+    def is_local_min(i: int) -> bool:
+        return bool((v_at(i - 1) > v_at(i)) and (v_at(i) <= v_at(i + 1)))
+
+    # NOTE: peak threshold is provided directly in the normalized amplitude scale.
+
+    peak_i = -1
+    peak_is_max = True
+    peak_amp = 0.0
+
+    for i in range(int(p) + 1, int(end) + 1):
+        vi = v_at(i)
+
+        # 正の局所最大だけを peak とする
+        if is_local_max(i) and float(vi) >= float(ath):
+            peak_i = i
+            peak_is_max = True
+            peak_amp = float(vi)
+            break
+
+    if peak_i < 0:
+        return p, -1, -1, True, ath, 0.0, 0.0, 'no_pos_peak'
+
+    trough_i = -1
+    trough_amp = 0.0
+    for i in range(int(peak_i) - 1, int(p), -1):
+        if peak_is_max:
+            if is_local_min(i):
+                trough_i = i
+                trough_amp = float(v_at(i))
+                break
+        elif is_local_max(i):
+            trough_i = i
+            trough_amp = float(v_at(i))
+            break
+
+    if trough_i < 0:
+        return (
+            p,
+            int(peak_i),
+            -1,
+            bool(peak_is_max),
+            ath,
+            float(peak_amp),
+            0.0,
+            'no_trough',
+        )
+
+    if int(trough_i) - int(p) > int(max_shift):
+        return (
+            p,
+            int(peak_i),
+            int(trough_i),
+            bool(peak_is_max),
+            ath,
+            float(peak_amp),
+            float(trough_amp),
+            'trough_too_far',
+        )
+
+    return (
+        int(trough_i),
+        int(peak_i),
+        int(trough_i),
+        bool(peak_is_max),
+        ath,
+        float(peak_amp),
+        float(trough_amp),
+        'shifted',
+    )
+
+
+def _post_trough_adjust_picks(
+    picks_i: np.ndarray,
+    raw_hw: np.ndarray,
+    *,
+    max_shift: int,
+    scan_ahead: int,
+    smooth_win: int,
+    a_th: float,
+    debug: bool,
+    debug_label: str,
+    debug_max_examples: int,
+) -> np.ndarray:
+    p = np.asarray(picks_i, dtype=np.int32)
+    x = np.asarray(raw_hw, dtype=np.float32)
+    if x.ndim != 2:
+        msg = f'raw_hw must be 2D, got {x.shape}'
+        raise ValueError(msg)
+    if p.shape != (x.shape[0],):
+        msg = f'picks_i shape mismatch: picks={p.shape}, raw_hw={x.shape}'
+        raise ValueError(msg)
+
+    out = p.copy()
+    if not bool(debug):
+        for j in range(int(out.size)):
+            pj = int(out[j])
+            if pj <= 0:
+                continue
+            out[j] = np.int32(
+                _shift_pick_to_preceding_trough_1d(
+                    x[j],
+                    pj,
+                    max_shift=int(max_shift),
+                    scan_ahead=int(scan_ahead),
+                    smooth_win=int(smooth_win),
+                    a_th=float(a_th),
+                )[0]
+            )
+        return out
+
+    reason_counts: dict[str, int] = {}
+    shifts: list[int] = []
+    examples: list[_PostTroughTraceDebug] = []
+
+    for j in range(int(out.size)):
+        pj = int(out[j])
+        if pj <= 0:
+            reason_counts['p<=0'] = reason_counts.get('p<=0', 0) + 1
+            continue
+
+        (
+            p2,
+            peak_i,
+            trough_i,
+            peak_is_max,
+            a_th,
+            peak_amp,
+            trough_amp,
+            reason,
+        ) = _shift_pick_to_preceding_trough_1d(
+            x[j],
+            pj,
+            max_shift=int(max_shift),
+            scan_ahead=int(scan_ahead),
+            smooth_win=int(smooth_win),
+            a_th=float(a_th),
+        )
+        out[j] = np.int32(p2)
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        if reason == 'shifted':
+            shifts.append(int(p2) - int(pj))
+
+        if len(examples) < int(debug_max_examples):
+            examples.append(
+                _PostTroughTraceDebug(
+                    tr_in_gather=int(j),
+                    p_in=int(pj),
+                    p_out=int(p2),
+                    peak_i=int(peak_i),
+                    trough_i=int(trough_i),
+                    peak_is_max=bool(peak_is_max),
+                    a_th=float(a_th),
+                    peak_amp=float(peak_amp),
+                    trough_amp=float(trough_amp),
+                    reason=str(reason),
+                )
+            )
+
+    n_in = int(np.count_nonzero(p > 0))
+    n_changed = int(np.count_nonzero(out != p))
+    mean_shift = float(np.mean(shifts)) if shifts else 0.0
+    max_abs_shift = int(np.max(np.abs(shifts))) if shifts else 0
+    reasons = ' '.join(f'{k}={v}' for k, v in sorted(reason_counts.items()))
+    print(
+        f'[POST_TROUGH] {debug_label} '
+        f'H={int(out.size)} nonzero={n_in} changed={n_changed} '
+        f'mean_shift={mean_shift:.3f} max_abs_shift={max_abs_shift} '
+        f'a_th={float(a_th):.3g} {reasons}'
+    )
+    for ex in examples:
+        shift = int(ex.p_out) - int(ex.p_in)
+        kind = 'max' if bool(ex.peak_is_max) else 'min'
+        print(
+            f'  ex tr={ex.tr_in_gather} p:{ex.p_in}->{ex.p_out} (d={shift}) '
+            f'peak({kind})={ex.peak_i} trough={ex.trough_i} '
+            f'th={ex.a_th:.3g} peak_amp={ex.peak_amp:.3g} trough_amp={ex.trough_amp:.3g} '
+            f'reason={ex.reason}'
+        )
+
+    return out
 
 
 def build_pick_aligned_window(
@@ -841,7 +1106,7 @@ def process_one_pair(
         ffid_to_row = {ff: i for i, ff in enumerate(ffids_sorted)}
         fb_mat = np.zeros((len(ffids_sorted), max_chno), dtype=np.int32)
 
-        for ffid in ffids_sorted:
+        for gather_i, ffid in enumerate(ffids_sorted):
             idx0 = ffid_to_indices[int(ffid)]
             ch = chno_values[idx0].astype(np.int64, copy=False)
             order = np.argsort(ch, kind='mergesort')
@@ -957,11 +1222,20 @@ def process_one_pair(
             pick_rs_i_g = np.rint(pick_rs_f_g).astype(np.int32, copy=False)
             np.clip(pick_rs_i_g, 0, int(n_samples_raw - 1), out=pick_rs_i_g)
 
-            pick_final_g = snap_picks_to_phase(
+            dbg = bool(POST_TROUGH_DEBUG) and (
+                int(POST_TROUGH_DEBUG_EVERY_N_GATHERS) > 0
+                and (int(gather_i) % int(POST_TROUGH_DEBUG_EVERY_N_GATHERS) == 0)
+            )
+            pick_final_g = _post_trough_adjust_picks(
                 pick_rs_i_g.copy(),
                 raw_g,
-                mode=str(SNAP_MODE),
-                ltcor=int(SNAP_LTCOR),
+                max_shift=int(POST_TROUGH_MAX_SHIFT),
+                scan_ahead=int(POST_TROUGH_SCAN_AHEAD),
+                smooth_win=int(POST_TROUGH_SMOOTH_WIN),
+                a_th=float(POST_TROUGH_A_TH),
+                debug=dbg,
+                debug_label=f'{raw_path.name} ffid={ffid}',
+                debug_max_examples=int(POST_TROUGH_DEBUG_MAX_EXAMPLES),
             ).astype(np.int32, copy=False)
 
             zero_in = pick_rs_i_g <= 0
