@@ -28,7 +28,7 @@ IN_RAW_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
 IN_WIN512_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_drop005')
 OUT_PRED_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_pred')
 
-CFG_YAML = Path('configs/config_convnext_prestage2.yaml')
+CFG_YAML = Path('configs/config_convnext_prestage2_drop005.yaml')
 # If None, resolved from CFG_YAML: paths.out_dir/ckpt/best.pt
 CKPT_PATH: Path | None = None
 

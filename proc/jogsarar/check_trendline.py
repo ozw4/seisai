@@ -15,10 +15,10 @@ SEGY_PATH = Path(
 PROB_NPZ_PATH = Path(
     '/home/dcuser/data/ActiveSeisField/jogsarar_out/0020_geom_set_1401.prob.npz'
 )  # run_fbp_infer の生成物
-FFID = 2147
+FFID = 2013
 
 SAMPLE_START = 0
-SAMPLE_END = 10  # 表示したいサンプル範囲（endは含まない）
+SAMPLE_END = 100  # 表示したいサンプル範囲（endは含まない）
 X_MODE = 'trace'  # "trace" | "offset" | "chno"
 ENDIAN = 'big'  # "big" | "little"
 OUT_PNG = None  # Path("/tmp/ffid2007.png") のようにすると保存。Noneなら表示

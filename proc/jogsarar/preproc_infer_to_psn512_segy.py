@@ -31,8 +31,8 @@ SCORE_KEYS = (
 PICK_KEY = 'pick_final'  # infer npz側の最終pick（p1）
 
 # 閾値モード
-#   'per_segy' : SEGYごとにp10
-#   'global'   : 全SEGYまとめてp10（全データグローバル）
+#   'per_segy' : SEGYごとにDrop_low_frac
+#   'global'   : 全SEGYまとめてDrop_low_frac（全データグローバル）
 THRESH_MODE = 'global'  # 'global' or 'per_segy'
 
 # semi-global trendline (ffid neighbors in same SEG-Y)
@@ -474,6 +474,7 @@ def _build_trend_with_optional_semi(
     ffid_groups: list[np.ndarray],
     shot_x_ffid: np.ndarray,
     shot_y_ffid: np.ndarray,
+    trend_filled_mask: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     local = np.asarray(trend_center_i_local, dtype=np.float32)
     off_proxy = np.asarray(trend_offset_signed_proxy, dtype=np.float32)
@@ -482,6 +483,11 @@ def _build_trend_with_optional_semi(
         raise ValueError(msg)
 
     n_traces = int(local.shape[0])
+    filled = np.asarray(trend_filled_mask, dtype=bool)
+    if filled.shape != (n_traces,):
+        msg = f'trend_filled_mask must be (n_traces,), got {filled.shape}, n_traces={n_traces}'
+        raise ValueError(msg)
+
     bin_valid = np.isfinite(off_proxy)
     bin_id = np.zeros(n_traces, dtype=np.int64)
     bin_id[bin_valid] = np.rint(off_proxy[bin_valid] / float(SEMI_BIN_W_M)).astype(
@@ -490,7 +496,13 @@ def _build_trend_with_optional_semi(
 
     local_bin_maps: list[dict[int, float]] = []
     for idx in ffid_groups:
-        valid = bin_valid[idx] & np.isfinite(local[idx]) & (local[idx] > 0.0)
+        # raw(0/NaN) を local で埋めた点は semi 構築に混ぜない
+        valid = (
+            bin_valid[idx]
+            & (~filled[idx])
+            & np.isfinite(local[idx])
+            & (local[idx] > 0.0)
+        )
         idx_use = idx[valid]
         if idx_use.size == 0:
             local_bin_maps.append({})
@@ -530,30 +542,47 @@ def _build_trend_with_optional_semi(
         semi_bin_maps.append(semi_map)
 
     semi_used_ffid_mask = np.zeros(len(ffid_groups), dtype=bool)
+    semi_ok_for_missing_ffid_mask = np.zeros(len(ffid_groups), dtype=bool)
     for g in range(len(ffid_groups)):
         local_phys_ng = not _is_physically_ok_bin_map(local_bin_maps[g])
         semi_map = semi_bin_maps[g]
-        semi_has = _count_finite_bins(semi_map) >= 2
-        semi_phys_ok = semi_has and _is_physically_ok_bin_map(semi_map)
-        semi_used_ffid_mask[g] = bool(local_phys_ng and semi_phys_ok)
+        semi_has_2 = _count_finite_bins(semi_map) >= 2
+        semi_phys_ok_2 = semi_has_2 and _is_physically_ok_bin_map(semi_map)
+        semi_used_ffid_mask[g] = bool(local_phys_ng and semi_phys_ok_2)
+
+        # raw欠損トレース向け: 1binでも semi が取れれば使う（物理チェックは関数側で安全）
+        semi_has_1 = _count_finite_bins(semi_map) >= 1
+        semi_ok_for_missing_ffid_mask[g] = bool(
+            semi_has_1 and _is_physically_ok_bin_map(semi_map)
+        )
 
     trend_center_i_semi = np.full(n_traces, np.nan, dtype=np.float32)
     trend_center_i_used = local.astype(np.float32, copy=True)
     fallback_count = 0
 
     for g, idx in enumerate(ffid_groups):
-        if not bool(semi_used_ffid_mask[g]):
+        use_semi_for_group = bool(semi_used_ffid_mask[g])
+        use_semi_for_missing = bool(np.any(filled[idx])) and bool(
+            semi_ok_for_missing_ffid_mask[g]
+        )
+        if not (use_semi_for_group or use_semi_for_missing):
             continue
+
         semi_map = semi_bin_maps[g]
         bins_g = bin_id[idx]
         bins_valid_g = bin_valid[idx]
         for j, tr_idx in enumerate(idx):
+            tr = int(tr_idx)
+            # グループ置換ではない場合、raw欠損トレースだけ semi を試す
+            if (not use_semi_for_group) and (not bool(filled[tr])):
+                continue
+
             v = float('nan')
             if bool(bins_valid_g[j]):
                 v = semi_map.get(int(bins_g[j]), float('nan'))
             if np.isfinite(v):
-                trend_center_i_semi[int(tr_idx)] = np.float32(v)
-                trend_center_i_used[int(tr_idx)] = np.float32(v)
+                trend_center_i_semi[tr] = np.float32(v)
+                trend_center_i_used[tr] = np.float32(v)
             else:
                 fallback_count += 1
 
@@ -624,6 +653,7 @@ def _build_trend_result(
             ffid_groups=ffid_groups,
             shot_x_ffid=shot_x_ffid,
             shot_y_ffid=shot_y_ffid,
+            trend_filled_mask=trend_filled_mask,
         )
     else:
         trend_center_i_local, trend_filled_mask = _fill_trend_center_i(
