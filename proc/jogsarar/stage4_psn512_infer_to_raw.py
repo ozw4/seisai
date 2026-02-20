@@ -22,7 +22,6 @@ from seisai_engine.pipelines.common.checkpoint_io import load_checkpoint
 from seisai_engine.pipelines.psn.build_model import build_model as build_psn_model
 from seisai_engine.pipelines.psn.config import load_psn_train_config
 from seisai_engine.predict import infer_tiled_chw
-from seisai_pick.lmo import apply_lmo_linear, lmo_correct_picks
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.residual_statics import refine_firstbreak_residual_statics
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
@@ -114,12 +113,10 @@ DT_TOL_SEC = 1e-9
 VIZ_EVERY_N_SHOTS = 20
 VIZ_DIRNAME = 'viz'
 VIZ_PLOT_START = 0
-VIZ_PLOT_END = 350
-VIZ_FIGSIZE = (15, 9)
+VIZ_PLOT_END = 1000
+VIZ_FIGSIZE = (12, 9)
 VIZ_DPI = 200
 VIZ_GAIN = 2.0
-LMO_VEL_MPS = 3200.0
-LMO_BULK_SHIFT_SAMPLES = 50.0
 
 MIN_GATHER_H = 32
 
@@ -624,14 +621,7 @@ def _save_gather_viz(
         msg = f'offsets_m must be (H,), got {offs.shape}, H={n_traces}'
         raise ValueError(msg)
 
-    wave_lmo = apply_lmo_linear(
-        wave,
-        offs,
-        dt_sec=float(dt_sec),
-        vel_mps=float(LMO_VEL_MPS),
-        fill=0.0,
-        bulk_shift_samples=float(LMO_BULK_SHIFT_SAMPLES),
-    )
+    # NOTE: visualization should NOT apply LMO (no wave LMO, no pick LMO)
 
     p_psn = np.asarray(pick_psn_orig_i, dtype=np.float32)
     p_rs = np.asarray(pick_rs_i, dtype=np.float32)
@@ -647,25 +637,6 @@ def _save_gather_viz(
     p_rs_plot[~valid_rs] = np.nan
     p_final_plot[~valid_final] = np.nan
 
-    p_psn_lmo = lmo_correct_picks(
-        p_psn_plot,
-        offs,
-        dt_sec=float(dt_sec),
-        vel_mps=float(LMO_VEL_MPS),
-    )
-    p_rs_lmo = lmo_correct_picks(
-        p_rs_plot,
-        offs,
-        dt_sec=float(dt_sec),
-        vel_mps=float(LMO_VEL_MPS),
-    )
-    p_final_lmo = lmo_correct_picks(
-        p_final_plot,
-        offs,
-        dt_sec=float(dt_sec),
-        vel_mps=float(LMO_VEL_MPS),
-    )
-
     start = int(max(0, VIZ_PLOT_START))
     end_cfg = int(VIZ_PLOT_END)
     if end_cfg <= 0:
@@ -678,7 +649,7 @@ def _save_gather_viz(
         )
         raise ValueError(msg)
 
-    wave_win = wave_lmo[:, start:end].astype(np.float32, copy=False)
+    wave_win = wave[:, start:end].astype(np.float32, copy=False)
     keep = np.max(np.abs(wave_win), axis=1) > 0.0
     if not np.any(keep):
         return
@@ -687,25 +658,25 @@ def _save_gather_viz(
     wave_plot = wave_win[keep]
 
     pick_psn_win = _pick_to_window_samples(
-        p_psn_lmo,
+        p_psn_plot,
         start=start,
         end=end,
         zero_is_invalid=False,
-        add_samples=float(LMO_BULK_SHIFT_SAMPLES),
+        add_samples=0.0,
     )[keep]
     pick_rs_win = _pick_to_window_samples(
-        p_rs_lmo,
+        p_rs_plot,
         start=start,
         end=end,
         zero_is_invalid=False,
-        add_samples=float(LMO_BULK_SHIFT_SAMPLES),
+        add_samples=0.0,
     )[keep]
     pick_final_win = _pick_to_window_samples(
-        p_final_lmo,
+        p_final_plot,
         start=start,
         end=end,
         zero_is_invalid=False,
-        add_samples=float(LMO_BULK_SHIFT_SAMPLES),
+        add_samples=0.0,
     )[keep]
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
@@ -753,7 +724,7 @@ def _save_gather_viz(
             show_legend=True,
         ),
     )
-    ax.set_title(f'{title} (LMO v={LMO_VEL_MPS:.1f} m/s)')
+    ax.set_title(f'{title} (no LMO)')
     fig.tight_layout()
     fig.savefig(out_png, dpi=int(VIZ_DPI))
     plt.close(fig)

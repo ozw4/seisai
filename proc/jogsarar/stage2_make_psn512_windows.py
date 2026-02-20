@@ -36,7 +36,7 @@ UP_FACTOR = 2
 OUT_NS = 2 * HALF_WIN * UP_FACTOR  # 512
 
 # 下位除外（p10）
-DROP_LOW_FRAC = 0.07  # 下位除外
+DROP_LOW_FRAC = 0.05  # 下位除外
 SCORE_KEYS_FOR_WEIGHT = (
     'conf_prob1',
     'conf_rs1',
@@ -68,6 +68,14 @@ GLOBAL_VMIN_M_S = 300.0
 GLOBAL_VMAX_M_S = 6000.0
 GLOBAL_SLOPE_EPS = 1e-6
 GLOBAL_SIDE_MIN_PTS = 16  # 2*min_pts of TwoPieceIRLSAutoBreakStrategy default
+# Stage1 local trendline baseline (from stage1 .prob.npz)
+USE_STAGE1_LOCAL_TRENDLINE_BASELINE = True
+LOCAL_GLOBAL_DIFF_TH_SAMPLES = 128  # >= -> discard local baseline around that trace
+LOCAL_DISCARD_RADIUS_TRACES = 32  # +/- traces within ffid
+LOCAL_TREND_T_SEC_KEY = 'trend_t_sec'
+LOCAL_TREND_COVERED_KEY = 'trend_covered'
+LOCAL_TREND_DT_SEC_KEY = 'dt_sec'
+
 
 # conf_trend1: Stage1互換
 CONF_TREND_SIGMA_MS = 6.0
@@ -90,6 +98,7 @@ class _TrendBuildResult:
     nn_replaced_mask: np.ndarray
     global_replaced_mask: np.ndarray
     global_missing_filled_mask: np.ndarray
+    local_discard_mask: np.ndarray
     global_edges_all: np.ndarray
     global_coef_all: np.ndarray
     global_edges_left: np.ndarray
@@ -128,6 +137,93 @@ def out_sidecar_npz_path_for_out(out_segy_path: Path) -> Path:
 def out_pick_csr_npz_path_for_out(out_segy_path: Path) -> Path:
     # PSN dataset (load_phase_pick_csr_npz) が読む用
     return out_segy_path.with_suffix('.phase_pick.csr.npz')
+
+
+def _load_stage1_local_trend_center_i(
+    *,
+    z: np.lib.npyio.NpzFile,
+    n_traces: int,
+    dt_sec_in: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    if not bool(USE_STAGE1_LOCAL_TRENDLINE_BASELINE):
+        center_i = np.full(int(n_traces), np.nan, dtype=np.float32)
+        ok = np.zeros(int(n_traces), dtype=bool)
+        return center_i, ok
+
+    dt_npz = float(require_npz_key(z, LOCAL_TREND_DT_SEC_KEY))
+    dt_in = float(dt_sec_in)
+    if (not np.isfinite(dt_npz)) or dt_npz <= 0.0:
+        msg = f'invalid {LOCAL_TREND_DT_SEC_KEY} in infer npz: {dt_npz}'
+        raise ValueError(msg)
+    if (not np.isfinite(dt_in)) or dt_in <= 0.0:
+        msg = f'invalid dt_sec_in from segy: {dt_in}'
+        raise ValueError(msg)
+
+    tol = 1e-7 * max(abs(dt_in), 1.0)
+    if abs(dt_npz - dt_in) > tol:
+        msg = (
+            f'dt mismatch between segy and infer npz: segy={dt_in:.9g} sec, '
+            f'npz={dt_npz:.9g} sec (tol={tol:.3g}). '
+            f'Run stage1 with the same input segy.'
+        )
+        raise ValueError(msg)
+
+    t_sec = require_npz_key(z, LOCAL_TREND_T_SEC_KEY).astype(np.float32, copy=False)
+    if t_sec.ndim != 1 or t_sec.shape[0] != int(n_traces):
+        msg = (
+            f'{LOCAL_TREND_T_SEC_KEY} must be (n_traces,), got {t_sec.shape}, '
+            f'n_traces={n_traces}'
+        )
+        raise ValueError(msg)
+
+    covered = require_npz_key(z, LOCAL_TREND_COVERED_KEY).astype(bool, copy=False)
+    if covered.ndim != 1 or covered.shape[0] != int(n_traces):
+        msg = (
+            f'{LOCAL_TREND_COVERED_KEY} must be (n_traces,), got {covered.shape}, '
+            f'n_traces={n_traces}'
+        )
+        raise ValueError(msg)
+
+    center_i = (t_sec / float(dt_in)).astype(np.float32, copy=False)
+    ok = covered & np.isfinite(center_i) & (center_i > 0.0)
+    return center_i.astype(np.float32, copy=False), ok.astype(bool, copy=False)
+
+
+def _expand_mask_within_ffid_groups(
+    *,
+    mask_by_trace: np.ndarray,
+    ffid_groups: list[np.ndarray],
+    radius: int,
+) -> np.ndarray:
+    m = np.asarray(mask_by_trace, dtype=bool)
+    if m.ndim != 1:
+        msg = f'mask_by_trace must be 1D, got {m.shape}'
+        raise ValueError(msg)
+    if int(radius) < 0:
+        msg = f'radius must be >= 0, got {radius}'
+        raise ValueError(msg)
+
+    out = np.zeros_like(m, dtype=bool)
+    r = int(radius)
+
+    for idx in ffid_groups:
+        idx = np.asarray(idx, dtype=np.int64)
+        if idx.size == 0:
+            continue
+
+        g = m[idx]
+        if not bool(np.any(g)):
+            continue
+
+        pos = np.flatnonzero(g)
+        g_out = np.zeros(idx.size, dtype=bool)
+        for p in pos:
+            lo = max(0, int(p) - r)
+            hi = min(int(idx.size), int(p) + r + 1)
+            g_out[lo:hi] = True
+        out[idx[g_out]] = True
+
+    return out.astype(bool, copy=False)
 
 
 def _validate_semi_config() -> None:
@@ -609,17 +705,17 @@ def _fill_global_missing_by_ffid_nearest_trace(
     return out.astype(np.float32, copy=False), filled.astype(bool, copy=False)
 
 
-def _compute_conf_trend1_from_final(
+def _compute_conf_trend1_from_trend(
     *,
     pick_final_i: np.ndarray,
-    trend_center_i_final: np.ndarray,
+    trend_center_i: np.ndarray,
     n_samples_in: int,
     dt_sec_in: float,
 ) -> np.ndarray:
     p = np.asarray(pick_final_i, dtype=np.int64)
-    c = np.asarray(trend_center_i_final, dtype=np.float32)
+    c = np.asarray(trend_center_i, dtype=np.float32)
     if p.ndim != 1 or c.ndim != 1 or p.shape != c.shape:
-        msg = f'pick_final_i/final trend shape mismatch: {p.shape}, {c.shape}'
+        msg = f'pick_final_i/trend shape mismatch: {p.shape}, {c.shape}'
         raise ValueError(msg)
 
     t_pick_sec = p.astype(np.float32, copy=False) * float(dt_sec_in)
@@ -999,6 +1095,8 @@ def _build_trend_result(
     dt_sec_in: float,
     pick_final_i: np.ndarray,
     scores: dict[str, np.ndarray],
+    trend_center_i_local_in: np.ndarray,
+    local_trend_ok_in: np.ndarray,
 ) -> _TrendBuildResult:
     _validate_semi_config()
 
@@ -1014,9 +1112,26 @@ def _build_trend_result(
         shot_y_by_trace=shot_y_trace,
     )
 
-    # Stage2 builds trend from pick_final + headers only.
     trend_center_i_raw = np.full(n_traces, np.nan, dtype=np.float32)
-    trend_center_i_local = np.full(n_traces, np.nan, dtype=np.float32)
+
+    trend_center_i_local = np.asarray(trend_center_i_local_in, dtype=np.float32)
+    local_trend_ok = np.asarray(local_trend_ok_in, dtype=bool)
+    if trend_center_i_local.shape != (n_traces,) or local_trend_ok.shape != (n_traces,):
+        msg = (
+            f'local trend shape mismatch: center={trend_center_i_local.shape}, '
+            f'ok={local_trend_ok.shape}, n_traces={n_traces}'
+        )
+        raise ValueError(msg)
+
+    if int(n_samples_in) > 2:
+        v = np.isfinite(trend_center_i_local) & (trend_center_i_local > 0.0)
+        if bool(np.any(v)):
+            trend_center_i_local = trend_center_i_local.copy()
+            trend_center_i_local[v] = np.clip(
+                trend_center_i_local[v],
+                1.0,
+                float(int(n_samples_in) - 1),
+            )
 
     offset_abs_m = _load_offset_abs_from_segy(src)
     if offset_abs_m.shape != (n_traces,):
@@ -1112,13 +1227,53 @@ def _build_trend_result(
         trend_center_i_global_filled > 0.0
     )
     global_replaced_mask = semi_low_mask & global_ok
-    trend_center_i_used = trend_center_i_final.astype(np.float32, copy=True)
-    trend_filled_mask = semi_low_mask.astype(bool, copy=False)
+
+    if int(LOCAL_GLOBAL_DIFF_TH_SAMPLES) < 0:
+        msg = f'LOCAL_GLOBAL_DIFF_TH_SAMPLES must be >= 0, got {LOCAL_GLOBAL_DIFF_TH_SAMPLES}'
+        raise ValueError(msg)
+
+    local_ok = (
+        np.asarray(local_trend_ok, dtype=bool)
+        & np.isfinite(trend_center_i_local)
+        & (trend_center_i_local > 0.0)
+    )
+
+    diff = np.abs(trend_center_i_global_filled - trend_center_i_local).astype(
+        np.float32, copy=False
+    )
+    bad = (
+        local_ok
+        & global_ok
+        & np.isfinite(diff)
+        & (diff >= float(int(LOCAL_GLOBAL_DIFF_TH_SAMPLES)))
+    )
+    local_discard_mask = _expand_mask_within_ffid_groups(
+        mask_by_trace=bad,
+        ffid_groups=ffid_groups,
+        radius=int(LOCAL_DISCARD_RADIUS_TRACES),
+    )
+
+    use_integrated = (~local_ok) | local_discard_mask
+    trend_center_i_used = np.where(
+        use_integrated, trend_center_i_final, trend_center_i_local
+    ).astype(np.float32, copy=False)
+
+    if int(n_samples_in) > 2:
+        f = np.isfinite(trend_center_i_used)
+        if bool(np.any(f)):
+            trend_center_i_used = trend_center_i_used.copy()
+            trend_center_i_used[f] = np.clip(
+                trend_center_i_used[f],
+                1.0,
+                float(int(n_samples_in) - 1),
+            )
+
+    trend_filled_mask = use_integrated.astype(bool, copy=False)
 
     nn_replaced_mask = np.zeros(n_traces, dtype=bool)
-    conf_trend1 = _compute_conf_trend1_from_final(
+    conf_trend1 = _compute_conf_trend1_from_trend(
         pick_final_i=pick_final_i,
-        trend_center_i_final=trend_center_i_final,
+        trend_center_i=trend_center_i_used,
         n_samples_in=int(n_samples_in),
         dt_sec_in=float(dt_sec_in),
     )
@@ -1135,6 +1290,7 @@ def _build_trend_result(
         nn_replaced_mask=nn_replaced_mask.astype(bool, copy=False),
         global_replaced_mask=global_replaced_mask.astype(bool, copy=False),
         global_missing_filled_mask=global_missing_filled_mask.astype(bool, copy=False),
+        local_discard_mask=local_discard_mask.astype(bool, copy=False),
         global_edges_all=global_edges_all.astype(np.float32, copy=False),
         global_coef_all=global_coef_all.astype(np.float32, copy=False),
         global_edges_left=global_edges_left.astype(np.float32, copy=False),
@@ -1346,6 +1502,12 @@ def _load_minimal_inputs_for_thresholds(
             for k in SCORE_KEYS_FOR_WEIGHT:
                 scores_weight[k] = require_npz_key(z, k).astype(np.float32, copy=False)
 
+            trend_center_i_local, local_trend_ok = _load_stage1_local_trend_center_i(
+                z=z,
+                n_traces=n_traces,
+                dt_sec_in=dt_sec_in,
+            )
+
             trend_res = _build_trend_result(
                 src=src,
                 n_traces=n_traces,
@@ -1353,6 +1515,8 @@ def _load_minimal_inputs_for_thresholds(
                 dt_sec_in=dt_sec_in,
                 pick_final_i=pick_final,
                 scores=scores_weight,
+                trend_center_i_local_in=trend_center_i_local,
+                local_trend_ok_in=local_trend_ok,
             )
             scores_filter: dict[str, np.ndarray] = {
                 'conf_prob1': scores_weight['conf_prob1'],
@@ -1531,6 +1695,12 @@ def process_one_segy(
             for k in SCORE_KEYS_FOR_WEIGHT:
                 scores_weight[k] = require_npz_key(z, k).astype(np.float32, copy=False)
 
+            trend_center_i_local, local_trend_ok = _load_stage1_local_trend_center_i(
+                z=z,
+                n_traces=n_traces,
+                dt_sec_in=dt_sec_in,
+            )
+
             trend_res = _build_trend_result(
                 src=src,
                 n_traces=n_traces,
@@ -1538,6 +1708,8 @@ def process_one_segy(
                 dt_sec_in=dt_sec_in,
                 pick_final_i=pick_final,
                 scores=scores_weight,
+                trend_center_i_local_in=trend_center_i_local,
+                local_trend_ok_in=local_trend_ok,
             )
             scores_filter: dict[str, np.ndarray] = {
                 'conf_prob1': scores_weight['conf_prob1'],
@@ -1564,6 +1736,7 @@ def process_one_segy(
             nn_replaced_mask = trend_res.nn_replaced_mask
             global_replaced_mask = trend_res.global_replaced_mask
             global_missing_filled_mask = trend_res.global_missing_filled_mask
+            local_discard_mask = trend_res.local_discard_mask
             trend_center_i_global = trend_res.trend_center_i_global
             global_edges_all = trend_res.global_edges_all
             global_coef_all = trend_res.global_coef_all
@@ -1667,6 +1840,8 @@ def process_one_segy(
         semi_irls_section_len=np.int32(SEMI_IRLS_SECTION_LEN),
         semi_irls_stride=np.int32(SEMI_IRLS_STRIDE),
         semi_min_support_per_trace=np.int32(SEMI_MIN_SUPPORT_PER_TRACE),
+        local_global_diff_th_samples=np.int32(LOCAL_GLOBAL_DIFF_TH_SAMPLES),
+        local_discard_radius_traces=np.int32(LOCAL_DISCARD_RADIUS_TRACES),
         trend_center_i_raw=trend_center_i_raw.astype(np.float32, copy=False),
         trend_center_i_local=trend_center_i_local.astype(np.float32, copy=False),
         trend_center_i_semi=trend_center_i_semi.astype(np.float32, copy=False),
@@ -1710,12 +1885,13 @@ def process_one_segy(
 
     n_keep = int(np.count_nonzero(keep_mask))
     n_fill = int(np.count_nonzero(trend_filled_mask))
+    n_ld = int(np.count_nonzero(local_discard_mask))
     n_nn = int(np.count_nonzero(nn_replaced_mask))
     n_gl = int(np.count_nonzero(global_replaced_mask))
     tag = 'global' if THRESH_MODE == 'global' else 'per_segy'
     print(
         f'[OK] {segy_path.name} -> {out_segy.name}  keep={n_keep}/{n_traces} '
-        f'filled_trend={n_fill}/{n_traces} '
+        f'filled_trend={n_fill}/{n_traces} discard_local={n_ld} '
         f'fill_nn={n_nn} fill_global={n_gl} '
         f'labels_written(P)={nnz_p} '
         f'th({tag} p10) prob={thresholds_used["conf_prob1"]:.6g} '

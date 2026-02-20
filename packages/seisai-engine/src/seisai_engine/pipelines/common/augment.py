@@ -5,6 +5,7 @@ from seisai_transforms import (
     RandomFreqFilter,
     RandomHFlip,
     RandomPolarityFlip,
+    RandomSparseTraceTimeShift,
     RandomSpatialStretchSameH,
     RandomTimeStretch,
     SpaceAugConfig,
@@ -13,6 +14,8 @@ from seisai_transforms import (
 from seisai_utils.config import (
     optional_bool,
     optional_float,
+    optional_int,
+    optional_str,
     optional_tuple2_float,
     optional_value,
 )
@@ -113,6 +116,34 @@ def build_train_augment_ops(augment_cfg: dict | None) -> tuple[list, list]:
         'augment.time.factor_range', time_factor_range
     )
 
+    trace_tshift_cfg = _require_dict_or_empty(
+        augment_cfg.get('trace_tshift'), 'trace_tshift'
+    )
+    trace_tshift_p_apply = _validate_prob_01(
+        'augment.trace_tshift.p_apply', optional_float(trace_tshift_cfg, 'p_apply', 0.0)
+    )
+    trace_tshift_p_trace = _validate_prob_01(
+        'augment.trace_tshift.p_trace',
+        optional_float(trace_tshift_cfg, 'p_trace', 0.02),
+    )
+    trace_tshift_min_abs_shift = optional_int(trace_tshift_cfg, 'min_abs_shift', 1)
+    trace_tshift_max_abs_shift = optional_int(trace_tshift_cfg, 'max_abs_shift', 3)
+    if int(trace_tshift_min_abs_shift) <= 0:
+        msg = 'augment.trace_tshift.min_abs_shift must be positive'
+        raise ValueError(msg)
+    if int(trace_tshift_max_abs_shift) < int(trace_tshift_min_abs_shift):
+        msg = 'augment.trace_tshift.max_abs_shift must be >= min_abs_shift'
+        raise ValueError(msg)
+
+    trace_tshift_force_one = optional_bool(trace_tshift_cfg, 'force_one', default=True)
+    trace_tshift_ignore_zero = optional_bool(
+        trace_tshift_cfg, 'ignore_zero', default=True
+    )
+    trace_tshift_fill = optional_float(trace_tshift_cfg, 'fill', 0.0)
+    trace_tshift_meta_key = optional_str(
+        trace_tshift_cfg, 'meta_key', 'trace_tshift_view'
+    )
+
     freq_cfg = _require_dict_or_empty(augment_cfg.get('freq'), 'freq')
     freq_prob = _validate_prob_01(
         'augment.freq.prob', optional_float(freq_cfg, 'prob', 0.0)
@@ -141,6 +172,16 @@ def build_train_augment_ops(augment_cfg: dict | None) -> tuple[list, list]:
         ),
         RandomTimeStretch(
             TimeAugConfig(prob=float(time_prob), factor_range=time_factor_range)
+        ),
+        RandomSparseTraceTimeShift(
+            p_apply=float(trace_tshift_p_apply),
+            p_trace=float(trace_tshift_p_trace),
+            min_abs_shift=int(trace_tshift_min_abs_shift),
+            max_abs_shift=int(trace_tshift_max_abs_shift),
+            force_one=bool(trace_tshift_force_one),
+            ignore_zero=bool(trace_tshift_ignore_zero),
+            fill=float(trace_tshift_fill),
+            meta_key=str(trace_tshift_meta_key),
         ),
     ]
 

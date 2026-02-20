@@ -32,9 +32,7 @@ X_MODE = 'trace'  # "trace" | "offset" | "chno"
 ENDIAN = 'big'  # "big" | "little"
 
 # ★ここを list で指定（同一SEGY内の複数FFIDをまとめて処理）
-FFIDS: list[int] = list(
-    np.arange(2464, 2464 + 16)
-)  # example: 16 FFIDs starting from 2464
+FFIDS: list[int] = list(np.arange(2007, 2624, 5))
 
 # ★保存フォルダ（ユーザーが設定）
 OUT_DIR = Path('./ffid_plots')
