@@ -9,6 +9,9 @@ import numpy as np
 import segyio
 import torch
 from seisai_pick.trend.trend_fit_strategy import TwoPieceIRLSAutoBreakStrategy
+from seisai_pick.segy_utils import find_segy_files, read_trace_field, require_npz_key
+
+from jogsarar_shared import build_groups_by_key, valid_pick_mask
 
 # =========================
 # CONFIG（ここだけ触ればOK）
@@ -78,16 +81,6 @@ class _TrendBuildResult:
     semi_fallback_count: int
 
 
-def find_segy_files(root: Path) -> list[Path]:
-    files: list[Path] = []
-    for ext in SEGY_EXTS:
-        files.extend(root.rglob(f'*{ext}'))
-    files = sorted(set(files))
-    if not files:
-        msg = f'no segy files under: {root}'
-        raise FileNotFoundError(msg)
-    return files
-
 
 def infer_npz_path_for_segy(segy_path: Path) -> Path:
     rel = segy_path.relative_to(IN_SEGY_ROOT)
@@ -109,12 +102,6 @@ def out_pick_csr_npz_path_for_out(out_segy_path: Path) -> Path:
     return out_segy_path.with_suffix('.phase_pick.csr.npz')
 
 
-def _npz_must_have(z: np.lib.npyio.NpzFile, key: str) -> np.ndarray:
-    if key not in z.files:
-        msg = f'npz missing key: {key}  available={sorted(z.files)}'
-        raise KeyError(msg)
-    return np.asarray(z[key])
-
 
 def _validate_semi_config() -> None:
     if float(SEMI_BIN_W_M) <= 0.0:
@@ -133,36 +120,6 @@ def _validate_semi_config() -> None:
             f'got {SEMI_PHYS_MAX_NONPOS_FRAC}'
         )
         raise ValueError(msg)
-
-
-def _read_trace_field(
-    segy_obj: segyio.SegyFile,
-    field: segyio.TraceField,
-    *,
-    dtype,
-    name: str,
-) -> np.ndarray:
-    arr = np.asarray(segy_obj.attributes(field)[:], dtype=dtype)
-    n_traces = int(segy_obj.tracecount)
-    if arr.shape != (n_traces,):
-        msg = f'{name} shape mismatch: got {arr.shape}, expected {(n_traces,)}'
-        raise ValueError(msg)
-    return arr
-
-
-def _build_ffid_groups(
-    ffid_values: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
-    ff = np.asarray(ffid_values, dtype=np.int64)
-    if ff.ndim != 1:
-        msg = f'ffid_values must be 1D, got {ff.shape}'
-        raise ValueError(msg)
-    uniq, inv, counts = np.unique(ff, return_inverse=True, return_counts=True)
-    order = np.argsort(inv, kind='mergesort')
-    splits = np.cumsum(counts)[:-1]
-    groups = [np.asarray(g, dtype=np.int64) for g in np.split(order, splits)]
-    return uniq.astype(np.int64, copy=False), inv.astype(np.int64, copy=False), groups
-
 
 def _apply_source_group_scalar(values: np.ndarray, scalar: np.ndarray) -> np.ndarray:
     v = np.asarray(values, dtype=np.float64)
@@ -213,13 +170,6 @@ def _percentile_threshold(x: np.ndarray, *, frac: float) -> float:
         return float('nan')
     q = float(frac) * 100.0
     return float(np.nanpercentile(v, q))
-
-
-def _valid_pick_mask(pick_i: np.ndarray, *, n_samples: int) -> np.ndarray:
-    p = np.asarray(pick_i)
-    return np.isfinite(p) & (p > 0) & (p < int(n_samples))
-
-
 def _load_trend_center_i(
     z: np.lib.npyio.NpzFile, *, n_traces: int, dt_sec_from_segy: float
 ) -> np.ndarray:
@@ -325,7 +275,7 @@ def _fill_trend_center_i_by_ffid(
             msg = f'trend/proxy length mismatch: {c.shape[0]} vs {proxy.shape[0]}'
             raise ValueError(msg)
 
-    _, _, groups = _build_ffid_groups(ff)
+    _, _, groups = build_groups_by_key(ff)
     out = c.copy()
     filled_mask = ~(np.isfinite(c) & (c > 0.0))
     for idx in groups:
@@ -451,25 +401,25 @@ def _build_neighbor_indices(
 def _load_ffid_and_shot_xy_from_segy(
     src: segyio.SegyFile,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    ffid_values = _read_trace_field(
+    ffid_values = read_trace_field(
         src,
         segyio.TraceField.FieldRecord,
         dtype=np.int64,
         name='ffid_values',
     )
-    src_x_raw = _read_trace_field(
+    src_x_raw = read_trace_field(
         src,
         segyio.TraceField.SourceX,
         dtype=np.float64,
         name='source_x',
     )
-    src_y_raw = _read_trace_field(
+    src_y_raw = read_trace_field(
         src,
         segyio.TraceField.SourceY,
         dtype=np.float64,
         name='source_y',
     )
-    src_grp_scalar = _read_trace_field(
+    src_grp_scalar = read_trace_field(
         src,
         segyio.TraceField.SourceGroupScalar,
         dtype=np.float64,
@@ -485,7 +435,7 @@ def _load_ffid_and_shot_xy_from_segy(
 
 
 def _load_offset_abs_from_segy(src: segyio.SegyFile) -> np.ndarray:
-    off = _read_trace_field(
+    off = read_trace_field(
         src,
         segyio.TraceField.offset,
         dtype=np.float64,
@@ -729,7 +679,7 @@ def _build_global_trend_center_i(
             raise ValueError(msg)
         w *= np.where(np.isfinite(s) & (s > 0.0), s, 0.0)
 
-    pick_ok = _valid_pick_mask(p, n_samples=int(n_samples_in))
+    pick_ok = valid_pick_mask(p, n_samples=int(n_samples_in))
     v_all = pick_ok & np.isfinite(off) & (off > 0.0) & np.isfinite(w) & (w > 0.0)
     y_sec = p.astype(np.float64) * float(dt_sec_in)
 
@@ -823,7 +773,7 @@ def _fill_missing_trend_center_i_nn_then_global(
     out = c.copy()
     nn_mask = np.zeros(c.shape[0], dtype=bool)
 
-    pick_ok = _valid_pick_mask(p, n_samples=int(n_samples_in))
+    pick_ok = valid_pick_mask(p, n_samples=int(n_samples_in))
 
     for idx in ffid_groups:
         idx = np.asarray(idx, dtype=np.int64)
@@ -1140,7 +1090,7 @@ def _build_trend_result(
         msg = f'ffid_values must be (n_traces,), got {ffid_values.shape}, n_traces={n_traces}'
         raise ValueError(msg)
 
-    ffid_unique_values, _ffid_inv, ffid_groups = _build_ffid_groups(ffid_values)
+    ffid_unique_values, _ffid_inv, ffid_groups = build_groups_by_key(ffid_values)
     shot_x_ffid, shot_y_ffid = _build_shot_xy_by_ffid(
         ffid_groups=ffid_groups,
         shot_x_by_trace=shot_x_trace,
@@ -1162,7 +1112,7 @@ def _build_trend_result(
         msg = 'SEMI_GLOBAL_ENABLE must be True for semi-global -> global trend build'
         raise ValueError(msg)
 
-    trend_offset_signed_proxy = _npz_must_have(z, 'trend_offset_signed_proxy').astype(
+    trend_offset_signed_proxy = require_npz_key(z, 'trend_offset_signed_proxy').astype(
         np.float32, copy=False
     )
     if trend_offset_signed_proxy.ndim == 2 and trend_offset_signed_proxy.shape[0] == 1:
@@ -1329,7 +1279,7 @@ def _base_valid_mask(
 
     reason = np.zeros(n_tr, dtype=np.uint8)
 
-    pick_ok = _valid_pick_mask(p, n_samples=n_samples_in)
+    pick_ok = valid_pick_mask(p, n_samples=int(n_samples_in))
     reason[~pick_ok] |= 1 << 0
 
     trend_ok = np.isfinite(c) & (c > 0.0)
@@ -1431,14 +1381,14 @@ def _load_minimal_inputs_for_thresholds(
             raise ValueError(msg)
         dt_sec_in = float(dt_us_in) * 1e-6
         with np.load(infer_npz, allow_pickle=False) as z:
-            pick_final = _npz_must_have(z, PICK_KEY).astype(np.int64, copy=False)
+            pick_final = require_npz_key(z, PICK_KEY).astype(np.int64, copy=False)
             if pick_final.ndim != 1 or pick_final.shape[0] != n_traces:
                 msg = f'{PICK_KEY} must be (n_traces,), got {pick_final.shape}, n_traces={n_traces}'
                 raise ValueError(msg)
 
             scores: dict[str, np.ndarray] = {}
             for k in SCORE_KEYS:
-                scores[k] = _npz_must_have(z, k).astype(np.float32, copy=False)
+                scores[k] = require_npz_key(z, k).astype(np.float32, copy=False)
 
             trend_res = _build_trend_result(
                 src=src,
@@ -1612,14 +1562,14 @@ def process_one_segy(
         dt_sec_out = float(dt_us_out) * 1e-6
 
         with np.load(infer_npz, allow_pickle=False) as z:
-            pick_final = _npz_must_have(z, PICK_KEY).astype(np.int64, copy=False)
+            pick_final = require_npz_key(z, PICK_KEY).astype(np.int64, copy=False)
             if pick_final.ndim != 1 or pick_final.shape[0] != n_traces:
                 msg = f'{PICK_KEY} must be (n_traces,), got {pick_final.shape}, n_traces={n_traces}'
                 raise ValueError(msg)
 
             scores: dict[str, np.ndarray] = {}
             for k in SCORE_KEYS:
-                scores[k] = _npz_must_have(z, k).astype(np.float32, copy=False)
+                scores[k] = require_npz_key(z, k).astype(np.float32, copy=False)
 
             trend_res = _build_trend_result(
                 src=src,
@@ -1804,7 +1754,7 @@ def process_one_segy(
 
 def main() -> None:
     _validate_semi_config()
-    segys = find_segy_files(IN_SEGY_ROOT)
+    segys = find_segy_files(IN_SEGY_ROOT, exts=SEGY_EXTS, recursive=True)
     print(f'[RUN] found {len(segys)} segy files under {IN_SEGY_ROOT}')
 
     segys2: list[Path] = []

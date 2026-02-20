@@ -15,11 +15,18 @@ from seisai_engine.pipelines.psn.build_model import build_model as build_psn_mod
 from seisai_engine.pipelines.psn.config import load_psn_train_config
 from seisai_engine.predict import infer_tiled_chw
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
+from seisai_pick.lmo import apply_lmo_linear, lmo_correct_picks
+from seisai_pick.segy_utils import find_segy_files, read_trace_field, require_npz_key
 from seisai_pick.residual_statics import refine_firstbreak_residual_statics
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
-from seisai_transforms.signal_ops.scaling.standardize import standardize_per_trace_torch
 from seisai_utils import config_yaml
 from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
+
+from jogsarar_shared import (
+    TilePerTraceStandardize,
+    build_key_to_indices,
+    build_pick_aligned_window,
+)
 
 # =========================
 # CONFIG (fixed constants)
@@ -116,19 +123,6 @@ LMO_BULK_SHIFT_SAMPLES = 50.0
 MIN_GATHER_H = 32
 
 
-def find_segy_files(root: Path) -> list[Path]:
-    if not root.is_dir():
-        msg = f'root directory not found: {root}'
-        raise FileNotFoundError(msg)
-
-    files = sorted(
-        p for p in root.rglob('*') if p.is_file() and p.suffix.lower() in SEGY_EXTS
-    )
-    if not files:
-        msg = f'no segy files under: {root}'
-        raise FileNotFoundError(msg)
-    return files
-
 
 def _stem_without_win512(stem: str) -> str:
     tag = '.win512'
@@ -138,7 +132,7 @@ def _stem_without_win512(stem: str) -> str:
 
 
 def _build_win512_lookup(win_root: Path) -> dict[tuple[str, str], Path]:
-    win_files = find_segy_files(win_root)
+    win_files = find_segy_files(win_root, exts=SEGY_EXTS, recursive=True)
     lookup: dict[tuple[str, str], Path] = {}
 
     for p in win_files:
@@ -163,19 +157,13 @@ def _resolve_sidecar_path(win_path: Path) -> Path | None:
     return None
 
 
-def _require_npz_key(z: np.lib.npyio.NpzFile, key: str) -> np.ndarray:
-    if key not in z.files:
-        msg = f'sidecar missing key={key} available={sorted(z.files)}'
-        raise KeyError(msg)
-    return np.asarray(z[key])
-
 
 def _require_scalar_int(z: np.lib.npyio.NpzFile, key: str) -> int:
-    return int(_require_npz_key(z, key).item())
+    return int(require_npz_key(z, key, context='sidecar').item())
 
 
 def _require_scalar_float(z: np.lib.npyio.NpzFile, key: str) -> float:
-    return float(_require_npz_key(z, key).item())
+    return float(require_npz_key(z, key, context='sidecar').item())
 
 
 def _load_sidecar_window_start(
@@ -188,7 +176,7 @@ def _load_sidecar_window_start(
     dt_sec_out: float,
 ) -> np.ndarray:
     with np.load(sidecar_path, allow_pickle=False) as z:
-        window_start_i = _require_npz_key(z, 'window_start_i').astype(
+        window_start_i = require_npz_key(z, 'window_start_i', context='sidecar').astype(
             np.int64, copy=False
         )
         if window_start_i.shape != (n_traces,):
@@ -225,20 +213,6 @@ def _load_sidecar_window_start(
     return window_start_i
 
 
-def _read_trace_field(
-    segy_obj: segyio.SegyFile,
-    field: segyio.TraceField,
-    *,
-    dtype,
-    name: str,
-) -> np.ndarray:
-    arr = np.asarray(segy_obj.attributes(field)[:], dtype=dtype)
-    n_traces = int(segy_obj.tracecount)
-    if arr.shape != (n_traces,):
-        msg = f'{name} shape mismatch: got {arr.shape}, expected {(n_traces,)}'
-        raise ValueError(msg)
-    return arr
-
 
 def _is_contiguous(idx: np.ndarray) -> bool:
     if idx.size <= 1:
@@ -268,23 +242,6 @@ def _load_traces_by_indices(segy_obj: segyio.SegyFile, idx: np.ndarray) -> np.nd
         msg = f'loaded trace block must be 2D, got {data.shape}'
         raise ValueError(msg)
     return data.astype(np.float32, copy=False)
-
-
-def _build_ffid_to_indices(ffid_values: np.ndarray) -> dict[int, np.ndarray]:
-    ff = np.asarray(ffid_values, dtype=np.int64)
-    if ff.ndim != 1:
-        msg = f'ffid_values must be 1D, got {ff.shape}'
-        raise ValueError(msg)
-    uniq, inv, counts = np.unique(ff, return_inverse=True, return_counts=True)
-    order = np.argsort(inv, kind='mergesort')
-    splits = np.cumsum(counts)[:-1]
-    groups = np.split(order, splits)
-    return {
-        int(k): np.asarray(g, dtype=np.int64)
-        for k, g in zip(uniq.tolist(), groups, strict=False)
-    }
-
-
 @dataclass(frozen=True)
 class _PostTroughTraceDebug:
     tr_in_gather: int
@@ -611,117 +568,6 @@ def _align_post_trough_shifts_to_neighbors(
             f'r={r} min_support={ms} max_dev={md} max_shift={int(max_shift)}'
         )
     return out
-
-
-def build_pick_aligned_window(
-    wave_hw: np.ndarray,
-    picks: np.ndarray,
-    pre: int,
-    post: int,
-    fill: float = 0.0,
-) -> np.ndarray:
-    wave = np.asarray(wave_hw, dtype=np.float32)
-    pk = np.asarray(picks)
-
-    if wave.ndim != 2:
-        msg = f'wave_hw must be 2D (H,W), got {wave.shape}'
-        raise ValueError(msg)
-    if pk.ndim != 1 or pk.shape[0] != wave.shape[0]:
-        msg = f'picks must be 1D length H={wave.shape[0]}, got {pk.shape}'
-        raise ValueError(msg)
-    if pre < 0 or post <= 0:
-        msg = f'pre must be >=0 and post > 0, got pre={pre}, post={post}'
-        raise ValueError(msg)
-
-    h, w = wave.shape
-    length = int(pre + post)
-    out = np.full((h, length), np.float32(fill), dtype=np.float32)
-
-    for i in range(h):
-        p = float(pk[i])
-        if (not np.isfinite(p)) or p <= 0.0:
-            continue
-
-        c = int(np.rint(p))
-        src_l = c - int(pre)
-        src_r = c + int(post)
-
-        ov_l = max(0, src_l)
-        ov_r = min(w, src_r)
-        if ov_l >= ov_r:
-            continue
-
-        dst_l = ov_l - src_l
-        dst_r = dst_l + (ov_r - ov_l)
-        out[i, dst_l:dst_r] = wave[i, ov_l:ov_r]
-
-    return out
-
-
-def _lmo_shift_samples(
-    offsets_m: np.ndarray, *, dt_sec: float, vel_mps: float
-) -> np.ndarray:
-    if vel_mps <= 0.0:
-        msg = f'LMO velocity must be positive, got {vel_mps}'
-        raise ValueError(msg)
-    if dt_sec <= 0.0:
-        msg = f'dt_sec must be positive, got {dt_sec}'
-        raise ValueError(msg)
-    off = np.asarray(offsets_m, dtype=np.float32)
-    if off.ndim != 1:
-        msg = f'offsets_m must be (H,), got {off.shape}'
-        raise ValueError(msg)
-    return (np.abs(off) / float(vel_mps)) / float(dt_sec)
-
-
-def apply_lmo_linear(
-    wave_hw: np.ndarray,
-    offsets_m: np.ndarray,
-    *,
-    dt_sec: float,
-    vel_mps: float,
-    bulk_shift_samples: float = 0.0,
-    fill: float = 0.0,
-) -> np.ndarray:
-    w = np.asarray(wave_hw, dtype=np.float32)
-    if w.ndim != 2:
-        msg = f'wave_hw must be 2D (H,W), got {w.shape}'
-        raise ValueError(msg)
-
-    h, ns = w.shape
-    shifts = _lmo_shift_samples(offsets_m, dt_sec=dt_sec, vel_mps=vel_mps)
-    if shifts.shape != (h,):
-        msg = f'offsets_m must be (H,), got {shifts.shape}, H={h}'
-        raise ValueError(msg)
-
-    xi = np.arange(ns, dtype=np.float32)
-    out = np.empty_like(w, dtype=np.float32)
-    for i in range(h):
-        src = xi - float(shifts[i]) + float(bulk_shift_samples)
-        out[i] = np.interp(xi, src, w[i], left=fill, right=fill)
-    return out
-
-
-def lmo_correct_picks(
-    picks: np.ndarray,
-    offsets_m: np.ndarray,
-    *,
-    dt_sec: float,
-    vel_mps: float,
-) -> np.ndarray:
-    p = np.asarray(picks, dtype=np.float32)
-    if p.ndim != 1:
-        msg = f'picks must be (H,), got {p.shape}'
-        raise ValueError(msg)
-    shifts = _lmo_shift_samples(offsets_m, dt_sec=dt_sec, vel_mps=vel_mps)
-    if shifts.shape != p.shape:
-        msg = f'picks/offsets shape mismatch: picks={p.shape}, shifts={shifts.shape}'
-        raise ValueError(msg)
-    out = p - shifts
-    out[~np.isfinite(p)] = np.nan
-    return out.astype(np.float32, copy=False)
-
-
 def _pick_to_window_samples(
     picks: np.ndarray,
     *,
@@ -910,18 +756,6 @@ def _save_gather_viz(
     fig.savefig(out_png, dpi=int(VIZ_DPI))
     plt.close(fig)
     print(f'[VIZ] saved {out_png}')
-
-
-@dataclass(frozen=True)
-class TilePerTraceStandardize:
-    eps_std: float = 1e-8
-
-    @torch.no_grad()
-    def __call__(self, patch: torch.Tensor, *, return_meta: bool = False):
-        out = standardize_per_trace_torch(patch, eps=self.eps_std)
-        return (out, {}) if return_meta else out
-
-
 def _resolve_config_loader() -> Callable[[str | Path], dict]:
     if hasattr(config_yaml, 'load_yaml_config'):
         fn = config_yaml.load_yaml_config
@@ -1126,32 +960,32 @@ def process_one_pair(
         dt_sec_raw = float(dt_us_raw) * 1.0e-6
         dt_sec_win = float(dt_us_win) * 1.0e-6
 
-        ffid_values = _read_trace_field(
+        ffid_values = read_trace_field(
             raw,
             segyio.TraceField.FieldRecord,
             dtype=np.int32,
             name='raw ffid_values',
         )
-        chno_values = _read_trace_field(
+        chno_values = read_trace_field(
             raw,
             segyio.TraceField.TraceNumber,
             dtype=np.int32,
             name='raw chno_values',
         )
-        offsets = _read_trace_field(
+        offsets = read_trace_field(
             raw,
             segyio.TraceField.offset,
             dtype=np.float32,
             name='raw offsets',
         )
 
-        ffid_win = _read_trace_field(
+        ffid_win = read_trace_field(
             win,
             segyio.TraceField.FieldRecord,
             dtype=np.int32,
             name='win ffid_values',
         )
-        chno_win = _read_trace_field(
+        chno_win = read_trace_field(
             win,
             segyio.TraceField.TraceNumber,
             dtype=np.int32,
@@ -1184,7 +1018,7 @@ def process_one_pair(
         pick_rs_i = np.zeros(n_traces, dtype=np.int32)
         pick_final = np.zeros(n_traces, dtype=np.int32)
 
-        ffid_to_indices = _build_ffid_to_indices(ffid_values)
+        ffid_to_indices = build_key_to_indices(ffid_values)
         ffids_sorted = sorted(int(k) for k in ffid_to_indices)
         viz_ffids = (
             set(ffids_sorted[:: int(VIZ_EVERY_N_SHOTS)])
@@ -1460,7 +1294,7 @@ def process_one_pair(
 
 def main() -> None:
     model, standardize_eps, ckpt_path = load_psn_model_and_eps()
-    raw_segys = find_segy_files(IN_RAW_SEGY_ROOT)
+    raw_segys = find_segy_files(IN_RAW_SEGY_ROOT, exts=SEGY_EXTS, recursive=True)
     win_lookup = _build_win512_lookup(IN_WIN512_SEGY_ROOT)
 
     print(

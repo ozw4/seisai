@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +17,8 @@ from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from seisai_engine.postprocess.velocity_filter_op import apply_velocity_filt_prob
 from seisai_engine.predict import _run_tiled
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
+from seisai_pick.lmo import apply_lmo_linear, lmo_correct_picks
+from seisai_pick.segy_utils import find_segy_files
 from seisai_pick.residual_statics import refine_firstbreak_residual_statics
 from seisai_pick.score.confidence_from_prob import (
     trace_confidence_from_prob_local_window,
@@ -31,8 +32,13 @@ from seisai_pick.score.confidence_from_trend_resid import (
 )
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 from seisai_pick.trend.trend_fit import robust_linear_trend
-from seisai_transforms.signal_ops.scaling.standardize import standardize_per_trace_torch
 from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
+
+from jogsarar_shared import (
+    TilePerTraceStandardize,
+    build_pick_aligned_window,
+    valid_pick_mask,
+)
 
 BuildFileInfoFn = Callable[..., Any]
 SnapPicksFn = Callable[..., Any]
@@ -315,16 +321,6 @@ def make_velocity_feasible_filt_allow_vmin0(
     return m  # (B,H,W)
 
 
-@dataclass(frozen=True)
-class TileWaveStdOnly:
-    eps_std: float = 1e-10
-
-    @torch.no_grad()
-    def __call__(self, patch: torch.Tensor, *, return_meta: bool = False):
-        out = standardize_per_trace_torch(patch, eps=self.eps_std)
-        return (out, {}) if return_meta else out
-
-
 def pad_samples_to_6016(
     x_hw: np.ndarray, w_target: int = 6016
 ) -> tuple[np.ndarray, int]:
@@ -340,112 +336,6 @@ def pad_samples_to_6016(
     out = np.zeros((x_hw.shape[0], w_target), dtype=np.float32)
     out[:, :w0] = x_hw.astype(np.float32, copy=False)
     return out, w0
-
-
-def build_pick_aligned_window(
-    wave_hw: np.ndarray,
-    picks: np.ndarray,
-    pre: int,
-    post: int,
-    fill: float = 0.0,
-) -> np.ndarray:
-    wave = np.asarray(wave_hw, dtype=np.float32)
-    pk = np.asarray(picks)
-
-    if wave.ndim != 2:
-        msg = f'wave_hw must be 2D (H,W), got {wave.shape}'
-        raise ValueError(msg)
-    if pk.ndim != 1 or pk.shape[0] != wave.shape[0]:
-        msg = f'picks must be 1D length H={wave.shape[0]}, got {pk.shape}'
-        raise ValueError(msg)
-    if pre < 0 or post <= 0:
-        msg = f'pre must be >=0 and post must be >0, got pre={pre}, post={post}'
-        raise ValueError(msg)
-
-    H, W = wave.shape
-    L = int(pre + post)
-    out = np.full((H, L), np.float32(fill), dtype=np.float32)
-
-    for i in range(H):
-        p = float(pk[i])
-        if (not np.isfinite(p)) or p <= 0.0:
-            continue
-
-        c = int(np.rint(p))
-        src_l = c - int(pre)
-        src_r = c + int(post)
-
-        ov_l = max(0, src_l)
-        ov_r = min(W, src_r)
-        if ov_l >= ov_r:
-            continue
-
-        dst_l = ov_l - src_l
-        dst_r = dst_l + (ov_r - ov_l)
-        out[i, dst_l:dst_r] = wave[i, ov_l:ov_r]
-
-    return out
-
-
-def _lmo_shift_samples(
-    offsets_m: np.ndarray, *, dt_sec: float, vel_mps: float
-) -> np.ndarray:
-    if vel_mps <= 0.0:
-        msg = f'LMO velocity must be positive, got {vel_mps}'
-        raise ValueError(msg)
-    if dt_sec <= 0.0:
-        msg = f'dt_sec must be positive, got {dt_sec}'
-        raise ValueError(msg)
-    off = np.asarray(offsets_m, dtype=np.float32)
-    return (np.abs(off) / float(vel_mps)) / float(dt_sec)  # (H,) float samples
-
-
-def apply_lmo_linear(
-    wave_hw: np.ndarray,  # (H,W)
-    offsets_m: np.ndarray,  # (H,)
-    *,
-    dt_sec: float,
-    vel_mps: float,
-    bulk_shift_samples: float = 0.0,
-    fill: float = 0.0,
-) -> np.ndarray:
-    w = np.asarray(wave_hw, dtype=np.float32)
-    if w.ndim != 2:
-        msg = f'wave_hw must be 2D (H,W), got {w.shape}'
-        raise ValueError(msg)
-    H, W = w.shape
-
-    shifts = _lmo_shift_samples(offsets_m, dt_sec=dt_sec, vel_mps=vel_mps)
-    if shifts.shape != (H,):
-        msg = f'offsets_m must be (H,), got {np.asarray(offsets_m).shape}, H={H}'
-        raise ValueError(msg)
-
-    xi = np.arange(W, dtype=np.float32)
-    out = np.empty_like(w)
-    for i in range(H):
-        src = xi - float(shifts[i]) + float(bulk_shift_samples)
-        out[i] = np.interp(xi, src, w[i], left=fill, right=fill)
-    return out
-
-
-def lmo_correct_picks(
-    picks: np.ndarray,
-    offsets_m: np.ndarray,
-    *,
-    dt_sec: float,
-    vel_mps: float,
-) -> np.ndarray:
-    p = np.asarray(picks, dtype=np.float32)
-    shifts = _lmo_shift_samples(offsets_m, dt_sec=dt_sec, vel_mps=vel_mps).astype(
-        np.float32, copy=False
-    )
-    if p.shape != shifts.shape:
-        msg = f'picks must be (H,), got {p.shape}, shifts={shifts.shape}'
-        raise ValueError(msg)
-    out = p - shifts
-    out[~np.isfinite(p)] = np.nan
-    return out
-
 
 @torch.no_grad()
 def infer_gather_prob(
@@ -498,7 +388,7 @@ def infer_gather_prob(
         amp=True,
         use_tqdm=False,
         tiles_per_batch=TILES_PER_BATCH,
-        tile_transform=TileWaveStdOnly(),
+        tile_transform=TilePerTraceStandardize(eps_std=1e-10),
         post_tile_transform=None,
     )
 
@@ -583,25 +473,6 @@ def build_model() -> torch.nn.Module:
     return model
 
 
-def find_segy_files(in_dir: Path) -> list[Path]:
-    exts = ['.sgy', '.segy', '.SGY', '.SEGY']
-    files: list[Path] = []
-    for e in exts:
-        files.extend(sorted(in_dir.glob(f'*{e}')))
-    if not files:
-        msg = f'no SEGY files found in {in_dir}'
-        raise FileNotFoundError(msg)
-    return sorted(set(files))
-
-
-def _valid_pick_mask(picks: np.ndarray, n_samples: int | None = None) -> np.ndarray:
-    pk = np.asarray(picks)
-    mask = np.isfinite(pk) & (pk > 0)
-    if n_samples is not None:
-        mask &= pk < int(n_samples)
-    return mask
-
-
 def _save_conf_scatter(
     *,
     out_png: Path,
@@ -621,7 +492,7 @@ def _save_conf_scatter(
         raise ValueError(msg)
 
     y_ms = pk.astype(np.float32, copy=False) * float(dt_ms)
-    valid = _valid_pick_mask(pk)
+    valid = valid_pick_mask(pk)
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharex=True, sharey=True)
     panels = [
@@ -1089,7 +960,7 @@ def process_one_segy(
                 dt_ms = float(dt_sec) * 1000.0
 
                 # ---- trend: pick_out_i から作成（RS+snap後） ----
-                trend_fit_mask = _valid_pick_mask(pick_out_i, n_samples_orig) & (
+                trend_fit_mask = valid_pick_mask(pick_out_i, n_samples=n_samples_orig) & (
                     ~invalid
                 )
                 t_trend_sec: np.ndarray | None = None
@@ -1163,8 +1034,8 @@ def process_one_segy(
                     t1_sec = pick_out_i.astype(np.float32, copy=False) * float(dt_sec)
 
                     trend_ok = (~invalid) & np.isfinite(t_trend_sec)
-                    valid0 = _valid_pick_mask(pick_pre_snap, n_samples_orig) & trend_ok
-                    valid1 = _valid_pick_mask(pick_out_i, n_samples_orig) & trend_ok
+                    valid0 = valid_pick_mask(pick_pre_snap, n_samples=n_samples_orig) & trend_ok
+                    valid1 = valid_pick_mask(pick_out_i, n_samples=n_samples_orig) & trend_ok
 
                     conf0_g = trace_confidence_from_trend_resid_gaussian(
                         t0_sec,
@@ -1611,7 +1482,7 @@ def process_one_segy(
 
 def main() -> None:
     model = build_model()
-    segys = find_segy_files(INPUT_DIR)
+    segys = find_segy_files(INPUT_DIR, exts=('.sgy', '.segy'), recursive=False)
     for segy_path in segys:
         print(f'[RUN] using first SEGY: {segys}')
         process_one_segy(
