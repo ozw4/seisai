@@ -53,10 +53,16 @@ def find_segy_files(
     return out
 
 
-def require_npz_key(z: np.lib.npyio.NpzFile, key: str) -> np.ndarray:
+def require_npz_key(
+    z: np.lib.npyio.NpzFile,
+    key: str,
+    *,
+    context: str | None = None,
+) -> np.ndarray:
     """Load a required key from npz, raising a clear KeyError if missing."""
     if key not in z.files:
-        msg = f'npz missing key={key!r}. available={sorted(z.files)}'
+        prefix = f'{context}: ' if context else ''
+        msg = f'{prefix}npz missing key={key!r}. available={sorted(z.files)}'
         raise KeyError(msg)
     return np.asarray(z[key])
 

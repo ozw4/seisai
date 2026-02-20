@@ -73,8 +73,14 @@ def plot_ffid_trend_wiggle(
     chno_all = np.asarray(z['chno_values'], dtype=np.int32)
 
     pick_final_all = np.asarray(z['pick_final'], dtype=np.int32)
-    trend_t_sec_all = np.asarray(z['trend_t_sec'], dtype=np.float32)
-    trend_covered_all = np.asarray(z['trend_covered'], dtype=bool)
+    trend_t_sec_all = None
+    trend_covered_all = None
+    if 'trend_t_sec' in z.files:
+        trend_t_sec_all = np.asarray(z['trend_t_sec'], dtype=np.float32)
+        if 'trend_covered' in z.files:
+            trend_covered_all = np.asarray(z['trend_covered'], dtype=bool)
+        else:
+            trend_covered_all = np.isfinite(trend_t_sec_all)
 
     m = ffid_values == int(ffid)
     if not np.any(m):
@@ -87,8 +93,12 @@ def plot_ffid_trend_wiggle(
     offsets = offsets_all[m][order]
     chno = chno_all[m][order]
     pick_final = pick_final_all[m][order].astype(np.float32)
-    trend_t_sec = trend_t_sec_all[m][order].astype(np.float32)
-    trend_covered = trend_covered_all[m][order]
+    if trend_t_sec_all is not None and trend_covered_all is not None:
+        trend_t_sec = trend_t_sec_all[m][order].astype(np.float32)
+        trend_covered = trend_covered_all[m][order]
+    else:
+        trend_t_sec = None
+        trend_covered = np.zeros(int(pick_final.shape[0]), dtype=bool)
 
     nt = int(trace_indices.size)
     ns = int(sample_end - sample_start)
@@ -126,13 +136,15 @@ def plot_ffid_trend_wiggle(
     pick_win = pick_win - float(sample_start)
     pick_win[(pick_win < 0) | (pick_win >= float(ns))] = np.nan
 
-    # trend_t_sec は秒なので、そのままtime軸に重ねる（window外はNaN）
-    trend_sec = trend_t_sec.copy()
-    trend_sec = np.where(
-        np.isfinite(trend_sec) & (trend_sec >= t0_sec) & (trend_sec <= t1_sec),
-        trend_sec,
-        np.nan,
-    )
+    trend_sec = None
+    if trend_t_sec is not None:
+        # trend_t_sec は秒なので、そのままtime軸に重ねる（window外はNaN）
+        trend_sec = trend_t_sec.copy()
+        trend_sec = np.where(
+            np.isfinite(trend_sec) & (trend_sec >= t0_sec) & (trend_sec <= t1_sec),
+            trend_sec,
+            np.nan,
+        )
 
     fig, ax = plt.subplots(figsize=(16, 10))
     plot_wiggle(
@@ -161,27 +173,35 @@ def plot_ffid_trend_wiggle(
         ),
     )
 
-    ax.plot(x, trend_sec, lw=1.6, alpha=0.9, color='g', label='trend_t_sec', zorder=7)
-
-    # trend欠損位置が一目で分かるように、covered=False を上端に打つ（任意）
-    miss = ~trend_covered
-    if np.any(miss):
-        ax.scatter(
-            x[miss],
-            np.full(int(np.count_nonzero(miss)), t0_sec, dtype=np.float32),
-            s=18.0,
-            marker='v',
-            color='g',
-            alpha=0.6,
-            label='trend missing (covered=False)',
-            zorder=8,
+    if trend_sec is not None:
+        ax.plot(
+            x, trend_sec, lw=1.6, alpha=0.9, color='g', label='trend_t_sec', zorder=7
         )
 
-    cov = int(np.count_nonzero(trend_covered))
-    ax.set_title(
-        f'{segy_path.name}  ffid={ffid}  trend_covered={cov}/{nt} ({cov / nt:.1%})  '
-        f'window=[{sample_start},{sample_end})'
-    )
+        # trend欠損位置が一目で分かるように、covered=False を上端に打つ（任意）
+        miss = ~trend_covered
+        if np.any(miss):
+            ax.scatter(
+                x[miss],
+                np.full(int(np.count_nonzero(miss)), t0_sec, dtype=np.float32),
+                s=18.0,
+                marker='v',
+                color='g',
+                alpha=0.6,
+                label='trend missing (covered=False)',
+                zorder=8,
+            )
+
+        cov = int(np.count_nonzero(trend_covered))
+        ax.set_title(
+            f'{segy_path.name}  ffid={ffid}  trend_covered={cov}/{nt} ({cov / nt:.1%})  '
+            f'window=[{sample_start},{sample_end})'
+        )
+    else:
+        ax.set_title(
+            f'{segy_path.name}  ffid={ffid}  trend_t_sec not found in npz '
+            f'(Stage1 trend removed)  window=[{sample_start},{sample_end})'
+        )
     ax.set_xlabel(x_label)
     ax.legend(loc='best')
     fig.tight_layout()

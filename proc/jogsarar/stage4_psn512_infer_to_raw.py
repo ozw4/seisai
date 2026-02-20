@@ -10,29 +10,30 @@ import matplotlib.pyplot as plt
 import numpy as np
 import segyio
 import torch
+from jogsarar_shared import (
+    TilePerTraceStandardize,
+    build_key_to_indices,
+    build_pick_aligned_window,
+    find_segy_files,
+    read_trace_field,
+    require_npz_key,
+)
 from seisai_engine.pipelines.common.checkpoint_io import load_checkpoint
 from seisai_engine.pipelines.psn.build_model import build_model as build_psn_model
 from seisai_engine.pipelines.psn.config import load_psn_train_config
 from seisai_engine.predict import infer_tiled_chw
-from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.lmo import apply_lmo_linear, lmo_correct_picks
-from seisai_pick.segy_utils import find_segy_files, read_trace_field, require_npz_key
+from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.residual_statics import refine_firstbreak_residual_statics
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 from seisai_utils import config_yaml
 from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
 
-from jogsarar_shared import (
-    TilePerTraceStandardize,
-    build_key_to_indices,
-    build_pick_aligned_window,
-)
-
 # =========================
 # CONFIG (fixed constants)
 # =========================
 IN_RAW_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
-IN_WIN512_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_drop005')
+IN_WIN512_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512')
 OUT_PRED_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_pred')
 
 CFG_YAML = Path('configs/config_convnext_prestage2_drop005.yaml')
@@ -123,7 +124,6 @@ LMO_BULK_SHIFT_SAMPLES = 50.0
 MIN_GATHER_H = 32
 
 
-
 def _stem_without_win512(stem: str) -> str:
     tag = '.win512'
     if stem.endswith(tag):
@@ -155,7 +155,6 @@ def _resolve_sidecar_path(win_path: Path) -> Path | None:
         if p.is_file():
             return p
     return None
-
 
 
 def _require_scalar_int(z: np.lib.npyio.NpzFile, key: str) -> int:
@@ -213,7 +212,6 @@ def _load_sidecar_window_start(
     return window_start_i
 
 
-
 def _is_contiguous(idx: np.ndarray) -> bool:
     if idx.size <= 1:
         return True
@@ -242,6 +240,8 @@ def _load_traces_by_indices(segy_obj: segyio.SegyFile, idx: np.ndarray) -> np.nd
         msg = f'loaded trace block must be 2D, got {data.shape}'
         raise ValueError(msg)
     return data.astype(np.float32, copy=False)
+
+
 @dataclass(frozen=True)
 class _PostTroughTraceDebug:
     tr_in_gather: int
@@ -568,6 +568,8 @@ def _align_post_trough_shifts_to_neighbors(
             f'r={r} min_support={ms} max_dev={md} max_shift={int(max_shift)}'
         )
     return out
+
+
 def _pick_to_window_samples(
     picks: np.ndarray,
     *,
@@ -756,6 +758,8 @@ def _save_gather_viz(
     fig.savefig(out_png, dpi=int(VIZ_DPI))
     plt.close(fig)
     print(f'[VIZ] saved {out_png}')
+
+
 def _resolve_config_loader() -> Callable[[str | Path], dict]:
     if hasattr(config_yaml, 'load_yaml_config'):
         fn = config_yaml.load_yaml_config

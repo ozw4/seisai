@@ -11,14 +11,19 @@ import numpy as np
 import segyio
 import torch
 from _model import NetAE as EncDec2D
+from jogsarar_shared import (
+    TilePerTraceStandardize,
+    build_pick_aligned_window,
+    find_segy_files,
+    valid_pick_mask,
+)
 from seisai_dataset.config import LoaderConfig
 from seisai_dataset.file_info import build_file_info_dataclass
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from seisai_engine.postprocess.velocity_filter_op import apply_velocity_filt_prob
 from seisai_engine.predict import _run_tiled
-from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.lmo import apply_lmo_linear, lmo_correct_picks
-from seisai_pick.segy_utils import find_segy_files
+from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.residual_statics import refine_firstbreak_residual_statics
 from seisai_pick.score.confidence_from_prob import (
     trace_confidence_from_prob_local_window,
@@ -33,12 +38,6 @@ from seisai_pick.score.confidence_from_trend_resid import (
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 from seisai_pick.trend.trend_fit import robust_linear_trend
 from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
-
-from jogsarar_shared import (
-    TilePerTraceStandardize,
-    build_pick_aligned_window,
-    valid_pick_mask,
-)
 
 BuildFileInfoFn = Callable[..., Any]
 SnapPicksFn = Callable[..., Any]
@@ -336,6 +335,7 @@ def pad_samples_to_6016(
     out = np.zeros((x_hw.shape[0], w_target), dtype=np.float32)
     out[:, :w0] = x_hw.astype(np.float32, copy=False)
     return out, w0
+
 
 @torch.no_grad()
 def infer_gather_prob(
@@ -960,9 +960,9 @@ def process_one_segy(
                 dt_ms = float(dt_sec) * 1000.0
 
                 # ---- trend: pick_out_i から作成（RS+snap後） ----
-                trend_fit_mask = valid_pick_mask(pick_out_i, n_samples=n_samples_orig) & (
-                    ~invalid
-                )
+                trend_fit_mask = valid_pick_mask(
+                    pick_out_i, n_samples=n_samples_orig
+                ) & (~invalid)
                 t_trend_sec: np.ndarray | None = None
                 trend_covered = np.zeros(idx.shape[0], dtype=bool)
                 trend_offset_signed_proxy = np.full(
@@ -1034,8 +1034,13 @@ def process_one_segy(
                     t1_sec = pick_out_i.astype(np.float32, copy=False) * float(dt_sec)
 
                     trend_ok = (~invalid) & np.isfinite(t_trend_sec)
-                    valid0 = valid_pick_mask(pick_pre_snap, n_samples=n_samples_orig) & trend_ok
-                    valid1 = valid_pick_mask(pick_out_i, n_samples=n_samples_orig) & trend_ok
+                    valid0 = (
+                        valid_pick_mask(pick_pre_snap, n_samples=n_samples_orig)
+                        & trend_ok
+                    )
+                    valid1 = (
+                        valid_pick_mask(pick_out_i, n_samples=n_samples_orig) & trend_ok
+                    )
 
                     conf0_g = trace_confidence_from_trend_resid_gaussian(
                         t0_sec,

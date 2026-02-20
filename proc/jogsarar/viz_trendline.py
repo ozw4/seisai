@@ -22,7 +22,6 @@ RANDOM_SEED = 0
 
 # weightsとして使いたいキーがnpzにある場合に自動採用（なければ1）
 WEIGHT_KEYS_CANDIDATES = [
-    'conf_trend1',
     'conf_prob1',
     'conf_rs1',
     'w_conf',
@@ -86,17 +85,33 @@ def _wls_line_fit(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> tuple[float, f
 z = np.load(PROB_NPZ_PATH)
 
 offsets = np.asarray(z['offsets'], dtype=np.float64) * float(OFFSET_SCALE)
-trend_t_sec = np.asarray(z['trend_t_sec'], dtype=np.float64)
-
-if 'trend_covered' in z.files:
-    covered = np.asarray(z['trend_covered'], dtype=bool)
+if 'trend_t_sec' in z.files:
+    y_src = np.asarray(z['trend_t_sec'], dtype=np.float64)
+    if 'trend_covered' in z.files:
+        covered = np.asarray(z['trend_covered'], dtype=bool)
+    else:
+        covered = np.isfinite(y_src)
+    y_label = 'trend_t_sec (sec)'
+    y_title = 'trend_t_sec'
 else:
-    covered = np.isfinite(trend_t_sec)
+    if 'pick_final' not in z.files:
+        raise ValueError(
+            "npz must contain either 'trend_t_sec' or 'pick_final' for visualization"
+        )
+    dt = float(np.asarray(z['dt_sec']).item())
+    pick_final = np.asarray(z['pick_final'], dtype=np.float64)
+    y_src = pick_final * dt
+    covered = np.isfinite(pick_final) & (pick_final > 0.0)
+    if 'n_samples_orig' in z.files:
+        ns = int(np.asarray(z['n_samples_orig']).item())
+        covered &= pick_final < float(ns)
+    y_label = 'pick_final (sec)'
+    y_title = 'pick_final(sec, trend_t_sec missing in Stage1)'
 
-# 有効点マスク（trendがNaNの所は除外）
-mask = covered & np.isfinite(trend_t_sec)
+# 有効点マスク
+mask = covered & np.isfinite(y_src)
 x_all = offsets[mask]
-y_all = trend_t_sec[mask]
+y_all = y_src[mask]
 
 if USE_ABS_OFFSET:
     x_all = np.abs(x_all)
@@ -160,13 +175,13 @@ ax.plot(
     x_line,
     y_line,
     lw=2.0,
-    label=f'global trend (Huber IRLS): t = {a_g:.4f} + {b_g:.4e} x',
+    label=f'global line (Huber IRLS): y = {a_g:.4f} + {b_g:.4e} x',
 )
 
 ax.set_xlabel('|offset| (scaled)' if USE_ABS_OFFSET else 'offset (scaled)')
-ax.set_ylabel('trend_t_sec (sec)')
+ax.set_ylabel(y_label)
 ax.set_title(
-    f'offset vs trend_t_sec (all ffid) + global trendline\n'
+    f'offset vs {y_title} (all ffid) + global line\n'
     f'N_valid={n_all:,}, fit_N={x_fit.size:,}, plot_N={x_plot.size:,}, '
     f'v_est≈{v_est:.1f} (unit depends on offset)'
 )
