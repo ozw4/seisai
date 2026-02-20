@@ -1,10 +1,93 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
+
+
+def find_segy_files(
+    root: Path | str,
+    *,
+    exts: Iterable[str] = ('.sgy', '.segy'),
+    recursive: bool = True,
+) -> list[Path]:
+    """Find SEG-Y files under root.
+
+    Args:
+        root: directory path.
+        exts: file extensions (case-insensitive). ".sgy", ".segy" etc.
+        recursive: if True use rglob, else glob only in root.
+
+    Returns:
+        Sorted list of paths.
+
+    """
+    r = Path(root)
+    if not r.exists() or not r.is_dir():
+        msg = f'root must be an existing directory: {r}'
+        raise FileNotFoundError(msg)
+
+    exts_l = []
+    for e in exts:
+        ee = str(e).lower()
+        if not ee.startswith('.'):
+            ee = '.' + ee
+        exts_l.append(ee)
+    exts_t = tuple(exts_l)
+
+    if bool(recursive):
+        cand = r.rglob('*')
+    else:
+        cand = r.glob('*')
+
+    out: list[Path] = []
+    for p in cand:
+        if p.is_file() and p.suffix.lower() in exts_t:
+            out.append(p)
+
+    out.sort()
+    return out
+
+
+def require_npz_key(z: np.lib.npyio.NpzFile, key: str) -> np.ndarray:
+    """Load a required key from npz, raising a clear KeyError if missing."""
+    if key not in z.files:
+        msg = f'npz missing key={key!r}. available={sorted(z.files)}'
+        raise KeyError(msg)
+    return np.asarray(z[key])
+
+
+def read_trace_field(
+    src,
+    field,
+    *,
+    dtype,
+    name: str = 'trace_field',
+) -> np.ndarray:
+    """Read a SEG-Y trace header field for all traces.
+
+    This is a thin wrapper around segyio's attributes().
+
+    Args:
+        src: segyio.SegyFile
+        field: segyio.TraceField.* or int
+        dtype: numpy dtype for output
+        name: label used in error messages
+
+    Returns:
+        (n_traces,) array
+
+    """
+    n_tr = int(src.tracecount)
+    v = np.asarray(src.attributes(field)[:], dtype=dtype)
+    if v.ndim != 1 or v.shape[0] != n_tr:
+        msg = f'{name} must be (n_traces,), got {v.shape}, n_traces={n_tr}'
+        raise ValueError(msg)
+    return v
 
 
 def valid_pick_mask(
@@ -49,6 +132,7 @@ def build_pick_aligned_window(
       picks: (H,) pick indices. Non-finite or <=0 picks are treated as invalid.
       pre/post: number of samples before/after the pick (post is exclusive).
       fill: fill value for out-of-range samples.
+
     """
     wave = np.asarray(wave_hw, dtype=np.float32)
     pk = np.asarray(picks)
@@ -88,13 +172,16 @@ def build_pick_aligned_window(
     return out
 
 
-def build_groups_by_key(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
+def build_groups_by_key(
+    values: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
     """Group trace indices by a 1D integer key array.
 
     Returns:
       uniq: unique keys sorted ascending
       inv:  per-element group id (0..len(uniq)-1)
       groups: list of index arrays (each group is sorted in original order)
+
     """
     v = np.asarray(values)
     if v.ndim != 1:

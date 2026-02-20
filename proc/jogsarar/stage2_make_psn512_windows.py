@@ -8,22 +8,26 @@ from pathlib import Path
 import numpy as np
 import segyio
 import torch
+from jogsarar_shared import (
+    build_groups_by_key,
+    find_segy_files,
+    read_trace_field,
+    require_npz_key,
+    valid_pick_mask,
+)
 from seisai_pick.trend.trend_fit_strategy import TwoPieceIRLSAutoBreakStrategy
-from seisai_pick.segy_utils import find_segy_files, read_trace_field, require_npz_key
-
-from jogsarar_shared import build_groups_by_key, valid_pick_mask
 
 # =========================
 # CONFIG（ここだけ触ればOK）
 # =========================
 IN_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
 IN_INFER_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_out')
-OUT_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_drop005')
+OUT_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_up1_drop005')
 
 SEGY_EXTS = ('.sgy', '.segy')
 
-HALF_WIN = 128  # ±128 => 256
-UP_FACTOR = 2  # 256 -> 512
+HALF_WIN = 256  # ±128 => 256
+UP_FACTOR = 1  # 256 -> 512
 OUT_NS = 2 * HALF_WIN * UP_FACTOR  # 512
 
 # 下位除外（p10）
@@ -49,7 +53,7 @@ SEMI_PHYS_MAX_NONPOS_FRAC = 0.0
 
 # global trendline (proxy sign split)
 GLOBAL_VMIN_M_S = 300.0
-GLOBAL_VMAX_M_S = 8000.0
+GLOBAL_VMAX_M_S = 6000.0
 GLOBAL_SLOPE_EPS = 1e-6
 GLOBAL_SIDE_MIN_PTS = 16  # 2*min_pts of TwoPieceIRLSAutoBreakStrategy default
 
@@ -81,7 +85,6 @@ class _TrendBuildResult:
     semi_fallback_count: int
 
 
-
 def infer_npz_path_for_segy(segy_path: Path) -> Path:
     rel = segy_path.relative_to(IN_SEGY_ROOT)
     return IN_INFER_ROOT / rel.parent / f'{segy_path.stem}.prob.npz'
@@ -102,7 +105,6 @@ def out_pick_csr_npz_path_for_out(out_segy_path: Path) -> Path:
     return out_segy_path.with_suffix('.phase_pick.csr.npz')
 
 
-
 def _validate_semi_config() -> None:
     if float(SEMI_BIN_W_M) <= 0.0:
         msg = f'SEMI_BIN_W_M must be > 0, got {SEMI_BIN_W_M}'
@@ -120,6 +122,7 @@ def _validate_semi_config() -> None:
             f'got {SEMI_PHYS_MAX_NONPOS_FRAC}'
         )
         raise ValueError(msg)
+
 
 def _apply_source_group_scalar(values: np.ndarray, scalar: np.ndarray) -> np.ndarray:
     v = np.asarray(values, dtype=np.float64)
@@ -170,6 +173,8 @@ def _percentile_threshold(x: np.ndarray, *, frac: float) -> float:
         return float('nan')
     q = float(frac) * 100.0
     return float(np.nanpercentile(v, q))
+
+
 def _load_trend_center_i(
     z: np.lib.npyio.NpzFile, *, n_traces: int, dt_sec_from_segy: float
 ) -> np.ndarray:
