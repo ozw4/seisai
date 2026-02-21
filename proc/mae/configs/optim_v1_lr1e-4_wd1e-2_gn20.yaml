@@ -1,0 +1,12 @@
+base: base_mae_optim_v1.yaml
+
+paths:
+  out_dir: ../runs/optim_v1_lr1e-4_wd1e-2_gn20
+
+tracking:
+  exp_name: optim_v1_lr1e-4_wd1e-2_gn20
+
+train:
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  max_norm: 2.0

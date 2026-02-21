@@ -1,0 +1,7 @@
+base: loss_v2_l1_plus_mse_all_w005.yaml
+
+paths:
+  out_dir: ../runs/optim_v1_BASE
+
+tracking:
+  exp_name: optim_v1_BASE
