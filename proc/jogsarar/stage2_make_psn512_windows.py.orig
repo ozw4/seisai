@@ -19,6 +19,7 @@ from seisai_pick.score.confidence_from_trend_resid import (
     trace_confidence_from_trend_resid_gaussian,
     trace_confidence_from_trend_resid_var,
 )
+from seisai_pick.trend.trend_fit import robust_linear_trend
 from seisai_pick.trend.trend_fit_strategy import TwoPieceIRLSAutoBreakStrategy
 
 # =========================
@@ -52,6 +53,16 @@ PICK_KEY = 'pick_final'  # infer npz側の最終pick（p1）
 #   'global'   : 全SEGYまとめてDrop_low_frac（全データグローバル）
 THRESH_MODE = 'global'  # 'global' or 'per_segy'
 
+# semi-global trendline (ffid neighbors in same SEG-Y)
+SEMI_GLOBAL_ENABLE = True
+SEMI_NEI_K = 3
+SEMI_MIN_NEI = 2
+SEMI_IRLS_SECTION_LEN = 48
+SEMI_IRLS_STRIDE = 16
+SEMI_IRLS_HUBER_C = 1.345
+SEMI_IRLS_ITERS = 3
+SEMI_MIN_SUPPORT_PER_TRACE = 3
+
 # global trendline (proxy sign split)
 GLOBAL_VMIN_M_S = 300.0
 GLOBAL_VMAX_M_S = 6000.0
@@ -64,8 +75,7 @@ LOCAL_DISCARD_RADIUS_TRACES = 32  # +/- traces within ffid
 LOCAL_TREND_T_SEC_KEY = 'trend_t_sec'
 LOCAL_TREND_COVERED_KEY = 'trend_covered'
 LOCAL_TREND_DT_SEC_KEY = 'dt_sec'
-LOCAL_INV_DROP_TH_SAMPLES = 10.0
-LOCAL_INV_MIN_CONSEC_STEPS = 2
+
 
 # conf_trend1: Stage1互換
 CONF_TREND_SIGMA_MS = 6.0
@@ -81,6 +91,7 @@ CONF_TREND_VAR_MIN_COUNT = 3
 class _TrendBuildResult:
     trend_center_i_raw: np.ndarray
     trend_center_i_local: np.ndarray
+    trend_center_i_semi: np.ndarray
     trend_center_i_final: np.ndarray
     trend_center_i_used: np.ndarray
     trend_center_i_global: np.ndarray
@@ -99,6 +110,12 @@ class _TrendBuildResult:
     ffid_unique_values: np.ndarray
     shot_x_ffid: np.ndarray
     shot_y_ffid: np.ndarray
+    semi_used_ffid_mask: np.ndarray
+    semi_fallback_count: int
+    semi_low_mask: np.ndarray
+    semi_covered: np.ndarray
+    semi_support_count: np.ndarray
+    semi_v_trend: np.ndarray
     conf_trend1: np.ndarray
 
 
@@ -209,228 +226,30 @@ def _expand_mask_within_ffid_groups(
     return out.astype(bool, copy=False)
 
 
-def _local_velocity_inversion_mask_by_split(
-    *,
-    trend_center_i_local: np.ndarray,
-    local_ok: np.ndarray,
-    trend_offset_signed_proxy: np.ndarray,
-    ffid_groups: list[np.ndarray],
-    inv_drop_th_samples: float,
-    inv_min_consec_steps: int,
-) -> np.ndarray:
-    """Return mask for traces belonging to split sides that contain any inversion.
-
-    For each FFID group:
-      - split traces by the sign of trend_offset_signed_proxy (<0 / >0)
-      - within each side, consider only VALID traces:
-            local_ok == True AND isfinite(trend_center_i_local) AND trend_center_i_local > 0
-      - sort VALID traces by increasing |proxy|
-      - inversion step:
-            ord_local[k+1] < ord_local[k] - inv_drop_th_samples
-      - if there exists a run of inversion steps of length >= inv_min_consec_steps,
-        mark ONLY those VALID traces in that side as True
-
-    Returns:
-        inversion_mask (bool, shape=(n_traces,))
-
-    """
-    local = np.asarray(trend_center_i_local, dtype=np.float32)
-    ok = np.asarray(local_ok, dtype=bool)
-    proxy = np.asarray(trend_offset_signed_proxy, dtype=np.float32)
-
-    if local.ndim != 1 or ok.ndim != 1 or proxy.ndim != 1:
-        msg = f'local/ok/proxy must be 1D, got {local.shape}, {ok.shape}, {proxy.shape}'
+def _validate_semi_config() -> None:
+    if int(SEMI_NEI_K) < 1:
+        msg = f'SEMI_NEI_K must be >= 1, got {SEMI_NEI_K}'
         raise ValueError(msg)
-    if local.shape != ok.shape or local.shape != proxy.shape:
-        msg = f'shape mismatch local={local.shape}, ok={ok.shape}, proxy={proxy.shape}'
+    if int(SEMI_MIN_NEI) < 1:
+        msg = f'SEMI_MIN_NEI must be >= 1, got {SEMI_MIN_NEI}'
         raise ValueError(msg)
-
-    drop_th = float(inv_drop_th_samples)
-    min_steps = int(inv_min_consec_steps)
-    if min_steps < 1:
-        raise ValueError(f'inv_min_consec_steps must be >= 1, got {min_steps}')
-
-    out = np.zeros(local.shape[0], dtype=bool)
-
-    for idx in ffid_groups:
-        idx = np.asarray(idx, dtype=np.int64)
-        if idx.size < 2:
-            continue
-
-        g_proxy = proxy[idx]
-        g_proxy_finite = np.isfinite(g_proxy)
-
-        for side_sel in (
-            (g_proxy < 0.0) & g_proxy_finite,
-            (g_proxy > 0.0) & g_proxy_finite,
-        ):
-            side_idx = idx[side_sel]
-            if side_idx.size < 2:
-                continue
-
-            valid = (
-                ok[side_idx] & np.isfinite(local[side_idx]) & (local[side_idx] > 0.0)
-            )
-
-            need_pts = (min_steps + 1) if min_steps > 1 else 2
-            if int(np.count_nonzero(valid)) < int(need_pts):
-                continue
-
-            valid_idx = side_idx[valid]
-
-            x = np.abs(proxy[valid_idx]).astype(np.float32, copy=False)
-            order = np.argsort(x, kind='mergesort')
-            ord_local = local[valid_idx[order]]
-
-            inv_step = ord_local[1:] < (ord_local[:-1] - drop_th)
-
-            if min_steps == 1:
-                has_inv = bool(np.any(inv_step))
-            else:
-                run = 0
-                has_inv = False
-                for b in inv_step:
-                    if bool(b):
-                        run += 1
-                        if run >= min_steps:
-                            has_inv = True
-                            break
-                    else:
-                        run = 0
-
-            if has_inv:
-                out[valid_idx] = True
-
-    return out.astype(bool, copy=False)
-
-
-def _fill_trend_center_i_by_linear_interp(
-    *,
-    trend_center_i_local: np.ndarray,
-    fill_mask: np.ndarray,
-    trend_center_i_global: np.ndarray,
-    trend_offset_signed_proxy: np.ndarray,
-    ffid_groups: list[np.ndarray],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Fill selected traces by linear interpolation in |proxy| order, per split side.
-
-    For each FFID group and each split side (proxy<0 / proxy>0), sort by increasing
-    |proxy| and replace contiguous fill segments by linear interpolation between
-    immediate outer traces (L-1 and R+1 in that sorted order). If either boundary
-    trace is missing, or if the physical constraint is violated (pick decreases as
-    |offset| increases), fall back to trend_center_i_global for that segment.
-
-    Returns:
-        trend_center_i_used, used_global_mask
-
-    """
-    local = np.asarray(trend_center_i_local, dtype=np.float32)
-    fm = np.asarray(fill_mask, dtype=bool)
-    glob = np.asarray(trend_center_i_global, dtype=np.float32)
-    proxy = np.asarray(trend_offset_signed_proxy, dtype=np.float32)
-
-    if local.ndim != 1 or fm.ndim != 1 or glob.ndim != 1 or proxy.ndim != 1:
+    if int(SEMI_IRLS_SECTION_LEN) < 4:
+        msg = f'SEMI_IRLS_SECTION_LEN must be >= 4, got {SEMI_IRLS_SECTION_LEN}'
+        raise ValueError(msg)
+    if int(SEMI_IRLS_STRIDE) < 1:
+        msg = f'SEMI_IRLS_STRIDE must be >= 1, got {SEMI_IRLS_STRIDE}'
+        raise ValueError(msg)
+    if float(SEMI_IRLS_HUBER_C) <= 0.0:
+        msg = f'SEMI_IRLS_HUBER_C must be > 0, got {SEMI_IRLS_HUBER_C}'
+        raise ValueError(msg)
+    if int(SEMI_IRLS_ITERS) < 1:
+        msg = f'SEMI_IRLS_ITERS must be >= 1, got {SEMI_IRLS_ITERS}'
+        raise ValueError(msg)
+    if int(SEMI_MIN_SUPPORT_PER_TRACE) < 1:
         msg = (
-            'local/fill_mask/global/proxy must be 1D, got '
-            f'local={local.shape}, fill_mask={fm.shape}, global={glob.shape}, proxy={proxy.shape}'
+            f'SEMI_MIN_SUPPORT_PER_TRACE must be >= 1, got {SEMI_MIN_SUPPORT_PER_TRACE}'
         )
         raise ValueError(msg)
-    if (
-        local.shape != fm.shape
-        or local.shape != glob.shape
-        or local.shape != proxy.shape
-    ):
-        msg = (
-            f'shape mismatch local={local.shape}, fill_mask={fm.shape}, '
-            f'global={glob.shape}, proxy={proxy.shape}'
-        )
-        raise ValueError(msg)
-
-    out = local.copy()
-    used_global = np.zeros(local.shape[0], dtype=bool)
-
-    n_traces = int(local.shape[0])
-    if n_traces == 0 or not bool(np.any(fm)):
-        return out.astype(np.float32, copy=False), used_global.astype(bool, copy=False)
-
-    for idx in ffid_groups:
-        idx = np.asarray(idx, dtype=np.int64)
-        if idx.size == 0:
-            continue
-
-        g_fill = fm[idx]
-        if not bool(np.any(g_fill)):
-            continue
-
-        g_proxy = proxy[idx]
-        g_proxy_finite = np.isfinite(g_proxy)
-
-        # If proxy is missing, we cannot order by offset. Fill such traces by global.
-        bad_proxy = g_fill & (~g_proxy_finite)
-        if bool(np.any(bad_proxy)):
-            seg_idx = idx[bad_proxy]
-            out[seg_idx] = glob[seg_idx]
-            used_global[seg_idx] = True
-
-        for side_sel in (
-            (g_proxy < 0.0) & g_proxy_finite,
-            (g_proxy > 0.0) & g_proxy_finite,
-        ):
-            side_idx = idx[side_sel]
-            if side_idx.size == 0:
-                continue
-
-            x = np.abs(proxy[side_idx]).astype(np.float32, copy=False)
-            order = np.argsort(x, kind='mergesort')
-            ord_idx = side_idx[order]
-            ord_fill = fm[ord_idx]
-
-            if not bool(np.any(ord_fill)):
-                continue
-
-            j = 0
-            n = int(ord_idx.size)
-            while j < n:
-                if not bool(ord_fill[j]):
-                    j += 1
-                    continue
-
-                start = j
-                j += 1
-                while j < n and bool(ord_fill[j]):
-                    j += 1
-                end = j - 1
-
-                seg_idx = ord_idx[start : end + 1]
-                has_left = start - 1 >= 0
-                has_right = end + 1 < n
-
-                if has_left and has_right:
-                    left_t = int(ord_idx[start - 1])
-                    right_t = int(ord_idx[end + 1])
-                    left_val = float(out[left_t])
-                    right_val = float(out[right_t])
-
-                    if (not np.isfinite(left_val)) or (not np.isfinite(right_val)):
-                        out[seg_idx] = glob[seg_idx]
-                        used_global[seg_idx] = True
-                        continue
-
-                    # physical constraint: for increasing |offset|, pick should not decrease.
-                    if left_val > right_val:
-                        out[seg_idx] = glob[seg_idx]
-                        used_global[seg_idx] = True
-                        continue
-
-                    denom = float((end - start) + 2)
-                    for k, t_i in enumerate(seg_idx, start=1):
-                        a = float(k) / denom
-                        out[int(t_i)] = (1.0 - a) * left_val + a * right_val
-                else:
-                    out[seg_idx] = glob[seg_idx]
-                    used_global[seg_idx] = True
-
-    return out.astype(np.float32, copy=False), used_global.astype(bool, copy=False)
 
 
 def _apply_source_group_scalar(values: np.ndarray, scalar: np.ndarray) -> np.ndarray:
@@ -549,6 +368,307 @@ def _build_offset_signed_proxy_by_ffid(
         p_g[~finite] = np.nan
         proxy[idx] = p_g
     return proxy.astype(np.float32, copy=False)
+
+
+def _aggregate_knots_by_offset(
+    x: np.ndarray, y: np.ndarray, v: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    xx = np.asarray(x, dtype=np.float32)
+    yy = np.asarray(y, dtype=np.float32)
+    vv = np.asarray(v, dtype=np.float32)
+    if xx.shape != yy.shape or xx.shape != vv.shape or xx.ndim != 1:
+        msg = f'x/y/v must be 1D and same shape, got {xx.shape}, {yy.shape}, {vv.shape}'
+        raise ValueError(msg)
+
+    use = np.isfinite(xx) & np.isfinite(yy) & np.isfinite(vv)
+    xx = xx[use]
+    yy = yy[use]
+    vv = vv[use]
+    if xx.size == 0:
+        e = np.zeros(0, dtype=np.float32)
+        return e, e, e
+
+    order = np.argsort(xx, kind='mergesort')
+    xx = xx[order]
+    yy = yy[order]
+    vv = vv[order]
+
+    uniq, inv = np.unique(xx, return_inverse=True)
+    y_out = np.full(uniq.shape[0], np.nan, dtype=np.float32)
+    v_out = np.full(uniq.shape[0], np.nan, dtype=np.float32)
+    for i in range(int(uniq.shape[0])):
+        sel = inv == i
+        y_out[i] = np.float32(np.median(yy[sel]))
+        v_out[i] = np.float32(np.median(vv[sel]))
+    return (
+        uniq.astype(np.float32, copy=False),
+        y_out.astype(np.float32, copy=False),
+        v_out.astype(np.float32, copy=False),
+    )
+
+
+def _eval_linear_interp_no_extrap(
+    *,
+    x_query: np.ndarray,
+    x_knots: np.ndarray,
+    y_knots: np.ndarray,
+    v_knots: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    xq = np.asarray(x_query, dtype=np.float32)
+    xk = np.asarray(x_knots, dtype=np.float32)
+    yk = np.asarray(y_knots, dtype=np.float32)
+    vk = np.asarray(v_knots, dtype=np.float32)
+
+    if xq.ndim != 1:
+        msg = f'x_query must be 1D, got {xq.shape}'
+        raise ValueError(msg)
+    if xk.ndim != 1 or yk.ndim != 1 or vk.ndim != 1:
+        msg = f'knots must be 1D, got {xk.shape}, {yk.shape}, {vk.shape}'
+        raise ValueError(msg)
+    if xk.shape != yk.shape or xk.shape != vk.shape:
+        msg = f'knots shape mismatch: {xk.shape}, {yk.shape}, {vk.shape}'
+        raise ValueError(msg)
+
+    y = np.full(xq.shape[0], np.nan, dtype=np.float32)
+    v = np.full(xq.shape[0], np.nan, dtype=np.float32)
+    covered = np.zeros(xq.shape[0], dtype=bool)
+    if xk.size == 0:
+        return y, v, covered
+
+    q_ok = np.isfinite(xq)
+    if not bool(np.any(q_ok)):
+        return y, v, covered
+
+    if xk.size == 1:
+        use = q_ok & np.isclose(xq, float(xk[0]), rtol=0.0, atol=1e-6)
+        y[use] = yk[0]
+        v[use] = vk[0]
+        covered[use] = True
+        return y, v, covered
+
+    in_range = q_ok & (xq >= float(xk[0])) & (xq <= float(xk[-1]))
+    if not bool(np.any(in_range)):
+        return y, v, covered
+
+    q = xq[in_range].astype(np.float64, copy=False)
+    y[in_range] = np.interp(
+        q, xk.astype(np.float64, copy=False), yk.astype(np.float64, copy=False)
+    ).astype(np.float32, copy=False)
+    v[in_range] = np.interp(
+        q, xk.astype(np.float64, copy=False), vk.astype(np.float64, copy=False)
+    ).astype(np.float32, copy=False)
+    covered[in_range] = True
+    return y, v, covered
+
+
+def _fit_side_trend_knots_from_points(
+    *,
+    x_side: np.ndarray,
+    y_side_sec: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    xs = np.asarray(x_side, dtype=np.float32)
+    ys = np.asarray(y_side_sec, dtype=np.float32)
+    if xs.shape != ys.shape or xs.ndim != 1:
+        msg = f'x_side/y_side_sec must be 1D and same shape, got {xs.shape}, {ys.shape}'
+        raise ValueError(msg)
+
+    support = int(xs.shape[0])
+    if support <= 0:
+        e = np.zeros(0, dtype=np.float32)
+        return e, e, e, 0
+
+    use = np.isfinite(xs) & np.isfinite(ys)
+    xs = xs[use]
+    ys = ys[use]
+    support = int(xs.shape[0])
+    if support <= 0:
+        e = np.zeros(0, dtype=np.float32)
+        return e, e, e, 0
+
+    valid = np.ones((1, support), dtype=np.uint8)
+    w_conf = np.ones((1, support), dtype=np.float32)
+    trend_t, _trend_s, v_trend, _w_used, covered = robust_linear_trend(
+        offsets=xs.reshape(1, -1),
+        t_sec=ys.reshape(1, -1),
+        valid=valid,
+        w_conf=w_conf,
+        section_len=int(SEMI_IRLS_SECTION_LEN),
+        stride=int(SEMI_IRLS_STRIDE),
+        huber_c=float(SEMI_IRLS_HUBER_C),
+        iters=int(SEMI_IRLS_ITERS),
+        vmin=float(GLOBAL_VMIN_M_S),
+        vmax=float(GLOBAL_VMAX_M_S),
+        sort_offsets=True,
+        use_taper=True,
+        abs_velocity=True,
+    )
+
+    tt = np.asarray(trend_t, dtype=np.float32).reshape(-1)
+    vv = np.asarray(v_trend, dtype=np.float32).reshape(-1)
+    cc = np.asarray(covered, dtype=bool).reshape(-1)
+    fit_ok = cc & np.isfinite(tt) & np.isfinite(vv)
+    if not bool(np.any(fit_ok)):
+        e = np.zeros(0, dtype=np.float32)
+        return e, e, e, support
+
+    return (*_aggregate_knots_by_offset(xs[fit_ok], tt[fit_ok], vv[fit_ok]), support)
+
+
+def _build_semi_trend_center_i_from_picks(
+    *,
+    pick_final_i: np.ndarray,
+    n_samples_in: int,
+    dt_sec_in: float,
+    trend_offset_signed_proxy: np.ndarray,
+    ffid_groups: list[np.ndarray],
+    shot_x_ffid: np.ndarray,
+    shot_y_ffid: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+    p = np.asarray(pick_final_i, dtype=np.int64)
+    proxy = np.asarray(trend_offset_signed_proxy, dtype=np.float32)
+    if p.ndim != 1 or proxy.ndim != 1 or p.shape != proxy.shape:
+        msg = (
+            'pick_final_i/trend_offset_signed_proxy must be 1D and same shape, '
+            f'got {p.shape}, {proxy.shape}'
+        )
+        raise ValueError(msg)
+    if int(n_samples_in) < 2:
+        msg = f'n_samples_in must be >= 2, got {n_samples_in}'
+        raise ValueError(msg)
+    if float(dt_sec_in) <= 0.0:
+        msg = f'dt_sec_in must be > 0, got {dt_sec_in}'
+        raise ValueError(msg)
+
+    n_traces = int(p.shape[0])
+    pick_ok = valid_pick_mask(p, n_samples=int(n_samples_in))
+    proxy_ok = np.isfinite(proxy)
+
+    neighbors = _build_neighbor_indices(
+        shot_x_ffid,
+        shot_y_ffid,
+        k=int(SEMI_NEI_K),
+    )
+
+    trend_center_i_semi = np.full(n_traces, np.nan, dtype=np.float32)
+    semi_covered = np.zeros(n_traces, dtype=bool)
+    semi_support_count = np.zeros(n_traces, dtype=np.int32)
+    semi_v_trend = np.full(n_traces, np.nan, dtype=np.float32)
+    semi_used_ffid_mask = np.zeros(len(ffid_groups), dtype=bool)
+
+    for g, idx in enumerate(ffid_groups):
+        nei = np.asarray(neighbors[g], dtype=np.int64)
+        if int(nei.size) < int(SEMI_MIN_NEI):
+            continue
+        train_parts = [np.asarray(idx, dtype=np.int64)]
+        train_parts += [np.asarray(ffid_groups[int(j)], dtype=np.int64) for j in nei]
+        if len(train_parts) == 0:
+            continue
+        train_idx = np.concatenate(train_parts).astype(np.int64, copy=False)
+        if train_idx.size == 0:
+            continue
+
+        tr_ok = pick_ok[train_idx] & proxy_ok[train_idx]
+        if not bool(np.any(tr_ok)):
+            continue
+
+        x_train = proxy[train_idx][tr_ok].astype(np.float32, copy=False)
+        y_train_sec = p[train_idx][tr_ok].astype(np.float32, copy=False) * float(
+            dt_sec_in
+        )
+
+        (
+            xk_l,
+            yk_l,
+            vk_l,
+            supp_l,
+        ) = _fit_side_trend_knots_from_points(
+            x_side=x_train[x_train < 0.0],
+            y_side_sec=y_train_sec[x_train < 0.0],
+        )
+        (
+            xk_r,
+            yk_r,
+            vk_r,
+            supp_r,
+        ) = _fit_side_trend_knots_from_points(
+            x_side=x_train[x_train > 0.0],
+            y_side_sec=y_train_sec[x_train > 0.0],
+        )
+
+        if xk_l.size == 0 and xk_r.size == 0:
+            continue
+        semi_used_ffid_mask[g] = True
+
+        x_t = proxy[idx].astype(np.float32, copy=False)
+        y_l, v_l, c_l = _eval_linear_interp_no_extrap(
+            x_query=x_t, x_knots=xk_l, y_knots=yk_l, v_knots=vk_l
+        )
+        y_r, v_r, c_r = _eval_linear_interp_no_extrap(
+            x_query=x_t, x_knots=xk_r, y_knots=yk_r, v_knots=vk_r
+        )
+
+        y_out = np.full(idx.shape[0], np.nan, dtype=np.float32)
+        v_out = np.full(idx.shape[0], np.nan, dtype=np.float32)
+        c_out = np.zeros(idx.shape[0], dtype=bool)
+        s_out = np.zeros(idx.shape[0], dtype=np.int32)
+
+        m_l = x_t < 0.0
+        if bool(np.any(m_l)):
+            y_out[m_l] = y_l[m_l]
+            v_out[m_l] = v_l[m_l]
+            c_out[m_l] = c_l[m_l]
+            s_out[m_l] = np.int32(supp_l)
+
+        m_r = x_t > 0.0
+        if bool(np.any(m_r)):
+            y_out[m_r] = y_r[m_r]
+            v_out[m_r] = v_r[m_r]
+            c_out[m_r] = c_r[m_r]
+            s_out[m_r] = np.int32(supp_r)
+
+        m0 = np.isfinite(x_t) & (x_t == 0.0)
+        if bool(np.any(m0)):
+            j0 = np.flatnonzero(m0)
+            for j in j0:
+                if bool(c_l[j]) and bool(c_r[j]):
+                    y_out[j] = np.float32(0.5 * (float(y_l[j]) + float(y_r[j])))
+                    v_out[j] = np.float32(0.5 * (float(v_l[j]) + float(v_r[j])))
+                    c_out[j] = True
+                    s_out[j] = np.int32(max(int(supp_l), int(supp_r)))
+                elif bool(c_l[j]):
+                    y_out[j] = y_l[j]
+                    v_out[j] = v_l[j]
+                    c_out[j] = True
+                    s_out[j] = np.int32(supp_l)
+                elif bool(c_r[j]):
+                    y_out[j] = y_r[j]
+                    v_out[j] = v_r[j]
+                    c_out[j] = True
+                    s_out[j] = np.int32(supp_r)
+
+        y_i = (y_out.astype(np.float64) / float(dt_sec_in)).astype(
+            np.float32, copy=False
+        )
+        if int(n_samples_in) > 2:
+            y_clip = y_i.copy()
+            finite = np.isfinite(y_clip)
+            y_clip[finite] = np.clip(y_clip[finite], 1.0, float(int(n_samples_in) - 1))
+            y_i = y_clip
+
+        trend_center_i_semi[idx] = y_i
+        semi_covered[idx] = c_out
+        semi_support_count[idx] = s_out
+        semi_v_trend[idx] = v_out
+
+    fallback_count = int(np.count_nonzero(~semi_covered))
+    return (
+        trend_center_i_semi.astype(np.float32, copy=False),
+        semi_covered.astype(bool, copy=False),
+        semi_support_count.astype(np.int32, copy=False),
+        semi_v_trend.astype(np.float32, copy=False),
+        semi_used_ffid_mask.astype(bool, copy=False),
+        int(fallback_count),
+    )
 
 
 def _fill_global_missing_by_ffid_nearest_trace(
@@ -978,6 +1098,8 @@ def _build_trend_result(
     trend_center_i_local_in: np.ndarray,
     local_trend_ok_in: np.ndarray,
 ) -> _TrendBuildResult:
+    _validate_semi_config()
+
     ffid_values, shot_x_trace, shot_y_trace = _load_ffid_and_shot_xy_from_segy(src)
     if ffid_values.shape != (n_traces,):
         msg = f'ffid_values must be (n_traces,), got {ffid_values.shape}, n_traces={n_traces}'
@@ -1016,9 +1138,30 @@ def _build_trend_result(
         msg = f'offset_abs_m must be (n_traces,), got {offset_abs_m.shape}, n_traces={n_traces}'
         raise ValueError(msg)
 
+    if not bool(SEMI_GLOBAL_ENABLE):
+        msg = 'SEMI_GLOBAL_ENABLE must be True for semi-global -> global trend build'
+        raise ValueError(msg)
+
     trend_offset_signed_proxy = _build_offset_signed_proxy_by_ffid(
         offset_abs_m=offset_abs_m,
         ffid_groups=ffid_groups,
+    )
+
+    (
+        trend_center_i_semi,
+        semi_covered,
+        semi_support_count,
+        semi_v_trend,
+        semi_used_ffid_mask,
+        semi_fallback_count,
+    ) = _build_semi_trend_center_i_from_picks(
+        pick_final_i=pick_final_i,
+        n_samples_in=int(n_samples_in),
+        dt_sec_in=float(dt_sec_in),
+        trend_offset_signed_proxy=trend_offset_signed_proxy,
+        ffid_groups=ffid_groups,
+        shot_x_ffid=shot_x_ffid,
+        shot_y_ffid=shot_y_ffid,
     )
 
     (
@@ -1052,20 +1195,38 @@ def _build_trend_result(
         )
     )
 
-    trend_center_i_final = trend_center_i_global_filled.astype(np.float32, copy=False)
+    vabs = np.abs(np.asarray(semi_v_trend, dtype=np.float32))
+    v_sat = np.isfinite(vabs) & (
+        (np.abs(vabs - float(GLOBAL_VMIN_M_S)) <= 0.01 * float(GLOBAL_VMIN_M_S))
+        | (np.abs(vabs - float(GLOBAL_VMAX_M_S)) <= 0.01 * float(GLOBAL_VMAX_M_S))
+    )
+    semi_low_mask = (
+        (~np.asarray(semi_covered, dtype=bool))
+        | (
+            np.asarray(semi_support_count, dtype=np.int32)
+            < int(SEMI_MIN_SUPPORT_PER_TRACE)
+        )
+        | v_sat
+    )
+
+    trend_center_i_final = np.where(
+        semi_low_mask,
+        trend_center_i_global_filled,
+        trend_center_i_semi,
+    ).astype(np.float32, copy=False)
     if int(n_samples_in) > 2:
         f = np.isfinite(trend_center_i_final)
-        if bool(np.any(f)):
-            trend_center_i_final = trend_center_i_final.copy()
-            trend_center_i_final[f] = np.clip(
-                trend_center_i_final[f],
-                1.0,
-                float(int(n_samples_in) - 1),
-            )
+        trend_center_i_final = trend_center_i_final.copy()
+        trend_center_i_final[f] = np.clip(
+            trend_center_i_final[f],
+            1.0,
+            float(int(n_samples_in) - 1),
+        )
 
     global_ok = np.isfinite(trend_center_i_global_filled) & (
         trend_center_i_global_filled > 0.0
     )
+    global_replaced_mask = semi_low_mask & global_ok
 
     if int(LOCAL_GLOBAL_DIFF_TH_SAMPLES) < 0:
         msg = f'LOCAL_GLOBAL_DIFF_TH_SAMPLES must be >= 0, got {LOCAL_GLOBAL_DIFF_TH_SAMPLES}'
@@ -1086,31 +1247,16 @@ def _build_trend_result(
         & np.isfinite(diff)
         & (diff >= float(int(LOCAL_GLOBAL_DIFF_TH_SAMPLES)))
     )
-
-    inversion_mask = _local_velocity_inversion_mask_by_split(
-        trend_center_i_local=trend_center_i_local,
-        local_ok=local_ok,
-        trend_offset_signed_proxy=trend_offset_signed_proxy,
-        ffid_groups=ffid_groups,
-        inv_drop_th_samples=int(LOCAL_INV_DROP_TH_SAMPLES),
-        inv_min_consec_steps=int(LOCAL_INV_MIN_CONSEC_STEPS),
-    )
-
-    seeds = bad & inversion_mask
     local_discard_mask = _expand_mask_within_ffid_groups(
-        mask_by_trace=seeds,
+        mask_by_trace=bad,
         ffid_groups=ffid_groups,
         radius=int(LOCAL_DISCARD_RADIUS_TRACES),
     )
 
-    fill_mask = (~local_ok) | local_discard_mask
-    trend_center_i_used, global_replaced_mask = _fill_trend_center_i_by_linear_interp(
-        trend_center_i_local=trend_center_i_local,
-        fill_mask=fill_mask,
-        trend_center_i_global=trend_center_i_global_filled,
-        trend_offset_signed_proxy=trend_offset_signed_proxy,
-        ffid_groups=ffid_groups,
-    )
+    use_integrated = (~local_ok) | local_discard_mask
+    trend_center_i_used = np.where(
+        use_integrated, trend_center_i_final, trend_center_i_local
+    ).astype(np.float32, copy=False)
 
     if int(n_samples_in) > 2:
         f = np.isfinite(trend_center_i_used)
@@ -1122,7 +1268,7 @@ def _build_trend_result(
                 float(int(n_samples_in) - 1),
             )
 
-    trend_filled_mask = fill_mask.astype(bool, copy=False)
+    trend_filled_mask = use_integrated.astype(bool, copy=False)
 
     nn_replaced_mask = np.zeros(n_traces, dtype=bool)
     conf_trend1 = _compute_conf_trend1_from_trend(
@@ -1135,6 +1281,7 @@ def _build_trend_result(
     return _TrendBuildResult(
         trend_center_i_raw=trend_center_i_raw.astype(np.float32, copy=False),
         trend_center_i_local=trend_center_i_local.astype(np.float32, copy=False),
+        trend_center_i_semi=trend_center_i_semi.astype(np.float32, copy=False),
         trend_center_i_final=trend_center_i_final.astype(np.float32, copy=False),
         trend_center_i_used=trend_center_i_used.astype(np.float32, copy=False),
         trend_center_i_global=trend_center_i_global_filled.astype(
@@ -1155,6 +1302,12 @@ def _build_trend_result(
         ffid_unique_values=ffid_unique_values.astype(np.int64, copy=False),
         shot_x_ffid=shot_x_ffid.astype(np.float64, copy=False),
         shot_y_ffid=shot_y_ffid.astype(np.float64, copy=False),
+        semi_used_ffid_mask=semi_used_ffid_mask.astype(bool, copy=False),
+        semi_fallback_count=int(semi_fallback_count),
+        semi_low_mask=semi_low_mask.astype(bool, copy=False),
+        semi_covered=semi_covered.astype(bool, copy=False),
+        semi_support_count=semi_support_count.astype(np.int32, copy=False),
+        semi_v_trend=semi_v_trend.astype(np.float32, copy=False),
         conf_trend1=conf_trend1.astype(np.float32, copy=False),
     )
 
@@ -1565,6 +1718,7 @@ def process_one_segy(
             }
             trend_center_i_raw = trend_res.trend_center_i_raw
             trend_center_i_local = trend_res.trend_center_i_local
+            trend_center_i_semi = trend_res.trend_center_i_semi
             trend_center_i_final = trend_res.trend_center_i_final
             trend_center_i_used = trend_res.trend_center_i_used
             trend_filled_mask = trend_res.trend_filled_mask
@@ -1572,6 +1726,12 @@ def process_one_segy(
             ffid_unique_values = trend_res.ffid_unique_values
             shot_x_ffid = trend_res.shot_x_ffid
             shot_y_ffid = trend_res.shot_y_ffid
+            semi_used_ffid_mask = trend_res.semi_used_ffid_mask
+            semi_fallback_count = int(trend_res.semi_fallback_count)
+            semi_low_mask = trend_res.semi_low_mask
+            semi_covered = trend_res.semi_covered
+            semi_support_count = trend_res.semi_support_count
+            semi_v_trend = trend_res.semi_v_trend
 
             nn_replaced_mask = trend_res.nn_replaced_mask
             global_replaced_mask = trend_res.global_replaced_mask
@@ -1674,10 +1834,17 @@ def process_one_segy(
         n_traces=np.int32(n_traces),
         n_samples_in=np.int32(ns_in),
         n_samples_out=np.int32(OUT_NS),
+        semi_global_enable=np.asarray(bool(SEMI_GLOBAL_ENABLE)),
+        semi_nei_k=np.int32(SEMI_NEI_K),
+        semi_min_nei=np.int32(SEMI_MIN_NEI),
+        semi_irls_section_len=np.int32(SEMI_IRLS_SECTION_LEN),
+        semi_irls_stride=np.int32(SEMI_IRLS_STRIDE),
+        semi_min_support_per_trace=np.int32(SEMI_MIN_SUPPORT_PER_TRACE),
         local_global_diff_th_samples=np.int32(LOCAL_GLOBAL_DIFF_TH_SAMPLES),
         local_discard_radius_traces=np.int32(LOCAL_DISCARD_RADIUS_TRACES),
         trend_center_i_raw=trend_center_i_raw.astype(np.float32, copy=False),
         trend_center_i_local=trend_center_i_local.astype(np.float32, copy=False),
+        trend_center_i_semi=trend_center_i_semi.astype(np.float32, copy=False),
         trend_center_i_final=trend_center_i_final.astype(np.float32, copy=False),
         trend_center_i_used=trend_center_i_used.astype(np.float32, copy=False),
         trend_center_i_global=trend_center_i_global.astype(np.float32, copy=False),
@@ -1693,6 +1860,12 @@ def process_one_segy(
         trend_center_i=trend_center_i_used.astype(np.float32, copy=False),
         trend_filled_mask=trend_filled_mask.astype(bool, copy=False),
         trend_center_i_round=c_round.astype(np.int64, copy=False),
+        semi_used_ffid_mask=semi_used_ffid_mask.astype(bool, copy=False),
+        semi_fallback_count=np.int32(semi_fallback_count),
+        semi_low_mask=semi_low_mask.astype(bool, copy=False),
+        semi_covered=semi_covered.astype(bool, copy=False),
+        semi_support_count=semi_support_count.astype(np.int32, copy=False),
+        semi_v_trend=semi_v_trend.astype(np.float32, copy=False),
         ffid_values=ffid_values.astype(np.int64, copy=False),
         ffid_unique_values=ffid_unique_values.astype(np.int64, copy=False),
         shot_x_ffid=shot_x_ffid.astype(np.float64, copy=False),
@@ -1724,9 +1897,23 @@ def process_one_segy(
         f'th({tag} p10) prob={thresholds_used["conf_prob1"]:.6g} '
         f'trend={thresholds_used["conf_trend1"]:.6g} rs={thresholds_used["conf_rs1"]:.6g}'
     )
+    if SEMI_GLOBAL_ENABLE:
+        ffids_total = int(ffid_unique_values.shape[0])
+        ffids_used_semi = int(np.count_nonzero(semi_used_ffid_mask))
+        print(
+            f'[SEMI] {segy_path.name} ffids_total={ffids_total} '
+            f'ffids_used_semi={ffids_used_semi} '
+            f'semi_missing_traces={semi_fallback_count}'
+        )
+        if semi_fallback_count > 0:
+            print(
+                f'[WARN] {segy_path.name} semi missing (filled by global) for '
+                f'{semi_fallback_count} traces'
+            )
 
 
 def main() -> None:
+    _validate_semi_config()
     segys = find_segy_files(IN_SEGY_ROOT, exts=SEGY_EXTS, recursive=True)
     print(f'[RUN] found {len(segys)} segy files under {IN_SEGY_ROOT}')
 

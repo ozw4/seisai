@@ -32,7 +32,7 @@ X_MODE = 'trace'  # "trace" | "offset" | "chno"
 ENDIAN = 'big'  # "big" | "little"
 
 # ★ここを list で指定（同一SEGY内の複数FFIDをまとめて処理）
-FFIDS: list[int] = list(np.arange(2007, 2624, 5))
+FFIDS: list[int] = list([2147, 2467])
 
 # ★保存フォルダ（ユーザーが設定）
 OUT_DIR = Path('./ffid_plots')
@@ -150,7 +150,6 @@ class SidecarData:
     ffid_values: np.ndarray
 
     trend_center_i_raw: np.ndarray
-    trend_center_i_semi: np.ndarray
     trend_center_i_used: np.ndarray
     trend_center_i_global: np.ndarray
 
@@ -184,7 +183,6 @@ def load_sidecar(sidecar_npz_path: Path) -> SidecarData:
             dt_sec_out=float(np.asarray(z['dt_sec_out']).item()),
             ffid_values=np.asarray(z['ffid_values'], dtype=np.int64),
             trend_center_i_raw=np.asarray(z['trend_center_i_raw'], dtype=np.float32),
-            trend_center_i_semi=np.asarray(z['trend_center_i_semi'], dtype=np.float32),
             trend_center_i_used=np.asarray(z['trend_center_i_used'], dtype=np.float32),
             trend_center_i_global=np.asarray(
                 z['trend_center_i_global'], dtype=np.float32
@@ -249,7 +247,6 @@ def plot_ffid_psn512_trendlines(
 
     # subset arrays
     c_raw_g = sidecar.trend_center_i_raw[m]
-    c_semi_g = sidecar.trend_center_i_semi[m]
     c_used_g = sidecar.trend_center_i_used[m]
     c_global_g = sidecar.trend_center_i_global[m]
     w0_g = sidecar.window_start_i[m]
@@ -280,7 +277,6 @@ def plot_ffid_psn512_trendlines(
     pick_win_raw[(pick_win_raw < 0.0) | (pick_win_raw >= float(ns_raw))] = np.nan
 
     # trend centers -> seconds (raw time base)
-    semi_sec = _sec_in_raw_window(c_semi_g * dt_sec_in, t0=t0_sec, t1=t1_sec)
     used_sec = _sec_in_raw_window(c_used_g * dt_sec_in, t0=t0_sec, t1=t1_sec)
     global_sec = _sec_in_raw_window(c_global_g * dt_sec_in, t0=t0_sec, t1=t1_sec)
 
@@ -292,12 +288,10 @@ def plot_ffid_psn512_trendlines(
 
     # map trend centers to win512 sample coordinates -> seconds
     y_raw_512 = _to_win512_sample(c_raw_g, w0_g, up_factor=up_factor)
-    y_semi_512 = _to_win512_sample(c_semi_g, w0_g, up_factor=up_factor)
     y_used_512 = _to_win512_sample(c_used_g, w0_g, up_factor=up_factor)
     y_global_512 = _to_win512_sample(c_global_g, w0_g, up_factor=up_factor)
 
     raw_512_sec = y_raw_512 * dt_sec_out
-    semi_512_sec = y_semi_512 * dt_sec_out
     used_512_sec = y_used_512 * dt_sec_out
     global_512_sec = y_global_512 * dt_sec_out
 
@@ -336,23 +330,16 @@ def plot_ffid_psn512_trendlines(
             show_legend=False,
         ),
     )
+
+    ax0.plot(x, used_sec, lw=2.2, ls='-', alpha=0.95, label='trend_used (final)')
     ax0.plot(
         x,
-        semi_sec,
-        lw=1.6,
-        ls='-',
+        global_sec,
+        lw=1.4,
+        ls='-.',
         alpha=0.9,
-        label='trend_semi (semi-global, NaN if not used)',
+        label='trend_global (offset-time fit fallback)',
     )
-    ax0.plot(x, used_sec, lw=2.2, ls='-', alpha=0.95, label='trend_used (final)')
-    # ax0.plot(
-    #    x,
-    #    global_sec,
-    #    lw=1.4,
-    #    ls='-.',
-    #    alpha=0.9,
-    #    label='trend_global (offset-time fit fallback)',
-    # )
 
     if np.any(filled_g):
         ax0.scatter(
@@ -408,12 +395,10 @@ def plot_ffid_psn512_trendlines(
         ),
     )
 
-    # ax1.plot(
-    #    x, raw_512_sec, lw=1.2, ls='--', alpha=0.85, label='trend_raw mapped to win512'
-    # )
     ax1.plot(
-        x, semi_512_sec, lw=1.6, ls='-', alpha=0.9, label='trend_semi mapped to win512'
+        x, raw_512_sec, lw=1.2, ls='--', alpha=0.85, label='trend_raw mapped to win512'
     )
+
     ax1.plot(
         x, used_512_sec, lw=2.2, ls='-', alpha=0.95, label='trend_used mapped to win512'
     )

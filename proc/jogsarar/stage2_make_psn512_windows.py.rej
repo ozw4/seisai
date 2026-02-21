@@ -1,0 +1,160 @@
+--- proc/jogsarar/stage2_make_psn512_windows.py
++++ proc/jogsarar/stage2_make_psn512_windows.py
+@@ -231,21 +231,24 @@
+     trend_center_i_local: np.ndarray,
+     fill_mask: np.ndarray,
+     trend_center_i_global: np.ndarray,
++    trend_offset_signed_proxy: np.ndarray,
+     ffid_groups: list[np.ndarray],
+ ) -> tuple[np.ndarray, np.ndarray]:
+     local = np.asarray(trend_center_i_local, dtype=np.float32)
+     fm = np.asarray(fill_mask, dtype=bool)
+     glob = np.asarray(trend_center_i_global, dtype=np.float32)
+-    if local.ndim != 1 or fm.ndim != 1 or glob.ndim != 1:
++    proxy = np.asarray(trend_offset_signed_proxy, dtype=np.float32)
++
++    if local.ndim != 1 or fm.ndim != 1 or glob.ndim != 1 or proxy.ndim != 1:
+         msg = (
+-            f'local/fill_mask/global must be 1D, got local={local.shape}, '
+-            f'fill_mask={fm.shape}, global={glob.shape}'
+-        )
+-        raise ValueError(msg)
+-    if local.shape != fm.shape or local.shape != glob.shape:
++            'local/fill_mask/global/proxy must be 1D, got '
++            f'local={local.shape}, fill_mask={fm.shape}, global={glob.shape}, proxy={proxy.shape}'
++        )
++        raise ValueError(msg)
++    if local.shape != fm.shape or local.shape != glob.shape or local.shape != proxy.shape:
+         msg = (
+             f'shape mismatch local={local.shape}, fill_mask={fm.shape}, '
+-            f'global={glob.shape}'
++            f'global={glob.shape}, proxy={proxy.shape}'
+         )
+         raise ValueError(msg)
+ 
+@@ -265,51 +268,77 @@
+         if not bool(np.any(g_fill)):
+             continue
+ 
+-        j = 0
+-        n = int(idx.size)
+-        while j < n:
+-            if not bool(g_fill[j]):
++        g_proxy = proxy[idx]
++        g_proxy_finite = np.isfinite(g_proxy)
++
++        # If proxy is missing, we cannot order by offset. Fill such traces by global.
++        bad_proxy = g_fill & (~g_proxy_finite)
++        if bool(np.any(bad_proxy)):
++            seg_idx = idx[bad_proxy]
++            out[seg_idx] = glob[seg_idx]
++            used_global[seg_idx] = True
++
++        # Fill separately per side (proxy sign), ordered by increasing |offset|.
++        for side_sel in (
++            (g_proxy < 0.0) & g_proxy_finite,
++            (g_proxy > 0.0) & g_proxy_finite,
++        ):
++            side_idx = idx[side_sel]
++            if side_idx.size == 0:
++                continue
++
++            x = np.abs(proxy[side_idx]).astype(np.float32, copy=False)
++            order = np.argsort(x, kind='mergesort')
++            ord_idx = side_idx[order]
++            ord_fill = fm[ord_idx]
++
++            if not bool(np.any(ord_fill)):
++                continue
++
++            j = 0
++            n = int(ord_idx.size)
++            while j < n:
++                if not bool(ord_fill[j]):
++                    j += 1
++                    continue
++
++                start = j
+                 j += 1
+-                continue
+-
+-            start = j
+-            j += 1
+-            while j < n and bool(g_fill[j]):
+-                j += 1
+-            end = j - 1
+-
+-            has_left = start - 1 >= 0
+-            has_right = end + 1 < n
+-
+-            seg_idx = idx[start : end + 1]
+-
+-            if has_left and has_right:
+-                left_val = float(out[int(idx[start - 1])])
+-                right_val = float(out[int(idx[end + 1])])
+-
+-                if (not np.isfinite(left_val)) or (not np.isfinite(right_val)):
++                while j < n and bool(ord_fill[j]):
++                    j += 1
++                end = j - 1
++
++                seg_idx = ord_idx[start : end + 1]
++                has_left = start - 1 >= 0
++                has_right = end + 1 < n
++
++                if has_left and has_right:
++                    left_t = int(ord_idx[start - 1])
++                    right_t = int(ord_idx[end + 1])
++                    left_val = float(out[left_t])
++                    right_val = float(out[right_t])
++
++                    if (not np.isfinite(left_val)) or (not np.isfinite(right_val)):
++                        out[seg_idx] = glob[seg_idx]
++                        used_global[seg_idx] = True
++                        continue
++
++                    # physical constraint: for increasing |offset|, pick should not decrease.
++                    if left_val > right_val:
++                        out[seg_idx] = glob[seg_idx]
++                        used_global[seg_idx] = True
++                        continue
++
++                    denom = float((end - start) + 2)
++                    for k, t_i in enumerate(seg_idx, start=1):
++                        a = float(k) / denom
++                        out[int(t_i)] = (1.0 - a) * left_val + a * right_val
++                else:
++                    # missing boundary -> fall back to global
+                     out[seg_idx] = glob[seg_idx]
+                     used_global[seg_idx] = True
+-                    continue
+-
+-                # physical constraint: pick must not decrease with increasing offset direction
+-                # (assumes trace order within ffid is offset-increasing)
+-                if left_val > right_val:
+-                    out[seg_idx] = glob[seg_idx]
+-                    used_global[seg_idx] = True
+-                    continue
+-
+-                denom = float((end - start) + 2)
+-                for k, t_i in enumerate(seg_idx, start=1):
+-                    a = float(k) / denom
+-                    out[int(t_i)] = (1.0 - a) * left_val + a * right_val
+-            else:
+-                # missing boundary -> fall back to global
+-                out[seg_idx] = glob[seg_idx]
+-                used_global[seg_idx] = True
+ 
+     return out.astype(np.float32, copy=False), used_global.astype(bool, copy=False)
+-
+ 
+ 
+ def _validate_semi_config() -> None:
+@@ -1350,6 +1379,7 @@
+         trend_center_i_local=trend_center_i_local,
+         fill_mask=use_integrated,
+         trend_center_i_global=trend_center_i_global_filled,
++        trend_offset_signed_proxy=trend_offset_signed_proxy,
+         ffid_groups=ffid_groups,
+     )
+ 

@@ -119,6 +119,7 @@ VIZ_DPI = 200
 VIZ_GAIN = 2.0
 
 MIN_GATHER_H = 32
+EDGE_PICK_MAX_GAP_SAMPLES = 5
 
 
 def _stem_without_win512(stem: str) -> str:
@@ -126,6 +127,68 @@ def _stem_without_win512(stem: str) -> str:
     if stem.endswith(tag):
         return stem[: -len(tag)]
     return stem
+
+
+def _replace_edge_picks_if_far(
+    pick512: np.ndarray,
+    pmax: np.ndarray,
+    pick_orig_f: np.ndarray,
+    pick_orig_i: np.ndarray,
+    *,
+    max_gap_samples: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    p512 = np.asarray(pick512, dtype=np.int32)
+    pm = np.asarray(pmax, dtype=np.float32)
+    pf = np.asarray(pick_orig_f, dtype=np.float32)
+    pi = np.asarray(pick_orig_i, dtype=np.int32)
+
+    if p512.ndim != 1 or pm.ndim != 1 or pf.ndim != 1 or pi.ndim != 1:
+        msg = (
+            'all pick arrays must be 1D: '
+            f'pick512={p512.shape} pmax={pm.shape} '
+            f'pick_orig_f={pf.shape} pick_orig_i={pi.shape}'
+        )
+        raise ValueError(msg)
+    if not (p512.shape == pm.shape == pf.shape == pi.shape):
+        msg = (
+            'pick array shapes must match: '
+            f'pick512={p512.shape} pmax={pm.shape} '
+            f'pick_orig_f={pf.shape} pick_orig_i={pi.shape}'
+        )
+        raise ValueError(msg)
+
+    valid = pi > 0
+    idx = np.flatnonzero(valid).astype(np.int64, copy=False)
+    if int(idx.size) < 3:
+        return p512, pm, pf, pi
+
+    i0 = int(idx[0])
+    i1 = int(idx[-1])
+    n0 = int(idx[1])
+    n1 = int(idx[-2])
+
+    gap0 = abs(int(pi[i0]) - int(pi[n0]))
+    gap1 = abs(int(pi[i1]) - int(pi[n1]))
+    if gap0 < int(max_gap_samples) and gap1 < int(max_gap_samples):
+        return p512, pm, pf, pi
+
+    out512 = p512.copy()
+    outpm = pm.copy()
+    outf = pf.copy()
+    outi = pi.copy()
+
+    if gap0 >= int(max_gap_samples):
+        out512[i0] = out512[n0]
+        outpm[i0] = outpm[n0]
+        outf[i0] = outf[n0]
+        outi[i0] = outi[n0]
+    if gap1 >= int(max_gap_samples):
+        out512[i1] = out512[n1]
+        outpm[i1] = outpm[n1]
+        outf[i1] = outf[n1]
+        outi[i1] = outi[n1]
+
+    return out512, outpm, outf, outi
 
 
 def _build_win512_lookup(win_root: Path) -> dict[tuple[str, str], Path]:
@@ -1071,6 +1134,19 @@ def process_one_pair(
                 pmax_g[invalid_trace_g] = 0.0
                 pick_orig_f_g[invalid_trace_g] = 0.0
                 pick_orig_i_g[invalid_trace_g] = 0
+
+            # Edge-fix before residual statics:
+            # If the first/last valid pick differs from its neighbor by >= N samples,
+            # replace it with the neighbor pick to avoid boundary outliers.
+            pick512_g, pmax_g, pick_orig_f_g, pick_orig_i_g = (
+                _replace_edge_picks_if_far(
+                    pick512_g,
+                    pmax_g,
+                    pick_orig_f_g,
+                    pick_orig_i_g,
+                    max_gap_samples=int(EDGE_PICK_MAX_GAP_SAMPLES),
+                )
+            )
 
             x_rs = build_pick_aligned_window(
                 raw_g,
