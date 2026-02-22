@@ -1,0 +1,16 @@
+base: base_mae_aug_v1.yaml
+
+paths:
+  out_dir: ../runs/aug_v1_A24_freq_mid_mix_restd
+
+tracking:
+  exp_name: aug_v1_A24_freq_mid_mix_restd
+
+augment:
+  freq:
+    prob: 0.5
+    kinds: [bandpass, lowpass, highpass]
+    band: [0.05, 0.45]
+    width: [0.10, 0.35]
+    roll: 0.02
+    restandardize: true

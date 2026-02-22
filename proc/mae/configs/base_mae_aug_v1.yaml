@@ -1,0 +1,29 @@
+base: loss_v2_l1_plus_mse_all_w005.yaml
+
+paths:
+  out_dir: ../runs/aug_v1_BASE
+
+tracking:
+  exp_name: aug_v1_BASE
+
+train:
+  lr: 5.0e-4
+  weight_decay: 1.0e-2
+  max_norm: 1.0
+
+augment:
+  hflip_prob: 0.0
+  polarity_prob: 0.0
+  space:
+    prob: 0.0
+    factor_range: [0.90, 1.10]
+  time:
+    prob: 0.0
+    factor_range: [0.95, 1.05]
+  freq:
+    prob: 0.0
+    kinds: [bandpass, lowpass, highpass]
+    band: [0.05, 0.45]
+    width: [0.10, 0.35]
+    roll: 0.02
+    restandardize: false

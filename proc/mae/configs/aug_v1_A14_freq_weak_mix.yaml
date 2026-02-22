@@ -1,0 +1,16 @@
+base: base_mae_aug_v1.yaml
+
+paths:
+  out_dir: ../runs/aug_v1_A14_freq_weak_mix
+
+tracking:
+  exp_name: aug_v1_A14_freq_weak_mix
+
+augment:
+  freq:
+    prob: 0.3
+    kinds: [bandpass, lowpass, highpass]
+    band: [0.05, 0.45]
+    width: [0.10, 0.25]
+    roll: 0.02
+    restandardize: false

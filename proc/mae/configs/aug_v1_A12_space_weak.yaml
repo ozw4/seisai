@@ -1,0 +1,12 @@
+base: base_mae_aug_v1.yaml
+
+paths:
+  out_dir: ../runs/aug_v1_A12_space_weak
+
+tracking:
+  exp_name: aug_v1_A12_space_weak
+
+augment:
+  space:
+    prob: 0.3
+    factor_range: [0.95, 1.05]
