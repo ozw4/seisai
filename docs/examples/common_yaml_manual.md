@@ -67,7 +67,7 @@ paths:
     - $SEGY_ROOT/train_0005.sgy
 ```
 
-## 2. `dataset` セクション（共通部分）
+## 2. `dataset` セクション
 
 タスク固有の追加キーは各タスクマニュアルを参照しつつ、以下は共通で頻出です。
 
@@ -91,7 +91,7 @@ paths:
 
 ---
 
-## 3. `transform` セクション（共通部分）
+## 3. `transform` セクション
 
 ### 3.1 `transform.time_len`
 多くのタスクでは時間方向（W）を `time_len` へ揃えます。
@@ -103,7 +103,6 @@ paths:
 
 ### 3.2 標準化（Per-trace）
 標準化の有無・eps の指定方法はタスクごとに異なります。
-
 - PSN: `transform.standardize_eps`（PerTraceStandardize を必ず適用）
 - BlindTrace: `transform.per_trace_standardize`（on/off）
 - Pair: Dataset 側で input から z-score を計算して input/target 両方へ適用（現状は常に on）
@@ -145,7 +144,7 @@ paths:
 
 ---
 
-## 5. `train` / `eval` / `infer`（共通部分）
+## 5. `train` / `eval` / `infer`
 
 ### 5.1 `train`（学習ループ）
 頻出キー（タスク固有の追加キーは別途）:
@@ -204,6 +203,55 @@ train:
 | `infer.num_workers` | `int` | **必ず 0**（固定サンプル維持のため、違反は即エラー） |
 
 ---
+
+## 5.5 `optimizer` セクション（任意）
+
+optimizer を指定しない場合は `torch.optim.AdamW`** が使われます。
+`optimizer` セクションを指定した場合は **timm の optimizer factory（`timm.optim.create_optimizer_v2`）** 経由で生成され、`lion` などに差し替えできます。
+
+### 5.5.1 基本ルール
+- 学習率は **常に `train.lr`** を使用します。
+- weight decay は **`train.weight_decay`** を使用します（タスクによって必須/任意が異なる場合あり）。
+- `optimizer.kwargs` に **`lr` / `weight_decay` は書けません**（書くとエラー）。
+  → それらは `train.*` 側で統一管理します。
+
+> 補足: `filter_bias_and_bn` は timm 経由のときのみ有効です。
+> 「bias / BN を weight decay から除外したい」場合は、`optimizer` セクションを明示して timm 経由にしてください（`name: adamw` でもOK）。
+
+### 5.5.2 キー一覧
+| key | 型 | 必須 | デフォルト | 意味 / 制約 |
+|---|---:|:---:|---:|---|
+| `optimizer.name` | `str` | No | `adamw` | optimizer 名（timm が認識できる文字列）。例: `adamw`, `lion`, `sgd` など。大小文字は無視。 |
+| `optimizer.filter_bias_and_bn` | `bool` | No | `false` | `true` の場合、bias / BN などを weight decay 対象から除外する param group を作る（timm 経由のみ）。 |
+| `optimizer.kwargs` | `dict` | No | `{}` | optimizer 固有引数。`lr` / `weight_decay` は禁止。`betas` は YAML では list になりやすいので `[0.9, 0.99]` のように書く。 |
+
+### 5.5.3 例
+
+#### 例A: Lion（timm の実装を使用）
+```yaml
+optimizer:
+  name: lion
+  filter_bias_and_bn: false
+  kwargs:
+    betas: [0.9, 0.99]
+例B: timm 経由で AdamW を使い、bias/Bn を weight decay から除外する
+train:
+  lr: 3.0e-4
+  weight_decay: 1.0e-2
+
+optimizer:
+  name: adamw
+  filter_bias_and_bn: true
+  kwargs: {}
+```
+### 5.x.4 差し替え可能な optimizer の要件
+
+  optimizer.name が timm 側で認識できる名前であること
+  （sgd, adam, adamw, nadamw, lamb, lars, adafactor, adan, madgrad, muon…など。
+    手元の timm バージョンでの一覧は timm.optim.list_optimizers() で確認できます）。
+
+  optimizer.kwargs がその optimizer の __init__ が受け取れる引数であること（不一致は即エラー）。
+
 
 ## 6. `tile` セクション（Pair / BlindTrace で使用）
 

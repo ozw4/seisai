@@ -34,6 +34,7 @@ from seisai_engine.pipelines.common import (
 from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 from seisai_engine.loss import composite
+from seisai_engine.optim import build_optimizer
 
 from .build_dataset import (
     build_dataset,
@@ -493,8 +494,9 @@ def main(argv: list[str] | None = None) -> None:
         model_sig=model_sig,
     )
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
+    optimizer = build_optimizer(
+        cfg,
+        model,
         lr=float(lr),
         weight_decay=float(weight_decay),
     )

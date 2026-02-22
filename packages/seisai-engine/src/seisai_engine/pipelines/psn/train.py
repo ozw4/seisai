@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import torch
 from seisai_utils.config import (
     optional_bool,
+    optional_float,
     optional_str,
     require_dict,
     require_list_str,
@@ -27,6 +28,7 @@ from seisai_engine.pipelines.common import (
     run_train_skeleton,
     seed_all,
 )
+from seisai_engine.optim import build_optimizer
 
 from .build_dataset import build_dataset, build_infer_transform, build_train_transform
 from .build_model import build_model
@@ -395,7 +397,15 @@ def main(argv: list[str] | None = None) -> None:
         model=model,
         model_sig=model_sig,
     )
-    optimizer = torch.optim.AdamW(model.parameters(), lr=float(typed.train.lr))
+
+    train_cfg = require_dict(cfg, 'train')
+    weight_decay = optional_float(train_cfg, 'weight_decay', 0.01)
+    optimizer = build_optimizer(
+        cfg,
+        model,
+        lr=float(typed.train.lr),
+        weight_decay=float(weight_decay),
+    )
 
     def infer_epoch_fn(model, loader, device, vis_epoch_dir, vis_n, max_batches):
         return _run_infer_epoch(

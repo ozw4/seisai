@@ -23,6 +23,7 @@ train:
   # gradient_accumulation_steps: 1
   epochs: 50
   lr: 3.0e-4
+  # weight_decay: 1.0e-2
   subset_traces: 128
   samples_per_epoch: 4096
   seed: 42
@@ -43,6 +44,18 @@ train:
         eps: 1.0e-6
         f_lo: 1
         f_hi: null
+
+# Optional: choose optimizer via timm (default if omitted: torch.optim.AdamW)
+# optimizer:
+#   name: adamw   # e.g. lion
+#   filter_bias_and_bn: false
+#   kwargs: {}
+#
+# optimizer:
+#   name: lion
+#   filter_bias_and_bn: false
+#   kwargs:
+#     betas: [0.9, 0.99]
 
 transform:
   time_len: 1280

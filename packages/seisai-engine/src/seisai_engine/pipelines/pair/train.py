@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from seisai_utils.config import optional_str, require_dict
+from seisai_utils.config import optional_float, optional_str, require_dict
 from seisai_utils.viz_pair import PairTriptychVisConfig
 
 from seisai_engine.infer.runner import TiledHConfig
@@ -20,6 +20,7 @@ from seisai_engine.pipelines.common import (
     run_train_skeleton,
     seed_all,
 )
+from seisai_engine.optim import build_optimizer
 
 from .build_dataset import (
     build_infer_transform,
@@ -147,7 +148,13 @@ def main(argv: list[str] | None = None) -> None:
         model_sig=model_sig,
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=float(typed.train.lr))
+    weight_decay = optional_float(train_cfg, 'weight_decay', 0.01)
+    optimizer = build_optimizer(
+        cfg,
+        model,
+        lr=float(typed.train.lr),
+        weight_decay=float(weight_decay),
+    )
 
     tiled_cfg = TiledHConfig(
         tile_h=int(typed.tile.tile_h),

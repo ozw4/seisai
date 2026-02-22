@@ -84,6 +84,18 @@ train:
   samples_per_epoch: 256
   subset_traces: 128
 
+# Optional: choose optimizer via timm (default if omitted: torch.optim.AdamW)
+# optimizer:
+#   name: adamw   # e.g. lion
+#   filter_bias_and_bn: false
+#   kwargs: {}
+#
+# optimizer:
+#   name: lion
+#   filter_bias_and_bn: false
+#   kwargs:
+#     betas: [0.9, 0.99]
+
 eval:
   loss_scope: masked_only
   losses:
