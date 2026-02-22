@@ -1,0 +1,17 @@
+base: base_mae_optim_v2.yaml
+
+paths:
+  out_dir: ../runs/opt_v2_T03_lion_lr2p5e-4_wd1e-2
+
+tracking:
+  exp_name: opt_v2_T03_lion_lr2p5e-4_wd1e-2
+
+train:
+  lr: 2.5e-4
+  weight_decay: 1.0e-2
+
+optimizer:
+  name: lion
+  filter_bias_and_bn: true
+  kwargs:
+    betas: [0.9, 0.99]
