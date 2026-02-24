@@ -10,7 +10,8 @@ from seisai_engine.pipelines.psn.train import main as pipeline_main
 
 __all__ = ['main']
 
-DEFAULT_CONFIG_PATH = Path(__file__).with_name('config_train_psn.yaml')
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG_PATH = REPO_ROOT / 'examples' / 'config_train_psn.yaml'
 
 
 def main(argv: list[str] | None = None) -> None:

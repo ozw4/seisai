@@ -67,7 +67,7 @@ def test_e2e_train_psn_with_augment(tmp_path: Path) -> None:
     if not cfg.is_file():
         raise FileNotFoundError(cfg)
 
-    import examples.example_train_psn as m
+    import cli.run_psn_train as m
 
     cfg_data = load_config(cfg)
     base_dir = cfg.parent
@@ -125,7 +125,7 @@ def test_e2e_train_blindtrace_with_augment(tmp_path: Path) -> None:
     if not cfg.is_file():
         raise FileNotFoundError(cfg)
 
-    import examples.examples_train_blindtrace as m
+    import cli.run_blindtrace_train as m
 
     cfg_data = load_config(cfg)
     base_dir = cfg.parent
@@ -193,7 +193,7 @@ def test_e2e_train_pair_with_augment(tmp_path: Path) -> None:
     if not cfg.is_file():
         raise FileNotFoundError(cfg)
 
-    import examples.example_train_pair as m
+    import cli.run_pair_train as m
 
     cfg_data = load_config(cfg)
     base_dir = cfg.parent

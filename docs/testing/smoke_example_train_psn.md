@@ -1,6 +1,6 @@
-# example_train_psn.py スモークテスト手順（最低限）
+# run_psn_train.py スモークテスト手順（最低限）
 
-目的: `examples/example_train_psn.py` が最低限の契約を満たして動くことを、人手で短時間に確認する。
+目的: `cli/run_psn_train.py` が最低限の契約を満たして動くことを、人手で短時間に確認する。
 
 ---
 
@@ -23,7 +23,7 @@
 ## 実行コマンド
 
 ```bash
-python examples/example_train_psn.py --config examples/config_train_psn.yaml
+python cli/run_psn_train.py --config examples/config_train_psn.yaml
 ```
 
 ---

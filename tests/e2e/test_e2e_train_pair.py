@@ -22,7 +22,7 @@ def _run_e2e(*, out_dir: Path, waveform_mode: str | None = None) -> tuple[Path, 
     if not cfg.is_file():
         raise FileNotFoundError(cfg)
 
-    import examples.example_train_pair as m
+    import cli.run_pair_train as m
 
     cfg_data = load_config(cfg)
     base_dir = cfg.parent

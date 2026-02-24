@@ -301,14 +301,14 @@ python packages/seisai-dataset/examples/noise_dataset_quick_check.py
 python packages/seisai-dataset/examples/phase_dataset_quick_check.py
 ```
 
-### 2) 学習スクリプト (root/examples)
+### 2) 学習スクリプト (root/cli)
 
 このリポジトリには **YAML 設定で学習/推論/可視化まで回すサンプル**が入っています。
 
-- `examples/example_train_psn.py` : P/S/Noise (3-class) 学習 + 推論 + 可視化
-- `examples/example_train_pair.py` : paired SEG-Y 学習 + tiled 推論 + triptych 可視化
+- `cli/run_psn_train.py` : P/S/Noise (3-class) 学習 + 推論 + 可視化
+- `cli/run_pair_train.py` : paired SEG-Y 学習 + tiled 推論 + triptych 可視化
 - `examples/example_train_fbp.py` : first-break 系の学習例
-- `examples/examples_train_blindtrace.py` : mask/blindtrace 系の学習例
+- `cli/run_blindtrace_train.py` : mask/blindtrace 系の学習例
 
 #### config の `paths` セクション（train と infer を分ける）
 
@@ -331,10 +331,10 @@ listfile 内の相対パスは、**listfile のあるディレクトリ**基準�
 
 ```bash
 # PSN (設定ファイルは examples/config_train_psn.yaml)
-python examples/example_train_psn.py --config examples/config_train_psn.yaml
+python cli/run_psn_train.py --config examples/config_train_psn.yaml
 
 # Pair
-python examples/example_train_pair.py --config examples/config_train_pair.yaml
+python cli/run_pair_train.py --config examples/config_train_pair.yaml
 ```
 
 tracking 設定（最小例）:
@@ -358,7 +358,7 @@ tracking:
 同梱データでの最小実行 (1 epoch / PNG 出力):
 
 ```bash
-python examples/example_train_psn.py --config tests/e2e/config_train_psn.yaml
+python cli/run_psn_train.py --config tests/e2e/config_train_psn.yaml
 ```
 
 ### 3) パッケージ内の小さな例

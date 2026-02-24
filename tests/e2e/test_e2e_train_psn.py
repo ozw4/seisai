@@ -8,7 +8,7 @@ import yaml
 from seisai_engine.pipelines.common import load_checkpoint
 from seisai_utils.config import load_config
 
-import examples.example_train_psn as m
+import cli.run_psn_train as m
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=DeprecationWarning)

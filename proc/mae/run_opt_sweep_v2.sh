@@ -41,7 +41,7 @@ run_one() {
 
   echo "[GPU${gpu}] ${name}"
   CUDA_VISIBLE_DEVICES="$gpu" \
-    python examples/examples_train_blindtrace.py --config "$cfg" \
+    python cli/run_blindtrace_train.py --config "$cfg" \
     >"$log_path" 2>&1
 }
 

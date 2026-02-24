@@ -31,7 +31,7 @@ def _run_e2e(*, out_dir: Path, waveform_mode: str | None = None) -> tuple[Path, 
     if not cfg.is_file():
         raise FileNotFoundError(cfg)
 
-    import examples.examples_train_blindtrace as m
+    import cli.run_blindtrace_train as m
 
     cfg_data = load_config(cfg)
     base_dir = cfg.parent

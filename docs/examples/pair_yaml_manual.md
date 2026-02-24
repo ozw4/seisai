@@ -3,7 +3,7 @@
 共通の仕様（パス解決/listfile、dataset 共通、augment、scheduler、ckpt、ema、tracking、train/infer の共通キー、tile/vis の一般ルールなど）は `docs/examples/common_yaml_manual.md` を参照してください。
 
 対象:
-- エントリポイント: `examples/example_train_pair.py` → `seisai_engine.pipelines.pair.train.main`
+- エントリポイント: `cli/run_pair_train.py` → `seisai_engine.pipelines.pair.train.main`
 - 参照 YAML: `examples/config_train_pair.yaml`
 
 ---

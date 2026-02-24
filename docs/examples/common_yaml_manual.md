@@ -1,8 +1,8 @@
 # YAML 共通説明（PSN / Pair / BlindTrace）
 
 このドキュメントは `docs/examples/psn_yaml_manual.md` / `docs/examples/pair_yaml_manual.md` / `docs/examples/blindtrace_yaml_manual.md` に共通する **ルール・構造・制約** をまとめたものです。
-各タスク固有のキー（例: Pair の `paths.input_segy_files`、PSN の `train.psn_sigma`、BlindTrace の `mask` など）は各タスクのマニュアル側に残しています。
-
+- 各タスク固有のキー（例: Pair の `paths.input_segy_files`、PSN の `train.psn_sigma`、BlindTrace の `mask` など）は各タスクのマニュアル側に残しています。
+- YAML の `base` 継承/マージ、読み込み時の型チェック、パス解決・listfile 展開の詳細仕様は `docs/spec/yaml_config_loading_contract.md` を参照してください。
 ---
 
 ## 1. パス解決・listfile 展開ルール
