@@ -10,7 +10,12 @@ from .config_schema import (
 )
 from .device import resolve_device
 from .init_weights import maybe_load_init_weights
-from .listfiles import expand_cfg_listfiles, load_path_listfile
+from .listfiles import (
+    expand_cfg_listfiles,
+    get_cfg_listfile_meta,
+    load_path_listfile,
+    load_path_listfile_with_meta,
+)
 from .seed import seed_all
 from .skeleton_helpers import (
     ensure_fixed_infer_num_workers,
@@ -43,11 +48,13 @@ __all__ = [
     'ensure_fixed_infer_num_workers',
     'epoch_vis_dir',
     'expand_cfg_listfiles',
+    'get_cfg_listfile_meta',
     'load_cfg_with_base_dir',
     'load_checkpoint',
     'load_common_train_config',
     'load_config',
     'load_path_listfile',
+    'load_path_listfile_with_meta',
     'make_train_worker_init_fn',
     'maybe_load_init_weights',
     'maybe_save_best_min',

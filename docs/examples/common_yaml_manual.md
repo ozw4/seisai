@@ -27,6 +27,25 @@
 - 展開後に全ファイルの存在チェックを行う（存在しないと即エラー）
 - listfile が空の場合はエラー
 
+#### 1.2.1 拡張行形式（SEGYごとのサンプリング指定）
+`paths.segy_files` / `paths.infer_segy_files` の listfile では、次の形式を使うと 1 ファイルごとにサンプリング設定を上書きできます。
+
+```
+<segy_path><TAB><json object>
+```
+
+例:
+
+```text
+/data/train_a.sgy	{"primary_keys":["ffid"],"primary_ranges":{"ffid":[[1,100]]},"secondary_key_fixed":{"ffid":true},"secondary_key":{"ffid":"chno"}}
+/data/train_b.sgy
+```
+
+- JSON 指定がない行は従来通り（全体設定を使用）
+- `primary_ranges` は閉区間 `[lo, hi]` を複数指定可（`[[1,100],[300,350]]`）
+- `secondary_key` は primary ごとに固定指定（例: `ffid -> chno`）
+- `secondary_key_fixed` は `bool` または primary 別の `dict[str,bool]`
+
 ### 入力例A: listfile（`str` で指定）
 
 (1) listfile の中身例（例: data/train_segy_list.txt）

@@ -77,6 +77,7 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
         segy_endian: str = 'big',
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
+        sampling_overrides: list[dict[str, object] | None] | None = None,
         verbose: bool = False,
         progress: bool | None = None,
         max_trials: int = 2048,
@@ -92,6 +93,12 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
 
         self.phase_pick_files = list(phase_pick_files)
         self.include_empty_gathers = bool(include_empty_gathers)
+        if sampling_overrides is not None and len(sampling_overrides) != len(segy_files):
+            msg = 'sampling_overrides length must match segy_files length'
+            raise ValueError(msg)
+        self.sampling_overrides = (
+            list(sampling_overrides) if sampling_overrides is not None else None
+        )
 
         super().__init__(
             segy_files=segy_files,
@@ -135,7 +142,7 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
             unit='file',
             disable=not self.progress,
         )
-        for segy_path, pick_path in it:
+        for file_idx, (segy_path, pick_path) in enumerate(it):
             it.set_description_str(f'Index {Path(segy_path).name}', refresh=False)
             info = build_file_info_dataclass(
                 segy_path,
@@ -147,6 +154,14 @@ class SegyGatherPhasePipelineDataset(BaseSegyGatherPipelineDataset):
                 include_centroids=True,
                 waveform_mode=self.waveform_mode,
                 segy_endian=self.segy_endian,
+            )
+            raw_override = (
+                None
+                if self.sampling_overrides is None
+                else self.sampling_overrides[int(file_idx)]
+            )
+            info.sampling_override = self.sampler.normalize_sampling_override(
+                raw_override
             )
 
             picks = load_phase_pick_csr_npz(pick_path)

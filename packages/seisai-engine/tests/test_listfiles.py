@@ -6,7 +6,9 @@ import pytest
 
 from seisai_engine.pipelines.common.listfiles import (
     expand_cfg_listfiles,
+    get_cfg_listfile_meta,
     load_path_listfile,
+    load_path_listfile_with_meta,
 )
 
 
@@ -114,3 +116,69 @@ def test_expand_cfg_listfiles_dot_path_inplace(tmp_path: Path) -> None:
 
     assert out is cfg
     assert cfg['paths']['segy_files'] == [str(data_file.resolve())]
+
+
+def test_load_path_listfile_with_tab_json_metadata(tmp_path: Path) -> None:
+    f1 = tmp_path / 'a.sgy'
+    f2 = tmp_path / 'b.sgy'
+    _write_file(f1)
+    _write_file(f2)
+
+    listfile = tmp_path / 'paths.txt'
+    listfile.write_text(
+        '\n'.join(
+            [
+                (
+                    f'{f1}\t'
+                    '{"primary_keys":["ffid"],"primary_ranges":{"ffid":[[1,100]]}}'
+                ),
+                str(f2),
+            ]
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    paths, metas = load_path_listfile_with_meta(listfile)
+    assert paths == [str(f1.resolve()), str(f2.resolve())]
+    assert metas == [
+        {'primary_keys': ['ffid'], 'primary_ranges': {'ffid': [[1, 100]]}},
+        None,
+    ]
+
+
+def test_load_path_listfile_with_tab_invalid_json_raises(tmp_path: Path) -> None:
+    f1 = tmp_path / 'a.sgy'
+    _write_file(f1)
+    listfile = tmp_path / 'paths.txt'
+    listfile.write_text(f'{f1}\t{{invalid json}}\n', encoding='utf-8')
+
+    with pytest.raises(ValueError, match='invalid metadata json'):
+        load_path_listfile_with_meta(listfile)
+
+
+def test_expand_cfg_listfiles_stores_metadata_for_key(tmp_path: Path) -> None:
+    f1 = tmp_path / 'a.sgy'
+    f2 = tmp_path / 'b.sgy'
+    _write_file(f1)
+    _write_file(f2)
+    listfile = tmp_path / 'paths.txt'
+    listfile.write_text(
+        '\n'.join(
+            [
+                f'{f1}\t{{"secondary_key_fixed":{{"ffid":true}}}}',
+                str(f2),
+            ]
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    cfg = {'paths': {'segy_files': str(listfile)}}
+    expand_cfg_listfiles(cfg, keys=['paths.segy_files'])
+
+    assert cfg['paths']['segy_files'] == [str(f1.resolve()), str(f2.resolve())]
+    assert get_cfg_listfile_meta(cfg, key_path='paths.segy_files') == [
+        {'secondary_key_fixed': {'ffid': True}},
+        None,
+    ]

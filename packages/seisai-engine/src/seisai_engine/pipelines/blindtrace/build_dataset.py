@@ -69,6 +69,7 @@ def build_dataset(
     *,
     segy_files: list[str],
     fb_files: list[str] | None,
+    sampling_overrides: list[dict[str, object] | None] | None,
     transform: ViewCompose,
     fbgate: FirstBreakGate,
     plan,
@@ -82,6 +83,9 @@ def build_dataset(
     waveform_mode: str,
     segy_endian: str,
 ) -> SegyGatherPipelineDataset:
+    if sampling_overrides is not None and len(sampling_overrides) != len(segy_files):
+        msg = 'sampling_overrides length must match segy_files length'
+        raise ValueError(msg)
     if fb_files is None:
         validate_files_exist(list(segy_files))
     else:
@@ -89,6 +93,7 @@ def build_dataset(
     return SegyGatherPipelineDataset(
         segy_files=segy_files,
         fb_files=fb_files,
+        sampling_overrides=sampling_overrides,
         transform=transform,
         fbgate=fbgate,
         plan=plan,

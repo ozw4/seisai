@@ -125,6 +125,7 @@ def build_dataset(
     *,
     transform: ViewCompose,
     segy_endian: str | None = None,
+    sampling_overrides: list[dict[str, object] | None] | None = None,
 ) -> SegyGatherPhasePipelineDataset:
     if not isinstance(cfg, dict):
         msg = 'cfg must be dict'
@@ -145,6 +146,9 @@ def build_dataset(
         raise ValueError(
             msg
         )
+    if sampling_overrides is not None and len(sampling_overrides) != len(segy_files):
+        msg = 'sampling_overrides length must match paths.segy_files length'
+        raise ValueError(msg)
     validate_files_exist(list(segy_files) + list(phase_pick_files))
 
     max_trials = optional_int(ds_cfg, 'max_trials', 2048)
@@ -192,6 +196,7 @@ def build_dataset(
         use_header_cache=bool(use_header_cache),
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
+        sampling_overrides=sampling_overrides,
         waveform_mode=str(waveform_mode),
         segy_endian=str(dataset_endian),
         verbose=bool(verbose),

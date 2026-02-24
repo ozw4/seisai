@@ -24,6 +24,7 @@ from seisai_engine.infer.runner import TiledHConfig
 from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
     expand_cfg_listfiles,
+    get_cfg_listfile_meta,
     load_cfg_with_base_dir,
     maybe_load_init_weights,
     resolve_device,
@@ -214,6 +215,12 @@ def main(argv: list[str] | None = None) -> None:
 
     segy_files = require_list_str(paths, 'segy_files')
     infer_segy_files = require_list_str(paths, 'infer_segy_files')
+    train_sampling_overrides = get_cfg_listfile_meta(
+        cfg, key_path='paths.segy_files'
+    )
+    infer_sampling_overrides = get_cfg_listfile_meta(
+        cfg, key_path='paths.infer_segy_files'
+    )
     phase_pick_files = (
         require_list_str(paths, 'phase_pick_files')
         if 'phase_pick_files' in paths
@@ -454,6 +461,7 @@ def main(argv: list[str] | None = None) -> None:
     ds_train_full = build_dataset(
         segy_files=segy_files,
         fb_files=phase_pick_files,
+        sampling_overrides=train_sampling_overrides,
         transform=train_transform,
         fbgate=fbgate_train,
         plan=plan,
@@ -471,6 +479,7 @@ def main(argv: list[str] | None = None) -> None:
     ds_infer_full = build_dataset(
         segy_files=infer_segy_files,
         fb_files=infer_phase_pick_files,
+        sampling_overrides=infer_sampling_overrides,
         transform=infer_transform,
         fbgate=fbgate_infer,
         plan=plan,

@@ -21,6 +21,7 @@ from seisai_engine.pipelines.common import (
     InferEpochResult,
     TrainSkeletonSpec,
     expand_cfg_listfiles,
+    get_cfg_listfile_meta,
     load_cfg_with_base_dir,
     maybe_load_init_weights,
     resolve_device,
@@ -60,6 +61,7 @@ def _build_dataset_for_subset(
     transform,
     secondary_key_fixed: bool,
     segy_endian: str,
+    sampling_overrides: list[dict[str, object] | None] | None,
 ):
     cfg_copy = copy.deepcopy(cfg)
     train_cfg = require_dict(cfg_copy, 'train')
@@ -69,7 +71,12 @@ def _build_dataset_for_subset(
     paths['phase_pick_files'] = list(phase_pick_files)
     ds_cfg = require_dict(cfg_copy, 'dataset')
     ds_cfg['secondary_key_fixed'] = bool(secondary_key_fixed)
-    return build_dataset(cfg_copy, transform=transform, segy_endian=segy_endian)
+    return build_dataset(
+        cfg_copy,
+        transform=transform,
+        segy_endian=segy_endian,
+        sampling_overrides=sampling_overrides,
+    )
 
 
 def _to_tensor_bh(*, value, name: str, device: torch.device) -> torch.Tensor:
@@ -337,6 +344,12 @@ def main(argv: list[str] | None = None) -> None:
     train_phase_pick_files = require_list_str(paths_cfg, 'phase_pick_files')
     infer_segy_files = require_list_str(paths_cfg, 'infer_segy_files')
     infer_phase_pick_files = require_list_str(paths_cfg, 'infer_phase_pick_files')
+    train_sampling_overrides = get_cfg_listfile_meta(
+        cfg, key_path='paths.segy_files'
+    )
+    infer_sampling_overrides = get_cfg_listfile_meta(
+        cfg, key_path='paths.infer_segy_files'
+    )
     if len(train_segy_files) != len(train_phase_pick_files):
         msg = 'paths.segy_files and paths.phase_pick_files must have same length'
         raise ValueError(msg)
@@ -379,6 +392,7 @@ def main(argv: list[str] | None = None) -> None:
         transform=train_transform,
         secondary_key_fixed=bool(train_secondary_key_fixed),
         segy_endian=str(train_endian),
+        sampling_overrides=train_sampling_overrides,
     )
     ds_infer_full = _build_dataset_for_subset(
         cfg,
@@ -388,6 +402,7 @@ def main(argv: list[str] | None = None) -> None:
         transform=infer_transform,
         secondary_key_fixed=True,
         segy_endian=str(infer_endian),
+        sampling_overrides=infer_sampling_overrides,
     )
 
     model = build_model(typed.model).to(device)

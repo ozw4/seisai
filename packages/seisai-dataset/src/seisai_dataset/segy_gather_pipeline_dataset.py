@@ -65,6 +65,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
         segy_endian: str = 'big',
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
+        sampling_overrides: list[dict[str, object] | None] | None = None,
         verbose: bool = False,
         progress: bool | None = None,
         max_trials: int = 2048,
@@ -85,6 +86,13 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
             self.fb_files = list(fb_files)
         else:
             self.fb_files = []
+
+        if sampling_overrides is not None and len(sampling_overrides) != len(segy_files):
+            msg = 'sampling_overrides length must match segy_files length'
+            raise ValueError(msg)
+        self.sampling_overrides = (
+            list(sampling_overrides) if sampling_overrides is not None else None
+        )
 
         super().__init__(
             segy_files=segy_files,
@@ -130,7 +138,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                 unit='file',
                 disable=not self.progress,
             )
-            for segy_path in it:
+            for file_idx, segy_path in enumerate(it):
                 it.set_description_str(f'Index {Path(segy_path).name}', refresh=False)
                 info = build_file_info_dataclass(
                     segy_path,
@@ -142,6 +150,14 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                     include_centroids=True,  # or False
                     waveform_mode=self.waveform_mode,
                     segy_endian=self.segy_endian,
+                )
+                raw_override = (
+                    None
+                    if self.sampling_overrides is None
+                    else self.sampling_overrides[int(file_idx)]
+                )
+                info.sampling_override = self.sampler.normalize_sampling_override(
+                    raw_override
                 )
                 fb = np.full(int(info.n_traces), 1, dtype=np.int32)
                 info.fb = fb
@@ -158,7 +174,7 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                 unit='file',
                 disable=not self.progress,
             )
-            for segy_path, fb_path in it:
+            for file_idx, (segy_path, fb_path) in enumerate(it):
                 it.set_description_str(f'Index {Path(segy_path).name}', refresh=False)
                 info = build_file_info_dataclass(
                     segy_path,
@@ -170,6 +186,14 @@ class SegyGatherPipelineDataset(BaseSegyGatherPipelineDataset):
                     include_centroids=True,  # or False
                     waveform_mode=self.waveform_mode,
                     segy_endian=self.segy_endian,
+                )
+                raw_override = (
+                    None
+                    if self.sampling_overrides is None
+                    else self.sampling_overrides[int(file_idx)]
+                )
+                info.sampling_override = self.sampler.normalize_sampling_override(
+                    raw_override
                 )
                 fb = np.load(fb_path)
                 info.fb = fb

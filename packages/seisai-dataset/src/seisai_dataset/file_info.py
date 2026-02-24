@@ -92,6 +92,7 @@ class FileInfo:
     p_data: np.ndarray | None = None
     s_indptr: np.ndarray | None = None
     s_data: np.ndarray | None = None
+    sampling_override: dict[str, object] | None = None
 
     def __getitem__(self, key: str):
         return getattr(self, key)
