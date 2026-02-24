@@ -445,6 +445,7 @@ def main(argv: list[str] | None = None) -> None:
         infer_max_batches=common.infer.infer_max_batches,
         vis_n=common.infer.vis_n,
         infer_epoch_fn=infer_epoch_fn,
+        ckpt_extra={'output_ids': ['P', 'S', 'N'], 'softmax_axis': 'channel'},
         print_freq=common.train.print_freq,
     )
 
