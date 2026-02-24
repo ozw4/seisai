@@ -178,3 +178,26 @@ def test_sampler_supports_attr_info_without_get() -> None:
     out = sampler.draw(info)
     assert out['key_name'] == 'ffid'
     assert out['primary_unique'] == '100'
+
+
+def test_sampler_primary_ranges_reapplied_after_superwindow() -> None:
+    info = fake_info()
+    info['sampling_override'] = {
+        'primary_keys': ['ffid'],
+        'primary_ranges': {'ffid': [[100, 100]]},
+    }
+    cfg = TraceSubsetSamplerConfig(
+        primary_keys=('ffid',),
+        use_superwindow=True,
+        sw_halfspan=1,
+        sw_prob=1.0,
+        secondary_key_fixed=True,
+        subset_traces=8,
+    )
+    sampler = TraceSubsetSampler(cfg)
+    out = sampler.draw(info)
+    assert out['key_name'] == 'ffid'
+    assert out['did_super'] is True
+    assert out['primary_unique'] == '100'
+    ffid_values = info['ffid_values'][out['indices']]
+    assert np.all(ffid_values == 100)

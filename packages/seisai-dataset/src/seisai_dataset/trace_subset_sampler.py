@@ -117,6 +117,19 @@ class TraceSubsetSampler:
                 indices = self._apply_superwindow(info, key_name, key, indices)
 
         indices = np.asarray(indices, dtype=np.int64)
+        if ranges:
+            indices = self._filter_indices_by_primary_ranges(
+                info,
+                key_name=key_name,
+                indices=indices,
+                ranges=ranges,
+            )
+            if indices.size == 0:
+                msg = (
+                    f'No trace indices for {key_name} after applying primary_ranges: '
+                    f'{ranges}'
+                )
+                raise RuntimeError(msg)
 
         # 3) secondary 整列(従来条件の踏襲 + override)
         secondary_by_primary = self._resolve_secondary_by_primary(sampling_override)
@@ -561,6 +574,23 @@ class TraceSubsetSampler:
                 out_keys.append(key_name)
                 out_weights.append(float(weight))
         return out_keys, out_weights
+
+    def _filter_indices_by_primary_ranges(
+        self,
+        info: dict | FileInfo,
+        *,
+        key_name: str,
+        indices: np.ndarray,
+        ranges: tuple[tuple[int, int], ...],
+    ) -> np.ndarray:
+        if indices.size == 0:
+            return indices
+        values = np.asarray(info[f'{key_name}_values'][indices], dtype=np.int64)
+        keep_mask = np.array(
+            [self._value_in_ranges(int(v), ranges) for v in values],
+            dtype=np.bool_,
+        )
+        return np.asarray(indices[keep_mask], dtype=np.int64)
 
     def _apply_superwindow(
         self, info: dict | FileInfo, key_name: str, key: int, indices: np.ndarray
