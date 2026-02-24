@@ -32,6 +32,10 @@ from seisai_engine.pipelines.common import (
     run_train_skeleton,
     seed_all,
 )
+from seisai_engine.pipelines.common.config_keys import (
+    normalize_endian,
+    raise_if_deprecated_time_len_keys,
+)
 from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 from seisai_engine.loss import composite
@@ -53,31 +57,11 @@ __all__ = ['main']
 DEFAULT_CONFIG_PATH = Path('examples/config_train_blindtrace.yaml')
 
 
-def _normalize_endian(*, value: str, key_name: str) -> str:
-    endian = str(value).strip().lower()
-    if endian not in ('big', 'little'):
-        msg = f'{key_name} must be "big" or "little"'
-        raise ValueError(msg)
-    return endian
-
-
-def _format_key(section: str, key: str) -> str:
-    return f'{section}.{key}'
-
-
 def _raise_if_deprecated_time_len_keys(*, train_cfg: object, transform_cfg: object) -> None:
-    if isinstance(train_cfg, dict) and 'time_len' in train_cfg:
-        msg = (
-            f'deprecated key: {_format_key("train", "time_len")}; '
-            f'use {_format_key("transform", "time_len")}'
-        )
-        raise ValueError(msg)
-    if isinstance(transform_cfg, dict) and 'target_len' in transform_cfg:
-        msg = (
-            f'deprecated key: {_format_key("transform", "target_len")}; '
-            f'use {_format_key("transform", "time_len")}'
-        )
-        raise ValueError(msg)
+    raise_if_deprecated_time_len_keys(
+        train_cfg=train_cfg,
+        transform_cfg=transform_cfg,
+    )
 
 
 def _validate_mask_ratio_for_subset(
@@ -244,11 +228,11 @@ def main(argv: list[str] | None = None) -> None:
         msg = 'dataset.waveform_mode must be "eager" or "mmap"'
         raise ValueError(msg)
     ds_cfg['waveform_mode'] = waveform_mode
-    train_endian = _normalize_endian(
+    train_endian = normalize_endian(
         value=optional_str(ds_cfg, 'train_endian', 'big'),
         key_name='dataset.train_endian',
     )
-    infer_endian = _normalize_endian(
+    infer_endian = normalize_endian(
         value=optional_str(ds_cfg, 'infer_endian', 'big'),
         key_name='dataset.infer_endian',
     )

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 from seisai_engine.pipelines.blindtrace.train import main as pipeline_main
+
+if __package__:
+    from ._entrypoint import run_pipeline_train_entrypoint
+else:  # pragma: no cover - used when run as a script path
+    from _entrypoint import run_pipeline_train_entrypoint
 
 __all__ = ['main']
 
@@ -14,14 +18,11 @@ DEFAULT_CONFIG_PATH = REPO_ROOT / 'examples' / 'config_train_blindtrace.yaml'
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
-    args, unknown = parser.parse_known_args(argv)
-
-    pipeline_args = ['--config', str(args.config)]
-    pipeline_args += unknown
-
-    pipeline_main(argv=pipeline_args)
+    run_pipeline_train_entrypoint(
+        default_config_path=DEFAULT_CONFIG_PATH,
+        pipeline_main=pipeline_main,
+        argv=argv,
+    )
 
 
 if __name__ == '__main__':

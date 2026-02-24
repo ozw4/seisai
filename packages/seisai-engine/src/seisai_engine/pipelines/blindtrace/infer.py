@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
 
-from seisai_engine.infer.runner import TiledHConfig, infer_batch_tiled_h
+from seisai_engine.infer.runner import TiledHConfig
+from seisai_engine.pipelines.common.tiled_infer import run_tiled_infer_epoch
 
 from .vis import save_triptych_step
 
@@ -27,42 +27,34 @@ def run_infer_epoch(
     vis_n: int,
     max_batches: int,
 ) -> float:
-    non_blocking = bool(device.type == 'cuda')
-    infer_loss_sum = 0.0
-    infer_samples = 0
+    def _save_step(
+        step: int,
+        x_in_bchw: torch.Tensor,
+        x_tg_bchw: torch.Tensor,
+        x_pr_bchw: torch.Tensor,
+        batch: dict,
+    ) -> None:
+        save_triptych_step(
+            out_dir=str(vis_out_dir),
+            step=step,
+            x_in_bchw=x_in_bchw,
+            x_tg_bchw=x_tg_bchw,
+            x_pr_bchw=x_pr_bchw,
+            cfg=vis_cfg,
+            batch=batch,
+            c=0,
+        )
 
-    Path(vis_out_dir).mkdir(parents=True, exist_ok=True)
-
-    with torch.no_grad():
-        for step, batch in enumerate(loader):
-            if step >= int(max_batches):
-                break
-
-            x_in = batch['input'].to(device=device, non_blocking=non_blocking)
-            x_tg = batch['target'].to(device=device, non_blocking=non_blocking)
-
-            x_pr = infer_batch_tiled_h(model, x_in, cfg=tiled_cfg)
-            loss = criterion(x_pr, x_tg, batch)
-
-            bsize = int(x_in.shape[0])
-            infer_loss_sum += float(loss.detach().item()) * bsize
-            infer_samples += bsize
-
-            if step < int(vis_n):
-                x_in_wave = x_in[:, :1, :, :]
-                save_triptych_step(
-                    out_dir=str(vis_out_dir),
-                    step=step,
-                    x_in_bchw=x_in_wave.detach().cpu(),
-                    x_tg_bchw=x_tg.detach().cpu(),
-                    x_pr_bchw=x_pr.detach().cpu(),
-                    cfg=vis_cfg,
-                    batch=batch,
-                    c=0,
-                )
-
-    if infer_samples <= 0:
-        msg = 'no inference samples were processed'
-        raise RuntimeError(msg)
-
-    return infer_loss_sum / float(infer_samples)
+    return run_tiled_infer_epoch(
+        model=model,
+        loader=loader,
+        device=device,
+        criterion=criterion,
+        tiled_cfg=tiled_cfg,
+        vis_out_dir=vis_out_dir,
+        vis_n=int(vis_n),
+        max_batches=int(max_batches),
+        save_step_fn=_save_step,
+        pass_device_batch_to_criterion=False,
+        select_vis_input_fn=lambda x: x[:, :1, :, :],
+    )

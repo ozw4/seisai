@@ -22,6 +22,7 @@ from seisai_utils.config import (
 )
 
 from seisai_engine.pipelines.common.augment import build_train_augment_ops
+from seisai_engine.pipelines.common.config_keys import raise_if_deprecated_time_len_keys
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 
@@ -30,25 +31,11 @@ from .build_plan import build_plan
 __all__ = ['build_dataset', 'build_infer_transform', 'build_train_transform']
 
 
-def _format_key(section: str, key: str) -> str:
-    return f'{section}.{key}'
-
-
 def _raise_if_deprecated_time_len_keys(*, cfg: dict) -> None:
-    train_cfg = cfg.get('train')
-    if isinstance(train_cfg, dict) and 'time_len' in train_cfg:
-        msg = (
-            f'deprecated key: {_format_key("train", "time_len")}; '
-            f'use {_format_key("transform", "time_len")}'
-        )
-        raise ValueError(msg)
-    transform_cfg = cfg.get('transform')
-    if isinstance(transform_cfg, dict) and 'target_len' in transform_cfg:
-        msg = (
-            f'deprecated key: {_format_key("transform", "target_len")}; '
-            f'use {_format_key("transform", "time_len")}'
-        )
-        raise ValueError(msg)
+    raise_if_deprecated_time_len_keys(
+        train_cfg=cfg.get('train'),
+        transform_cfg=cfg.get('transform'),
+    )
 
 
 def _resolve_time_len(cfg: dict) -> tuple[dict, int]:

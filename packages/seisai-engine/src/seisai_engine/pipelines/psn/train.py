@@ -29,6 +29,7 @@ from seisai_engine.pipelines.common import (
     run_train_skeleton,
     seed_all,
 )
+from seisai_engine.pipelines.common.config_keys import normalize_endian
 from seisai_engine.optim import build_optimizer
 
 from .build_dataset import build_dataset, build_infer_transform, build_train_transform
@@ -42,14 +43,6 @@ if TYPE_CHECKING:
 __all__ = ['main']
 
 DEFAULT_CONFIG_PATH = Path('examples/config_train_psn.yaml')
-
-
-def _normalize_endian(*, value: str, key_name: str) -> str:
-    endian = str(value).strip().lower()
-    if endian not in ('big', 'little'):
-        msg = f'{key_name} must be "big" or "little"'
-        raise ValueError(msg)
-    return endian
 
 
 def _build_dataset_for_subset(
@@ -369,11 +362,11 @@ def main(argv: list[str] | None = None) -> None:
         msg = 'dataset.waveform_mode must be "eager" or "mmap"'
         raise ValueError(msg)
     ds_cfg['waveform_mode'] = waveform_mode
-    train_endian = _normalize_endian(
+    train_endian = normalize_endian(
         value=optional_str(ds_cfg, 'train_endian', 'big'),
         key_name='dataset.train_endian',
     )
-    infer_endian = _normalize_endian(
+    infer_endian = normalize_endian(
         value=optional_str(ds_cfg, 'infer_endian', 'big'),
         key_name='dataset.infer_endian',
     )
