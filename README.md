@@ -408,6 +408,9 @@ pytest -q -m integration
 - Mask 契約: `docs/spec/mask_contract.md`
 - Training pipeline 出力レイアウト: `docs/spec/training_pipeline_output_layout.md`
 - MLflow tracking 仕様: `docs/spec/mlflow_tracking_spec.md`
+- `run_psn_train.py` スモークテスト手順: `docs/testing/smoke_run_train_psn.md`
+- `SegyGatherPairDataset` 例外系テスト技術メモ: `docs/testing/-test_segy_gather_pair_dataset_exceptions.md`
+- `SegyGatherPairDataset` Pair整合性テスト技術メモ: `docs/testing/test_segy_gather_pair_dataset_pair_consistency.md`
 
 ## License
 
