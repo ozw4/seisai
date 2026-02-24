@@ -30,6 +30,13 @@
 #### 1.2.1 拡張行形式（SEGYごとのサンプリング指定）
 `paths.segy_files` / `paths.infer_segy_files` の listfile では、次の形式を使うと 1 ファイルごとにサンプリング設定を上書きできます。
 
+適用範囲（現状）:
+- PSN
+- BlindTrace
+
+Pair について:
+- `paths.input_segy_files` / `paths.target_segy_files` への同等拡張は **将来対応予定**（現状未対応）
+
 ```
 <segy_path><TAB><json object>
 ```
@@ -45,6 +52,19 @@
 - `primary_ranges` は閉区間 `[lo, hi]` を複数指定可（`[[1,100],[300,350]]`）
 - `secondary_key` は primary ごとに固定指定（例: `ffid -> chno`）
 - `secondary_key_fixed` は `bool` または primary 別の `dict[str,bool]`
+- `primary_ranges` は superwindow 適用後の trace indices にも再適用されるため、範囲外トレースは混入しません（train/val リーク防止）
+
+推奨ユースケース（同一SEGYを train/val で範囲分割）:
+
+```text
+# train_segy_list.txt
+/data/siteA.sgy	{"primary_keys":["ffid"],"primary_ranges":{"ffid":[[1,100]]}}
+```
+
+```text
+# infer_segy_list.txt
+/data/siteA.sgy	{"primary_keys":["ffid"],"primary_ranges":{"ffid":[[101,200]]}}
+```
 
 ### 入力例A: listfile（`str` で指定）
 
