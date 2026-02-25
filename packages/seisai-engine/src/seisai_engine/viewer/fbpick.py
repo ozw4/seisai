@@ -6,10 +6,12 @@ from pathlib import Path
 import numpy as np
 import torch
 from seisai_dataset.builder import MakeOffsetChannel
-from seisai_engine.pipelines.common import load_checkpoint
-from seisai_engine.predict import infer_tiled_chw
 from seisai_transforms.augment import PerTraceStandardize
 from seisai_utils.validator import validate_array
+
+from seisai_engine.infer.ckpt_meta import resolve_output_ids, resolve_softmax_axis
+from seisai_engine.pipelines.common import load_checkpoint
+from seisai_engine.predict import infer_tiled_chw
 
 from .model_cache import ViewerModelBundle, get_or_create_model_bundle
 
@@ -77,61 +79,6 @@ def _resolve_device(device: str | torch.device) -> torch.device:
         return torch.device(f'cuda:{idx}')
     msg = f'device="{device}" is invalid; expected auto|cpu|cuda|cuda:N'
     raise ValueError(msg)
-
-
-def _resolve_softmax_axis(*, ckpt: dict, out_chans: int) -> str:
-    axis_raw = ckpt.get('softmax_axis')
-    if axis_raw is not None:
-        if not isinstance(axis_raw, str):
-            msg = 'checkpoint softmax_axis must be str'
-            raise TypeError(msg)
-        axis = axis_raw.strip().lower()
-        if axis not in ('time', 'channel'):
-            msg = 'checkpoint softmax_axis must be "time" or "channel"'
-            raise ValueError(msg)
-    else:
-        pipeline = ckpt['pipeline']
-        if pipeline == 'psn':
-            axis = 'channel'
-        elif out_chans == 1:
-            axis = 'time'
-        else:
-            msg = 'softmax_axis is ambiguous; set checkpoint softmax_axis'
-            raise ValueError(msg)
-
-    if axis == 'time' and out_chans != 1:
-        msg = 'softmax_axis="time" requires out_chans==1'
-        raise ValueError(msg)
-
-    return axis
-
-
-def _resolve_output_ids(*, ckpt: dict, out_chans: int) -> tuple[str, ...]:
-    output_ids_raw = ckpt.get('output_ids')
-    if output_ids_raw is not None:
-        if not isinstance(output_ids_raw, list | tuple):
-            msg = 'checkpoint output_ids must be list[str] or tuple[str, ...]'
-            raise TypeError(msg)
-        output_ids = []
-        for idx, item in enumerate(output_ids_raw):
-            if not isinstance(item, str) or not item:
-                msg = f'checkpoint output_ids[{idx}] must be non-empty str'
-                raise TypeError(msg)
-            output_ids.append(item)
-        if len(output_ids) != out_chans:
-            msg = (
-                f'checkpoint output_ids length {len(output_ids)} '
-                f'!= out_chans {out_chans}'
-            )
-            raise ValueError(msg)
-        return tuple(output_ids)
-
-    pipeline = ckpt['pipeline']
-    if pipeline == 'psn' and out_chans == 3:
-        return ('P', 'S', 'N')
-    if out_chans == 1:
-        return ('P',)
-    return tuple(f'ch{idx}' for idx in range(out_chans))
 
 
 def _resolve_channel_index(
@@ -307,8 +254,16 @@ def _build_model_bundle(*, ckpt_path: Path, device: torch.device) -> ViewerModel
         model=model,
         in_chans=in_chans,
         out_chans=out_chans,
-        softmax_axis=_resolve_softmax_axis(ckpt=ckpt, out_chans=out_chans),
-        output_ids=_resolve_output_ids(ckpt=ckpt, out_chans=out_chans),
+        softmax_axis=resolve_softmax_axis(
+            ckpt=ckpt,
+            out_chans=out_chans,
+            pipeline_name='psn',
+        ),
+        output_ids=resolve_output_ids(
+            ckpt=ckpt,
+            out_chans=out_chans,
+            pipeline_name='psn',
+        ),
     )
 
 
@@ -350,6 +305,7 @@ def infer_prob_hw(
       each trace (distribution-over-time style, typically `out_chans==1`).
     - `channel` string input is matched after `strip()`; label matching remains
       case-sensitive against `output_ids`.
+
     """
     validate_array(section_hw, allowed_ndims=(2,), name='section_hw', backend='numpy')
     section = np.ascontiguousarray(section_hw, dtype=np.float32)

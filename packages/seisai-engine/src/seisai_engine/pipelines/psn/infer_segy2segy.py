@@ -20,6 +20,7 @@ from seisai_utils.config import (
 )
 from seisai_utils.segy_write import write_segy_float32_like_input_with_text0_append
 
+from seisai_engine.infer.ckpt_meta import resolve_output_ids, resolve_softmax_axis
 from seisai_engine.infer.ffid_segy2segy import (
     Tiled2DConfig,
     _validate_tiled2d_cfg,
@@ -27,13 +28,29 @@ from seisai_engine.infer.ffid_segy2segy import (
 )
 from seisai_engine.infer.segy2segy_cli_common import (
     apply_unknown_overrides as _apply_unknown_overrides_common,
+)
+from seisai_engine.infer.segy2segy_cli_common import (
     build_merged_cfg as _build_merged_cfg_common,
+)
+from seisai_engine.infer.segy2segy_cli_common import (
     cfg_hash as _cfg_hash_common,
+)
+from seisai_engine.infer.segy2segy_cli_common import (
     is_strict_int as _is_strict_int_common,
+)
+from seisai_engine.infer.segy2segy_cli_common import (
     merge_with_precedence as _merge_with_precedence_common,
+)
+from seisai_engine.infer.segy2segy_cli_common import (
     resolve_ckpt_path as _resolve_ckpt_path_common,
+)
+from seisai_engine.infer.segy2segy_cli_common import (
     resolve_segy_files as _resolve_segy_files_common,
+)
+from seisai_engine.infer.segy2segy_cli_common import (
     select_state_dict as _select_state_dict_common,
+)
+from seisai_engine.infer.segy2segy_cli_common import (
     sig_hash as _sig_hash_common,
 )
 from seisai_engine.pipelines.common import (
@@ -157,61 +174,6 @@ def _select_state_dict(ckpt: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     return _select_state_dict_common(ckpt)
 
 
-def _resolve_softmax_axis(*, ckpt: dict[str, Any], out_chans: int) -> str:
-    axis_raw = ckpt.get('softmax_axis')
-    if axis_raw is not None:
-        if not isinstance(axis_raw, str):
-            msg = 'checkpoint softmax_axis must be str'
-            raise TypeError(msg)
-        axis = axis_raw.strip().lower()
-        if axis not in ('time', 'channel'):
-            msg = 'checkpoint softmax_axis must be "time" or "channel"'
-            raise ValueError(msg)
-    else:
-        if ckpt['pipeline'] == PIPELINE_NAME:
-            axis = 'channel'
-        elif int(out_chans) == 1:
-            axis = 'time'
-        else:
-            msg = 'softmax_axis is ambiguous; set checkpoint softmax_axis'
-            raise ValueError(msg)
-
-    if axis == 'time' and int(out_chans) != 1:
-        msg = 'softmax_axis="time" requires out_chans==1'
-        raise ValueError(msg)
-    return axis
-
-
-def _resolve_output_ids(*, ckpt: dict[str, Any], out_chans: int) -> tuple[str, ...]:
-    output_ids_raw = ckpt.get('output_ids')
-    if output_ids_raw is not None:
-        if not isinstance(output_ids_raw, list | tuple):
-            msg = 'checkpoint output_ids must be list[str] or tuple[str, ...]'
-            raise TypeError(msg)
-        output_ids: list[str] = []
-        for idx, item in enumerate(output_ids_raw):
-            if not isinstance(item, str) or len(item.strip()) == 0:
-                msg = f'checkpoint output_ids[{idx}] must be non-empty str'
-                raise TypeError(msg)
-            output_ids.append(item.strip())
-        if len(output_ids) != int(out_chans):
-            msg = (
-                f'checkpoint output_ids length {len(output_ids)} '
-                f'!= out_chans {int(out_chans)}'
-            )
-            raise ValueError(msg)
-        if len(set(output_ids)) != len(output_ids):
-            msg = 'checkpoint output_ids must be unique'
-            raise ValueError(msg)
-        return tuple(output_ids)
-
-    if ckpt['pipeline'] == PIPELINE_NAME and int(out_chans) == 3:
-        return ('P', 'S', 'N')
-    if int(out_chans) == 1:
-        return ('P',)
-    return tuple(f'ch{idx}' for idx in range(int(out_chans)))
-
-
 def _resolve_selected_outputs(
     *,
     infer_cfg: dict[str, Any],
@@ -315,8 +277,16 @@ def _build_model_from_ckpt(
         msg = f'psn infer requires model_sig.out_chans=3, got {int(out_chans)}'
         raise ValueError(msg)
 
-    output_ids = _resolve_output_ids(ckpt=ckpt, out_chans=int(out_chans))
-    softmax_axis = _resolve_softmax_axis(ckpt=ckpt, out_chans=int(out_chans))
+    output_ids = resolve_output_ids(
+        ckpt=ckpt,
+        out_chans=int(out_chans),
+        pipeline_name=PIPELINE_NAME,
+    )
+    softmax_axis = resolve_softmax_axis(
+        ckpt=ckpt,
+        out_chans=int(out_chans),
+        pipeline_name=PIPELINE_NAME,
+    )
 
     model_kwargs = dict(model_sig)
     model_kwargs['pretrained'] = False
@@ -530,6 +500,17 @@ def run_infer_and_write(
         msg = 'output_ids must be unique'
         raise ValueError(msg)
 
+    out_chans = len(output_ids)
+    tile_h_cfg = int(tile_cfg.tile_h)
+    tile_w_cfg = int(tile_cfg.tile_w)
+    overlap_h_cfg = int(tile_cfg.overlap_h)
+    overlap_w_cfg = int(tile_cfg.overlap_w)
+    tile_amp = bool(tile_cfg.amp)
+    tile_use_tqdm = bool(tile_cfg.use_tqdm)
+    tiles_per_batch = int(tile_cfg.tiles_per_batch)
+    standardize_eps_value = float(standardize_eps)
+    overwrite_flag = bool(overwrite)
+
     cfg_hash = _cfg_hash(cfg)
     ckpt_cfg_hash = _cfg_hash(ckpt_cfg)
     sig_hash = _sig_hash(model_sig)
@@ -542,6 +523,7 @@ def run_infer_and_write(
     with FFIDGatherIterator(segy_files, sort_within=sort_within) as iterator:
         for file_index, src in enumerate(iterator.segy_files):
             src_path = Path(src)
+            standardize = PerTraceStandardize(eps=standardize_eps_value)
 
             def infer_one_gather(gather: Any) -> np.ndarray:
                 x_hw = np.asarray(gather.x_hw, dtype=np.float32)
@@ -554,7 +536,6 @@ def run_infer_and_write(
                     msg = f'invalid gather shape: {x_hw.shape}'
                     raise ValueError(msg)
 
-                standardize = PerTraceStandardize(eps=float(standardize_eps))
                 x_std_hw = standardize(x_hw)
                 if not isinstance(x_std_hw, np.ndarray):
                     msg = 'PerTraceStandardize must return numpy.ndarray'
@@ -571,10 +552,10 @@ def run_infer_and_write(
                     device=device, dtype=torch.float32
                 )
 
-                tile_h = min(int(tile_cfg.tile_h), h)
-                tile_w = min(int(tile_cfg.tile_w), w)
-                overlap_h = int(tile_cfg.overlap_h)
-                overlap_w = int(tile_cfg.overlap_w)
+                tile_h = min(tile_h_cfg, h)
+                tile_w = min(tile_w_cfg, w)
+                overlap_h = overlap_h_cfg
+                overlap_w = overlap_w_cfg
                 overlap_h = 0 if tile_h == 1 else min(overlap_h, tile_h - 1)
                 overlap_w = 0 if tile_w == 1 else min(overlap_w, tile_w - 1)
 
@@ -583,11 +564,11 @@ def run_infer_and_write(
                     x_bchw,
                     tile=(tile_h, tile_w),
                     overlap=(overlap_h, overlap_w),
-                    amp=bool(tile_cfg.amp),
-                    use_tqdm=bool(tile_cfg.use_tqdm),
-                    tiles_per_batch=int(tile_cfg.tiles_per_batch),
+                    amp=tile_amp,
+                    use_tqdm=tile_use_tqdm,
+                    tiles_per_batch=tiles_per_batch,
                 )
-                expected_logits = (1, len(output_ids), h, w)
+                expected_logits = (1, out_chans, h, w)
                 if tuple(y_bchw.shape) != expected_logits:
                     msg = (
                         f'predict output shape must be {expected_logits}, '
@@ -597,7 +578,7 @@ def run_infer_and_write(
 
                 y_prob = torch.softmax(y_bchw.to(dtype=torch.float32), dim=1)
                 y_chw = y_prob[0].detach().cpu().numpy().astype(np.float32, copy=False)
-                expected_chw = (len(output_ids), h, w)
+                expected_chw = (out_chans, h, w)
                 if tuple(y_chw.shape) != expected_chw:
                     msg = (
                         f'prob output shape must be {expected_chw}, '
@@ -609,15 +590,15 @@ def run_infer_and_write(
             out_chw = run_ffid_gather_infer_core_chw(
                 iterator=iterator,
                 file_index=file_index,
-                out_chans=len(output_ids),
+                out_chans=out_chans,
                 infer_one_gather_fn=infer_one_gather,
                 ffids=ffids,
             )
+            inferred_at = datetime.now(timezone.utc).isoformat()
 
             for output_id in selected_outputs:
                 ch_idx = output_id_to_chan[output_id]
                 out_hw = np.asarray(out_chw[ch_idx], dtype=np.float32)
-                inferred_at = datetime.now(timezone.utc).isoformat()
                 out_path = _build_output_path(
                     src_path=src_path,
                     out_dir=out_dir,
@@ -643,7 +624,7 @@ def run_infer_and_write(
                     dst_path=out_path,
                     data_hw_float32=out_hw,
                     text0_append_lines=text0_lines,
-                    overwrite=bool(overwrite),
+                    overwrite=overwrite_flag,
                 )
                 _write_sidecar_json(
                     out_path=out_path,

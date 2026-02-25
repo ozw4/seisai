@@ -1,11 +1,9 @@
 import pytest
 import torch
-
+from seisai_engine.infer.ckpt_meta import resolve_output_ids, resolve_softmax_axis
 from seisai_engine.viewer.fbpick import (
     _apply_softmax,
     _resolve_channel_index,
-    _resolve_output_ids,
-    _resolve_softmax_axis,
 )
 
 
@@ -55,50 +53,78 @@ def test_apply_softmax_time_requires_single_output_channel() -> None:
 
 
 def test_resolve_softmax_axis_from_checkpoint_and_defaults() -> None:
-    axis_1 = _resolve_softmax_axis(
+    axis_1 = resolve_softmax_axis(
         ckpt={'pipeline': 'fbpick', 'softmax_axis': 'channel'},
         out_chans=4,
+        pipeline_name='psn',
     )
     assert axis_1 == 'channel'
 
-    axis_2 = _resolve_softmax_axis(ckpt={'pipeline': 'psn'}, out_chans=3)
+    axis_2 = resolve_softmax_axis(
+        ckpt={'pipeline': 'psn'},
+        out_chans=3,
+        pipeline_name='psn',
+    )
     assert axis_2 == 'channel'
 
-    axis_3 = _resolve_softmax_axis(ckpt={'pipeline': 'fbpick'}, out_chans=1)
+    axis_3 = resolve_softmax_axis(
+        ckpt={'pipeline': 'fbpick'},
+        out_chans=1,
+        pipeline_name='psn',
+    )
     assert axis_3 == 'time'
 
     with pytest.raises(ValueError):
-        _resolve_softmax_axis(ckpt={'pipeline': 'fbpick'}, out_chans=2)
+        resolve_softmax_axis(
+            ckpt={'pipeline': 'fbpick'},
+            out_chans=2,
+            pipeline_name='psn',
+        )
 
     with pytest.raises(ValueError):
-        _resolve_softmax_axis(
+        resolve_softmax_axis(
             ckpt={'pipeline': 'fbpick', 'softmax_axis': 'time'},
             out_chans=2,
+            pipeline_name='psn',
         )
 
 
 def test_resolve_output_ids_from_ckpt_and_fallback_rules() -> None:
-    output_ids = _resolve_output_ids(
+    output_ids = resolve_output_ids(
         ckpt={'pipeline': 'fbpick', 'output_ids': ['A', 'B']},
         out_chans=2,
+        pipeline_name='psn',
     )
     assert output_ids == ('A', 'B')
 
-    assert _resolve_output_ids(ckpt={'pipeline': 'psn'}, out_chans=3) == (
+    assert resolve_output_ids(
+        ckpt={'pipeline': 'psn'},
+        out_chans=3,
+        pipeline_name='psn',
+    ) == (
         'P',
         'S',
         'N',
     )
-    assert _resolve_output_ids(ckpt={'pipeline': 'fbpick'}, out_chans=1) == ('P',)
-    assert _resolve_output_ids(ckpt={'pipeline': 'fbpick'}, out_chans=2) == (
+    assert resolve_output_ids(
+        ckpt={'pipeline': 'fbpick'},
+        out_chans=1,
+        pipeline_name='psn',
+    ) == ('P',)
+    assert resolve_output_ids(
+        ckpt={'pipeline': 'fbpick'},
+        out_chans=2,
+        pipeline_name='psn',
+    ) == (
         'ch0',
         'ch1',
     )
 
     with pytest.raises(ValueError):
-        _resolve_output_ids(
+        resolve_output_ids(
             ckpt={'pipeline': 'fbpick', 'output_ids': ['P']},
             out_chans=2,
+            pipeline_name='psn',
         )
 
 
