@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timezone
+from functools import partial
 from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any
@@ -26,32 +27,24 @@ from seisai_engine.infer.ffid_segy2segy import (
     run_ffid_gather_infer_core,
 )
 from seisai_engine.infer.segy2segy_cli_common import (
-    apply_unknown_overrides as _apply_unknown_overrides_common,
+    apply_unknown_overrides as _apply_unknown_overrides,
 )
 from seisai_engine.infer.segy2segy_cli_common import (
     build_merged_cfg as _build_merged_cfg_common,
 )
+from seisai_engine.infer.segy2segy_cli_common import cfg_hash as _cfg_hash
+from seisai_engine.infer.segy2segy_cli_common import is_strict_int as _is_strict_int
+from seisai_engine.infer.segy2segy_cli_common import merge_with_precedence
 from seisai_engine.infer.segy2segy_cli_common import (
-    cfg_hash as _cfg_hash_common,
+    resolve_ckpt_path as _resolve_ckpt_path,
 )
 from seisai_engine.infer.segy2segy_cli_common import (
-    is_strict_int as _is_strict_int_common,
+    resolve_segy_files as _resolve_segy_files,
 )
 from seisai_engine.infer.segy2segy_cli_common import (
-    merge_with_precedence as _merge_with_precedence_common,
+    select_state_dict as _select_state_dict,
 )
-from seisai_engine.infer.segy2segy_cli_common import (
-    resolve_ckpt_path as _resolve_ckpt_path_common,
-)
-from seisai_engine.infer.segy2segy_cli_common import (
-    resolve_segy_files as _resolve_segy_files_common,
-)
-from seisai_engine.infer.segy2segy_cli_common import (
-    select_state_dict as _select_state_dict_common,
-)
-from seisai_engine.infer.segy2segy_cli_common import (
-    sig_hash as _sig_hash_common,
-)
+from seisai_engine.infer.segy2segy_cli_common import sig_hash as _sig_hash
 from seisai_engine.pipelines.common import (
     build_encdec2d_model,
     load_cfg_with_base_dir,
@@ -126,49 +119,10 @@ def _default_cfg() -> dict[str, Any]:
     }
 
 
-def _is_strict_int(v: object) -> bool:
-    return _is_strict_int_common(v)
-
-
-def merge_with_precedence(
-    *,
-    default_cfg: dict[str, Any],
-    ckpt_cfg: dict[str, Any],
-    infer_cfg: dict[str, Any],
-) -> dict[str, Any]:
-    return _merge_with_precedence_common(default_cfg, ckpt_cfg, infer_cfg)
-
-
-def apply_unknown_overrides(
-    *,
-    cfg: dict[str, Any],
-    unknown_overrides: list[str],
-) -> dict[str, Any]:
-    return _apply_unknown_overrides_common(
-        cfg=cfg,
-        unknown_overrides=unknown_overrides,
-        safe_paths=_SAFE_OVERRIDE_PATHS,
-    )
-
-
-def _resolve_ckpt_path(cfg: dict[str, Any], *, base_dir: Path) -> Path:
-    return _resolve_ckpt_path_common(cfg, base_dir)
-
-
-def _resolve_segy_files(*, base_dir: Path, segy_files: list[str]) -> list[str]:
-    return _resolve_segy_files_common(base_dir, segy_files)
-
-
-def _cfg_hash(cfg: dict[str, Any]) -> str:
-    return _cfg_hash_common(cfg)
-
-
-def _sig_hash(sig: dict[str, Any]) -> str:
-    return _sig_hash_common(sig)
-
-
-def _select_state_dict(ckpt: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    return _select_state_dict_common(ckpt)
+apply_unknown_overrides = partial(
+    _apply_unknown_overrides,
+    safe_paths=_SAFE_OVERRIDE_PATHS,
+)
 
 
 def _require_positive_float(value: object, *, name: str) -> float:
@@ -514,35 +468,22 @@ def _load_ckpt_cfg_for_merge(
     return cfg_from_ckpt
 
 
-def _build_merged_cfg(
-    *,
-    infer_yaml_cfg: dict[str, Any],
-    base_dir: Path,
-    unknown_overrides: list[str],
-) -> dict[str, Any]:
-    return _build_merged_cfg_common(
-        infer_yaml_cfg=infer_yaml_cfg,
-        base_dir=base_dir,
-        unknown_overrides=unknown_overrides,
-        default_cfg=_default_cfg(),
-        safe_paths=_SAFE_OVERRIDE_PATHS,
-        ckpt_cfg_loader=lambda infer_cfg_for_ckpt, local_base_dir: _load_ckpt_cfg_for_merge(
-            base_dir=local_base_dir,
-            infer_cfg_for_ckpt=infer_cfg_for_ckpt,
-        ),
-    )
-
-
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
     args, unknown = parser.parse_known_args(argv)
 
     infer_yaml_cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
-    merged_cfg = _build_merged_cfg(
+    merged_cfg = _build_merged_cfg_common(
         infer_yaml_cfg=infer_yaml_cfg,
         base_dir=base_dir,
         unknown_overrides=unknown,
+        default_cfg=_default_cfg(),
+        safe_paths=_SAFE_OVERRIDE_PATHS,
+        ckpt_cfg_loader=lambda infer_cfg_for_ckpt, local_base_dir: _load_ckpt_cfg_for_merge(
+            base_dir=local_base_dir,
+            infer_cfg_for_ckpt=infer_cfg_for_ckpt,
+        ),
     )
     out_paths = run_infer_and_write(cfg=merged_cfg, base_dir=base_dir)
     for path in out_paths:
