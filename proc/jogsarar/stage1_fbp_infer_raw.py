@@ -13,7 +13,9 @@ import torch
 from _model import NetAE as EncDec2D
 from jogsarar_shared import (
     TilePerTraceStandardize,
-    build_pick_aligned_window,
+    compute_conf_rs_from_residual_statics,
+    compute_conf_trend_gaussian_var,
+    compute_residual_statics_metrics,
     find_segy_files,
     valid_pick_mask,
 )
@@ -24,16 +26,8 @@ from seisai_engine.postprocess.velocity_filter_op import apply_velocity_filt_pro
 from seisai_engine.predict import _run_tiled
 from seisai_pick.lmo import apply_lmo_linear, lmo_correct_picks
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
-from seisai_pick.residual_statics import refine_firstbreak_residual_statics
 from seisai_pick.score.confidence_from_prob import (
     trace_confidence_from_prob_local_window,
-)
-from seisai_pick.score.confidence_from_residual_statics import (
-    trace_confidence_from_residual_statics,
-)
-from seisai_pick.score.confidence_from_trend_resid import (
-    trace_confidence_from_trend_resid_gaussian,
-    trace_confidence_from_trend_resid_var,
 )
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 from seisai_pick.trend.trend_fit import robust_linear_trend
@@ -938,16 +932,12 @@ def process_one_segy(
                     msg = f"RS_BASE_PICK must be 'pre' or 'snap', got {RS_BASE_PICK!r}"
                     raise ValueError(msg)
 
-                X_rs = build_pick_aligned_window(
-                    wave_pad[:, :n_samples_orig],
+                rs_metrics = compute_residual_statics_metrics(
+                    wave_hw=wave_pad[:, :n_samples_orig],
                     picks=pick_base,
                     pre=int(RS_PRE_SAMPLES),
                     post=int(RS_POST_SAMPLES),
                     fill=0.0,
-                )
-
-                res = refine_firstbreak_residual_statics(
-                    X_rs,
                     max_lag=int(RS_MAX_LAG),
                     k_neighbors=int(RS_K_NEIGHBORS),
                     n_iter=int(RS_N_ITER),
@@ -963,10 +953,10 @@ def process_one_segy(
                     lag_penalty_power=float(RS_LAG_PENALTY_POWER),
                 )
 
-                delta = np.asarray(res['delta_pick'], dtype=np.float32)
-                cmax_rs = np.asarray(res['cmax'], dtype=np.float32)
-                score_rs = np.asarray(res['score'], dtype=np.float32)
-                valid_rs = np.asarray(res['valid_mask'], dtype=bool)
+                delta = rs_metrics.delta_pick
+                cmax_rs = rs_metrics.cmax
+                score_rs = rs_metrics.score
+                valid_rs = rs_metrics.valid_mask
 
                 pick_ref = pick_base.astype(np.float32, copy=False) + delta
                 pick_ref[pick_base == 0] = 0.0
@@ -998,7 +988,9 @@ def process_one_segy(
                     pick_out_i = pick_ref_i
                     rs_label = f'refine({base_label})'
 
-                hist_last = res['history'][-1] if res['history'] else {}
+                hist_last = (
+                    rs_metrics.history[-1] if rs_metrics.history else {}
+                )
                 mean_cmax = float(hist_last.get('mean_cmax', 0.0))
                 mean_abs_update = float(hist_last.get('mean_abs_update', 0.0))
                 n_valid_hist = int(hist_last.get('n_valid', 0))
@@ -1098,51 +1090,33 @@ def process_one_segy(
                         valid_pick_mask(pick_out_i, n_samples=n_samples_orig) & trend_ok
                     )
 
-                    conf0_g = trace_confidence_from_trend_resid_gaussian(
-                        t0_sec,
-                        t_trend_sec,
-                        valid0,
+                    conf_trend0 = compute_conf_trend_gaussian_var(
+                        t_pick_sec=t0_sec,
+                        t_trend_sec=t_trend_sec,
+                        valid_mask=valid0,
                         sigma_ms=float(TREND_SIGMA_MS),
-                    )
-                    conf1_g = trace_confidence_from_trend_resid_gaussian(
-                        t1_sec,
-                        t_trend_sec,
-                        valid1,
-                        sigma_ms=float(TREND_SIGMA_MS),
-                    )
-
-                    conf0_v = trace_confidence_from_trend_resid_var(
-                        t0_sec,
-                        t_trend_sec,
-                        valid0,
                         half_win_traces=int(TREND_VAR_HALF_WIN_TRACES),
                         sigma_std_ms=float(TREND_VAR_SIGMA_STD_MS),
                         min_count=int(TREND_VAR_MIN_COUNT),
+                        zero_invalid=False,
                     )
-                    conf1_v = trace_confidence_from_trend_resid_var(
-                        t1_sec,
-                        t_trend_sec,
-                        valid1,
+                    conf_trend1 = compute_conf_trend_gaussian_var(
+                        t_pick_sec=t1_sec,
+                        t_trend_sec=t_trend_sec,
+                        valid_mask=valid1,
+                        sigma_ms=float(TREND_SIGMA_MS),
                         half_win_traces=int(TREND_VAR_HALF_WIN_TRACES),
                         sigma_std_ms=float(TREND_VAR_SIGMA_STD_MS),
                         min_count=int(TREND_VAR_MIN_COUNT),
+                        zero_invalid=False,
                     )
-
-                    conf_trend0 = (
-                        np.asarray(conf0_g, dtype=np.float32)
-                        * np.asarray(conf0_v, dtype=np.float32)
-                    ).astype(np.float32, copy=False)
-                    conf_trend1 = (
-                        np.asarray(conf1_g, dtype=np.float32)
-                        * np.asarray(conf1_v, dtype=np.float32)
-                    ).astype(np.float32, copy=False)
 
                 # ---- conf_rs: residual statics の信頼度 ----
                 if USE_RESIDUAL_STATICS:
-                    conf_rs1 = trace_confidence_from_residual_statics(
-                        delta,
-                        cmax_rs,
-                        valid_rs,
+                    conf_rs1 = compute_conf_rs_from_residual_statics(
+                        delta_pick=delta,
+                        cmax=cmax_rs,
+                        valid_mask=valid_rs,
                         c_th=float(RS_CMAX_TH),
                         max_lag=float(RS_ABS_LAG_SOFT),
                     )

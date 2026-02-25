@@ -9,14 +9,11 @@ import segyio
 import torch
 from jogsarar_shared import (
     build_groups_by_key,
+    compute_conf_trend1_from_trend as compute_conf_trend1_from_trend_shared,
     find_segy_files,
     read_trace_field,
     require_npz_key,
     valid_pick_mask,
-)
-from seisai_pick.score.confidence_from_trend_resid import (
-    trace_confidence_from_trend_resid_gaussian,
-    trace_confidence_from_trend_resid_var,
 )
 from seisai_pick.trend.trend_fit_strategy import TwoPieceIRLSAutoBreakStrategy
 
@@ -605,36 +602,16 @@ def _compute_conf_trend1_from_trend(
     dt_sec_in: float,
     cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> np.ndarray:
-    p = np.asarray(pick_final_i, dtype=np.int64)
-    c = np.asarray(trend_center_i, dtype=np.float32)
-    if p.ndim != 1 or c.ndim != 1 or p.shape != c.shape:
-        msg = f'pick_final_i/trend shape mismatch: {p.shape}, {c.shape}'
-        raise ValueError(msg)
-
-    t_pick_sec = p.astype(np.float32, copy=False) * float(dt_sec_in)
-    t_trend_sec = c.astype(np.float32, copy=False) * float(dt_sec_in)
-    trend_ok = np.isfinite(c) & (c > 0.0)
-    valid = valid_pick_mask(p, n_samples=int(n_samples_in)) & trend_ok
-
-    conf_g = trace_confidence_from_trend_resid_gaussian(
-        t_pick_sec,
-        t_trend_sec,
-        valid,
+    return compute_conf_trend1_from_trend_shared(
+        pick_final_i=pick_final_i,
+        trend_center_i=trend_center_i,
+        n_samples_in=int(n_samples_in),
+        dt_sec_in=float(dt_sec_in),
         sigma_ms=float(cfg.conf_trend_sigma_ms),
-    )
-    conf_v = trace_confidence_from_trend_resid_var(
-        t_pick_sec,
-        t_trend_sec,
-        valid,
         half_win_traces=int(cfg.conf_trend_var_half_win_traces),
         sigma_std_ms=float(cfg.conf_trend_var_sigma_std_ms),
         min_count=int(cfg.conf_trend_var_min_count),
     )
-    out = (
-        np.asarray(conf_g, dtype=np.float32) * np.asarray(conf_v, dtype=np.float32)
-    ).astype(np.float32, copy=False)
-    out[~valid] = 0.0
-    return out
 
 
 def _load_ffid_and_shot_xy_from_segy(

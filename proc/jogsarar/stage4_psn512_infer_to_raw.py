@@ -13,7 +13,7 @@ import torch
 from jogsarar_shared import (
     TilePerTraceStandardize,
     build_key_to_indices,
-    build_pick_aligned_window,
+    compute_residual_statics_metrics,
     find_segy_files,
     read_trace_field,
     require_npz_key,
@@ -24,7 +24,6 @@ from seisai_engine.pipelines.psn.config import load_psn_train_config
 from seisai_engine.predict import infer_tiled_chw
 from seisai_models.models.encdec2d import EncDec2D
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
-from seisai_pick.residual_statics import refine_firstbreak_residual_statics
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 from seisai_utils import config_yaml
 from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
@@ -1457,15 +1456,12 @@ def process_one_pair(
                 )
             )
 
-            x_rs = build_pick_aligned_window(
-                raw_g,
+            rs_metrics = compute_residual_statics_metrics(
+                wave_hw=raw_g,
                 picks=pick_orig_i_g,
                 pre=int(cfg.rs_pre),
                 post=int(cfg.rs_post),
                 fill=0.0,
-            )
-            rs_res = refine_firstbreak_residual_statics(
-                x_rs,
                 max_lag=int(cfg.rs_max_lag),
                 k_neighbors=int(cfg.rs_k_neighbors),
                 n_iter=int(cfg.rs_n_iter),
@@ -1481,9 +1477,9 @@ def process_one_pair(
                 lag_penalty_power=float(cfg.rs_lag_penalty_power),
             )
 
-            delta_g = np.asarray(rs_res['delta_pick'], dtype=np.float32)
-            cmax_g = np.asarray(rs_res['cmax'], dtype=np.float32)
-            valid_g = np.asarray(rs_res['valid_mask'], dtype=bool)
+            delta_g = rs_metrics.delta_pick
+            cmax_g = rs_metrics.cmax
+            valid_g = rs_metrics.valid_mask
             if delta_g.shape != (idx.shape[0],):
                 msg = f'delta_pick shape mismatch for ffid={ffid}: {delta_g.shape}'
                 raise ValueError(msg)
