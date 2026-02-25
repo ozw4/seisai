@@ -48,6 +48,7 @@ infer:
   max_batches: 2
   subset_traces: 128
   seed: 43
+  tile.overlap_w: 0
   num_workers: 0
 
 ckpt:
