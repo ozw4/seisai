@@ -5,7 +5,7 @@ from .config_keys import (
     raise_if_deprecated_time_len_keys,
 )
 from .config_io import load_config, resolve_cfg_paths, resolve_relpath
-from .config_loaders import load_common_train_config
+from .config_loaders import load_common_train_config, parse_train_eval_loss_specs
 from .config_schema import (
     CommonTrainConfig,
     InferLoopConfig,
@@ -68,6 +68,7 @@ __all__ = [
     'maybe_load_init_weights',
     'maybe_save_best_min',
     'normalize_endian',
+    'parse_train_eval_loss_specs',
     'prepare_output_dirs',
     'raise_if_deprecated_time_len_keys',
     'resolve_cfg_paths',

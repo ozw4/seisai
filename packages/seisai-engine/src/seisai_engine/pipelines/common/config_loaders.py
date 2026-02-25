@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from seisai_engine.loss import composite
 from seisai_utils.config import (
+    optional_str,
     optional_value,
     require_bool,
     require_dict,
@@ -17,7 +19,7 @@ from .config_schema import (
     TrainLoopConfig,
 )
 
-__all__ = ['load_common_train_config']
+__all__ = ['load_common_train_config', 'parse_train_eval_loss_specs']
 
 
 def load_common_train_config(cfg: dict) -> CommonTrainConfig:
@@ -76,3 +78,49 @@ def load_common_train_config(cfg: dict) -> CommonTrainConfig:
     seeds = SeedsConfig(seed_train=int(seed_train), seed_infer=int(seed_infer))
 
     return CommonTrainConfig(output=output, seeds=seeds, train=train, infer=infer)
+
+
+def parse_train_eval_loss_specs(
+    cfg: dict,
+    *,
+    train_cfg: dict,
+    default_scope: str,
+    scope_key: str = 'loss_scope',
+    losses_key: str = 'losses',
+    train_label: str = 'train.losses',
+    eval_label: str = 'eval.losses',
+) -> tuple[tuple[composite.LossSpec, ...], tuple[composite.LossSpec, ...]]:
+    if not isinstance(cfg, dict):
+        msg = 'cfg must be dict'
+        raise TypeError(msg)
+    if not isinstance(train_cfg, dict):
+        msg = 'train_cfg must be dict'
+        raise TypeError(msg)
+
+    train_loss_scope = optional_str(train_cfg, scope_key, default_scope)
+    train_loss_specs = composite.parse_loss_specs(
+        train_cfg.get(losses_key, None),
+        default_scope=train_loss_scope,
+        label=train_label,
+        scope_label=f'train.{scope_key}',
+    )
+
+    eval_cfg = cfg.get('eval')
+    if eval_cfg is None:
+        eval_loss_specs = train_loss_specs
+    else:
+        if not isinstance(eval_cfg, dict):
+            raise TypeError('eval must be dict')
+        eval_losses = eval_cfg.get(losses_key, None)
+        if eval_losses is None:
+            eval_loss_specs = train_loss_specs
+        else:
+            eval_loss_scope = optional_str(eval_cfg, scope_key, train_loss_scope)
+            eval_loss_specs = composite.parse_loss_specs(
+                eval_losses,
+                default_scope=eval_loss_scope,
+                label=eval_label,
+                scope_label=f'eval.{scope_key}',
+            )
+
+    return tuple(train_loss_specs), tuple(eval_loss_specs)
