@@ -37,6 +37,17 @@ augment:
     width: [0.10, 0.35]
     roll: 0.02
     restandardize: false
+  # Optional: mix in online-sampled noise traces from external SEG-Y files.
+  # noise_add:
+  #   segy_files:
+  #     - /path/to/noise_only_0.sgy
+  #     - /path/to/noise_only_1.sgy
+  #   prob: 0.3
+  #   gain_range: [0.2, 0.8] # Use either gain_range or snr_db_range.
+  #   # snr_db_range: [6.0, 18.0]
+  #   detect:
+  #     threshold: 4.0
+  #     min_traces: 8
 
 fbgate:
   apply_on: "off"

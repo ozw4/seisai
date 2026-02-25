@@ -223,6 +223,9 @@ def main(argv: list[str] | None = None) -> None:
     progress = optional_bool(ds_cfg, 'progress', default=bool(verbose))
     primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
     primary_keys = validate_primary_keys(primary_keys_list)
+    train_secondary_key_fixed = optional_bool(
+        ds_cfg, 'secondary_key_fixed', default=False
+    )
     waveform_mode = optional_str(ds_cfg, 'waveform_mode', 'eager').lower()
     if waveform_mode not in ('eager', 'mmap'):
         msg = 'dataset.waveform_mode must be "eager" or "mmap"'
@@ -401,6 +404,15 @@ def main(argv: list[str] | None = None) -> None:
         time_len=int(time_len),
         per_trace_standardize=bool(per_trace_standardize),
         augment_cfg=augment_cfg,
+        noise_provider_ctx={
+            'subset_traces': int(train_subset_traces),
+            'primary_keys': primary_keys,
+            'secondary_key_fixed': bool(train_secondary_key_fixed),
+            'waveform_mode': str(waveform_mode),
+            'segy_endian': str(train_endian),
+            'header_cache_dir': None,
+            'use_header_cache': bool(use_header_cache),
+        },
     )
     infer_transform = build_infer_transform(
         time_len=int(time_len), per_trace_standardize=bool(per_trace_standardize)
@@ -451,7 +463,7 @@ def main(argv: list[str] | None = None) -> None:
         plan=plan,
         subset_traces=int(train_subset_traces),
         primary_keys=primary_keys,
-        secondary_key_fixed=False,
+        secondary_key_fixed=bool(train_secondary_key_fixed),
         verbose=bool(verbose),
         progress=bool(progress),
         max_trials=int(max_trials),

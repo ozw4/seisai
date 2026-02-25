@@ -23,6 +23,7 @@ from seisai_utils.config import (
 
 from seisai_engine.pipelines.common.augment import build_train_augment_ops
 from seisai_engine.pipelines.common.config_keys import raise_if_deprecated_time_len_keys
+from seisai_engine.pipelines.common.noise_add import maybe_build_noise_add_op
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 
@@ -75,7 +76,40 @@ def _build_fbgate(fbgate_cfg: dict | None) -> FirstBreakGate:
     )
 
 
-def build_train_transform(cfg: dict) -> ViewCompose:
+def _default_noise_provider_ctx_from_cfg(cfg: dict) -> dict[str, object]:
+    ds_cfg = require_dict(cfg, 'dataset')
+    train_cfg = require_dict(cfg, 'train')
+
+    primary_keys_list = ds_cfg.get('primary_keys', ['ffid'])
+    primary_keys = validate_primary_keys(primary_keys_list)
+    secondary_key_fixed = optional_bool(ds_cfg, 'secondary_key_fixed', default=False)
+    waveform_mode = optional_str(ds_cfg, 'waveform_mode', 'eager').lower()
+    if waveform_mode not in ('eager', 'mmap'):
+        msg = 'dataset.waveform_mode must be "eager" or "mmap"'
+        raise ValueError(msg)
+    segy_endian = optional_str(ds_cfg, 'train_endian', 'big').lower()
+    if segy_endian not in ('big', 'little'):
+        msg = 'dataset.train_endian must be "big" or "little"'
+        raise ValueError(msg)
+    use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)
+    subset_traces = require_int(train_cfg, 'subset_traces')
+
+    return {
+        'subset_traces': int(subset_traces),
+        'primary_keys': primary_keys,
+        'secondary_key_fixed': bool(secondary_key_fixed),
+        'waveform_mode': str(waveform_mode),
+        'segy_endian': str(segy_endian),
+        'header_cache_dir': None,
+        'use_header_cache': bool(use_header_cache),
+    }
+
+
+def build_train_transform(
+    cfg: dict,
+    *,
+    noise_provider_ctx: dict[str, object] | None = None,
+) -> ViewCompose:
     if not isinstance(cfg, dict):
         msg = 'cfg must be dict'
         raise TypeError(msg)
@@ -83,14 +117,32 @@ def build_train_transform(cfg: dict) -> ViewCompose:
     augment_cfg = cfg.get('augment')
     standardize_eps = optional_float(transform_cfg, 'standardize_eps', 1.0e-8)
     geom_ops, post_ops = build_train_augment_ops(augment_cfg)
-    return ViewCompose(
-        [
-            *geom_ops,
-            RandomCropOrPad(target_len=int(time_len)),
-            *post_ops,
-            PerTraceStandardize(eps=float(standardize_eps)),
-        ]
-    )
+    noise_op = None
+    if isinstance(augment_cfg, dict) and augment_cfg.get('noise_add') is not None:
+        noise_ctx = (
+            _default_noise_provider_ctx_from_cfg(cfg)
+            if noise_provider_ctx is None
+            else dict(noise_provider_ctx)
+        )
+        noise_op = maybe_build_noise_add_op(
+            augment_cfg=augment_cfg,
+            subset_traces=int(noise_ctx['subset_traces']),
+            primary_keys=tuple(noise_ctx['primary_keys']),
+            secondary_key_fixed=bool(noise_ctx['secondary_key_fixed']),
+            waveform_mode=str(noise_ctx['waveform_mode']),
+            segy_endian=str(noise_ctx['segy_endian']),
+            header_cache_dir=noise_ctx['header_cache_dir'],
+            use_header_cache=bool(noise_ctx['use_header_cache']),
+        )
+    ops: list = [
+        *geom_ops,
+        RandomCropOrPad(target_len=int(time_len)),
+        *post_ops,
+    ]
+    if noise_op is not None:
+        ops.append(noise_op)
+    ops.append(PerTraceStandardize(eps=float(standardize_eps)))
+    return ViewCompose(ops)
 
 
 def build_infer_transform(cfg: dict) -> ViewCompose:

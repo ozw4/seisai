@@ -30,6 +30,7 @@ from seisai_engine.pipelines.common import (
     seed_all,
 )
 from seisai_engine.pipelines.common.config_keys import normalize_endian
+from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 from seisai_engine.optim import build_optimizer
 
 from .build_dataset import build_dataset, build_infer_transform, build_train_transform
@@ -327,10 +328,14 @@ def main(argv: list[str] | None = None) -> None:
     device = resolve_device(device_str)
     seed_all(common.seeds.seed_train)
 
-    train_transform = build_train_transform(cfg)
-    infer_transform = build_infer_transform(cfg)
-    criterion_train = build_psn_criterion(list(typed.loss_specs_train))
-    criterion_eval = build_psn_criterion(list(typed.loss_specs_eval))
+    criterion_train = build_psn_criterion(
+        list(typed.loss_specs_train),
+        use_label_valid=bool(typed.train.use_label_valid_mask),
+    )
+    criterion_eval = build_psn_criterion(
+        list(typed.loss_specs_eval),
+        use_label_valid=bool(typed.eval.use_label_valid_mask),
+    )
 
     paths_cfg = require_dict(cfg, 'paths')
     train_segy_files = require_list_str(paths_cfg, 'segy_files')
@@ -357,6 +362,7 @@ def main(argv: list[str] | None = None) -> None:
     train_secondary_key_fixed = optional_bool(
         ds_cfg, 'secondary_key_fixed', default=False
     )
+    train_primary_keys = validate_primary_keys(ds_cfg.get('primary_keys', ['ffid']))
     waveform_mode = optional_str(ds_cfg, 'waveform_mode', 'eager').lower()
     if waveform_mode not in ('eager', 'mmap'):
         msg = 'dataset.waveform_mode must be "eager" or "mmap"'
@@ -376,6 +382,22 @@ def main(argv: list[str] | None = None) -> None:
     if waveform_mode == 'mmap' and int(common.infer.infer_num_workers) > 0:
         msg = 'dataset.waveform_mode="mmap" requires infer.num_workers=0'
         raise ValueError(msg)
+
+    train_transform = build_train_transform(
+        cfg,
+        noise_provider_ctx={
+            'subset_traces': int(typed.train.subset_traces),
+            'primary_keys': train_primary_keys,
+            'secondary_key_fixed': bool(train_secondary_key_fixed),
+            'waveform_mode': str(waveform_mode),
+            'segy_endian': str(train_endian),
+            'header_cache_dir': None,
+            'use_header_cache': bool(
+                optional_bool(ds_cfg, 'use_header_cache', default=True)
+            ),
+        },
+    )
+    infer_transform = build_infer_transform(cfg)
 
     ds_train_full = _build_dataset_for_subset(
         cfg,

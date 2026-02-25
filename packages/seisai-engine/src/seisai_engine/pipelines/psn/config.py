@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from seisai_utils.config import (
+    optional_bool,
     require_bool,
     require_dict,
     require_float,
@@ -28,6 +29,12 @@ __all__ = ['PsnTrainConfig', 'load_psn_train_config']
 class PsnTrainCfg:
     lr: float
     subset_traces: int
+    use_label_valid_mask: bool
+
+
+@dataclass(frozen=True)
+class PsnEvalCfg:
+    use_label_valid_mask: bool
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,7 @@ class PsnCkptCfg:
 class PsnTrainConfig:
     common: CommonTrainConfig
     train: PsnTrainCfg
+    eval: PsnEvalCfg
     loss_specs_train: tuple[composite.LossSpec, ...]
     loss_specs_eval: tuple[composite.LossSpec, ...]
     infer: PsnInferCfg
@@ -89,6 +97,11 @@ def load_psn_train_config(cfg: dict) -> PsnTrainConfig:
 
     lr = require_float(train_cfg, 'lr')
     train_subset_traces = require_int(train_cfg, 'subset_traces')
+    train_use_label_valid_mask = optional_bool(
+        train_cfg,
+        'use_label_valid_mask',
+        default=True,
+    )
     infer_subset_traces = require_int(infer_cfg, 'subset_traces')
     loss_specs_train, loss_specs_eval = parse_train_eval_loss_specs(
         cfg,
@@ -99,6 +112,17 @@ def load_psn_train_config(cfg: dict) -> PsnTrainConfig:
         train_label='train.losses',
         eval_label='eval.losses',
     )
+    eval_cfg = cfg.get('eval')
+    if eval_cfg is None:
+        eval_use_label_valid_mask = bool(train_use_label_valid_mask)
+    else:
+        if not isinstance(eval_cfg, dict):
+            raise TypeError('eval must be dict')
+        eval_use_label_valid_mask = optional_bool(
+            eval_cfg,
+            'use_label_valid_mask',
+            default=bool(train_use_label_valid_mask),
+        )
 
     save_best_only = require_bool(ckpt_cfg, 'save_best_only')
     metric = require_value(
@@ -128,7 +152,9 @@ def load_psn_train_config(cfg: dict) -> PsnTrainConfig:
         train=PsnTrainCfg(
             lr=float(lr),
             subset_traces=int(train_subset_traces),
+            use_label_valid_mask=bool(train_use_label_valid_mask),
         ),
+        eval=PsnEvalCfg(use_label_valid_mask=bool(eval_use_label_valid_mask)),
         loss_specs_train=loss_specs_train,
         loss_specs_eval=loss_specs_eval,
         infer=PsnInferCfg(

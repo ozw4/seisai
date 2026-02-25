@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from seisai_dataset import (
     FirstBreakGate,
     FirstBreakGateConfig,
@@ -13,6 +15,7 @@ from seisai_transforms.augment import (
 )
 
 from seisai_engine.pipelines.common.augment import build_train_augment_ops
+from seisai_engine.pipelines.common.noise_add import maybe_build_noise_add_op
 from seisai_engine.pipelines.common.validate_files import validate_files_exist
 
 __all__ = [
@@ -28,13 +31,36 @@ def build_train_transform(
     time_len: int,
     per_trace_standardize: bool,
     augment_cfg: dict | None = None,
+    noise_provider_ctx: dict[str, object] | None = None,
 ) -> ViewCompose:
     geom_ops, post_ops = build_train_augment_ops(augment_cfg)
+    noise_op = None
+    if (
+        noise_provider_ctx is None
+        and isinstance(augment_cfg, dict)
+        and augment_cfg.get('noise_add') is not None
+    ):
+        msg = 'noise_provider_ctx is required when augment.noise_add is set'
+        raise ValueError(msg)
+    if noise_provider_ctx is not None:
+        noise_ctx = dict(noise_provider_ctx)
+        noise_op = maybe_build_noise_add_op(
+            augment_cfg=augment_cfg,
+            subset_traces=int(noise_ctx['subset_traces']),
+            primary_keys=tuple(noise_ctx['primary_keys']),
+            secondary_key_fixed=bool(noise_ctx['secondary_key_fixed']),
+            waveform_mode=str(noise_ctx['waveform_mode']),
+            segy_endian=str(noise_ctx['segy_endian']),
+            header_cache_dir=noise_ctx['header_cache_dir'],
+            use_header_cache=bool(noise_ctx['use_header_cache']),
+        )
     ops: list = [
         *geom_ops,
         RandomCropOrPad(target_len=int(time_len)),
         *post_ops,
     ]
+    if noise_op is not None:
+        ops.append(noise_op)
     if per_trace_standardize:
         ops.append(PerTraceStandardize(eps=1e-8))
     return ViewCompose(ops)
@@ -74,7 +100,7 @@ def build_dataset(
     fbgate: FirstBreakGate,
     plan,
     subset_traces: int,
-    primary_keys: tuple[str, ...],
+    primary_keys: Sequence[str],
     secondary_key_fixed: bool,
     verbose: bool,
     progress: bool,

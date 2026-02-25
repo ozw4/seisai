@@ -30,6 +30,10 @@ train:
   max_norm: 1.0
   num_workers: 0
   loss_scope: all
+  # Toggle whether PSN loss mask ANDs label_valid.
+  # true  -> trace_valid & label_valid (& mask_bool)
+  # false -> trace_valid (& mask_bool), useful when mixing datasets without label_valid.
+  use_label_valid_mask: true
   losses:
     - kind: soft_label_ce
       weight: 1.0
@@ -76,6 +80,17 @@ augment:
     width: [0.10, 0.35]
     roll: 0.02
     restandardize: false
+  # Optional: mix in online-sampled noise traces from external SEG-Y files.
+  # noise_add:
+  #   segy_files:
+  #     - /path/to/noise_only_0.sgy
+  #     - /path/to/noise_only_1.sgy
+  #   prob: 0.3
+  #   gain_range: [0.2, 0.8] # Use either gain_range or snr_db_range.
+  #   # snr_db_range: [6.0, 18.0]
+  #   detect:
+  #     threshold: 4.0
+  #     min_traces: 8
 
 vis:
   out_subdir: vis
@@ -87,6 +102,10 @@ infer:
   subset_traces: 128
   seed: 43
   num_workers: 0
+
+# eval:
+#   # Omit this key to inherit train.use_label_valid_mask.
+#   use_label_valid_mask: true
 
 ckpt:
   save_best_only: true

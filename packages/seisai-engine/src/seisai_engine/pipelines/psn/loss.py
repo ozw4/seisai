@@ -64,6 +64,7 @@ def _resolve_pixel_mask(
     logits: torch.Tensor,
     target: torch.Tensor,
     batch: dict[str, Any],
+    use_label_valid: bool,
 ) -> torch.Tensor:
     if not isinstance(batch, dict):
         raise TypeError('batch must be dict[str, Any]')
@@ -80,7 +81,7 @@ def _resolve_pixel_mask(
     pixel_mask = build_pixel_mask_from_batch(
         batch_for_mask,
         use_trace_valid=True,
-        use_label_valid=True,
+        use_label_valid=use_label_valid,
         mask_bool_key=mask_bool_key,
     )
     if pixel_mask.device != logits.device:
@@ -222,11 +223,15 @@ def _build_psn_term(
 
 def build_psn_criterion(
     loss_specs: list[composite.LossSpec],
+    *,
+    use_label_valid: bool = True,
 ) -> Callable[[torch.Tensor, torch.Tensor, dict[str, Any]], torch.Tensor]:
     if not isinstance(loss_specs, list):
         raise TypeError('loss_specs must be list[LossSpec]')
     if len(loss_specs) == 0:
         raise ValueError('loss_specs must be non-empty')
+    if not isinstance(use_label_valid, bool):
+        raise TypeError('use_label_valid must be bool')
 
     terms: list[
         tuple[
@@ -261,6 +266,7 @@ def build_psn_criterion(
                     logits=logits,
                     target=target,
                     batch=batch,
+                    use_label_valid=use_label_valid,
                 )
             pixel_mask = mask_cache[scope]
             total = total + term(logits, target, batch, pixel_mask) * weight

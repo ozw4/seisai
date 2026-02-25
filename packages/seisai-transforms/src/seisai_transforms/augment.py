@@ -249,9 +249,126 @@ ArrayLike: TypeAlias = np.ndarray | Tensor
 
 
 class RNGLike(Protocol):
-    def random(self, *args, **kwargs) -> None: ...
-    def uniform(self, *args, **kwargs) -> None: ...
-    def integers(self, *args, **kwargs) -> None: ...
+    def random(self, *args, **kwargs) -> None:
+        pass
+
+    def uniform(self, *args, **kwargs) -> None:
+        pass
+
+    def integers(self, *args, **kwargs) -> None:
+        pass
+
+
+class NoiseSampleProvider(Protocol):
+    def sample(
+        self,
+        shape: tuple[int, int],
+        rng: RNGLike | None = None,
+    ) -> np.ndarray:
+        pass
+
+
+def _validate_prob(prob: float) -> float:
+    p = float(prob)
+    if p < 0.0 or p > 1.0:
+        msg = f'prob must be within [0, 1], got {prob}'
+        raise ValueError(msg)
+    return p
+
+
+def _validate_tuple2(
+    value: tuple[float, float],
+    *,
+    name: str,
+) -> tuple[float, float]:
+    lo, hi = float(value[0]), float(value[1])
+    if lo > hi:
+        msg = f'{name} must satisfy lo <= hi'
+        raise ValueError(msg)
+    return (lo, hi)
+
+
+class AdditiveNoiseMix:
+    def __init__(
+        self,
+        provider: NoiseSampleProvider,
+        *,
+        prob: float = 1.0,
+        gain_range: tuple[float, float] | None = (0.3, 0.7),
+        snr_db_range: tuple[float, float] | None = None,
+    ) -> None:
+        if not hasattr(provider, 'sample'):
+            msg = 'provider must implement sample(shape, rng)'
+            raise TypeError(msg)
+        if gain_range is not None and snr_db_range is not None:
+            msg = 'gain_range and snr_db_range are mutually exclusive'
+            raise ValueError(msg)
+
+        self.provider = provider
+        self.prob = _validate_prob(float(prob))
+        self.gain_range = (
+            _validate_tuple2(gain_range, name='gain_range')
+            if gain_range is not None
+            else None
+        )
+        self.snr_db_range = (
+            _validate_tuple2(snr_db_range, name='snr_db_range')
+            if snr_db_range is not None
+            else None
+        )
+
+    def __call__(
+        self,
+        x_hw: np.ndarray,
+        rng: np.random.Generator | None = None,
+        return_meta: bool = False,
+    ):
+        x = np.asarray(x_hw)
+        if x.ndim != 2:
+            msg = f'x_hw must be 2D (H,W), got shape={tuple(x.shape)}'
+            raise ValueError(msg)
+
+        r = rng or np.random.default_rng()
+        if self.prob <= 0.0 or float(r.random()) >= self.prob:
+            meta = {'noise_add_applied': False}
+            return (x, meta) if return_meta else x
+
+        H, W = int(x.shape[0]), int(x.shape[1])
+        noise = np.asarray(self.provider.sample((H, W), rng=r))
+        if noise.shape != (H, W):
+            msg = (
+                'provider.sample returned shape mismatch: '
+                f'got={tuple(noise.shape)} expected={(H, W)}'
+            )
+            raise ValueError(msg)
+
+        x_f = x.astype(np.float32, copy=False)
+        noise_f = noise.astype(np.float32, copy=False)
+
+        snr_db_used: float | None = None
+        if self.snr_db_range is not None:
+            snr_db_used = float(r.uniform(*self.snr_db_range))
+            sig_rms = float(np.sqrt(np.mean(np.square(x_f), dtype=np.float64)))
+            noi_rms = float(np.sqrt(np.mean(np.square(noise_f), dtype=np.float64)))
+            if noi_rms <= 0.0:
+                gain = 0.0
+            else:
+                gain = (sig_rms / max(noi_rms, 1.0e-12)) * (
+                    10.0 ** (-snr_db_used / 20.0)
+                )
+        elif self.gain_range is not None:
+            gain = float(r.uniform(*self.gain_range))
+        else:
+            gain = 1.0
+
+        y = x_f + noise_f * np.float32(gain)
+        meta = {
+            'noise_add_applied': True,
+            'noise_add_gain': float(gain),
+        }
+        if snr_db_used is not None:
+            meta['noise_add_snr_db'] = float(snr_db_used)
+        return (y, meta) if return_meta else y
 
 
 class ViewCompose:

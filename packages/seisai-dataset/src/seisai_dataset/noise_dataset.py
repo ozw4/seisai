@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from inspect import Parameter, signature
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -38,14 +39,17 @@ class NoiseTraceSubsetDataset(Dataset):
         sampler_cfg: TraceSubsetSamplerConfig,
         detect_cfg: EventDetectConfig = EventDetectConfig(),
         transform: object
-        | None = None,  # 例: ViewCompose([DeterministicCropOrPad(...), ...])
+        | None = None,  # 例: ViewCompose([DeterministicCropOrPad(target_len)])
         *,
         ffid_byte=segyio.TraceField.FieldRecord,
         chno_byte=segyio.TraceField.TraceNumber,
         cmp_byte=segyio.TraceField.CDP,
         header_cache_dir: str | None = None,
+        use_header_cache: bool = True,
         max_retries: int = 1000,
         secondary_key_fixed: bool = False,
+        waveform_mode: str = 'eager',
+        segy_endian: str = 'big',
         verbose: bool = False,
         seed: int | None = None,
     ) -> None:
@@ -64,8 +68,11 @@ class NoiseTraceSubsetDataset(Dataset):
         self.cmp_byte = cmp_byte
 
         self.header_cache_dir = header_cache_dir
+        self.use_header_cache = bool(use_header_cache)
         self.max_retries = int(max_retries)
         self.secondary_key_fixed = bool(secondary_key_fixed)
+        self.waveform_mode = str(waveform_mode)
+        self.segy_endian = str(segy_endian)
         self.verbose = bool(verbose)
         self.transform = transform
         self._rng = np.random.default_rng(
@@ -84,7 +91,10 @@ class NoiseTraceSubsetDataset(Dataset):
                 chno_byte=self.chno_byte,
                 cmp_byte=self.cmp_byte,
                 header_cache_dir=self.header_cache_dir,
+                use_header_cache=self.use_header_cache,
                 include_centroids=False,
+                waveform_mode=self.waveform_mode,
+                segy_endian=self.segy_endian,
             )
             for p in self.segy_files
         ]
@@ -92,11 +102,28 @@ class NoiseTraceSubsetDataset(Dataset):
     def __len__(self) -> int:
         return 10**6
 
-    def __getitem__(self, _=None) -> dict:
+    @staticmethod
+    def _supports_kwarg(transform: object, key: str) -> bool:
+        try:
+            sig = signature(transform)
+        except (TypeError, ValueError):
+            return False
+        if key in sig.parameters:
+            return True
+        return any(
+            p.kind is Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+
+    def sample(self, *, rng: np.random.Generator | None = None) -> dict:
+        r = self._rng if rng is None else rng
+        if not isinstance(r, np.random.Generator):
+            msg = 'rng must be numpy.random.Generator or None'
+            raise TypeError(msg)
+
         # tries: 1..self.max_retries まで試行。成功で return、全滅なら例外。
         for _tries in range(1, self.max_retries + 1):
             # --- 1) ファイル選択 ---
-            fidx = int(self._rng.integers(0, len(self.file_infos)))
+            fidx = int(r.integers(0, len(self.file_infos)))
             info = self.file_infos[fidx]
             mmap = info['mmap']
             dt_sec = float(info['dt_sec'])
@@ -104,7 +131,7 @@ class NoiseTraceSubsetDataset(Dataset):
             # --- 2) TraceSubset 抽出 ---
             d = self.sampler.draw(
                 info,
-                py_random=random.Random(int(self._rng.integers(0, 2**31 - 1))),
+                py_random=random.Random(int(r.integers(0, 2**31 - 1))),
             )
             key_name: str = d['key_name']
             indices: np.ndarray = d['indices']
@@ -116,7 +143,12 @@ class NoiseTraceSubsetDataset(Dataset):
             # --- 4) Transform(任意・最終長合わせ/標準化など)---
             meta = {}
             if self.transform is not None:
-                out = self.transform(x)
+                kwargs: dict[str, object] = {}
+                if self._supports_kwarg(self.transform, 'rng'):
+                    kwargs['rng'] = r
+                if self._supports_kwarg(self.transform, 'return_meta'):
+                    kwargs['return_meta'] = True
+                out = self.transform(x, **kwargs)
                 if isinstance(out, tuple) and len(out) == 2:
                     x, meta = out
                 else:
@@ -150,6 +182,9 @@ class NoiseTraceSubsetDataset(Dataset):
         # ここまで到達= max_retries 回すべて「イベント含み」で棄却された
         msg = 'Failed to sample noise-only TraceSubset within max_retries'
         raise RuntimeError(msg)
+
+    def __getitem__(self, _=None) -> dict:
+        return self.sample()
 
     def close(self) -> None:
         for info in self.file_infos:

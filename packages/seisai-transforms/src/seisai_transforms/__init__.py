@@ -2,6 +2,7 @@
 # Keep it minimal & explicit.
 
 from .augment import (
+    AdditiveNoiseMix,
     DeterministicCropOrPad,
     PerTraceStandardize,
     RandomCropOrPad,
@@ -24,6 +25,7 @@ from .view_projection import (
 )
 
 __all__ = [
+    'AdditiveNoiseMix',
     'DeterministicCropOrPad',
     # config
     'FreqAugConfig',

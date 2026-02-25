@@ -22,6 +22,7 @@ from .listfiles import (
     load_path_listfile,
     load_path_listfile_with_meta,
 )
+from .noise_add import NoiseTraceSubsetProvider, maybe_build_noise_add_op
 from .seed import seed_all
 from .skeleton_helpers import (
     ensure_fixed_infer_num_workers,
@@ -66,8 +67,10 @@ __all__ = [
     'load_path_listfile_with_meta',
     'make_train_worker_init_fn',
     'maybe_load_init_weights',
+    'maybe_build_noise_add_op',
     'maybe_save_best_min',
     'normalize_endian',
+    'NoiseTraceSubsetProvider',
     'parse_train_eval_loss_specs',
     'prepare_output_dirs',
     'raise_if_deprecated_time_len_keys',
