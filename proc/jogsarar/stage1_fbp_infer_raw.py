@@ -436,10 +436,17 @@ def _strip_prefix(sd: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     return out
 
 
-def build_model() -> torch.nn.Module:
+def build_model(*, weights_path: Path = WEIGHTS_PATH) -> torch.nn.Module:
     if DEVICE == 'cuda' and not torch.cuda.is_available():
         msg = 'CUDA requested but not available'
         raise RuntimeError(msg)
+
+    ckpt_path = Path(weights_path).expanduser()
+    if not ckpt_path.is_absolute():
+        ckpt_path = (Path.cwd() / ckpt_path).resolve()
+    if not ckpt_path.is_file():
+        msg = f'weights not found: {ckpt_path}'
+        raise FileNotFoundError(msg)
 
     model = EncDec2D(
         backbone=BACKBONE,
@@ -453,7 +460,7 @@ def build_model() -> torch.nn.Module:
     model.out_chans = 1
     model.use_tta = bool(USE_TTA)
 
-    ckpt = torch.load(WEIGHTS_PATH, map_location='cpu', weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     sd = ckpt['model_ema']
 
     if (
@@ -465,12 +472,61 @@ def build_model() -> torch.nn.Module:
         raise ValueError(msg)
 
     sd = _strip_prefix(sd)
-    print('[CKPT] load from: model_ema (direct state_dict)')
+    print(f'[CKPT] load from: {ckpt_path} (model_ema direct state_dict)')
 
     model.load_state_dict(sd, strict=True)
     model.to(device=torch.device(DEVICE))
     model.eval()
     return model
+
+
+def run_stage1(
+    *,
+    in_segy_root: Path = INPUT_DIR,
+    out_infer_root: Path = OUT_DIR,
+    weights_path: Path = WEIGHTS_PATH,
+    segy_paths: list[Path] | None = None,
+    segy_exts: tuple[str, ...] = ('.sgy', '.segy'),
+    recursive: bool = False,
+    viz_every_n_shots: int = VIZ_EVERY_N_SHOTS,
+    viz_dirname: str = VIZ_DIRNAME,
+) -> None:
+    in_root = Path(in_segy_root).expanduser().resolve()
+    if not in_root.is_dir():
+        msg = f'in_segy_root must be an existing directory: {in_root}'
+        raise FileNotFoundError(msg)
+
+    out_root = Path(out_infer_root).expanduser().resolve()
+
+    if segy_paths is None:
+        segys = find_segy_files(in_root, exts=segy_exts, recursive=bool(recursive))
+    else:
+        segys = [Path(p).expanduser().resolve() for p in segy_paths]
+
+    if len(segys) == 0:
+        msg = f'no segy files found under: {in_root}'
+        raise RuntimeError(msg)
+
+    model = build_model(weights_path=weights_path)
+
+    print(f'[RUN][STAGE1] files={len(segys)} in_root={in_root} out_root={out_root}')
+    n_ok = 0
+    for segy_path in segys:
+        if not segy_path.is_file():
+            msg = f'segy file not found: {segy_path}'
+            raise FileNotFoundError(msg)
+        rel = segy_path.relative_to(in_root)
+        per_file_out_dir = out_root / rel.parent
+        process_one_segy(
+            segy_path=segy_path,
+            out_dir=per_file_out_dir,
+            model=model,
+            viz_every_n_shots=viz_every_n_shots,
+            viz_dirname=viz_dirname,
+        )
+        n_ok += 1
+
+    print(f'[DONE][STAGE1] processed={n_ok} out_root={out_root}')
 
 
 def _save_conf_scatter(
@@ -1486,17 +1542,16 @@ def process_one_segy(
 
 
 def main() -> None:
-    model = build_model()
-    segys = find_segy_files(INPUT_DIR, exts=('.sgy', '.segy'), recursive=False)
-    for segy_path in segys:
-        print(f'[RUN] using first SEGY: {segys}')
-        process_one_segy(
-            segy_path=segy_path,
-            out_dir=OUT_DIR,
-            model=model,
-            viz_every_n_shots=VIZ_EVERY_N_SHOTS,
-            viz_dirname=VIZ_DIRNAME,
-        )
+    run_stage1(
+        in_segy_root=INPUT_DIR,
+        out_infer_root=OUT_DIR,
+        weights_path=WEIGHTS_PATH,
+        segy_paths=None,
+        segy_exts=('.sgy', '.segy'),
+        recursive=False,
+        viz_every_n_shots=VIZ_EVERY_N_SHOTS,
+        viz_dirname=VIZ_DIRNAME,
+    )
 
 
 if __name__ == '__main__':
