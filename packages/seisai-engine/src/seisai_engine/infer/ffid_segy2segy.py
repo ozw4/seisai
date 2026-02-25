@@ -175,6 +175,89 @@ def run_ffid_gather_infer_core(
     return out_hw
 
 
+def run_ffid_gather_infer_core_chw(
+    *,
+    iterator: FFIDGatherIterator,
+    file_index: int,
+    out_chans: int,
+    infer_one_gather_fn: Callable[[Any], np.ndarray],
+    ffids: Iterable[int] | None = None,
+) -> np.ndarray:
+    if not isinstance(file_index, int) or isinstance(file_index, bool):
+        msg = 'file_index must be int'
+        raise TypeError(msg)
+    if not isinstance(out_chans, int) or isinstance(out_chans, bool):
+        msg = 'out_chans must be int'
+        raise TypeError(msg)
+    if int(out_chans) <= 0:
+        msg = 'out_chans must be positive'
+        raise ValueError(msg)
+    file_infos = _get_iterator_file_infos(iterator)
+    if file_index < 0 or file_index >= len(file_infos):
+        msg = f'file_index out of range: {file_index}'
+        raise ValueError(msg)
+    if not callable(infer_one_gather_fn):
+        msg = 'infer_one_gather_fn must be callable'
+        raise TypeError(msg)
+
+    ffid_list = None
+    if ffids is not None:
+        ffid_list = [int(x) for x in ffids]
+        if len(ffid_list) == 0:
+            msg = 'ffids must be non-empty if provided'
+            raise ValueError(msg)
+
+    info = file_infos[file_index]
+    n_traces = int(info['n_traces'])
+    n_samples = int(info['n_samples'])
+    if n_traces <= 0 or n_samples <= 0:
+        src_path = str(info.get('path', 'unknown'))
+        msg = (
+            f'invalid segy shape: n_traces={n_traces}, n_samples={n_samples} '
+            f'({src_path})'
+        )
+        raise ValueError(msg)
+
+    out_chw = np.zeros((int(out_chans), n_traces, n_samples), dtype=np.float32)
+    seen = np.zeros((n_traces,), dtype=np.bool_)
+
+    for gather in iterator.iter_gathers(file_indices=[file_index], ffids=ffid_list):
+        idx = np.asarray(gather.trace_indices, dtype=np.int64)
+        if idx.size == 0:
+            continue
+        if idx.min() < 0 or idx.max() >= n_traces:
+            msg = 'trace_indices out of range'
+            raise ValueError(msg)
+        if int(gather.x_hw.shape[1]) != n_samples:
+            src_path = str(info.get('path', 'unknown'))
+            msg = (
+                f'gather W mismatch: got {int(gather.x_hw.shape[1])}, '
+                f'want {n_samples} ({src_path})'
+            )
+            raise ValueError(msg)
+
+        y_chw = infer_one_gather_fn(gather)
+        y_chw = np.asarray(y_chw, dtype=np.float32)
+        expected_shape = (int(out_chans), int(idx.shape[0]), int(n_samples))
+        if tuple(y_chw.shape) != expected_shape:
+            msg = (
+                f'infer_one_gather_fn output must be {expected_shape}, '
+                f'got {tuple(y_chw.shape)}'
+            )
+            raise ValueError(msg)
+
+        out_chw[:, idx, :] = y_chw
+        seen[idx] = True
+
+    if not bool(seen.all()):
+        miss = int((~seen).sum())
+        src_path = str(info.get('path', 'unknown'))
+        msg = f'some traces were not filled (miss={miss}) in {src_path}'
+        raise ValueError(msg)
+
+    return out_chw
+
+
 @torch.no_grad()
 def run_ffid_gather_infer_and_write_segy(
     model: torch.nn.Module,
@@ -247,5 +330,6 @@ def run_ffid_gather_infer_and_write_segy(
 __all__ = [
     'Tiled2DConfig',
     'run_ffid_gather_infer_core',
+    'run_ffid_gather_infer_core_chw',
     'run_ffid_gather_infer_and_write_segy',
 ]
