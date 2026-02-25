@@ -1,6 +1,5 @@
 # %%
 #!/usr/bin/env python3
-from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -22,6 +21,7 @@ from seisai_engine.pipelines.common.checkpoint_io import load_checkpoint
 from seisai_engine.pipelines.psn.build_model import build_model as build_psn_model
 from seisai_engine.pipelines.psn.config import load_psn_train_config
 from seisai_engine.predict import infer_tiled_chw
+from seisai_models.models.encdec2d import EncDec2D
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.residual_statics import refine_firstbreak_residual_statics
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
@@ -31,95 +31,84 @@ from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
 # =========================
 # CONFIG (fixed constants)
 # =========================
-IN_RAW_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
-IN_WIN512_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512')
-OUT_PRED_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_pred')
+@dataclass(frozen=True)
+class Stage4Cfg:
+    in_raw_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
+    in_win512_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512')
+    out_pred_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_pred')
+    # cfg_yaml=None で ckpt-only 起動。DEFAULT では従来互換の YAML 起動。
+    cfg_yaml: Path | None = Path('configs/config_convnext_prestage2_drop005.yaml')
+    # cfg_yaml=None のとき ckpt_path は必須。
+    # cfg_yaml!=None のときは、ckpt_path 指定が最優先 / 未指定なら YAML の paths.out_dir から解決。
+    ckpt_path: Path | None = None
+    # cfg_yaml=None (ckpt-only) のときに使う標準化eps。
+    standardize_eps: float = 1.0e-8
+    segy_exts: tuple[str, ...] = ('.sgy', '.segy')
+    device: str = 'cuda'
+    # PSN class order from seisai_dataset.builder.builder.PhasePSNMap:
+    # [P, S, Noise] -> P index is fixed to 0.
+    p_class_index: int = 0
+    # win512 -> raw sample inverse mapping
+    up_factor: float = 2.0
+    # tiled inference
+    tile_h: int = 128
+    tile_w: int = 512
+    overlap_h: int = 96
+    overlap_w: int = 0
+    tiles_per_batch: int = 8
+    use_amp: bool = True
+    use_tqdm: bool = False
+    # lightweight residual statics + final snap
+    rs_pre: int = 20
+    rs_post: int = 20
+    rs_max_lag: int = 4
+    rs_k_neighbors: int = 5
+    rs_n_iter: int = 1
+    rs_mode: str = 'diff'
+    rs_c_th: float = 0.8
+    rs_smooth_method: str = 'wls'
+    rs_lam: float = 5.0
+    rs_subsample: bool = True
+    rs_propagate_low_corr: bool = False
+    rs_taper: str = 'hann'
+    rs_taper_power: float = 1.0
+    rs_lag_penalty: float = 0.10
+    rs_lag_penalty_power: float = 1.0
+    snap_mode: str = 'trough'
+    snap_ltcor: int = 3
+    log_gather_rs: bool = True
+    # post-trough refinement
+    post_trough_max_shift: int = 16
+    post_trough_scan_ahead: int = 32
+    post_trough_smooth_win: int = 5
+    # post-trough refinement offset gating (ABS offset in meters)
+    post_trough_offs_abs_min_m: float | None = None
+    post_trough_offs_abs_max_m: float | None = 1500
+    # Peak threshold on positive amplitude after per-trace normalization.
+    post_trough_a_th: float = 0.03
+    # align shifts to neighborhood
+    post_trough_outlier_radius: int = 4
+    post_trough_outlier_min_support: int = 3
+    post_trough_outlier_max_dev: int = 2
+    post_trough_align_propagate_zero: bool = False
+    # debug prints for post-trough
+    post_trough_debug: bool = False
+    post_trough_debug_max_examples: int = 5
+    post_trough_debug_every_n_gathers: int = 10
+    dt_tol_sec: float = 1e-9
+    # visualization (like run_fbp_infer.py)
+    viz_every_n_shots: int = 20
+    viz_dirname: str = 'viz'
+    viz_plot_start: int = 0
+    viz_plot_end: int = 1000
+    viz_figsize: tuple[int, int] = (12, 9)
+    viz_dpi: int = 200
+    viz_gain: float = 2.0
+    min_gather_h: int = 32
+    edge_pick_max_gap_samples: int = 5
 
-CFG_YAML = Path('configs/config_convnext_prestage2_drop005.yaml')
-# If None, resolved from CFG_YAML: paths.out_dir/ckpt/best.pt
-CKPT_PATH: Path | None = None
 
-SEGY_EXTS = ('.sgy', '.segy')
-DEVICE = 'cuda'
-
-# PSN class order from seisai_dataset.builder.builder.PhasePSNMap:
-# [P, S, Noise] -> P index is fixed to 0.
-P_CLASS_INDEX = 0
-
-# win512 -> raw sample inverse mapping
-UP_FACTOR = 2.0
-
-# tiled inference
-TILE_H = 128
-TILE_W = 512
-OVERLAP_H = 96
-OVERLAP_W = 0
-TILES_PER_BATCH = 8
-USE_AMP = True
-USE_TQDM = False
-
-# lightweight residual statics + final snap
-RS_PRE = 20
-RS_POST = 20
-RS_MAX_LAG = 4
-RS_K_NEIGHBORS = 5
-RS_N_ITER = 1
-RS_MODE = 'diff'
-RS_C_TH = 0.8
-RS_SMOOTH_METHOD = 'wls'
-RS_LAM = 5.0
-RS_SUBSAMPLE = True
-RS_PROPAGATE_LOW_CORR = False
-RS_TAPER = 'hann'
-RS_TAPER_POWER = 1.0
-RS_LAG_PENALTY = 0.10
-RS_LAG_PENALTY_POWER = 1.0
-
-SNAP_MODE = 'trough'
-SNAP_LTCOR = 3
-LOG_GATHER_RS = True
-
-# post-trough refinement: find first positive peak ahead of pick, then snap to its preceding trough
-POST_TROUGH_MAX_SHIFT = 16
-POST_TROUGH_SCAN_AHEAD = 32
-POST_TROUGH_SMOOTH_WIN = 5
-
-# post-trough refinement offset gating (ABS offset in meters).
-# Set to None to disable each bound.
-# Example:
-#   POST_TROUGH_OFFS_ABS_MIN_M = 200.0
-#   POST_TROUGH_OFFS_ABS_MAX_M = 2200.0
-POST_TROUGH_OFFS_ABS_MIN_M: float | None = None
-POST_TROUGH_OFFS_ABS_MAX_M: float | None = 1500
-
-# Peak threshold on positive amplitude after per-trace normalization (max(|amp|)=1).
-# Example: 0.05 means "accept the first local MAXIMUM with amp >= 0.05".
-POST_TROUGH_A_TH = 0.03
-
-# align shifts to neighborhood (robust) to keep per-trace moves consistent
-POST_TROUGH_OUTLIER_RADIUS = 4
-POST_TROUGH_OUTLIER_MIN_SUPPORT = 3
-POST_TROUGH_OUTLIER_MAX_DEV = 2
-POST_TROUGH_ALIGN_PROPAGATE_ZERO = False
-
-# debug prints for post-trough
-POST_TROUGH_DEBUG = False
-POST_TROUGH_DEBUG_MAX_EXAMPLES = 5
-POST_TROUGH_DEBUG_EVERY_N_GATHERS = 10
-
-DT_TOL_SEC = 1e-9
-
-# visualization (like run_fbp_infer.py)
-VIZ_EVERY_N_SHOTS = 20
-VIZ_DIRNAME = 'viz'
-VIZ_PLOT_START = 0
-VIZ_PLOT_END = 1000
-VIZ_FIGSIZE = (12, 9)
-VIZ_DPI = 200
-VIZ_GAIN = 2.0
-
-MIN_GATHER_H = 32
-EDGE_PICK_MAX_GAP_SAMPLES = 5
+DEFAULT_STAGE4_CFG = Stage4Cfg()
 
 
 def _stem_without_win512(stem: str) -> str:
@@ -191,8 +180,10 @@ def _replace_edge_picks_if_far(
     return out512, outpm, outf, outi
 
 
-def _build_win512_lookup(win_root: Path) -> dict[tuple[str, str], Path]:
-    win_files = find_segy_files(win_root, exts=SEGY_EXTS, recursive=True)
+def _build_win512_lookup(
+    win_root: Path, *, cfg: Stage4Cfg = DEFAULT_STAGE4_CFG
+) -> dict[tuple[str, str], Path]:
+    win_files = find_segy_files(win_root, exts=cfg.segy_exts, recursive=True)
     lookup: dict[tuple[str, str], Path] = {}
 
     for p in win_files:
@@ -233,6 +224,7 @@ def _load_sidecar_window_start(
     n_samples_out: int,
     dt_sec_in: float,
     dt_sec_out: float,
+    cfg: Stage4Cfg = DEFAULT_STAGE4_CFG,
 ) -> np.ndarray:
     with np.load(sidecar_path, allow_pickle=False) as z:
         window_start_i = require_npz_key(z, 'window_start_i', context='sidecar').astype(
@@ -262,10 +254,10 @@ def _load_sidecar_window_start(
     if side_ns_out != int(n_samples_out):
         msg = f'sidecar n_samples_out mismatch: side={side_ns_out}, win={n_samples_out}'
         raise ValueError(msg)
-    if abs(float(side_dt_in) - float(dt_sec_in)) > DT_TOL_SEC:
+    if abs(float(side_dt_in) - float(dt_sec_in)) > float(cfg.dt_tol_sec):
         msg = f'sidecar dt_sec_in mismatch: side={side_dt_in}, raw={dt_sec_in}'
         raise ValueError(msg)
-    if abs(float(side_dt_out) - float(dt_sec_out)) > DT_TOL_SEC:
+    if abs(float(side_dt_out) - float(dt_sec_out)) > float(cfg.dt_tol_sec):
         msg = f'sidecar dt_sec_out mismatch: side={side_dt_out}, win={dt_sec_out}'
         raise ValueError(msg)
 
@@ -315,13 +307,15 @@ class _PostTroughTraceDebug:
     reason: str
 
 
-def _post_trough_apply_mask_from_offsets(offsets_m: np.ndarray) -> np.ndarray:
+def _post_trough_apply_mask_from_offsets(
+    offsets_m: np.ndarray, *, cfg: Stage4Cfg = DEFAULT_STAGE4_CFG
+) -> np.ndarray:
     off = np.asarray(offsets_m, dtype=np.float32)
     m = np.isfinite(off)
-    if POST_TROUGH_OFFS_ABS_MIN_M is not None:
-        m &= np.abs(off) >= float(POST_TROUGH_OFFS_ABS_MIN_M)
-    if POST_TROUGH_OFFS_ABS_MAX_M is not None:
-        m &= np.abs(off) <= float(POST_TROUGH_OFFS_ABS_MAX_M)
+    if cfg.post_trough_offs_abs_min_m is not None:
+        m &= np.abs(off) >= float(cfg.post_trough_offs_abs_min_m)
+    if cfg.post_trough_offs_abs_max_m is not None:
+        m &= np.abs(off) <= float(cfg.post_trough_offs_abs_max_m)
     return m
 
 
@@ -665,6 +659,7 @@ def _save_gather_viz(
     pick_rs_i: np.ndarray,
     pick_final_i: np.ndarray,
     title: str,
+    cfg: Stage4Cfg = DEFAULT_STAGE4_CFG,
 ) -> None:
     wave = np.asarray(raw_wave_hw, dtype=np.float32)
     if wave.ndim != 2:
@@ -700,8 +695,8 @@ def _save_gather_viz(
     p_rs_plot[~valid_rs] = np.nan
     p_final_plot[~valid_final] = np.nan
 
-    start = int(max(0, VIZ_PLOT_START))
-    end_cfg = int(VIZ_PLOT_END)
+    start = int(max(0, cfg.viz_plot_start))
+    end_cfg = int(cfg.viz_plot_end)
     if end_cfg <= 0:
         end = n_samples
     else:
@@ -743,7 +738,7 @@ def _save_gather_viz(
     )[keep]
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=VIZ_FIGSIZE)
+    fig, ax = plt.subplots(figsize=cfg.viz_figsize)
     plot_wiggle(
         wave_plot,
         ax=ax,
@@ -753,7 +748,7 @@ def _save_gather_viz(
             time_axis=1,
             x=x_keep,
             normalize='trace',
-            gain=float(VIZ_GAIN),
+            gain=float(cfg.viz_gain),
             fill_positive=True,
             picks=(
                 PickOverlay(
@@ -789,7 +784,7 @@ def _save_gather_viz(
     )
     ax.set_title(f'{title} (no LMO)')
     fig.tight_layout()
-    fig.savefig(out_png, dpi=int(VIZ_DPI))
+    fig.savefig(out_png, dpi=int(cfg.viz_dpi))
     plt.close(fig)
     print(f'[VIZ] saved {out_png}')
 
@@ -807,17 +802,36 @@ def _resolve_config_loader() -> Callable[[str | Path], dict]:
     raise AttributeError(msg)
 
 
-def _resolve_ckpt_path(cfg: dict, cfg_yaml_path: Path) -> Path:
-    if CKPT_PATH is not None:
-        ckpt_path = CKPT_PATH.expanduser()
-        if not ckpt_path.is_absolute():
-            ckpt_path = (Path.cwd() / ckpt_path).resolve()
-        if not ckpt_path.is_file():
-            msg = f'checkpoint not found: {ckpt_path}'
-            raise FileNotFoundError(msg)
-        return ckpt_path
+def _resolve_explicit_ckpt_path(path: Path) -> Path:
+    ckpt_path = path.expanduser()
+    if not ckpt_path.is_absolute():
+        ckpt_path = (Path.cwd() / ckpt_path).resolve()
+    if not ckpt_path.is_file():
+        msg = f'checkpoint not found: {ckpt_path}'
+        raise FileNotFoundError(msg)
+    return ckpt_path
 
-    paths = cfg.get('paths')
+
+def _resolve_ckpt_path(
+    loaded_cfg: dict | None,
+    cfg_yaml_path: Path | None,
+    *,
+    cfg: Stage4Cfg = DEFAULT_STAGE4_CFG,
+) -> Path:
+    if cfg_yaml_path is None:
+        if cfg.ckpt_path is None:
+            msg = 'ckpt_path must be set when cfg_yaml is None'
+            raise ValueError(msg)
+        return _resolve_explicit_ckpt_path(cfg.ckpt_path)
+
+    if cfg.ckpt_path is not None:
+        return _resolve_explicit_ckpt_path(cfg.ckpt_path)
+
+    if loaded_cfg is None:
+        msg = 'loaded_cfg must be provided when cfg_yaml is set'
+        raise ValueError(msg)
+
+    paths = loaded_cfg.get('paths')
     if not isinstance(paths, dict):
         msg = 'config.paths must be dict'
         raise TypeError(msg)
@@ -833,56 +847,88 @@ def _resolve_ckpt_path(cfg: dict, cfg_yaml_path: Path) -> Path:
     if not ckpt_path.is_file():
         msg = (
             f'checkpoint not found: {ckpt_path} '
-            '(set CKPT_PATH constant explicitly if needed)'
+            '(set cfg.ckpt_path explicitly if needed)'
         )
         raise FileNotFoundError(msg)
     return ckpt_path
 
 
-def _resolve_device() -> torch.device:
-    dev = torch.device(str(DEVICE))
+def _resolve_device(*, cfg: Stage4Cfg = DEFAULT_STAGE4_CFG) -> torch.device:
+    dev = torch.device(str(cfg.device))
     if dev.type == 'cuda' and not torch.cuda.is_available():
-        msg = 'DEVICE is cuda but CUDA is not available'
+        msg = 'cfg.device is cuda but CUDA is not available'
         raise RuntimeError(msg)
     return dev
 
 
-def load_psn_model_and_eps() -> tuple[torch.nn.Module, float, Path]:
-    cfg_yaml_path = CFG_YAML.expanduser().resolve()
-    if not cfg_yaml_path.is_file():
-        msg = f'CFG_YAML not found: {cfg_yaml_path}'
-        raise FileNotFoundError(msg)
+def load_psn_model_and_eps(
+    *, cfg: Stage4Cfg = DEFAULT_STAGE4_CFG
+) -> tuple[torch.nn.Module, float, Path]:
+    # cfg_yaml あり:
+    #   - YAML→typed config→model_sig照合→epsはYAML(transform.standardize_eps)を使用。
+    # cfg_yaml なし:
+    #   - ckpt-only 起動。ckpt_path 必須、model_sig から EncDec2D を直接構築、
+    #     pretrained 系キーがあれば False に強制して外部DLを抑止、
+    #     epsは cfg.standardize_eps を使用。
+    if cfg.cfg_yaml is not None:
+        cfg_yaml_path = cfg.cfg_yaml.expanduser().resolve()
+        if not cfg_yaml_path.is_file():
+            msg = f'cfg_yaml not found: {cfg_yaml_path}'
+            raise FileNotFoundError(msg)
 
-    load_yaml_fn = _resolve_config_loader()
-    cfg = load_yaml_fn(cfg_yaml_path)
-    if not isinstance(cfg, dict):
-        msg = f'loaded config must be dict, got {type(cfg).__name__}'
-        raise TypeError(msg)
+        load_yaml_fn = _resolve_config_loader()
+        loaded_cfg = load_yaml_fn(cfg_yaml_path)
+        if not isinstance(loaded_cfg, dict):
+            msg = f'loaded config must be dict, got {type(loaded_cfg).__name__}'
+            raise TypeError(msg)
 
-    typed = load_psn_train_config(cfg)
-    ckpt_path = _resolve_ckpt_path(cfg, cfg_yaml_path)
-    ckpt = load_checkpoint(ckpt_path)
-    if ckpt['pipeline'] != 'psn':
-        msg = f'checkpoint pipeline must be "psn", got {ckpt["pipeline"]!r}'
-        raise ValueError(msg)
+        typed = load_psn_train_config(loaded_cfg)
+        ckpt_path = _resolve_ckpt_path(loaded_cfg, cfg_yaml_path, cfg=cfg)
+        ckpt = load_checkpoint(ckpt_path)
+        if ckpt['pipeline'] != 'psn':
+            msg = f'checkpoint pipeline must be "psn", got {ckpt["pipeline"]!r}'
+            raise ValueError(msg)
 
-    model_sig = ckpt['model_sig']
-    expected_sig = asdict(typed.model)
-    if model_sig != expected_sig:
-        msg = 'checkpoint model_sig does not match CFG_YAML model definition'
-        raise ValueError(msg)
+        model_sig = ckpt['model_sig']
+        expected_sig = asdict(typed.model)
+        if model_sig != expected_sig:
+            msg = 'checkpoint model_sig does not match cfg_yaml model definition'
+            raise ValueError(msg)
 
-    transform_cfg = cfg.get('transform', {})
-    if not isinstance(transform_cfg, dict):
-        msg = 'config.transform must be dict'
-        raise TypeError(msg)
-    standardize_eps = float(transform_cfg.get('standardize_eps', 1.0e-8))
-    if standardize_eps <= 0.0:
-        msg = f'transform.standardize_eps must be > 0, got {standardize_eps}'
-        raise ValueError(msg)
+        transform_cfg = loaded_cfg.get('transform', {})
+        if not isinstance(transform_cfg, dict):
+            msg = 'config.transform must be dict'
+            raise TypeError(msg)
+        standardize_eps = float(transform_cfg.get('standardize_eps', 1.0e-8))
+        if standardize_eps <= 0.0:
+            msg = f'transform.standardize_eps must be > 0, got {standardize_eps}'
+            raise ValueError(msg)
+        model = build_psn_model(typed.model)
+    else:
+        ckpt_path = _resolve_ckpt_path(None, None, cfg=cfg)
+        ckpt = load_checkpoint(ckpt_path)
+        if ckpt['pipeline'] != 'psn':
+            msg = f'checkpoint pipeline must be "psn", got {ckpt["pipeline"]!r}'
+            raise ValueError(msg)
+        model_sig = ckpt['model_sig']
+        if not isinstance(model_sig, dict):
+            msg = f'checkpoint model_sig must be dict, got {type(model_sig).__name__}'
+            raise TypeError(msg)
+        model_kwargs = dict(model_sig)
+        if 'pretrained' in model_kwargs:
+            model_kwargs['pretrained'] = False
+        if 'backbone_pretrained' in model_kwargs:
+            # Older signatures may carry backbone_pretrained; EncDec2D expects pretrained.
+            if 'pretrained' not in model_kwargs:
+                model_kwargs['pretrained'] = False
+            model_kwargs.pop('backbone_pretrained')
+        standardize_eps = float(cfg.standardize_eps)
+        if standardize_eps <= 0.0:
+            msg = f'cfg.standardize_eps must be > 0, got {standardize_eps}'
+            raise ValueError(msg)
+        model = EncDec2D(**model_kwargs)
 
-    device = _resolve_device()
-    model = build_psn_model(typed.model)
+    device = _resolve_device(cfg=cfg)
     model.load_state_dict(ckpt['model_state_dict'], strict=True)
     model.to(device)
     model.eval()
@@ -895,6 +941,7 @@ def infer_pick512_from_win(
     model: torch.nn.Module,
     wave_hw: np.ndarray,
     standardize_eps: float,
+    cfg: Stage4Cfg = DEFAULT_STAGE4_CFG,
 ) -> tuple[np.ndarray, np.ndarray]:
     x = np.asarray(wave_hw, dtype=np.float32)
     if x.ndim != 2:
@@ -902,22 +949,22 @@ def infer_pick512_from_win(
         raise ValueError(msg)
 
     h, w = x.shape
-    if w != int(TILE_W):
-        msg = f'win512 width mismatch: expected {TILE_W}, got {w}'
+    if w != int(cfg.tile_w):
+        msg = f'win512 width mismatch: expected {cfg.tile_w}, got {w}'
         raise ValueError(msg)
 
     x_chw = x[None, :, :]
-    tile_h = min(int(TILE_H), int(h))
-    overlap_h = min(int(OVERLAP_H), max(tile_h - 1, 0))
+    tile_h = min(int(cfg.tile_h), int(h))
+    overlap_h = min(int(cfg.overlap_h), max(tile_h - 1, 0))
 
     logits = infer_tiled_chw(
         model,
         x_chw,
-        tile=(int(tile_h), int(TILE_W)),
-        overlap=(int(overlap_h), int(OVERLAP_W)),
-        amp=bool(USE_AMP),
-        use_tqdm=bool(USE_TQDM),
-        tiles_per_batch=int(TILES_PER_BATCH),
+        tile=(int(tile_h), int(cfg.tile_w)),
+        overlap=(int(overlap_h), int(cfg.overlap_w)),
+        amp=bool(cfg.use_amp),
+        use_tqdm=bool(cfg.use_tqdm),
+        tiles_per_batch=int(cfg.tiles_per_batch),
         tile_transform=TilePerTraceStandardize(eps_std=float(standardize_eps)),
         post_tile_transform=None,
     )
@@ -925,18 +972,21 @@ def infer_pick512_from_win(
     if int(logits.ndim) != 3:
         msg = f'logits must be (C,H,W), got shape={tuple(logits.shape)}'
         raise ValueError(msg)
-    if int(logits.shape[1]) != int(h) or int(logits.shape[2]) != int(TILE_W):
+    if int(logits.shape[1]) != int(h) or int(logits.shape[2]) != int(cfg.tile_w):
         msg = (
             f'logits shape mismatch: got {tuple(logits.shape)}, '
-            f'expected (*,{h},{TILE_W})'
+            f'expected (*,{h},{cfg.tile_w})'
         )
         raise ValueError(msg)
-    if int(logits.shape[0]) <= int(P_CLASS_INDEX):
-        msg = f'P_CLASS_INDEX={P_CLASS_INDEX} is out of range for logits={tuple(logits.shape)}'
+    if int(logits.shape[0]) <= int(cfg.p_class_index):
+        msg = (
+            f'p_class_index={cfg.p_class_index} is out of range for '
+            f'logits={tuple(logits.shape)}'
+        )
         raise ValueError(msg)
 
     probs = torch.softmax(logits, dim=0)
-    prob_p = probs[int(P_CLASS_INDEX)]  # (H, 512)
+    prob_p = probs[int(cfg.p_class_index)]  # (H, 512)
     pick512 = torch.argmax(prob_p, dim=1).to(dtype=torch.int32)
     pmax = torch.max(prob_p, dim=1).values.to(dtype=torch.float32)
 
@@ -953,9 +1003,10 @@ def process_one_pair(
     sidecar_path: Path,
     model: torch.nn.Module,
     standardize_eps: float,
+    cfg: Stage4Cfg = DEFAULT_STAGE4_CFG,
 ) -> None:
-    rel = raw_path.relative_to(IN_RAW_SEGY_ROOT)
-    out_dir = OUT_PRED_ROOT / rel.parent
+    rel = raw_path.relative_to(cfg.in_raw_segy_root)
+    out_dir = cfg.out_pred_root / rel.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
     out_npz = out_dir / f'{raw_path.stem}.psn_pred.npz'
@@ -986,8 +1037,11 @@ def process_one_pair(
                 f'raw={raw_path} win={win_path}'
             )
             raise ValueError(msg)
-        if n_samples_win != int(TILE_W):
-            msg = f'win512 segy must have {TILE_W} samples, got {n_samples_win}: {win_path}'
+        if n_samples_win != int(cfg.tile_w):
+            msg = (
+                f'win512 segy must have {cfg.tile_w} samples, '
+                f'got {n_samples_win}: {win_path}'
+            )
             raise ValueError(msg)
 
         dt_us_raw = int(raw.bin[segyio.BinField.Interval])
@@ -1044,6 +1098,7 @@ def process_one_pair(
             n_samples_out=n_samples_win,
             dt_sec_in=dt_sec_raw,
             dt_sec_out=dt_sec_win,
+            cfg=cfg,
         )
 
         pick_psn512 = np.zeros(n_traces, dtype=np.int32)
@@ -1059,11 +1114,11 @@ def process_one_pair(
         ffid_to_indices = build_key_to_indices(ffid_values)
         ffids_sorted = sorted(int(k) for k in ffid_to_indices)
         viz_ffids = (
-            set(ffids_sorted[:: int(VIZ_EVERY_N_SHOTS)])
-            if int(VIZ_EVERY_N_SHOTS) > 0
+            set(ffids_sorted[:: int(cfg.viz_every_n_shots)])
+            if int(cfg.viz_every_n_shots) > 0
             else set()
         )
-        viz_dir = out_dir / str(VIZ_DIRNAME)
+        viz_dir = out_dir / str(cfg.viz_dirname)
 
         max_chno = int(chno_values.max(initial=0))
         ffid_to_row = {ff: i for i, ff in enumerate(ffids_sorted)}
@@ -1075,7 +1130,7 @@ def process_one_pair(
             order = np.argsort(ch, kind='mergesort')
             idx = idx0[order]
             h_g = int(idx.size)
-            if h_g < int(MIN_GATHER_H):
+            if h_g < int(cfg.min_gather_h):
                 # このgatherはPSN入力高さが小さすぎてConvNeXtのdownsampleで落ちるのでスキップ
                 pick_psn512[idx] = 0
                 pmax_psn[idx] = 0.0
@@ -1089,7 +1144,7 @@ def process_one_pair(
 
                 print(
                     f'[SKIP_GATHER] {raw_path.name} ffid={ffid} '
-                    f'H={h_g} < {MIN_GATHER_H} -> set picks=0'
+                    f'H={h_g} < {cfg.min_gather_h} -> set picks=0'
                 )
                 continue
             chno_g = chno_values[idx].astype(np.int32, copy=False)
@@ -1103,12 +1158,13 @@ def process_one_pair(
                 model=model,
                 wave_hw=win_g,
                 standardize_eps=standardize_eps,
+                cfg=cfg,
             )
 
             win_start_g = window_start_i[idx].astype(np.float32, copy=False)
             pick_orig_f_g = win_start_g + pick512_g.astype(
                 np.float32, copy=False
-            ) / float(UP_FACTOR)
+            ) / float(cfg.up_factor)
             pick_orig_i_g = np.rint(pick_orig_f_g).astype(np.int32, copy=False)
             valid_map = (pick_orig_f_g >= 0.0) & (pick_orig_f_g < float(n_samples_raw))
 
@@ -1144,32 +1200,32 @@ def process_one_pair(
                     pmax_g,
                     pick_orig_f_g,
                     pick_orig_i_g,
-                    max_gap_samples=int(EDGE_PICK_MAX_GAP_SAMPLES),
+                    max_gap_samples=int(cfg.edge_pick_max_gap_samples),
                 )
             )
 
             x_rs = build_pick_aligned_window(
                 raw_g,
                 picks=pick_orig_i_g,
-                pre=int(RS_PRE),
-                post=int(RS_POST),
+                pre=int(cfg.rs_pre),
+                post=int(cfg.rs_post),
                 fill=0.0,
             )
             rs_res = refine_firstbreak_residual_statics(
                 x_rs,
-                max_lag=int(RS_MAX_LAG),
-                k_neighbors=int(RS_K_NEIGHBORS),
-                n_iter=int(RS_N_ITER),
-                mode=str(RS_MODE),
-                c_th=float(RS_C_TH),
-                smooth_method=str(RS_SMOOTH_METHOD),
-                lam=float(RS_LAM),
-                subsample=bool(RS_SUBSAMPLE),
-                propagate_low_corr=bool(RS_PROPAGATE_LOW_CORR),
-                taper=str(RS_TAPER),
-                taper_power=float(RS_TAPER_POWER),
-                lag_penalty=float(RS_LAG_PENALTY),
-                lag_penalty_power=float(RS_LAG_PENALTY_POWER),
+                max_lag=int(cfg.rs_max_lag),
+                k_neighbors=int(cfg.rs_k_neighbors),
+                n_iter=int(cfg.rs_n_iter),
+                mode=str(cfg.rs_mode),
+                c_th=float(cfg.rs_c_th),
+                smooth_method=str(cfg.rs_smooth_method),
+                lam=float(cfg.rs_lam),
+                subsample=bool(cfg.rs_subsample),
+                propagate_low_corr=bool(cfg.rs_propagate_low_corr),
+                taper=str(cfg.rs_taper),
+                taper_power=float(cfg.rs_taper_power),
+                lag_penalty=float(cfg.rs_lag_penalty),
+                lag_penalty_power=float(cfg.rs_lag_penalty_power),
             )
 
             delta_g = np.asarray(rs_res['delta_pick'], dtype=np.float32)
@@ -1197,38 +1253,40 @@ def process_one_pair(
             pick_rs_i_g = np.rint(pick_rs_f_g).astype(np.int32, copy=False)
             np.clip(pick_rs_i_g, 0, int(n_samples_raw - 1), out=pick_rs_i_g)
 
-            dbg = bool(POST_TROUGH_DEBUG) and (
-                int(POST_TROUGH_DEBUG_EVERY_N_GATHERS) > 0
-                and (int(gather_i) % int(POST_TROUGH_DEBUG_EVERY_N_GATHERS) == 0)
+            dbg = bool(cfg.post_trough_debug) and (
+                int(cfg.post_trough_debug_every_n_gathers) > 0
+                and (
+                    int(gather_i) % int(cfg.post_trough_debug_every_n_gathers) == 0
+                )
             )
             dbg_label = f'{raw_path.name} ffid={ffid}'
 
             # apply post-trough refinement only within offset window
-            pt_mask = _post_trough_apply_mask_from_offsets(offs_m)
+            pt_mask = _post_trough_apply_mask_from_offsets(offs_m, cfg=cfg)
             if np.any(invalid_trace_g):
                 pt_mask = pt_mask & (~invalid_trace_g)
 
             pick_final_g = _post_trough_adjust_picks(
                 pick_rs_i_g.copy(),
                 raw_g,
-                max_shift=int(POST_TROUGH_MAX_SHIFT),
-                scan_ahead=int(POST_TROUGH_SCAN_AHEAD),
-                smooth_win=int(POST_TROUGH_SMOOTH_WIN),
-                a_th=float(POST_TROUGH_A_TH),
+                max_shift=int(cfg.post_trough_max_shift),
+                scan_ahead=int(cfg.post_trough_scan_ahead),
+                smooth_win=int(cfg.post_trough_smooth_win),
+                a_th=float(cfg.post_trough_a_th),
                 apply_mask=pt_mask,
                 debug=dbg,
                 debug_label=dbg_label,
-                debug_max_examples=int(POST_TROUGH_DEBUG_MAX_EXAMPLES),
+                debug_max_examples=int(cfg.post_trough_debug_max_examples),
             ).astype(np.int32, copy=False)
 
             pick_final_g = _align_post_trough_shifts_to_neighbors(
                 pick_rs_i_g,
                 pick_final_g,
-                radius=int(POST_TROUGH_OUTLIER_RADIUS),
-                min_support=int(POST_TROUGH_OUTLIER_MIN_SUPPORT),
-                max_dev=int(POST_TROUGH_OUTLIER_MAX_DEV),
-                max_shift=int(POST_TROUGH_MAX_SHIFT),
-                propagate_zero=bool(POST_TROUGH_ALIGN_PROPAGATE_ZERO),
+                radius=int(cfg.post_trough_outlier_radius),
+                min_support=int(cfg.post_trough_outlier_min_support),
+                max_dev=int(cfg.post_trough_outlier_max_dev),
+                max_shift=int(cfg.post_trough_max_shift),
+                propagate_zero=bool(cfg.post_trough_align_propagate_zero),
                 apply_mask=pt_mask,
                 debug=dbg,
                 debug_label=dbg_label,
@@ -1239,8 +1297,8 @@ def process_one_pair(
             pick_final_g = snap_picks_to_phase(
                 pick_final_g,
                 raw_g,
-                mode=str(SNAP_MODE),
-                ltcor=int(SNAP_LTCOR),
+                mode=str(cfg.snap_mode),
+                ltcor=int(cfg.snap_ltcor),
             ).astype(np.int32, copy=False)
             # ensure out-of-range offsets are not modified by snap either
             if np.any(~pt_mask):
@@ -1293,9 +1351,10 @@ def process_one_pair(
                     pick_rs_i=pick_rs_i_g,
                     pick_final_i=pick_final_g,
                     title=f'{raw_path.stem} ffid={int(ffid)}',
+                    cfg=cfg,
                 )
 
-            if LOG_GATHER_RS:
+            if cfg.log_gather_rs:
                 mean_cmax = float(np.mean(cmax_g)) if cmax_g.size > 0 else 0.0
                 n_valid = int(np.count_nonzero(valid_g))
                 n_forced0 = int(np.count_nonzero(invalid_trace_g))
@@ -1343,10 +1402,19 @@ def process_one_pair(
     )
 
 
-def main() -> None:
-    model, standardize_eps, ckpt_path = load_psn_model_and_eps()
-    raw_segys = find_segy_files(IN_RAW_SEGY_ROOT, exts=SEGY_EXTS, recursive=True)
-    win_lookup = _build_win512_lookup(IN_WIN512_SEGY_ROOT)
+def run_stage4(
+    *,
+    cfg: Stage4Cfg = DEFAULT_STAGE4_CFG,
+    raw_paths: list[Path] | None = None,
+) -> None:
+    model, standardize_eps, ckpt_path = load_psn_model_and_eps(cfg=cfg)
+    if raw_paths is None:
+        raw_segys = find_segy_files(
+            cfg.in_raw_segy_root, exts=cfg.segy_exts, recursive=True
+        )
+    else:
+        raw_segys = list(raw_paths)
+    win_lookup = _build_win512_lookup(cfg.in_win512_segy_root, cfg=cfg)
 
     print(
         f'[RUN] raw={len(raw_segys)} win_lookup={len(win_lookup)} '
@@ -1357,7 +1425,7 @@ def main() -> None:
     n_skip = 0
 
     for raw_path in raw_segys:
-        rel = raw_path.relative_to(IN_RAW_SEGY_ROOT)
+        rel = raw_path.relative_to(cfg.in_raw_segy_root)
         key = (rel.parent.as_posix(), rel.stem)
         win_path = win_lookup.get(key)
         if win_path is None:
@@ -1377,10 +1445,15 @@ def main() -> None:
             sidecar_path=sidecar_path,
             model=model,
             standardize_eps=standardize_eps,
+            cfg=cfg,
         )
         n_ok += 1
 
-    print(f'[DONE] processed={n_ok} skipped={n_skip} out_root={OUT_PRED_ROOT}')
+    print(f'[DONE] processed={n_ok} skipped={n_skip} out_root={cfg.out_pred_root}')
+
+
+def main() -> None:
+    run_stage4(cfg=DEFAULT_STAGE4_CFG)
 
 
 if __name__ == '__main__':

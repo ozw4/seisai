@@ -1,6 +1,5 @@
 # %%
 #!/usr/bin/env python3
-from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,54 +23,55 @@ from seisai_pick.trend.trend_fit_strategy import TwoPieceIRLSAutoBreakStrategy
 # =========================
 # CONFIG（ここだけ触ればOK）
 # =========================
-IN_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
-IN_INFER_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_out')
-OUT_SEGY_ROOT = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512')
+@dataclass(frozen=True)
+class Stage2Cfg:
+    in_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
+    in_infer_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_out')
+    out_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512')
+    segy_exts: tuple[str, ...] = ('.sgy', '.segy')
+    half_win: int = 128  # ± samples
+    up_factor: int = 2
+    drop_low_frac: float = 0.05  # 下位除外
+    score_keys_for_weight: tuple[str, ...] = (
+        'conf_prob1',
+        'conf_rs1',
+    )
+    score_keys_for_filter: tuple[str, ...] = (
+        'conf_prob1',
+        'conf_trend1',
+        'conf_rs1',
+    )
+    pick_key: str = 'pick_final'  # infer npz側の最終pick（p1）
+    # 閾値モード
+    #   'per_segy' : SEGYごとにDrop_low_frac
+    #   'global'   : 全SEGYまとめてDrop_low_frac（全データグローバル）
+    thresh_mode: str = 'global'  # 'global' or 'per_segy'
+    # global trendline (proxy sign split)
+    global_vmin_m_s: float = 300.0
+    global_vmax_m_s: float = 6000.0
+    global_slope_eps: float = 1e-6
+    global_side_min_pts: int = 16
+    # Stage1 local trendline baseline (from stage1 .prob.npz)
+    use_stage1_local_trendline_baseline: bool = True
+    local_global_diff_th_samples: int = 128
+    local_discard_radius_traces: int = 32
+    local_trend_t_sec_key: str = 'trend_t_sec'
+    local_trend_covered_key: str = 'trend_covered'
+    local_trend_dt_sec_key: str = 'dt_sec'
+    local_inv_drop_th_samples: float = 10.0
+    local_inv_min_consec_steps: int = 2
+    # conf_trend1: Stage1互換
+    conf_trend_sigma_ms: float = 6.0
+    conf_trend_var_half_win_traces: int = 8
+    conf_trend_var_sigma_std_ms: float = 6.0
+    conf_trend_var_min_count: int = 3
 
-SEGY_EXTS = ('.sgy', '.segy')
+    @property
+    def out_ns(self) -> int:
+        return int(2 * int(self.half_win) * int(self.up_factor))
 
-HALF_WIN = 128  # ± samples
-UP_FACTOR = 2
-OUT_NS = 2 * HALF_WIN * UP_FACTOR  # 512
 
-# 下位除外（p10）
-DROP_LOW_FRAC = 0.05  # 下位除外
-SCORE_KEYS_FOR_WEIGHT = (
-    'conf_prob1',
-    'conf_rs1',
-)
-SCORE_KEYS_FOR_FILTER = (
-    'conf_prob1',
-    'conf_trend1',
-    'conf_rs1',
-)
-PICK_KEY = 'pick_final'  # infer npz側の最終pick（p1）
-
-# 閾値モード
-#   'per_segy' : SEGYごとにDrop_low_frac
-#   'global'   : 全SEGYまとめてDrop_low_frac（全データグローバル）
-THRESH_MODE = 'global'  # 'global' or 'per_segy'
-
-# global trendline (proxy sign split)
-GLOBAL_VMIN_M_S = 300.0
-GLOBAL_VMAX_M_S = 6000.0
-GLOBAL_SLOPE_EPS = 1e-6
-GLOBAL_SIDE_MIN_PTS = 16  # 2*min_pts of TwoPieceIRLSAutoBreakStrategy default
-# Stage1 local trendline baseline (from stage1 .prob.npz)
-USE_STAGE1_LOCAL_TRENDLINE_BASELINE = True
-LOCAL_GLOBAL_DIFF_TH_SAMPLES = 128  # >= -> discard local baseline around that trace
-LOCAL_DISCARD_RADIUS_TRACES = 32  # +/- traces within ffid
-LOCAL_TREND_T_SEC_KEY = 'trend_t_sec'
-LOCAL_TREND_COVERED_KEY = 'trend_covered'
-LOCAL_TREND_DT_SEC_KEY = 'dt_sec'
-LOCAL_INV_DROP_TH_SAMPLES = 10.0
-LOCAL_INV_MIN_CONSEC_STEPS = 2
-
-# conf_trend1: Stage1互換
-CONF_TREND_SIGMA_MS = 6.0
-CONF_TREND_VAR_HALF_WIN_TRACES = 8
-CONF_TREND_VAR_SIGMA_STD_MS = 6.0
-CONF_TREND_VAR_MIN_COUNT = 3
+DEFAULT_STAGE2_CFG = Stage2Cfg()
 
 
 # =========================
@@ -102,22 +102,32 @@ class _TrendBuildResult:
     conf_trend1: np.ndarray
 
 
-def infer_npz_path_for_segy(segy_path: Path) -> Path:
-    rel = segy_path.relative_to(IN_SEGY_ROOT)
-    return IN_INFER_ROOT / rel.parent / f'{segy_path.stem}.prob.npz'
+def infer_npz_path_for_segy(
+    segy_path: Path, *, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
+) -> Path:
+    rel = segy_path.relative_to(cfg.in_segy_root)
+    return cfg.in_infer_root / rel.parent / f'{segy_path.stem}.prob.npz'
 
 
-def out_segy_path_for_in(segy_path: Path) -> Path:
-    rel = segy_path.relative_to(IN_SEGY_ROOT)
+def out_segy_path_for_in(
+    segy_path: Path, *, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
+) -> Path:
+    rel = segy_path.relative_to(cfg.in_segy_root)
     out_rel = rel.with_suffix('')
-    return OUT_SEGY_ROOT / out_rel.parent / f'{out_rel.name}.win512.sgy'
+    return cfg.out_segy_root / out_rel.parent / f'{out_rel.name}.win512.sgy'
 
 
-def out_sidecar_npz_path_for_out(out_segy_path: Path) -> Path:
+def out_sidecar_npz_path_for_out(
+    out_segy_path: Path, *, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
+) -> Path:
+    del cfg
     return out_segy_path.with_suffix('.sidecar.npz')
 
 
-def out_pick_csr_npz_path_for_out(out_segy_path: Path) -> Path:
+def out_pick_csr_npz_path_for_out(
+    out_segy_path: Path, *, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
+) -> Path:
+    del cfg
     # PSN dataset (load_phase_pick_csr_npz) が読む用
     return out_segy_path.with_suffix('.phase_pick.csr.npz')
 
@@ -127,16 +137,17 @@ def _load_stage1_local_trend_center_i(
     z: np.lib.npyio.NpzFile,
     n_traces: int,
     dt_sec_in: float,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> tuple[np.ndarray, np.ndarray]:
-    if not bool(USE_STAGE1_LOCAL_TRENDLINE_BASELINE):
+    if not bool(cfg.use_stage1_local_trendline_baseline):
         center_i = np.full(int(n_traces), np.nan, dtype=np.float32)
         ok = np.zeros(int(n_traces), dtype=bool)
         return center_i, ok
 
-    dt_npz = float(require_npz_key(z, LOCAL_TREND_DT_SEC_KEY))
+    dt_npz = float(require_npz_key(z, cfg.local_trend_dt_sec_key))
     dt_in = float(dt_sec_in)
     if (not np.isfinite(dt_npz)) or dt_npz <= 0.0:
-        msg = f'invalid {LOCAL_TREND_DT_SEC_KEY} in infer npz: {dt_npz}'
+        msg = f'invalid {cfg.local_trend_dt_sec_key} in infer npz: {dt_npz}'
         raise ValueError(msg)
     if (not np.isfinite(dt_in)) or dt_in <= 0.0:
         msg = f'invalid dt_sec_in from segy: {dt_in}'
@@ -151,18 +162,18 @@ def _load_stage1_local_trend_center_i(
         )
         raise ValueError(msg)
 
-    t_sec = require_npz_key(z, LOCAL_TREND_T_SEC_KEY).astype(np.float32, copy=False)
+    t_sec = require_npz_key(z, cfg.local_trend_t_sec_key).astype(np.float32, copy=False)
     if t_sec.ndim != 1 or t_sec.shape[0] != int(n_traces):
         msg = (
-            f'{LOCAL_TREND_T_SEC_KEY} must be (n_traces,), got {t_sec.shape}, '
+            f'{cfg.local_trend_t_sec_key} must be (n_traces,), got {t_sec.shape}, '
             f'n_traces={n_traces}'
         )
         raise ValueError(msg)
 
-    covered = require_npz_key(z, LOCAL_TREND_COVERED_KEY).astype(bool, copy=False)
+    covered = require_npz_key(z, cfg.local_trend_covered_key).astype(bool, copy=False)
     if covered.ndim != 1 or covered.shape[0] != int(n_traces):
         msg = (
-            f'{LOCAL_TREND_COVERED_KEY} must be (n_traces,), got {covered.shape}, '
+            f'{cfg.local_trend_covered_key} must be (n_traces,), got {covered.shape}, '
             f'n_traces={n_traces}'
         )
         raise ValueError(msg)
@@ -591,6 +602,7 @@ def _compute_conf_trend1_from_trend(
     trend_center_i: np.ndarray,
     n_samples_in: int,
     dt_sec_in: float,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> np.ndarray:
     p = np.asarray(pick_final_i, dtype=np.int64)
     c = np.asarray(trend_center_i, dtype=np.float32)
@@ -607,15 +619,15 @@ def _compute_conf_trend1_from_trend(
         t_pick_sec,
         t_trend_sec,
         valid,
-        sigma_ms=float(CONF_TREND_SIGMA_MS),
+        sigma_ms=float(cfg.conf_trend_sigma_ms),
     )
     conf_v = trace_confidence_from_trend_resid_var(
         t_pick_sec,
         t_trend_sec,
         valid,
-        half_win_traces=int(CONF_TREND_VAR_HALF_WIN_TRACES),
-        sigma_std_ms=float(CONF_TREND_VAR_SIGMA_STD_MS),
-        min_count=int(CONF_TREND_VAR_MIN_COUNT),
+        half_win_traces=int(cfg.conf_trend_var_half_win_traces),
+        sigma_std_ms=float(cfg.conf_trend_var_sigma_std_ms),
+        min_count=int(cfg.conf_trend_var_min_count),
     )
     out = (
         np.asarray(conf_g, dtype=np.float32) * np.asarray(conf_v, dtype=np.float32)
@@ -782,6 +794,8 @@ def _fit_two_piece_projected(
     x_abs_m: np.ndarray,
     y_sec: np.ndarray,
     w_conf: np.ndarray,
+    *,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> tuple[np.ndarray, np.ndarray, bool]:
     """Return (edges, coef, used_deg_line).
 
@@ -838,8 +852,8 @@ def _fit_two_piece_projected(
             xmax = float(edges_t[2])
             a1, b1 = float(coef_t[0, 0]), float(coef_t[0, 1])
             a2, b2 = float(coef_t[1, 0]), float(coef_t[1, 1])
-            a_min = 1.0 / float(GLOBAL_VMAX_M_S)
-            a_max = 1.0 / float(GLOBAL_VMIN_M_S)
+            a_min = 1.0 / float(cfg.global_vmax_m_s)
+            a_max = 1.0 / float(cfg.global_vmin_m_s)
             a1p, b1p, a2p, b2p = _project_two_piece_coef(
                 xb=xb,
                 a1=a1,
@@ -848,14 +862,14 @@ def _fit_two_piece_projected(
                 b2=b2,
                 a_min=a_min,
                 a_max=a_max,
-                slope_eps=float(GLOBAL_SLOPE_EPS),
+                slope_eps=float(cfg.global_slope_eps),
             )
             edges = np.asarray([xmin, xb, xmax], dtype=np.float32)
             coef = np.asarray([[a1p, b1p], [a2p, b2p]], dtype=np.float32)
             return edges, coef, False
 
-    a_min = 1.0 / float(GLOBAL_VMAX_M_S)
-    a_max = 1.0 / float(GLOBAL_VMIN_M_S)
+    a_min = 1.0 / float(cfg.global_vmax_m_s)
+    a_max = 1.0 / float(cfg.global_vmin_m_s)
     a1p, b1p, a2p, b2p = _project_two_piece_coef(
         xb=xb,
         a1=a,
@@ -864,7 +878,7 @@ def _fit_two_piece_projected(
         b2=b,
         a_min=a_min,
         a_max=a_max,
-        slope_eps=float(GLOBAL_SLOPE_EPS),
+        slope_eps=float(cfg.global_slope_eps),
     )
     edges = np.asarray([xmin, xb, xmax], dtype=np.float32)
     coef = np.asarray([[a1p, b1p], [a2p, b2p]], dtype=np.float32)
@@ -879,6 +893,7 @@ def _build_global_trend_center_i(
     scores: dict[str, np.ndarray],
     n_samples_in: int,
     dt_sec_in: float,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -898,7 +913,7 @@ def _build_global_trend_center_i(
         raise ValueError(msg)
 
     w = np.ones_like(off, dtype=np.float64)
-    for k in SCORE_KEYS_FOR_WEIGHT:
+    for k in cfg.score_keys_for_weight:
         s = np.asarray(scores[k], dtype=np.float64)
         if s.shape != w.shape:
             msg = f'score shape mismatch {k}: {s.shape} vs {w.shape}'
@@ -910,22 +925,22 @@ def _build_global_trend_center_i(
     y_sec = p.astype(np.float64) * float(dt_sec_in)
 
     edges_all, coef_all, deg_all = _fit_two_piece_projected(
-        off[v_all], y_sec[v_all], w[v_all]
+        off[v_all], y_sec[v_all], w[v_all], cfg=cfg
     )
 
     left_mask = v_all & np.isfinite(proxy) & (proxy < 0.0)
     right_mask = v_all & np.isfinite(proxy) & (proxy > 0.0)
 
-    if int(np.count_nonzero(left_mask)) >= int(GLOBAL_SIDE_MIN_PTS):
+    if int(np.count_nonzero(left_mask)) >= int(cfg.global_side_min_pts):
         edges_left, coef_left, deg_left = _fit_two_piece_projected(
-            off[left_mask], y_sec[left_mask], w[left_mask]
+            off[left_mask], y_sec[left_mask], w[left_mask], cfg=cfg
         )
     else:
         edges_left, coef_left, deg_left = edges_all, coef_all, True
 
-    if int(np.count_nonzero(right_mask)) >= int(GLOBAL_SIDE_MIN_PTS):
+    if int(np.count_nonzero(right_mask)) >= int(cfg.global_side_min_pts):
         edges_right, coef_right, deg_right = _fit_two_piece_projected(
-            off[right_mask], y_sec[right_mask], w[right_mask]
+            off[right_mask], y_sec[right_mask], w[right_mask], cfg=cfg
         )
     else:
         edges_right, coef_right, deg_right = edges_all, coef_all, True
@@ -977,6 +992,7 @@ def _build_trend_result(
     scores: dict[str, np.ndarray],
     trend_center_i_local_in: np.ndarray,
     local_trend_ok_in: np.ndarray,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> _TrendBuildResult:
     ffid_values, shot_x_trace, shot_y_trace = _load_ffid_and_shot_xy_from_segy(src)
     if ffid_values.shape != (n_traces,):
@@ -1038,6 +1054,7 @@ def _build_trend_result(
         scores=scores,
         n_samples_in=int(n_samples_in),
         dt_sec_in=float(dt_sec_in),
+        cfg=cfg,
     )
 
     if bool(deg_left):
@@ -1067,8 +1084,11 @@ def _build_trend_result(
         trend_center_i_global_filled > 0.0
     )
 
-    if int(LOCAL_GLOBAL_DIFF_TH_SAMPLES) < 0:
-        msg = f'LOCAL_GLOBAL_DIFF_TH_SAMPLES must be >= 0, got {LOCAL_GLOBAL_DIFF_TH_SAMPLES}'
+    if int(cfg.local_global_diff_th_samples) < 0:
+        msg = (
+            f'local_global_diff_th_samples must be >= 0, '
+            f'got {cfg.local_global_diff_th_samples}'
+        )
         raise ValueError(msg)
 
     local_ok = (
@@ -1084,7 +1104,7 @@ def _build_trend_result(
         local_ok
         & global_ok
         & np.isfinite(diff)
-        & (diff >= float(int(LOCAL_GLOBAL_DIFF_TH_SAMPLES)))
+        & (diff >= float(int(cfg.local_global_diff_th_samples)))
     )
 
     inversion_mask = _local_velocity_inversion_mask_by_split(
@@ -1092,15 +1112,15 @@ def _build_trend_result(
         local_ok=local_ok,
         trend_offset_signed_proxy=trend_offset_signed_proxy,
         ffid_groups=ffid_groups,
-        inv_drop_th_samples=int(LOCAL_INV_DROP_TH_SAMPLES),
-        inv_min_consec_steps=int(LOCAL_INV_MIN_CONSEC_STEPS),
+        inv_drop_th_samples=int(cfg.local_inv_drop_th_samples),
+        inv_min_consec_steps=int(cfg.local_inv_min_consec_steps),
     )
 
     seeds = bad & inversion_mask
     local_discard_mask = _expand_mask_within_ffid_groups(
         mask_by_trace=seeds,
         ffid_groups=ffid_groups,
-        radius=int(LOCAL_DISCARD_RADIUS_TRACES),
+        radius=int(cfg.local_discard_radius_traces),
     )
 
     fill_mask = (~local_ok) | local_discard_mask
@@ -1130,6 +1150,7 @@ def _build_trend_result(
         trend_center_i=trend_center_i_used,
         n_samples_in=int(n_samples_in),
         dt_sec_in=float(dt_sec_in),
+        cfg=cfg,
     )
 
     return _TrendBuildResult(
@@ -1172,20 +1193,22 @@ def _field_key_to_int(key: object) -> int:
         raise TypeError(msg) from e
 
 
-def _extract_256(trace: np.ndarray, *, center_i: float) -> tuple[np.ndarray, int]:
+def _extract_256(
+    trace: np.ndarray, *, center_i: float, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
+) -> tuple[np.ndarray, int]:
     x = np.asarray(trace, dtype=np.float32)
     if x.ndim != 1:
         msg = f'trace must be 1D, got {x.shape}'
         raise ValueError(msg)
 
-    out = np.zeros(2 * HALF_WIN, dtype=np.float32)
+    out = np.zeros(2 * int(cfg.half_win), dtype=np.float32)
 
     if (not np.isfinite(center_i)) or center_i <= 0.0:
         return out, -1
 
     c = int(np.rint(float(center_i)))
-    start = c - HALF_WIN
-    end = c + HALF_WIN
+    start = c - int(cfg.half_win)
+    end = c + int(cfg.half_win)
 
     n = x.shape[0]
     ov_l = max(0, start)
@@ -1199,16 +1222,18 @@ def _extract_256(trace: np.ndarray, *, center_i: float) -> tuple[np.ndarray, int
     return out, start
 
 
-def _upsample_256_to_512_linear(win256: np.ndarray) -> np.ndarray:
+def _upsample_256_to_512_linear(
+    win256: np.ndarray, *, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
+) -> np.ndarray:
     y = np.asarray(win256, dtype=np.float32)
-    if y.shape != (2 * HALF_WIN,):
+    if y.shape != (2 * int(cfg.half_win),):
         msg = f'win256 must be (256,), got {y.shape}'
         raise ValueError(msg)
 
-    xp = np.arange(2 * HALF_WIN, dtype=np.float32)  # 0..255
-    xq = np.arange(OUT_NS, dtype=np.float32) / 2.0  # 0,0.5,..,255.5
+    xp = np.arange(2 * int(cfg.half_win), dtype=np.float32)  # 0..255
+    xq = np.arange(cfg.out_ns, dtype=np.float32) / float(cfg.up_factor)
     out = np.interp(xq, xp, y, left=0.0, right=0.0).astype(np.float32, copy=False)
-    if out.shape != (OUT_NS,):
+    if out.shape != (cfg.out_ns,):
         msg = f'unexpected upsample output shape: {out.shape}'
         raise ValueError(msg)
     return out
@@ -1219,6 +1244,7 @@ def _base_valid_mask(
     pick_final_i: np.ndarray,
     trend_center_i: np.ndarray,
     n_samples_in: int,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return (base_valid, reason_mask_partial)
     reason bits:
@@ -1245,8 +1271,8 @@ def _base_valid_mask(
     c_round = np.full(n_tr, -1, dtype=np.int64)
     if bool(np.any(trend_ok)):
         c_round[trend_ok] = np.rint(c[trend_ok]).astype(np.int64, copy=False)
-    # strict "< HALF_WIN" to keep pick_win_512 in (0, OUT_NS)
-    win_ok = pick_ok & trend_ok & (np.abs(p - c_round) < int(HALF_WIN))
+    # strict "< half_win" to keep pick_win_512 in (0, out_ns)
+    win_ok = pick_ok & trend_ok & (np.abs(p - c_round) < int(cfg.half_win))
     reason[~win_ok] |= 1 << 2
 
     return win_ok, reason
@@ -1259,6 +1285,7 @@ def build_keep_mask(
     n_samples_in: int,
     scores: dict[str, np.ndarray],
     thresholds: dict[str, float] | None,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> tuple[np.ndarray, dict[str, float], np.ndarray, np.ndarray]:
     """keep_mask, thresholds_used, reason_mask, base_valid
 
@@ -1276,6 +1303,7 @@ def build_keep_mask(
         pick_final_i=pick_final_i,
         trend_center_i=trend_center_i,
         n_samples_in=n_samples_in,
+        cfg=cfg,
     )
 
     bit_map = {'conf_prob1': 3, 'conf_trend1': 4, 'conf_rs1': 5}
@@ -1283,14 +1311,14 @@ def build_keep_mask(
     thresholds_used: dict[str, float] = {}
     keep = base_valid.copy()
 
-    for k in SCORE_KEYS_FOR_FILTER:
+    for k in cfg.score_keys_for_filter:
         s = np.asarray(scores[k], dtype=np.float32)
         if s.shape != (n_tr,):
             msg = f'score {k} must be (n_traces,), got {s.shape}, n_traces={n_tr}'
             raise ValueError(msg)
 
         if thresholds is None:
-            th = _percentile_threshold(s[base_valid], frac=DROP_LOW_FRAC)
+            th = _percentile_threshold(s[base_valid], frac=cfg.drop_low_frac)
         else:
             if k not in thresholds:
                 msg = f'thresholds missing key: {k} available={sorted(thresholds)}'
@@ -1310,6 +1338,8 @@ def build_keep_mask(
 
 def _load_minimal_inputs_for_thresholds(
     segy_path: Path,
+    *,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> tuple[
     int,
     int,
@@ -1318,7 +1348,7 @@ def _load_minimal_inputs_for_thresholds(
     dict[str, np.ndarray],
     _TrendBuildResult,
 ]:
-    infer_npz = infer_npz_path_for_segy(segy_path)
+    infer_npz = infer_npz_path_for_segy(segy_path, cfg=cfg)
     if not infer_npz.exists():
         msg = f'infer npz not found for segy: {segy_path} expected={infer_npz}'
         raise FileNotFoundError(msg)
@@ -1340,19 +1370,23 @@ def _load_minimal_inputs_for_thresholds(
             raise ValueError(msg)
         dt_sec_in = float(dt_us_in) * 1e-6
         with np.load(infer_npz, allow_pickle=False) as z:
-            pick_final = require_npz_key(z, PICK_KEY).astype(np.int64, copy=False)
+            pick_final = require_npz_key(z, cfg.pick_key).astype(np.int64, copy=False)
             if pick_final.ndim != 1 or pick_final.shape[0] != n_traces:
-                msg = f'{PICK_KEY} must be (n_traces,), got {pick_final.shape}, n_traces={n_traces}'
+                msg = (
+                    f'{cfg.pick_key} must be (n_traces,), got {pick_final.shape}, '
+                    f'n_traces={n_traces}'
+                )
                 raise ValueError(msg)
 
             scores_weight: dict[str, np.ndarray] = {}
-            for k in SCORE_KEYS_FOR_WEIGHT:
+            for k in cfg.score_keys_for_weight:
                 scores_weight[k] = require_npz_key(z, k).astype(np.float32, copy=False)
 
             trend_center_i_local, local_trend_ok = _load_stage1_local_trend_center_i(
                 z=z,
                 n_traces=n_traces,
                 dt_sec_in=dt_sec_in,
+                cfg=cfg,
             )
 
             trend_res = _build_trend_result(
@@ -1364,6 +1398,7 @@ def _load_minimal_inputs_for_thresholds(
                 scores=scores_weight,
                 trend_center_i_local_in=trend_center_i_local,
                 local_trend_ok_in=local_trend_ok,
+                cfg=cfg,
             )
             scores_filter: dict[str, np.ndarray] = {
                 'conf_prob1': scores_weight['conf_prob1'],
@@ -1381,14 +1416,16 @@ def _load_minimal_inputs_for_thresholds(
             )
 
 
-def compute_global_thresholds(segys: list[Path]) -> dict[str, float]:
-    vals: dict[str, list[np.ndarray]] = {k: [] for k in SCORE_KEYS_FOR_FILTER}
+def compute_global_thresholds(
+    segys: list[Path], *, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
+) -> dict[str, float]:
+    vals: dict[str, list[np.ndarray]] = {k: [] for k in cfg.score_keys_for_filter}
 
     n_files_used = 0
     n_base_total = 0
 
     for p in segys:
-        infer_npz = infer_npz_path_for_segy(p)
+        infer_npz = infer_npz_path_for_segy(p, cfg=cfg)
         if not infer_npz.exists():
             continue
 
@@ -1399,19 +1436,20 @@ def compute_global_thresholds(segys: list[Path]) -> dict[str, float]:
             pick_final,
             scores,
             trend_res,
-        ) = _load_minimal_inputs_for_thresholds(p)
+        ) = _load_minimal_inputs_for_thresholds(p, cfg=cfg)
 
         base_valid, _reason = _base_valid_mask(
             pick_final_i=pick_final,
             trend_center_i=trend_res.trend_center_i_used,
             n_samples_in=ns_in,
+            cfg=cfg,
         )
 
         n_b = int(np.count_nonzero(base_valid))
         if n_b <= 0:
             continue
 
-        for k in SCORE_KEYS_FOR_FILTER:
+        for k in cfg.score_keys_for_filter:
             s = np.asarray(scores[k], dtype=np.float32)
             vals[k].append(s[base_valid])
 
@@ -1426,12 +1464,12 @@ def compute_global_thresholds(segys: list[Path]) -> dict[str, float]:
         raise RuntimeError(msg)
 
     thresholds: dict[str, float] = {}
-    for k in SCORE_KEYS_FOR_FILTER:
+    for k in cfg.score_keys_for_filter:
         if not vals[k]:
             msg = f'no values accumulated for score={k}'
             raise RuntimeError(msg)
         v = np.concatenate(vals[k]).astype(np.float32, copy=False)
-        th = _percentile_threshold(v, frac=DROP_LOW_FRAC)
+        th = _percentile_threshold(v, frac=cfg.drop_low_frac)
         if np.isnan(th):
             msg = f'global threshold became NaN for score={k}'
             raise RuntimeError(msg)
@@ -1450,10 +1488,11 @@ def _build_phase_pick_csr_npz(
     pick_win_512: np.ndarray,
     keep_mask: np.ndarray,
     n_traces: int,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> int:
     """Write CSR pick npz required by seisai_dataset.load_phase_pick_csr_npz.
 
-    P picks: 1 per trace at most (int sample index in [1, OUT_NS-1])
+    P picks: 1 per trace at most (int sample index in [1, out_ns-1])
     S picks: empty
     """
     pw = np.asarray(pick_win_512, dtype=np.float32)
@@ -1465,7 +1504,7 @@ def _build_phase_pick_csr_npz(
     p_indptr = np.zeros(n_traces + 1, dtype=np.int64)
 
     pick_i = np.rint(pw).astype(np.int64, copy=False)
-    valid = km & np.isfinite(pw) & (pick_i > 0) & (pick_i < int(OUT_NS))
+    valid = km & np.isfinite(pw) & (pick_i > 0) & (pick_i < int(cfg.out_ns))
 
     nnz = int(np.count_nonzero(valid))
     p_data = np.empty(nnz, dtype=np.int64)
@@ -1495,18 +1534,21 @@ def _build_phase_pick_csr_npz(
 # Main per-file processing
 # =========================
 def process_one_segy(
-    segy_path: Path, *, global_thresholds: dict[str, float] | None
+    segy_path: Path,
+    *,
+    global_thresholds: dict[str, float] | None,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> None:
-    infer_npz = infer_npz_path_for_segy(segy_path)
+    infer_npz = infer_npz_path_for_segy(segy_path, cfg=cfg)
     if not infer_npz.exists():
         msg = f'infer npz not found for segy: {segy_path}  expected={infer_npz}'
         raise FileNotFoundError(msg)
 
-    out_segy = out_segy_path_for_in(segy_path)
+    out_segy = out_segy_path_for_in(segy_path, cfg=cfg)
     out_segy.parent.mkdir(parents=True, exist_ok=True)
 
-    side_npz = out_sidecar_npz_path_for_out(out_segy)
-    pick_csr_npz = out_pick_csr_npz_path_for_out(out_segy)
+    side_npz = out_sidecar_npz_path_for_out(out_segy, cfg=cfg)
+    pick_csr_npz = out_pick_csr_npz_path_for_out(out_segy, cfg=cfg)
 
     with segyio.open(str(segy_path), 'r', ignore_geometry=True) as src:
         n_traces = int(src.tracecount)
@@ -1524,28 +1566,32 @@ def process_one_segy(
             msg = f'invalid dt_us: {dt_us_in}'
             raise ValueError(msg)
 
-        if dt_us_in % UP_FACTOR != 0:
-            msg = f'dt_us must be divisible by {UP_FACTOR}. got {dt_us_in}'
+        if dt_us_in % int(cfg.up_factor) != 0:
+            msg = f'dt_us must be divisible by {cfg.up_factor}. got {dt_us_in}'
             raise ValueError(msg)
 
-        dt_us_out = dt_us_in // UP_FACTOR
+        dt_us_out = dt_us_in // int(cfg.up_factor)
         dt_sec_in = float(dt_us_in) * 1e-6
         dt_sec_out = float(dt_us_out) * 1e-6
 
         with np.load(infer_npz, allow_pickle=False) as z:
-            pick_final = require_npz_key(z, PICK_KEY).astype(np.int64, copy=False)
+            pick_final = require_npz_key(z, cfg.pick_key).astype(np.int64, copy=False)
             if pick_final.ndim != 1 or pick_final.shape[0] != n_traces:
-                msg = f'{PICK_KEY} must be (n_traces,), got {pick_final.shape}, n_traces={n_traces}'
+                msg = (
+                    f'{cfg.pick_key} must be (n_traces,), got {pick_final.shape}, '
+                    f'n_traces={n_traces}'
+                )
                 raise ValueError(msg)
 
             scores_weight: dict[str, np.ndarray] = {}
-            for k in SCORE_KEYS_FOR_WEIGHT:
+            for k in cfg.score_keys_for_weight:
                 scores_weight[k] = require_npz_key(z, k).astype(np.float32, copy=False)
 
             trend_center_i_local, local_trend_ok = _load_stage1_local_trend_center_i(
                 z=z,
                 n_traces=n_traces,
                 dt_sec_in=dt_sec_in,
+                cfg=cfg,
             )
 
             trend_res = _build_trend_result(
@@ -1557,6 +1603,7 @@ def process_one_segy(
                 scores=scores_weight,
                 trend_center_i_local_in=trend_center_i_local,
                 local_trend_ok_in=local_trend_ok,
+                cfg=cfg,
             )
             scores_filter: dict[str, np.ndarray] = {
                 'conf_prob1': scores_weight['conf_prob1'],
@@ -1587,15 +1634,18 @@ def process_one_segy(
             conf_trend1 = trend_res.conf_trend1
 
         thresholds_arg = None
-        if THRESH_MODE == 'global':
+        if cfg.thresh_mode == 'global':
             thresholds_arg = global_thresholds
             if thresholds_arg is None:
-                msg = 'THRESH_MODE=global but global_thresholds is None'
+                msg = 'thresh_mode=global but global_thresholds is None'
                 raise RuntimeError(msg)
-        elif THRESH_MODE == 'per_segy':
+        elif cfg.thresh_mode == 'per_segy':
             thresholds_arg = None
         else:
-            msg = f"THRESH_MODE must be 'global' or 'per_segy', got {THRESH_MODE!r}"
+            msg = (
+                "thresh_mode must be 'global' or 'per_segy', "
+                f'got {cfg.thresh_mode!r}'
+            )
             raise ValueError(msg)
 
         keep_mask, thresholds_used, reason_mask, _base_valid = build_keep_mask(
@@ -1604,6 +1654,7 @@ def process_one_segy(
             n_samples_in=ns_in,
             scores=scores_filter,
             thresholds=thresholds_arg,
+            cfg=cfg,
         )
 
         c_round = np.full(n_traces, -1, dtype=np.int64)
@@ -1612,16 +1663,16 @@ def process_one_segy(
             c_round[c_ok] = np.rint(trend_center_i_used[c_ok]).astype(
                 np.int64, copy=False
             )
-        win_start_i = c_round - int(HALF_WIN)
+        win_start_i = c_round - int(cfg.half_win)
 
         pick_win_512 = (
             pick_final.astype(np.float32) - win_start_i.astype(np.float32)
-        ) * float(UP_FACTOR)
+        ) * float(cfg.up_factor)
         pick_win_512[~keep_mask] = np.nan
 
         spec = segyio.spec()
         spec.tracecount = n_traces
-        spec.samples = np.arange(OUT_NS, dtype=np.int32)
+        spec.samples = np.arange(cfg.out_ns, dtype=np.int32)
         spec.format = 5  # IEEE float32
 
         sorting_val = getattr(src, 'sorting', 1)
@@ -1635,19 +1686,21 @@ def process_one_segy(
             for k in src.bin:
                 dst.bin[_field_key_to_int(k)] = src.bin[k]
             dst.bin[_field_key_to_int(segyio.BinField.Interval)] = dt_us_out
-            dst.bin[_field_key_to_int(segyio.BinField.Samples)] = OUT_NS
+            dst.bin[_field_key_to_int(segyio.BinField.Samples)] = cfg.out_ns
 
             for i in range(n_traces):
                 h = {_field_key_to_int(k): v for k, v in dict(src.header[i]).items()}
                 h[_field_key_to_int(segyio.TraceField.TRACE_SAMPLE_INTERVAL)] = (
                     dt_us_out
                 )
-                h[_field_key_to_int(segyio.TraceField.TRACE_SAMPLE_COUNT)] = OUT_NS
+                h[_field_key_to_int(segyio.TraceField.TRACE_SAMPLE_COUNT)] = cfg.out_ns
                 dst.header[i] = h
 
                 tr = np.asarray(src.trace[i], dtype=np.float32)
-                w256, _start = _extract_256(tr, center_i=float(trend_center_i_used[i]))
-                w512 = _upsample_256_to_512_linear(w256)
+                w256, _start = _extract_256(
+                    tr, center_i=float(trend_center_i_used[i]), cfg=cfg
+                )
+                w512 = _upsample_256_to_512_linear(w256, cfg=cfg)
                 dst.trace[i] = w512
 
             dst.flush()
@@ -1657,6 +1710,7 @@ def process_one_segy(
         pick_win_512=pick_win_512,
         keep_mask=keep_mask,
         n_traces=n_traces,
+        cfg=cfg,
     )
 
     np.savez_compressed(
@@ -1665,17 +1719,17 @@ def process_one_segy(
         src_infer_npz=str(infer_npz),
         out_segy=str(out_segy),
         out_pick_csr_npz=str(pick_csr_npz),
-        thresh_mode=str(THRESH_MODE),
-        drop_low_frac=np.float32(DROP_LOW_FRAC),
+        thresh_mode=str(cfg.thresh_mode),
+        drop_low_frac=np.float32(cfg.drop_low_frac),
         dt_sec_in=np.float32(dt_sec_in),
         dt_sec_out=np.float32(dt_sec_out),
         dt_us_in=np.int32(dt_us_in),
         dt_us_out=np.int32(dt_us_out),
         n_traces=np.int32(n_traces),
         n_samples_in=np.int32(ns_in),
-        n_samples_out=np.int32(OUT_NS),
-        local_global_diff_th_samples=np.int32(LOCAL_GLOBAL_DIFF_TH_SAMPLES),
-        local_discard_radius_traces=np.int32(LOCAL_DISCARD_RADIUS_TRACES),
+        n_samples_out=np.int32(cfg.out_ns),
+        local_global_diff_th_samples=np.int32(cfg.local_global_diff_th_samples),
+        local_discard_radius_traces=np.int32(cfg.local_discard_radius_traces),
         trend_center_i_raw=trend_center_i_raw.astype(np.float32, copy=False),
         trend_center_i_local=trend_center_i_local.astype(np.float32, copy=False),
         trend_center_i_final=trend_center_i_final.astype(np.float32, copy=False),
@@ -1715,7 +1769,7 @@ def process_one_segy(
     n_ld = int(np.count_nonzero(local_discard_mask))
     n_nn = int(np.count_nonzero(nn_replaced_mask))
     n_gl = int(np.count_nonzero(global_replaced_mask))
-    tag = 'global' if THRESH_MODE == 'global' else 'per_segy'
+    tag = 'global' if cfg.thresh_mode == 'global' else 'per_segy'
     print(
         f'[OK] {segy_path.name} -> {out_segy.name}  keep={n_keep}/{n_traces} '
         f'filled_trend={n_fill}/{n_traces} discard_local={n_ld} '
@@ -1726,24 +1780,35 @@ def process_one_segy(
     )
 
 
-def main() -> None:
-    segys = find_segy_files(IN_SEGY_ROOT, exts=SEGY_EXTS, recursive=True)
-    print(f'[RUN] found {len(segys)} segy files under {IN_SEGY_ROOT}')
+def run_stage2(
+    *,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
+    segy_paths: list[Path] | None = None,
+) -> None:
+    if segy_paths is None:
+        segys = find_segy_files(cfg.in_segy_root, exts=cfg.segy_exts, recursive=True)
+    else:
+        segys = list(segy_paths)
+    print(f'[RUN] found {len(segys)} segy files under {cfg.in_segy_root}')
 
     segys2: list[Path] = []
     for p in segys:
-        infer_npz = infer_npz_path_for_segy(p)
+        infer_npz = infer_npz_path_for_segy(p, cfg=cfg)
         if not infer_npz.exists():
             print(f'[SKIP] infer npz missing: {p}  expected={infer_npz}')
             continue
         segys2.append(p)
 
     global_thresholds = None
-    if THRESH_MODE == 'global':
-        global_thresholds = compute_global_thresholds(segys2)
+    if cfg.thresh_mode == 'global':
+        global_thresholds = compute_global_thresholds(segys2, cfg=cfg)
 
     for p in segys2:
-        process_one_segy(p, global_thresholds=global_thresholds)
+        process_one_segy(p, global_thresholds=global_thresholds, cfg=cfg)
+
+
+def main() -> None:
+    run_stage2(cfg=DEFAULT_STAGE2_CFG)
 
 
 if __name__ == '__main__':
