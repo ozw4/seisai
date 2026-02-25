@@ -1,7 +1,7 @@
 in_path: /home/dcuser/data/ActiveSeisField/jogsarar/infer_only
 stage1_ckpt: '/home/dcuser/data/model_weight/fbseg_caformer_b36.pth'
 stage4_ckpt: /workspace/proc/jogsarar/configs/runs/prestage2_drop005/ckpt/best.pt
-out_root:  /home/dcuser/data/ActiveSeisField/jogsarar/
+out_root:  /home/dcuser/data/ActiveSeisField/jogsarar/infer_out
 thresh_mode: global
 viz_every_n_shots: 20
 stage4_cfg_yaml: null

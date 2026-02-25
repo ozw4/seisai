@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -11,7 +11,7 @@ from seisai_utils.segy_write import write_segy_like_input
 from seisai_engine.predict import _run_tiled
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
 
@@ -91,6 +91,90 @@ def _infer_hw_denorm_like_input(
     return y_hw * s + m
 
 
+def _get_iterator_file_infos(iterator: FFIDGatherIterator) -> list[dict[str, Any]]:
+    infos = getattr(iterator, 'file_infos', None)
+    if not isinstance(infos, list):
+        msg = 'FFIDGatherIterator must expose public file_infos list'
+        raise TypeError(msg)
+    return infos
+
+
+def run_ffid_gather_infer_core(
+    *,
+    iterator: FFIDGatherIterator,
+    file_index: int,
+    infer_one_gather_fn: Callable[[Any], np.ndarray],
+    ffids: Iterable[int] | None = None,
+) -> np.ndarray:
+    if not isinstance(file_index, int) or isinstance(file_index, bool):
+        msg = 'file_index must be int'
+        raise TypeError(msg)
+    file_infos = _get_iterator_file_infos(iterator)
+    if file_index < 0 or file_index >= len(file_infos):
+        msg = f'file_index out of range: {file_index}'
+        raise ValueError(msg)
+    if not callable(infer_one_gather_fn):
+        msg = 'infer_one_gather_fn must be callable'
+        raise TypeError(msg)
+
+    ffid_list = None
+    if ffids is not None:
+        ffid_list = [int(x) for x in ffids]
+        if len(ffid_list) == 0:
+            msg = 'ffids must be non-empty if provided'
+            raise ValueError(msg)
+
+    info = file_infos[file_index]
+    n_traces = int(info['n_traces'])
+    n_samples = int(info['n_samples'])
+    if n_traces <= 0 or n_samples <= 0:
+        src_path = str(info.get('path', 'unknown'))
+        msg = (
+            f'invalid segy shape: n_traces={n_traces}, n_samples={n_samples} '
+            f'({src_path})'
+        )
+        raise ValueError(msg)
+
+    out_hw = np.zeros((n_traces, n_samples), dtype=np.float32)
+    seen = np.zeros((n_traces,), dtype=np.bool_)
+
+    for gather in iterator.iter_gathers(file_indices=[file_index], ffids=ffid_list):
+        idx = np.asarray(gather.trace_indices, dtype=np.int64)
+        if idx.size == 0:
+            continue
+        if idx.min() < 0 or idx.max() >= n_traces:
+            msg = 'trace_indices out of range'
+            raise ValueError(msg)
+        if int(gather.x_hw.shape[1]) != n_samples:
+            src_path = str(info.get('path', 'unknown'))
+            msg = (
+                f'gather W mismatch: got {int(gather.x_hw.shape[1])}, '
+                f'want {n_samples} ({src_path})'
+            )
+            raise ValueError(msg)
+
+        y_hw = infer_one_gather_fn(gather)
+        y_hw = np.asarray(y_hw, dtype=np.float32)
+        expected_shape = (int(idx.shape[0]), int(n_samples))
+        if tuple(y_hw.shape) != expected_shape:
+            msg = (
+                f'infer_one_gather_fn output must be {expected_shape}, '
+                f'got {tuple(y_hw.shape)}'
+            )
+            raise ValueError(msg)
+
+        out_hw[idx] = y_hw
+        seen[idx] = True
+
+    if not bool(seen.all()):
+        miss = int((~seen).sum())
+        src_path = str(info.get('path', 'unknown'))
+        msg = f'some traces were not filled (miss={miss}) in {src_path}'
+        raise ValueError(msg)
+
+    return out_hw
+
+
 @torch.no_grad()
 def run_ffid_gather_infer_and_write_segy(
     model: torch.nn.Module,
@@ -132,60 +216,22 @@ def run_ffid_gather_infer_and_write_segy(
 
     model.eval()
 
-    ffid_list = None
-    if ffids is not None:
-        ffid_list = [int(x) for x in ffids]
-        if len(ffid_list) == 0:
-            msg = 'ffids must be non-empty if provided'
-            raise ValueError(msg)
-
     out_paths: list[Path] = []
 
     with FFIDGatherIterator(segy_files, sort_within=sort_within) as it:
         for fi, src_path in enumerate(it.segy_files):
-            info = it.file_infos[fi]
-            n_traces = int(info['n_traces'])
-            n_samples = int(info['n_samples'])
-            if n_traces <= 0 or n_samples <= 0:
-                msg = f'invalid segy shape: n_traces={n_traces}, n_samples={n_samples} ({src_path})'
-                raise ValueError(
-                    msg
-                )
-
-            out_hw = np.zeros((n_traces, n_samples), dtype=np.float32)
-            seen = np.zeros((n_traces,), dtype=np.bool_)
-
-            for g in it.iter_gathers(file_indices=[fi], ffids=ffid_list):
-                idx = np.asarray(g.trace_indices, dtype=np.int64)
-                if idx.size == 0:
-                    continue
-                if idx.min() < 0 or idx.max() >= n_traces:
-                    msg = 'trace_indices out of range'
-                    raise ValueError(msg)
-                if int(g.x_hw.shape[1]) != n_samples:
-                    msg = f'gather W mismatch: got {int(g.x_hw.shape[1])}, want {n_samples} ({src_path})'
-                    raise ValueError(
-                        msg
-                    )
-
-                y_hw = _infer_hw_denorm_like_input(
+            out_hw = run_ffid_gather_infer_core(
+                iterator=it,
+                file_index=fi,
+                ffids=ffids,
+                infer_one_gather_fn=lambda g: _infer_hw_denorm_like_input(
                     model,
                     g.x_hw,
                     device=device,
                     cfg=cfg,
                     eps_std=float(eps_std),
-                )
-
-                out_hw[idx] = y_hw
-                seen[idx] = True
-
-            if not bool(seen.all()):
-                miss = int((~seen).sum())
-                msg = f'some traces were not filled (miss={miss}) in {src_path}'
-                raise ValueError(
-                    msg
-                )
-
+                ),
+            )
             dst = write_segy_like_input(
                 src_path=src_path,
                 out_dir=out_dir,
@@ -200,5 +246,6 @@ def run_ffid_gather_infer_and_write_segy(
 
 __all__ = [
     'Tiled2DConfig',
+    'run_ffid_gather_infer_core',
     'run_ffid_gather_infer_and_write_segy',
 ]

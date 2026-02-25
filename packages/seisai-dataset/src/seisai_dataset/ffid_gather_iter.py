@@ -116,6 +116,10 @@ class FFIDGatherIterator:
     def __iter__(self) -> Iterator[FfidGather]:
         return self.iter_gathers()
 
+    @property
+    def file_infos(self) -> list[dict]:
+        return list(self._file_infos)
+
     def iter_gathers(
         self,
         *,

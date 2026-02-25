@@ -1,5 +1,5 @@
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Literal
 
 import torch
@@ -20,6 +20,7 @@ def cover_all_traces_predict_striped(
     # 等間隔ストライプの「開始オフセット」を複数与えると TTA(平均化)になる
     offsets: Sequence[int] = (0,),
     passes_batch: int = 4,
+    predict_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> torch.Tensor:
     """等間隔(striped)マスクで全トレースを一度は隠し、その位置の予測を合成。
     offsets を複数与えると、開始位置をずらした複数ラウンドの平均(TTA)を行う。.
@@ -46,6 +47,15 @@ def cover_all_traces_predict_striped(
     if len(offsets) == 0:
         msg = 'offsets must be non-empty'
         raise ValueError(msg)
+    if isinstance(passes_batch, bool) or not isinstance(passes_batch, int):
+        msg = 'passes_batch must be int'
+        raise TypeError(msg)
+    if passes_batch <= 0:
+        msg = 'passes_batch must be positive'
+        raise ValueError(msg)
+    if predict_fn is not None and not callable(predict_fn):
+        msg = 'predict_fn must be callable or None'
+        raise TypeError(msg)
 
     device = device or x.device
     B, _, H, W = x.shape
@@ -108,8 +118,19 @@ def cover_all_traces_predict_striped(
                     xmb.append(xm)
 
                 xmb = torch.cat(xmb, dim=0)  # (len(batch_bi)*B, 1, H, W)
-                with autocast('cuda', enabled=use_amp):
-                    yb = model(xmb)  # (len(batch_bi)*B, C, H, W)
+                dev_type = 'cuda' if xmb.is_cuda else 'cpu'
+                amp_enabled = bool(use_amp and dev_type == 'cuda')
+                with autocast(dev_type, enabled=amp_enabled):
+                    if predict_fn is None:
+                        yb = model(xmb)
+                    else:
+                        yb = predict_fn(xmb)
+                if not isinstance(yb, torch.Tensor):
+                    msg = f'predict output must be torch.Tensor, got {type(yb)}'
+                    raise TypeError(msg)
+                if yb.ndim != 4:
+                    msg = f'predict output must be 4D (N,C,H,W), got {tuple(yb.shape)}'
+                    raise ValueError(msg)
                 # 元の B に戻して対応行だけ加算
                 yb = yb.view(len(batch_bi), B, -1, H, W)  # (Nb,B,C,H,W)
                 for k, rows in enumerate(row_index_list):
@@ -117,6 +138,15 @@ def cover_all_traces_predict_striped(
                     y_sum[:, :, rows_dev, :] += yb[k, :, :, rows_dev, :]
                     hits[:, :, rows_dev, :] += 1
 
-    # 平均化(全行 hit>=1 のはず。もし0があれば設計ミス)
-    hits_clamped = hits.clamp_min(1)
-    return y_sum / hits_clamped
+    # 全trace被覆を厳密チェック（0-hitは即失敗）
+    hits_bh = hits[:, 0, :, 0]
+    hit_min = int(hits_bh.min().item())
+    if hit_min < 1:
+        miss_bh = (hits_bh == 0).nonzero(as_tuple=False)
+        msg = (
+            'striped mask coverage failure: zero-hit traces detected; '
+            f'count={int(miss_bh.shape[0])}, first_bh={miss_bh[:16].tolist()}'
+        )
+        raise RuntimeError(msg)
+
+    return y_sum / hits.to(dtype=y_sum.dtype)

@@ -4,6 +4,7 @@
 # - モデルは恒等写像だが、フォワード入力から「全ゼロ行=マスクされた行」を検出・カウントします。
 # - noise_std=0, mask_noise_mode='replace' とすることで、マスク行が 0 に置換される前提で検出します。
 
+import pytest
 import torch
 from seisai_transforms.mask_inference import cover_all_traces_predict_striped
 from torch import nn
@@ -39,12 +40,26 @@ class ProbeIdentity(nn.Module):
         return x  # 恒等
 
 
-def _run_one_case(H, W, band_width, mask_ratio, offsets, B=2, device='cpu') -> None:
+def _run_one_case(
+    H,
+    W,
+    band_width,
+    mask_ratio,
+    offsets,
+    B=2,
+    device='cpu',
+    use_predict_fn=False,
+) -> None:
     # 入力を非ゼロにしておく(0埋めマスク検出の前提)
     torch.manual_seed(0)
     x = torch.randn(B, 1, H, W, device=device) + 1.0
 
     model = ProbeIdentity(B=B, H=H).to(device)
+    if use_predict_fn:
+        def predict_fn(xmb: torch.Tensor) -> torch.Tensor:
+            return model(xmb)
+    else:
+        predict_fn = None
     y = cover_all_traces_predict_striped(
         model,
         x,
@@ -56,6 +71,7 @@ def _run_one_case(H, W, band_width, mask_ratio, offsets, B=2, device='cpu') -> N
         device=device,
         offsets=tuple(offsets),  # TTAオフセットの数だけ各行がマスクされるはず
         passes_batch=4,
+        predict_fn=predict_fn,
     )
     assert y.shape == x.shape
     # 期待値：各行のヒット回数 == len(offsets)
@@ -88,6 +104,41 @@ def test_complete_coverage() -> None:
     for cfg in cases:
         _run_one_case(**cfg, device=device)
     print('✅ complete coverage confirmed for all test cases.')
+
+
+def test_complete_coverage_with_predict_fn() -> None:
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    cases = [
+        {'H': 17, 'W': 64, 'band_width': 1, 'mask_ratio': 0.5, 'offsets': (0,)},
+        {'H': 33, 'W': 40, 'band_width': 1, 'mask_ratio': 0.3, 'offsets': (0, 1, 2)},
+        {'H': 64, 'W': 128, 'band_width': 4, 'mask_ratio': 0.25, 'offsets': (0,)},
+        {'H': 37, 'W': 96, 'band_width': 5, 'mask_ratio': 0.4, 'offsets': (0, 1)},
+        {'H': 13, 'W': 80, 'band_width': 5, 'mask_ratio': 1.0, 'offsets': (0,)},
+        {'H': 48, 'W': 72, 'band_width': 7, 'mask_ratio': 0.6, 'offsets': (0, 1, 2, 3)},
+    ]
+    for cfg in cases:
+        _run_one_case(**cfg, device=device, use_predict_fn=True)
+
+
+def test_invalid_passes_batch_raises_value_error() -> None:
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    B, H, W = 1, 8, 16
+    x = torch.randn(B, 1, H, W, device=device) + 1.0
+    model = ProbeIdentity(B=B, H=H).to(device)
+
+    with pytest.raises(ValueError, match='passes_batch must be positive'):
+        cover_all_traces_predict_striped(
+            model,
+            x,
+            mask_ratio=0.5,
+            band_width=1,
+            noise_std=0.0,
+            mask_noise_mode='replace',
+            use_amp=False,
+            device=device,
+            offsets=(0,),
+            passes_batch=-1,
+        )
 
 
 if __name__ == '__main__':
