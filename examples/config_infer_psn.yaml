@@ -1,0 +1,34 @@
+paths:
+  segy_files:
+    - ../test_data/ridgecrest_das/20200623002546.sgy
+  out_dir: ./_psn_infer_out
+
+infer:
+  ckpt_path: ./_psn_out/ckpt/best.pt
+  device: auto
+  out_suffix: .sgy
+  overwrite: false
+  sort_within: chno
+  ffids: null
+  outputs: [P, S, N] # Optional. Use null (or omit) to output all classes in ckpt.
+  standardize_eps: null
+  allow_unsafe_override: false
+  note: demo
+
+tile:
+  tile_h: 128
+  overlap_h: 64
+  tile_w: 6016
+  overlap_w: 1024
+  tiles_per_batch: 16
+  amp: true
+  use_tqdm: false
+
+tta: []
+
+# Merge precedence: infer.yaml > ckpt cfg > defaults
+# Run:
+# python cli/run_psn_infer.py --config examples/config_infer_psn.yaml
+# Unknown override examples:
+# python cli/run_psn_infer.py --config examples/config_infer_psn.yaml tile.tile_w=4096
+# python cli/run_psn_infer.py --config examples/config_infer_psn.yaml infer.outputs=[P,S]
