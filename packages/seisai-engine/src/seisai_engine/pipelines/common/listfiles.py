@@ -39,12 +39,19 @@ def _parse_listfile_line(
     listfile_path: Path,
     line_no: int,
 ) -> tuple[str, dict[str, Any] | None]:
-    if '\t' not in stripped:
-        return stripped, None
+    if '\t' in stripped:
+        raw_path, raw_meta = stripped.split('\t', 1)
+        path_token = raw_path.strip()
+        meta_token = raw_meta.strip()
+    else:
+        brace_idx = stripped.find('{')
+        if brace_idx == -1:
+            return stripped, None
+        if brace_idx == 0 or not stripped[brace_idx - 1].isspace():
+            return stripped, None
+        path_token = stripped[:brace_idx].rstrip()
+        meta_token = stripped[brace_idx:].lstrip()
 
-    raw_path, raw_meta = stripped.split('\t', 1)
-    path_token = raw_path.strip()
-    meta_token = raw_meta.strip()
     if not path_token:
         msg = f'empty path token in {listfile_path}:{line_no}'
         raise ValueError(msg)

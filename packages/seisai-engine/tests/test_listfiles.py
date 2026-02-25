@@ -147,6 +147,47 @@ def test_load_path_listfile_with_tab_json_metadata(tmp_path: Path) -> None:
     ]
 
 
+def test_load_path_listfile_with_space_json_metadata(tmp_path: Path) -> None:
+    f1 = tmp_path / 'a.sgy'
+    f2 = tmp_path / 'b.sgy'
+    _write_file(f1)
+    _write_file(f2)
+
+    listfile = tmp_path / 'paths.txt'
+    listfile.write_text(
+        '\n'.join(
+            [
+                (
+                    f'{f1} '
+                    '{"primary_keys":["ffid"],"primary_ranges":{"ffid":[[1,100]]}}'
+                ),
+                str(f2),
+            ]
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    paths, metas = load_path_listfile_with_meta(listfile)
+    assert paths == [str(f1.resolve()), str(f2.resolve())]
+    assert metas == [
+        {'primary_keys': ['ffid'], 'primary_ranges': {'ffid': [[1, 100]]}},
+        None,
+    ]
+
+
+def test_load_path_listfile_keeps_brace_in_path_without_whitespace(tmp_path: Path) -> None:
+    f1 = tmp_path / 'a{meta}.sgy'
+    _write_file(f1)
+
+    listfile = tmp_path / 'paths.txt'
+    listfile.write_text(f'{f1}\n', encoding='utf-8')
+
+    paths, metas = load_path_listfile_with_meta(listfile)
+    assert paths == [str(f1.resolve())]
+    assert metas == [None]
+
+
 def test_load_path_listfile_with_tab_invalid_json_raises(tmp_path: Path) -> None:
     f1 = tmp_path / 'a.sgy'
     _write_file(f1)
