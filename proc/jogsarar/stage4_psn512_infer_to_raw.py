@@ -1,8 +1,9 @@
 # %%
 #!/usr/bin/env python3
 
+import argparse
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -28,13 +29,16 @@ from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 from seisai_utils import config_yaml
 from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
 
+
 # =========================
 # CONFIG (fixed constants)
 # =========================
 @dataclass(frozen=True)
 class Stage4Cfg:
     in_raw_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
-    in_win512_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512')
+    in_win512_segy_root: Path = Path(
+        '/home/dcuser/data/ActiveSeisField/jogsarar_psn512'
+    )
     out_pred_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_pred')
     # cfg_yaml=None で ckpt-only 起動。DEFAULT では従来互換の YAML 起動。
     cfg_yaml: Path | None = Path('configs/config_convnext_prestage2_drop005.yaml')
@@ -79,7 +83,9 @@ class Stage4Cfg:
     log_gather_rs: bool = True
     # post-trough refinement
     post_trough_max_shift: int = 16
+    # Peak search window length (direction depends on post_trough_peak_search).
     post_trough_scan_ahead: int = 32
+    post_trough_peak_search: str = 'after_pick'
     post_trough_smooth_win: int = 5
     # post-trough refinement offset gating (ABS offset in meters)
     post_trough_offs_abs_min_m: float | None = None
@@ -91,6 +97,7 @@ class Stage4Cfg:
     post_trough_outlier_min_support: int = 3
     post_trough_outlier_max_dev: int = 2
     post_trough_align_propagate_zero: bool = False
+    post_trough_align_zero_pin_tol: int = 2
     # debug prints for post-trough
     post_trough_debug: bool = False
     post_trough_debug_max_examples: int = 5
@@ -109,6 +116,165 @@ class Stage4Cfg:
 
 
 DEFAULT_STAGE4_CFG = Stage4Cfg()
+
+
+def _parse_segy_exts(text: str) -> tuple[str, ...]:
+    vals = [x.strip() for x in str(text).split(',')]
+    out: list[str] = []
+    for v in vals:
+        if not v:
+            continue
+        e = v.lower()
+        if not e.startswith('.'):
+            e = '.' + e
+        out.append(e)
+    if len(out) == 0:
+        msg = f'empty segy_exts: {text!r}'
+        raise ValueError(msg)
+    return tuple(out)
+
+
+def _coerce_path_value(key: str, value: object, *, allow_none: bool) -> Path | None:
+    if value is None:
+        if allow_none:
+            return None
+        msg = f'config[{key}] must not be null'
+        raise TypeError(msg)
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, str):
+        return Path(value)
+    msg = f'config[{key}] must be str or Path, got {type(value).__name__}'
+    raise TypeError(msg)
+
+
+def _coerce_segy_exts_value(value: object) -> tuple[str, ...]:
+    if isinstance(value, tuple):
+        return _parse_segy_exts(','.join(str(x) for x in value))
+    if isinstance(value, list):
+        if len(value) == 0:
+            raise ValueError('config[segy_exts] must not be empty')
+        for i, v in enumerate(value):
+            if not isinstance(v, str):
+                msg = f'config[segy_exts][{i}] must be str, got {type(v).__name__}'
+                raise TypeError(msg)
+        return _parse_segy_exts(','.join(value))
+    if isinstance(value, str):
+        return _parse_segy_exts(value)
+    msg = f'config[segy_exts] must be str | list[str] | tuple[str,...], got {type(value).__name__}'
+    raise TypeError(msg)
+
+
+def _coerce_viz_figsize_value(value: object) -> tuple[int, int]:
+    if isinstance(value, tuple) or isinstance(value, list):
+        if len(value) != 2:
+            raise ValueError(
+                f'config[viz_figsize] must have length 2, got {len(value)}'
+            )
+        a, b = value[0], value[1]
+        if (not isinstance(a, int)) or isinstance(a, bool):
+            raise TypeError(
+                f'config[viz_figsize][0] must be int, got {type(a).__name__}'
+            )
+        if (not isinstance(b, int)) or isinstance(b, bool):
+            raise TypeError(
+                f'config[viz_figsize][1] must be int, got {type(b).__name__}'
+            )
+        return (int(a), int(b))
+    msg = f'config[viz_figsize] must be list[int,int] or tuple[int,int], got {type(value).__name__}'
+    raise TypeError(msg)
+
+
+def _load_stage4_cfg_from_yaml(path: Path) -> Stage4Cfg:
+    cfg_path = Path(path).expanduser().resolve()
+    if not cfg_path.is_file():
+        msg = f'--config not found: {cfg_path}'
+        raise FileNotFoundError(msg)
+
+    import yaml
+
+    with cfg_path.open('r', encoding='utf-8') as f:
+        loaded = yaml.safe_load(f)
+    if not isinstance(loaded, dict):
+        msg = f'config top-level must be dict, got {type(loaded).__name__}'
+        raise TypeError(msg)
+
+    # allow either:
+    #   {stage4: {...}}
+    #   {...} (flat)
+    if 'stage4' in loaded:
+        sub = loaded['stage4']
+        if not isinstance(sub, dict):
+            msg = f'config.stage4 must be dict, got {type(sub).__name__}'
+            raise TypeError(msg)
+        data = sub
+    else:
+        data = loaded
+
+    allowed = {f.name for f in fields(Stage4Cfg)}
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        msg = f'unknown stage4 config keys: {unknown}'
+        raise ValueError(msg)
+
+    overrides: dict[str, object] = {}
+    path_keys = {
+        'in_raw_segy_root',
+        'in_win512_segy_root',
+        'out_pred_root',
+        'cfg_yaml',
+        'ckpt_path',
+    }
+    opt_path_keys = {'cfg_yaml', 'ckpt_path'}
+
+    for key, value in data.items():
+        if key in path_keys:
+            overrides[key] = _coerce_path_value(
+                key, value, allow_none=(key in opt_path_keys)
+            )
+            continue
+        if key == 'segy_exts':
+            overrides[key] = _coerce_segy_exts_value(value)
+            continue
+        if key == 'viz_figsize':
+            overrides[key] = _coerce_viz_figsize_value(value)
+            continue
+        # passthrough scalars (yaml gives bool/int/float/str/None)
+        overrides[key] = value
+
+    return replace(DEFAULT_STAGE4_CFG, **overrides)
+
+
+def _build_stage4_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description='Stage4: PSN512 infer -> raw pick pipeline')
+    p.add_argument(
+        '--config',
+        type=Path,
+        default=None,
+        help='Stage4 YAML config. CLI overrides YAML.',
+    )
+    p.add_argument('--in-raw-segy-root', type=Path, default=None)
+    p.add_argument('--in-win512-segy-root', type=Path, default=None)
+    p.add_argument('--out-pred-root', type=Path, default=None)
+    p.add_argument(
+        '--cfg-yaml',
+        type=Path,
+        default=None,
+        help='PSN training config YAML (model definition)',
+    )
+    p.add_argument(
+        '--ckpt-path',
+        type=Path,
+        default=None,
+        help='Explicit checkpoint path (best.pt etc.)',
+    )
+    p.add_argument('--device', type=str, default=None)
+    p.add_argument('--segy-exts', type=str, default=None, help='e.g. ".sgy,.segy"')
+    p.add_argument(
+        '--post-trough-peak-search', choices=('after_pick', 'before_pick'), default=None
+    )
+    p.add_argument('--viz-every-n-shots', type=int, default=None)
+    return p
 
 
 def _stem_without_win512(stem: str) -> str:
@@ -327,6 +493,7 @@ def _shift_pick_to_preceding_trough_1d(
     scan_ahead: int,
     smooth_win: int,
     a_th: float,
+    peak_search: str,
 ) -> tuple[int, int, int, float, float, float, str]:
     # "Return (p_out, peak_i, trough_i, a_th, peak_amp, trough_amp, reason).
     n = int(x.size)
@@ -336,10 +503,6 @@ def _shift_pick_to_preceding_trough_1d(
     scale = float(np.max(np.abs(x)))
     if (not np.isfinite(scale)) or scale <= 0.0:
         return p, -1, -1, float(a_th), 0.0, 0.0, 'scale0'
-
-    end = min(n - 2, p + int(scan_ahead))
-    if end <= p + 1:
-        return p, -1, -1, float(a_th), 0.0, 0.0, 'scan_empty'
 
     sw = int(smooth_win)
     if sw <= 0 or (sw % 2) != 1:
@@ -351,8 +514,43 @@ def _shift_pick_to_preceding_trough_1d(
         msg = f'a_th must be finite and >= 0, got {a_th}'
         raise ValueError(msg)
 
-    seg0 = max(0, int(p) - sw)
-    seg1 = min(n, int(end) + sw + 2)
+    p_i = int(p)
+    scan_i = int(scan_ahead)
+    max_shift_i = int(max_shift)
+
+    if peak_search == 'after_pick':
+        is_after_mode = True
+    elif peak_search == 'before_pick':
+        is_after_mode = False
+    else:
+        msg = (
+            'peak_search must be either '
+            f'"after_pick" or "before_pick", got {peak_search!r}'
+        )
+        raise ValueError(msg)
+
+    if is_after_mode:
+        peak_lo = p_i + 1
+        peak_hi = min(n - 2, p_i + scan_i)
+        needed_lo = p_i
+        needed_hi = peak_hi + 1
+        # Keep legacy behavior: require at least two samples in (p, p+scan_ahead].
+        if peak_hi <= p_i + 1:
+            return p, -1, -1, ath, 0.0, 0.0, 'scan_empty'
+        trough_lo = p_i + 1
+    else:
+        peak_lo = max(1, p_i - scan_i)
+        peak_hi = p_i - 1
+        # trough accepted only when abs(trough_i - p) <= max_shift
+        trough_lo = max(1, p_i - max_shift_i)
+        if peak_hi < peak_lo:
+            return p, -1, -1, ath, 0.0, 0.0, 'scan_empty'
+        needed_lo = min(peak_lo - 1, trough_lo - 1)
+        needed_hi = p_i
+
+    seg0 = max(0, needed_lo - sw)
+    seg1 = min(n, needed_hi + sw + 1)
+
     seg = (np.asarray(x[seg0:seg1], dtype=np.float32) / np.float32(scale)).astype(
         np.float32, copy=False
     )
@@ -378,21 +576,30 @@ def _shift_pick_to_preceding_trough_1d(
 
     peak_i = -1
     peak_amp = 0.0
-    for i in range(int(p) + 1, int(end) + 1):
-        if not is_local_max(i):
-            continue
-        vi = v_at(i)
-        if float(vi) >= float(ath):
-            peak_i = i
-            peak_amp = float(vi)
-            break
+    if is_after_mode:
+        peak_iter = range(peak_lo, peak_hi + 1)
+    else:
+        peak_iter = range(peak_hi, peak_lo - 1, -1)
+
+    for i in peak_iter:
+        if is_local_max(i):
+            vi = v_at(i)
+            if float(vi) >= float(ath):
+                peak_i = i
+                peak_amp = float(vi)
+                break
 
     if peak_i < 0:
         return p, -1, -1, ath, 0.0, 0.0, 'no_pos_peak'
 
     trough_i = -1
     trough_amp = 0.0
-    for i in range(int(peak_i) - 1, int(p), -1):
+    if is_after_mode:
+        trough_iter = range(peak_i - 1, p_i, -1)
+    else:
+        trough_iter = range(peak_i - 1, trough_lo - 1, -1)
+
+    for i in trough_iter:
         if is_local_min(i):
             trough_i = i
             trough_amp = float(v_at(i))
@@ -400,7 +607,11 @@ def _shift_pick_to_preceding_trough_1d(
 
     if trough_i < 0:
         return p, int(peak_i), -1, ath, float(peak_amp), 0.0, 'no_trough'
-    if int(trough_i) - int(p) > int(max_shift):
+    if is_after_mode:
+        trough_too_far = (trough_i - p_i) > max_shift_i
+    else:
+        trough_too_far = (p_i - trough_i) > max_shift_i
+    if trough_too_far:
         return (
             p,
             int(peak_i),
@@ -429,6 +640,7 @@ def _post_trough_adjust_picks(
     scan_ahead: int,
     smooth_win: int,
     a_th: float,
+    peak_search: str,
     apply_mask: np.ndarray | None,
     debug: bool,
     debug_label: str,
@@ -451,6 +663,17 @@ def _post_trough_adjust_picks(
             msg = f'apply_mask must be (H,), got {m.shape}, H={x.shape[0]}'
             raise ValueError(msg)
 
+    if peak_search == 'after_pick':
+        peak_search_mode = 'after_pick'
+    elif peak_search == 'before_pick':
+        peak_search_mode = 'before_pick'
+    else:
+        msg = (
+            'peak_search must be either '
+            f'"after_pick" or "before_pick", got {peak_search!r}'
+        )
+        raise ValueError(msg)
+
     out = p.copy()
     if not bool(debug):
         for j in range(int(out.size)):
@@ -467,6 +690,7 @@ def _post_trough_adjust_picks(
                     scan_ahead=int(scan_ahead),
                     smooth_win=int(smooth_win),
                     a_th=float(a_th),
+                    peak_search=peak_search_mode,
                 )[0]
             )
         return out
@@ -492,6 +716,7 @@ def _post_trough_adjust_picks(
                 scan_ahead=int(scan_ahead),
                 smooth_win=int(smooth_win),
                 a_th=float(a_th),
+                peak_search=peak_search_mode,
             )
         )
         out[j] = np.int32(p2)
@@ -522,7 +747,7 @@ def _post_trough_adjust_picks(
         f'[POST_TROUGH] {debug_label} '
         f'H={int(out.size)} nonzero={n_in} changed={n_changed} '
         f'mean_shift={mean_shift:.3f} max_abs_shift={max_abs_shift} '
-        f'a_th={float(a_th):.3g} {reasons}'
+        f'a_th={float(a_th):.3g} peak_search={peak_search_mode} {reasons}'
     )
     for ex in examples:
         shift = int(ex.p_out) - int(ex.p_in)
@@ -540,11 +765,13 @@ def _align_post_trough_shifts_to_neighbors(
     p_in: np.ndarray,
     p_post: np.ndarray,
     *,
+    peak_search: str,
     radius: int,
     min_support: int,
     max_dev: int,
     max_shift: int,
     propagate_zero: bool,
+    zero_pin_tol: int,
     apply_mask: np.ndarray | None,
     debug: bool,
     debug_label: str,
@@ -581,7 +808,23 @@ def _align_post_trough_shifts_to_neighbors(
     if md < 0:
         msg = f'max_dev must be >=0, got {max_dev}'
         raise ValueError(msg)
-
+    mmax = int(max_shift)
+    if peak_search == 'after_pick':
+        shift_lo = 0
+        shift_hi = mmax
+    elif peak_search == 'before_pick':
+        shift_lo = -mmax
+        shift_hi = 0
+    else:
+        msg = (
+            'peak_search must be either '
+            f'"after_pick" or "before_pick", got {peak_search!r}'
+        )
+        raise ValueError(msg)
+    ztol = int(zero_pin_tol)
+    if ztol < 0:
+        msg = f'zero_pin_tol must be >=0, got {zero_pin_tol}'
+        raise ValueError(msg)
     out = ppo.copy()
     n_correct_dev = 0
     n_propagate = 0
@@ -604,9 +847,18 @@ def _align_post_trough_shifts_to_neighbors(
             continue
         med = float(np.median(cand.astype(np.float32)))
         m_round = int(np.rint(med))
-        m_round = max(0, min(int(max_shift), m_round))
+        m_round = max(shift_lo, min(shift_hi, m_round))
 
         if di == 0:
+            # propagate only if this trace was not an outlier before post-trough:
+            # compare p_in[i] to median p_in of moved neighbors (same mask as cand).
+            pin_nb = pin[j0 : j1 + 1]
+            pin_cand = pin_nb[mask]
+            if pin_cand.size == 0:
+                continue
+            med_pin = float(np.median(pin_cand.astype(np.float32)))
+            if abs(float(pin[i]) - med_pin) > float(ztol):
+                continue
             out[i] = np.int32(int(pin[i]) + int(m_round))
             n_propagate += 1
             continue
@@ -619,7 +871,8 @@ def _align_post_trough_shifts_to_neighbors(
         print(
             f'[POST_TROUGH_ALIGN] {debug_label} '
             f'corrected_dev={n_correct_dev} propagated={n_propagate} '
-            f'r={r} min_support={ms} max_dev={md} max_shift={int(max_shift)}'
+            f'r={r} min_support={ms} max_dev={md} max_shift={mmax} '
+            f'peak_search={peak_search}'
         )
     return out
 
@@ -1255,9 +1508,7 @@ def process_one_pair(
 
             dbg = bool(cfg.post_trough_debug) and (
                 int(cfg.post_trough_debug_every_n_gathers) > 0
-                and (
-                    int(gather_i) % int(cfg.post_trough_debug_every_n_gathers) == 0
-                )
+                and (int(gather_i) % int(cfg.post_trough_debug_every_n_gathers) == 0)
             )
             dbg_label = f'{raw_path.name} ffid={ffid}'
 
@@ -1273,6 +1524,7 @@ def process_one_pair(
                 scan_ahead=int(cfg.post_trough_scan_ahead),
                 smooth_win=int(cfg.post_trough_smooth_win),
                 a_th=float(cfg.post_trough_a_th),
+                peak_search=cfg.post_trough_peak_search,
                 apply_mask=pt_mask,
                 debug=dbg,
                 debug_label=dbg_label,
@@ -1282,11 +1534,13 @@ def process_one_pair(
             pick_final_g = _align_post_trough_shifts_to_neighbors(
                 pick_rs_i_g,
                 pick_final_g,
+                peak_search=cfg.post_trough_peak_search,
                 radius=int(cfg.post_trough_outlier_radius),
                 min_support=int(cfg.post_trough_outlier_min_support),
                 max_dev=int(cfg.post_trough_outlier_max_dev),
                 max_shift=int(cfg.post_trough_max_shift),
                 propagate_zero=bool(cfg.post_trough_align_propagate_zero),
+                zero_pin_tol=int(cfg.post_trough_align_zero_pin_tol),
                 apply_mask=pt_mask,
                 debug=dbg,
                 debug_label=dbg_label,
@@ -1453,7 +1707,41 @@ def run_stage4(
 
 
 def main() -> None:
-    run_stage4(cfg=DEFAULT_STAGE4_CFG)
+    parser = _build_stage4_parser()
+    args = parser.parse_args()
+
+    if args.config is None:
+        cfg = DEFAULT_STAGE4_CFG
+    else:
+        cfg = _load_stage4_cfg_from_yaml(args.config)
+
+    if args.in_raw_segy_root is not None:
+        cfg = replace(
+            cfg, in_raw_segy_root=Path(args.in_raw_segy_root).expanduser().resolve()
+        )
+    if args.in_win512_segy_root is not None:
+        cfg = replace(
+            cfg,
+            in_win512_segy_root=Path(args.in_win512_segy_root).expanduser().resolve(),
+        )
+    if args.out_pred_root is not None:
+        cfg = replace(
+            cfg, out_pred_root=Path(args.out_pred_root).expanduser().resolve()
+        )
+    if args.cfg_yaml is not None:
+        cfg = replace(cfg, cfg_yaml=Path(args.cfg_yaml).expanduser().resolve())
+    if args.ckpt_path is not None:
+        cfg = replace(cfg, ckpt_path=Path(args.ckpt_path).expanduser().resolve())
+    if args.device is not None:
+        cfg = replace(cfg, device=str(args.device))
+    if args.segy_exts is not None:
+        cfg = replace(cfg, segy_exts=_parse_segy_exts(args.segy_exts))
+    if args.post_trough_peak_search is not None:
+        cfg = replace(cfg, post_trough_peak_search=str(args.post_trough_peak_search))
+    if args.viz_every_n_shots is not None:
+        cfg = replace(cfg, viz_every_n_shots=int(args.viz_every_n_shots))
+
+    run_stage4(cfg=cfg)
 
 
 if __name__ == '__main__':
