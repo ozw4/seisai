@@ -16,6 +16,9 @@ from seisai_engine.pipelines.common.noise_add import (
     NoiseTraceSubsetProvider,
     maybe_build_noise_add_op,
 )
+from seisai_engine.pipelines.pair.build_dataset import (
+    build_train_transform as build_pair_train_transform,
+)
 from seisai_engine.pipelines.psn.build_dataset import (
     build_train_transform as build_psn_train_transform,
 )
@@ -149,6 +152,47 @@ def test_blindtrace_train_transform_requires_ctx_when_noise_add_is_set() -> None
         build_blindtrace_train_transform(
             time_len=64,
             per_trace_standardize=True,
+            augment_cfg=_noise_augment_cfg(),
+            noise_provider_ctx=None,
+        )
+
+
+def test_pair_train_transform_inserts_noise_op_input_only() -> None:
+    input_transform, target_transform = build_pair_train_transform(
+        time_len=64,
+        augment_cfg=_noise_augment_cfg(),
+        noise_provider_ctx=_noise_provider_ctx(),
+    )
+
+    input_noise_indices = [
+        i for i, op in enumerate(input_transform.ops) if isinstance(op, AdditiveNoiseMix)
+    ]
+    target_noise_indices = [
+        i for i, op in enumerate(target_transform.ops) if isinstance(op, AdditiveNoiseMix)
+    ]
+
+    assert len(input_noise_indices) == 1
+    assert len(target_noise_indices) == 0
+    assert input_noise_indices[0] == len(target_transform.ops)
+
+
+def test_pair_train_transform_without_noise_add_returns_distinct_transforms() -> None:
+    input_transform, target_transform = build_pair_train_transform(
+        time_len=64,
+        augment_cfg={},
+        noise_provider_ctx=None,
+    )
+
+    assert input_transform is not target_transform
+    assert len(input_transform.ops) == len(target_transform.ops)
+    assert not any(isinstance(op, AdditiveNoiseMix) for op in input_transform.ops)
+    assert not any(isinstance(op, AdditiveNoiseMix) for op in target_transform.ops)
+
+
+def test_pair_train_transform_requires_ctx_when_noise_add_is_set() -> None:
+    with pytest.raises(ValueError, match='noise_provider_ctx is required'):
+        build_pair_train_transform(
+            time_len=64,
             augment_cfg=_noise_augment_cfg(),
             noise_provider_ctx=None,
         )

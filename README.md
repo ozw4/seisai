@@ -218,7 +218,9 @@ from seisai_transforms.augment import RandomCropOrPad, ViewCompose
 input_segy_files = ["/path/noisy_001.sgy", "/path/noisy_002.sgy"]
 target_segy_files = ["/path/clean_001.sgy", "/path/clean_002.sgy"]
 
-transform = ViewCompose([RandomCropOrPad(target_len=2048)])
+shared_transform = ViewCompose([RandomCropOrPad(target_len=2048)])
+input_transform = shared_transform
+target_transform = shared_transform
 
 plan = BuildPlan(
     wave_ops=[
@@ -233,7 +235,8 @@ plan = BuildPlan(
 ds = SegyGatherPairDataset(
     input_segy_files=input_segy_files,
     target_segy_files=target_segy_files,
-    transform=transform,
+    input_transform=input_transform,
+    target_transform=target_transform,
     plan=plan,
     use_header_cache=True,
 )

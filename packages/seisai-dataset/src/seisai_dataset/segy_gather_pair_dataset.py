@@ -49,7 +49,8 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
         self,
         input_segy_files: list[str],
         target_segy_files: list[str],
-        transform,
+        input_transform,
+        target_transform,
         plan: BuildPlan,
         *,
         ffid_byte: int = segyio.TraceField.FieldRecord,
@@ -79,11 +80,20 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
         if len(input_segy_files) != len(target_segy_files):
             msg = 'input_segy_files と target_segy_files の長さが一致していません'
             raise ValueError(msg)
+        if not callable(target_transform):
+            msg = 'target_transform must be callable'
+            raise TypeError(msg)
 
         self.input_segy_files = list(input_segy_files)
         self.target_segy_files = list(target_segy_files)
 
-        super().__init__(transform, plan, max_trials=max_trials, verbose=verbose)
+        super().__init__(
+            input_transform,
+            plan,
+            max_trials=max_trials,
+            verbose=verbose,
+        )
+        self.target_transform = target_transform
 
         self.progress = self.verbose if progress is None else bool(progress)
         self.waveform_mode = normalize_waveform_mode(waveform_mode)
@@ -256,7 +266,8 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
             rng_in,
             name='input',
         )
-        x_view_target, _meta_tg = self.sample_flow.apply_transform(
+        x_view_target, _meta_tg = self.sample_flow.apply_transform_with(
+            self.target_transform,
             x_tg,
             rng_tg,
             name='target',

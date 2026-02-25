@@ -94,7 +94,8 @@ def test_segy_gather_pair_dataset_mmap_roundtrip() -> None:
     ds = SegyGatherPairDataset(
         input_segy_files=[segy_path],
         target_segy_files=[segy_path],
-        transform=transform,
+        input_transform=transform,
+        target_transform=transform,
         plan=plan,
         primary_keys=('ffid',),
         subset_traces=32,

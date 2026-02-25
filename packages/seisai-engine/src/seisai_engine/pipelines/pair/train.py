@@ -85,10 +85,20 @@ def main(argv: list[str] | None = None) -> None:
     seed_all(common.seeds.seed_train)
 
     standardize_eps = 1e-8
-    train_transform = build_train_transform(
+    noise_provider_ctx = {
+        'subset_traces': int(typed.train.subset_traces),
+        'primary_keys': tuple(typed.dataset.primary_keys),
+        'secondary_key_fixed': bool(typed.dataset.secondary_key_fixed),
+        'waveform_mode': str(typed.dataset.waveform_mode),
+        'segy_endian': str(typed.dataset.train_input_endian),
+        'header_cache_dir': None,
+        'use_header_cache': bool(typed.dataset.use_header_cache),
+    }
+    train_input_transform, train_target_transform = build_train_transform(
         int(typed.transform.time_len),
         eps=standardize_eps,
         augment_cfg=augment_cfg,
+        noise_provider_ctx=noise_provider_ctx,
     )
     infer_transform = build_infer_transform(eps=standardize_eps)
 
@@ -112,7 +122,8 @@ def main(argv: list[str] | None = None) -> None:
     ds_train_full = build_pair_dataset(
         paths=paths_cfg,
         ds_cfg=dataset_cfg,
-        transform=train_transform,
+        input_transform=train_input_transform,
+        target_transform=train_target_transform,
         plan=plan,
         subset_traces=int(typed.train.subset_traces),
         secondary_key_fixed=bool(typed.dataset.secondary_key_fixed),
@@ -130,7 +141,8 @@ def main(argv: list[str] | None = None) -> None:
     ds_infer_full = build_pair_dataset(
         paths=infer_paths_cfg,
         ds_cfg=dataset_cfg,
-        transform=infer_transform,
+        input_transform=infer_transform,
+        target_transform=infer_transform,
         plan=plan,
         subset_traces=int(typed.infer.subset_traces),
         secondary_key_fixed=True,

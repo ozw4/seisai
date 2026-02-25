@@ -28,7 +28,8 @@
 SegyGatherPairDataset(
     input_segy_files: list[str],
     target_segy_files: list[str],
-    transform,
+    input_transform,
+    target_transform,
     plan: BuildPlan,
     *,
     ffid_byte=segyio.TraceField.FieldRecord,
@@ -51,10 +52,11 @@ SegyGatherPairDataset(
 ### 引数の意味
 - `input_segy_files`, `target_segy_files`
   - 同じ長さで、`zip(..., strict=True)` でペア化できること。
-- `transform`
+- `input_transform`, `target_transform`
   - 2D array `(H, W0)` を受け取り `(H, W)` を返す(または `(x_view, meta)`)。
   - **H(trace方向)を変えない**こと(`(H, W0) -> (H, W)`)。H を変える transform は非対応。
   - `rng` 引数を受け取り、乱数は **必ずその rng からのみ**消費すること(同期のため)。
+  - 同期 transform を維持したい場合は、shared ops を同一順序で並べること。
 - `plan: BuildPlan`
   - ペア対応 plan(後述)で `input` と `target` を生成する。
 - sampler/loader 系の引数は `SegyGatherPipelineDataset` と同等の意味で使用。
@@ -99,9 +101,10 @@ SegyGatherPairDataset(
   - `rng_in = np.random.default_rng(seed)`
   - `rng_tg = np.random.default_rng(seed)`
 - transform を2回呼ぶ：
-  - `out_in = transform(x_in, rng=rng_in, return_meta=True)`
-  - `out_tg = transform(x_tg, rng=rng_tg, return_meta=True)`
+  - `out_in = input_transform(x_in, rng=rng_in, return_meta=True)`
+  - `out_tg = target_transform(x_tg, rng=rng_tg, return_meta=True)`
 - `meta` は原則 `input` 側の `meta` を採用し、`target` 側は破棄(もしくは整合確認用途に任意保持)。
+- shared 部分の RNG 消費を揃えるには、`input_transform` と `target_transform` の shared ops を同一順序で並べる。
 
 ---
 

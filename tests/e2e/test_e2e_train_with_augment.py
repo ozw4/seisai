@@ -230,14 +230,21 @@ def test_e2e_train_pair_with_augment(tmp_path: Path) -> None:
     from seisai_transforms import RandomPolarityFlip
 
     time_len = int(cfg_data['transform']['time_len'])
-    train_tf = build_train_transform(
+    train_input_tf, train_target_tf = build_train_transform(
         time_len=time_len,
         augment_cfg=cfg_data.get('augment'),
     )
     infer_tf = build_infer_transform()
-    pol_ops = [op for op in train_tf.ops if isinstance(op, RandomPolarityFlip)]
-    assert len(pol_ops) == 1
-    assert float(pol_ops[0].prob) == 1.0
+    pol_ops_input = [
+        op for op in train_input_tf.ops if isinstance(op, RandomPolarityFlip)
+    ]
+    pol_ops_target = [
+        op for op in train_target_tf.ops if isinstance(op, RandomPolarityFlip)
+    ]
+    assert len(pol_ops_input) == 1
+    assert float(pol_ops_input[0].prob) == 1.0
+    assert len(pol_ops_target) == 1
+    assert float(pol_ops_target[0].prob) == 1.0
     assert not any(isinstance(op, RandomPolarityFlip) for op in infer_tf.ops)
 
     m.main(argv=['--config', str(cfg_tmp)])

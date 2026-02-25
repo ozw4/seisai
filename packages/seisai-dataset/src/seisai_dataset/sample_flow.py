@@ -124,7 +124,17 @@ class SampleFlow:
         *,
         name: str,
     ) -> tuple[np.ndarray, dict]:
-        out = self.transform(x, rng=rng, return_meta=True)
+        return self.apply_transform_with(self.transform, x, rng, name=name)
+
+    def apply_transform_with(
+        self,
+        transform,
+        x: np.ndarray,
+        rng: np.random.Generator,
+        *,
+        name: str,
+    ) -> tuple[np.ndarray, dict]:
+        out = transform(x, rng=rng, return_meta=True)
         x_view, meta = out if isinstance(out, tuple) else (out, {})
         if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
             msg = f'transform({name}) は 2D numpy または (2D, meta) を返す必要があります'
