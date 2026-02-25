@@ -1,0 +1,10 @@
+# proc/jogsarar/configs/run1234_train.yaml
+mode: train
+in_path: /path/to/train_data
+stage1_ckpt: /path/to/stage1.pth
+stage3_config: /path/to/stage3_train_config.yaml
+stage4_ckpt: /path/to/stage4.pt
+out_root: /path/to/out
+segy_exts: [".sgy", ".segy"]
+thresh_mode: global
+viz_every_n_shots: 20

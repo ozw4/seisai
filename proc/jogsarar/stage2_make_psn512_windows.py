@@ -46,6 +46,7 @@ class Stage2Cfg:
     #   'per_segy' : SEGYごとにDrop_low_frac
     #   'global'   : 全SEGYまとめてDrop_low_frac（全データグローバル）
     thresh_mode: str = 'global'  # 'global' or 'per_segy'
+    emit_training_artifacts: bool = True
     # global trendline (proxy sign split)
     global_vmin_m_s: float = 300.0
     global_vmax_m_s: float = 6000.0
@@ -1530,6 +1531,35 @@ def _build_phase_pick_csr_npz(
     return nnz
 
 
+def _validate_stage2_threshold_cfg(*, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG) -> None:
+    if cfg.thresh_mode not in ('global', 'per_segy'):
+        msg = (
+            "thresh_mode must be 'global' or 'per_segy', "
+            f'got {cfg.thresh_mode!r}'
+        )
+        raise ValueError(msg)
+    if (not bool(cfg.emit_training_artifacts)) and cfg.thresh_mode == 'global':
+        msg = (
+            'emit_training_artifacts=False does not support thresh_mode=global. '
+            "Set thresh_mode='per_segy'."
+        )
+        raise ValueError(msg)
+
+
+def _resolve_thresholds_arg_for_training(
+    *,
+    global_thresholds: dict[str, float] | None,
+    cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
+) -> dict[str, float] | None:
+    _validate_stage2_threshold_cfg(cfg=cfg)
+    if cfg.thresh_mode == 'global':
+        if global_thresholds is None:
+            msg = 'thresh_mode=global but global_thresholds is None'
+            raise RuntimeError(msg)
+        return global_thresholds
+    return None
+
+
 # =========================
 # Main per-file processing
 # =========================
@@ -1539,6 +1569,8 @@ def process_one_segy(
     global_thresholds: dict[str, float] | None,
     cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
 ) -> None:
+    _validate_stage2_threshold_cfg(cfg=cfg)
+
     infer_npz = infer_npz_path_for_segy(segy_path, cfg=cfg)
     if not infer_npz.exists():
         msg = f'infer npz not found for segy: {segy_path}  expected={infer_npz}'
@@ -1548,7 +1580,9 @@ def process_one_segy(
     out_segy.parent.mkdir(parents=True, exist_ok=True)
 
     side_npz = out_sidecar_npz_path_for_out(out_segy, cfg=cfg)
-    pick_csr_npz = out_pick_csr_npz_path_for_out(out_segy, cfg=cfg)
+    pick_csr_npz: Path | None = None
+    if bool(cfg.emit_training_artifacts):
+        pick_csr_npz = out_pick_csr_npz_path_for_out(out_segy, cfg=cfg)
 
     with segyio.open(str(segy_path), 'r', ignore_geometry=True) as src:
         n_traces = int(src.tracecount)
@@ -1633,30 +1667,6 @@ def process_one_segy(
             global_coef_right = trend_res.global_coef_right
             conf_trend1 = trend_res.conf_trend1
 
-        thresholds_arg = None
-        if cfg.thresh_mode == 'global':
-            thresholds_arg = global_thresholds
-            if thresholds_arg is None:
-                msg = 'thresh_mode=global but global_thresholds is None'
-                raise RuntimeError(msg)
-        elif cfg.thresh_mode == 'per_segy':
-            thresholds_arg = None
-        else:
-            msg = (
-                "thresh_mode must be 'global' or 'per_segy', "
-                f'got {cfg.thresh_mode!r}'
-            )
-            raise ValueError(msg)
-
-        keep_mask, thresholds_used, reason_mask, _base_valid = build_keep_mask(
-            pick_final_i=pick_final,
-            trend_center_i=trend_center_i_used,
-            n_samples_in=ns_in,
-            scores=scores_filter,
-            thresholds=thresholds_arg,
-            cfg=cfg,
-        )
-
         c_round = np.full(n_traces, -1, dtype=np.int64)
         c_ok = np.isfinite(trend_center_i_used) & (trend_center_i_used > 0.0)
         if bool(np.any(c_ok)):
@@ -1664,11 +1674,33 @@ def process_one_segy(
                 np.int64, copy=False
             )
         win_start_i = c_round - int(cfg.half_win)
+        if not bool(cfg.emit_training_artifacts):
+            # In inference-only mode there is no keep_mask gate on stage4 mapping.
+            # Force invalid-trend traces to stay outside raw sample range.
+            win_start_i[~c_ok] = np.int64(-int(ns_in))
 
-        pick_win_512 = (
-            pick_final.astype(np.float32) - win_start_i.astype(np.float32)
-        ) * float(cfg.up_factor)
-        pick_win_512[~keep_mask] = np.nan
+        keep_mask: np.ndarray | None = None
+        thresholds_used: dict[str, float] | None = None
+        reason_mask: np.ndarray | None = None
+        pick_win_512: np.ndarray | None = None
+
+        if bool(cfg.emit_training_artifacts):
+            thresholds_arg = _resolve_thresholds_arg_for_training(
+                global_thresholds=global_thresholds, cfg=cfg
+            )
+            keep_mask, thresholds_used, reason_mask, _base_valid = build_keep_mask(
+                pick_final_i=pick_final,
+                trend_center_i=trend_center_i_used,
+                n_samples_in=ns_in,
+                scores=scores_filter,
+                thresholds=thresholds_arg,
+                cfg=cfg,
+            )
+
+            pick_win_512 = (
+                pick_final.astype(np.float32) - win_start_i.astype(np.float32)
+            ) * float(cfg.up_factor)
+            pick_win_512[~keep_mask] = np.nan
 
         spec = segyio.spec()
         spec.tracecount = n_traces
@@ -1705,79 +1737,105 @@ def process_one_segy(
 
             dst.flush()
 
-    nnz_p = _build_phase_pick_csr_npz(
-        out_path=pick_csr_npz,
-        pick_win_512=pick_win_512,
-        keep_mask=keep_mask,
-        n_traces=n_traces,
-        cfg=cfg,
-    )
+    sidecar_payload: dict[str, object] = {
+        'src_segy': str(segy_path),
+        'src_infer_npz': str(infer_npz),
+        'out_segy': str(out_segy),
+        'dt_sec_in': np.float32(dt_sec_in),
+        'dt_sec_out': np.float32(dt_sec_out),
+        'dt_us_in': np.int32(dt_us_in),
+        'dt_us_out': np.int32(dt_us_out),
+        'n_traces': np.int32(n_traces),
+        'n_samples_in': np.int32(ns_in),
+        'n_samples_out': np.int32(cfg.out_ns),
+        'window_start_i': win_start_i.astype(np.int64, copy=False),
+    }
 
-    np.savez_compressed(
-        side_npz,
-        src_segy=str(segy_path),
-        src_infer_npz=str(infer_npz),
-        out_segy=str(out_segy),
-        out_pick_csr_npz=str(pick_csr_npz),
-        thresh_mode=str(cfg.thresh_mode),
-        drop_low_frac=np.float32(cfg.drop_low_frac),
-        dt_sec_in=np.float32(dt_sec_in),
-        dt_sec_out=np.float32(dt_sec_out),
-        dt_us_in=np.int32(dt_us_in),
-        dt_us_out=np.int32(dt_us_out),
-        n_traces=np.int32(n_traces),
-        n_samples_in=np.int32(ns_in),
-        n_samples_out=np.int32(cfg.out_ns),
-        local_global_diff_th_samples=np.int32(cfg.local_global_diff_th_samples),
-        local_discard_radius_traces=np.int32(cfg.local_discard_radius_traces),
-        trend_center_i_raw=trend_center_i_raw.astype(np.float32, copy=False),
-        trend_center_i_local=trend_center_i_local.astype(np.float32, copy=False),
-        trend_center_i_final=trend_center_i_final.astype(np.float32, copy=False),
-        trend_center_i_used=trend_center_i_used.astype(np.float32, copy=False),
-        trend_center_i_global=trend_center_i_global.astype(np.float32, copy=False),
-        nn_replaced_mask=nn_replaced_mask.astype(bool, copy=False),
-        global_replaced_mask=global_replaced_mask.astype(bool, copy=False),
-        global_missing_filled_mask=global_missing_filled_mask.astype(bool, copy=False),
-        global_edges_all=global_edges_all.astype(np.float32, copy=False),
-        global_coef_all=global_coef_all.astype(np.float32, copy=False),
-        global_edges_left=global_edges_left.astype(np.float32, copy=False),
-        global_coef_left=global_coef_left.astype(np.float32, copy=False),
-        global_edges_right=global_edges_right.astype(np.float32, copy=False),
-        global_coef_right=global_coef_right.astype(np.float32, copy=False),
-        trend_center_i=trend_center_i_used.astype(np.float32, copy=False),
-        trend_filled_mask=trend_filled_mask.astype(bool, copy=False),
-        trend_center_i_round=c_round.astype(np.int64, copy=False),
-        ffid_values=ffid_values.astype(np.int64, copy=False),
-        ffid_unique_values=ffid_unique_values.astype(np.int64, copy=False),
-        shot_x_ffid=shot_x_ffid.astype(np.float64, copy=False),
-        shot_y_ffid=shot_y_ffid.astype(np.float64, copy=False),
-        window_start_i=win_start_i.astype(np.int64, copy=False),
-        pick_final_i=pick_final.astype(np.int64, copy=False),
-        pick_win_512=pick_win_512.astype(np.float32, copy=False),
-        keep_mask=keep_mask.astype(bool, copy=False),
-        reason_mask=reason_mask.astype(np.uint8, copy=False),
-        th_conf_prob1=np.float32(thresholds_used['conf_prob1']),
-        th_conf_trend1=np.float32(thresholds_used['conf_trend1']),
-        th_conf_rs1=np.float32(thresholds_used['conf_rs1']),
-        conf_prob1=scores_filter['conf_prob1'].astype(np.float32, copy=False),
-        conf_trend1=conf_trend1.astype(np.float32, copy=False),
-        conf_rs1=scores_filter['conf_rs1'].astype(np.float32, copy=False),
-    )
+    nnz_p = 0
+    if bool(cfg.emit_training_artifacts):
+        if pick_csr_npz is None:
+            msg = 'internal error: pick_csr_npz is None in training mode'
+            raise RuntimeError(msg)
+        if keep_mask is None or thresholds_used is None or reason_mask is None:
+            msg = 'internal error: keep/threshold/reason missing in training mode'
+            raise RuntimeError(msg)
+        if pick_win_512 is None:
+            msg = 'internal error: pick_win_512 missing in training mode'
+            raise RuntimeError(msg)
 
-    n_keep = int(np.count_nonzero(keep_mask))
+        nnz_p = _build_phase_pick_csr_npz(
+            out_path=pick_csr_npz,
+            pick_win_512=pick_win_512,
+            keep_mask=keep_mask,
+            n_traces=n_traces,
+            cfg=cfg,
+        )
+
+        sidecar_payload.update(
+            out_pick_csr_npz=str(pick_csr_npz),
+            thresh_mode=str(cfg.thresh_mode),
+            drop_low_frac=np.float32(cfg.drop_low_frac),
+            local_global_diff_th_samples=np.int32(cfg.local_global_diff_th_samples),
+            local_discard_radius_traces=np.int32(cfg.local_discard_radius_traces),
+            trend_center_i_raw=trend_center_i_raw.astype(np.float32, copy=False),
+            trend_center_i_local=trend_center_i_local.astype(np.float32, copy=False),
+            trend_center_i_final=trend_center_i_final.astype(np.float32, copy=False),
+            trend_center_i_used=trend_center_i_used.astype(np.float32, copy=False),
+            trend_center_i_global=trend_center_i_global.astype(np.float32, copy=False),
+            nn_replaced_mask=nn_replaced_mask.astype(bool, copy=False),
+            global_replaced_mask=global_replaced_mask.astype(bool, copy=False),
+            global_missing_filled_mask=global_missing_filled_mask.astype(bool, copy=False),
+            global_edges_all=global_edges_all.astype(np.float32, copy=False),
+            global_coef_all=global_coef_all.astype(np.float32, copy=False),
+            global_edges_left=global_edges_left.astype(np.float32, copy=False),
+            global_coef_left=global_coef_left.astype(np.float32, copy=False),
+            global_edges_right=global_edges_right.astype(np.float32, copy=False),
+            global_coef_right=global_coef_right.astype(np.float32, copy=False),
+            trend_center_i=trend_center_i_used.astype(np.float32, copy=False),
+            trend_filled_mask=trend_filled_mask.astype(bool, copy=False),
+            trend_center_i_round=c_round.astype(np.int64, copy=False),
+            ffid_values=ffid_values.astype(np.int64, copy=False),
+            ffid_unique_values=ffid_unique_values.astype(np.int64, copy=False),
+            shot_x_ffid=shot_x_ffid.astype(np.float64, copy=False),
+            shot_y_ffid=shot_y_ffid.astype(np.float64, copy=False),
+            pick_final_i=pick_final.astype(np.int64, copy=False),
+            pick_win_512=pick_win_512.astype(np.float32, copy=False),
+            keep_mask=keep_mask.astype(bool, copy=False),
+            reason_mask=reason_mask.astype(np.uint8, copy=False),
+            th_conf_prob1=np.float32(thresholds_used['conf_prob1']),
+            th_conf_trend1=np.float32(thresholds_used['conf_trend1']),
+            th_conf_rs1=np.float32(thresholds_used['conf_rs1']),
+            conf_prob1=scores_filter['conf_prob1'].astype(np.float32, copy=False),
+            conf_trend1=conf_trend1.astype(np.float32, copy=False),
+            conf_rs1=scores_filter['conf_rs1'].astype(np.float32, copy=False),
+        )
+
+    np.savez_compressed(side_npz, **sidecar_payload)
+
     n_fill = int(np.count_nonzero(trend_filled_mask))
     n_ld = int(np.count_nonzero(local_discard_mask))
     n_nn = int(np.count_nonzero(nn_replaced_mask))
     n_gl = int(np.count_nonzero(global_replaced_mask))
-    tag = 'global' if cfg.thresh_mode == 'global' else 'per_segy'
-    print(
-        f'[OK] {segy_path.name} -> {out_segy.name}  keep={n_keep}/{n_traces} '
-        f'filled_trend={n_fill}/{n_traces} discard_local={n_ld} '
-        f'fill_nn={n_nn} fill_global={n_gl} '
-        f'labels_written(P)={nnz_p} '
-        f'th({tag} p10) prob={thresholds_used["conf_prob1"]:.6g} '
-        f'trend={thresholds_used["conf_trend1"]:.6g} rs={thresholds_used["conf_rs1"]:.6g}'
-    )
+    if bool(cfg.emit_training_artifacts):
+        if keep_mask is None or thresholds_used is None:
+            msg = 'internal error: summary stats missing in training mode'
+            raise RuntimeError(msg)
+        n_keep = int(np.count_nonzero(keep_mask))
+        tag = 'global' if cfg.thresh_mode == 'global' else 'per_segy'
+        print(
+            f'[OK] {segy_path.name} -> {out_segy.name}  keep={n_keep}/{n_traces} '
+            f'filled_trend={n_fill}/{n_traces} discard_local={n_ld} '
+            f'fill_nn={n_nn} fill_global={n_gl} '
+            f'labels_written(P)={nnz_p} '
+            f'th({tag} p10) prob={thresholds_used["conf_prob1"]:.6g} '
+            f'trend={thresholds_used["conf_trend1"]:.6g} rs={thresholds_used["conf_rs1"]:.6g}'
+        )
+    else:
+        print(
+            f'[OK] {segy_path.name} -> {out_segy.name}  inference_only=1 '
+            f'filled_trend={n_fill}/{n_traces} discard_local={n_ld} '
+            f'fill_nn={n_nn} fill_global={n_gl}'
+        )
 
 
 def run_stage2(
@@ -1785,6 +1843,8 @@ def run_stage2(
     cfg: Stage2Cfg = DEFAULT_STAGE2_CFG,
     segy_paths: list[Path] | None = None,
 ) -> None:
+    _validate_stage2_threshold_cfg(cfg=cfg)
+
     if segy_paths is None:
         segys = find_segy_files(cfg.in_segy_root, exts=cfg.segy_exts, recursive=True)
     else:
@@ -1800,7 +1860,7 @@ def run_stage2(
         segys2.append(p)
 
     global_thresholds = None
-    if cfg.thresh_mode == 'global':
+    if bool(cfg.emit_training_artifacts) and cfg.thresh_mode == 'global':
         global_thresholds = compute_global_thresholds(segys2, cfg=cfg)
 
     for p in segys2:
