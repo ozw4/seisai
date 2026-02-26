@@ -1,8 +1,11 @@
+import numpy as np
 import pytest
 import torch
 from seisai_engine.infer.ckpt_meta import resolve_output_ids, resolve_softmax_axis
 from seisai_engine.viewer.fbpick import (
     _apply_softmax,
+    _crop_logits_chw,
+    _pad_chw_to_min_tile,
     _resolve_channel_index,
 )
 
@@ -50,6 +53,61 @@ def test_apply_softmax_time_requires_single_output_channel() -> None:
             tau=1.0,
             out_chans=2,
         )
+
+
+def test_pad_chw_to_min_tile_expands_and_zero_fills() -> None:
+    x_chw = np.arange(2 * 3 * 5, dtype=np.float32).reshape(2, 3, 5)
+
+    padded_chw, orig_hw, target_hw = _pad_chw_to_min_tile(x_chw, tile=(4, 8))
+
+    assert orig_hw == (3, 5)
+    assert target_hw == (4, 8)
+    assert padded_chw.shape == (2, 4, 8)
+    assert np.array_equal(padded_chw[:, :3, :5], x_chw)
+    assert np.all(padded_chw[:, 3:, :] == 0.0)
+    assert np.all(padded_chw[:, :, 5:] == 0.0)
+
+
+def test_pad_chw_to_min_tile_keeps_shape_when_already_large() -> None:
+    x_chw = np.ascontiguousarray(
+        np.arange(2 * 6 * 9, dtype=np.float32).reshape(2, 6, 9)
+    )
+
+    padded_chw, orig_hw, target_hw = _pad_chw_to_min_tile(x_chw, tile=(4, 8))
+
+    assert orig_hw == (6, 9)
+    assert target_hw == (6, 9)
+    assert padded_chw.shape == (2, 6, 9)
+    assert np.array_equal(padded_chw, x_chw)
+    assert padded_chw is x_chw
+
+
+def test_apply_softmax_time_after_crop_preserves_normalization() -> None:
+    logits_padded = torch.tensor(
+        [[[0.0, 0.0, 0.0, 8.0, 8.0, 8.0], [1.0, 1.0, 1.0, 8.0, 8.0, 8.0]]],
+        dtype=torch.float32,
+    )
+    orig_hw = (2, 3)
+
+    logits_crop = _crop_logits_chw(logits_padded, orig_hw=orig_hw)
+    probs_crop_first = _apply_softmax(
+        logits_chw=logits_crop,
+        softmax_axis='time',
+        tau=1.0,
+        out_chans=1,
+    )
+    crop_first_sums = probs_crop_first.sum(dim=-1)
+    assert torch.allclose(crop_first_sums, torch.ones_like(crop_first_sums))
+
+    probs_padded_first = _apply_softmax(
+        logits_chw=logits_padded,
+        softmax_axis='time',
+        tau=1.0,
+        out_chans=1,
+    )
+    probs_padded_then_crop = _crop_logits_chw(probs_padded_first, orig_hw=orig_hw)
+    padded_first_sums = probs_padded_then_crop.sum(dim=-1)
+    assert not torch.allclose(padded_first_sums, torch.ones_like(padded_first_sums))
 
 
 def test_resolve_softmax_axis_from_checkpoint_and_defaults() -> None:

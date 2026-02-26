@@ -215,6 +215,42 @@ def _build_input_chw(
     raise ValueError(msg)
 
 
+def _pad_chw_to_min_tile(
+    x_chw: np.ndarray, tile: tuple[int, int]
+) -> tuple[np.ndarray, tuple[int, int], tuple[int, int]]:
+    validate_array(x_chw, allowed_ndims=(3,), name='x_chw', backend='numpy')
+    x = np.ascontiguousarray(x_chw, dtype=np.float32)
+
+    _, h, w = x.shape
+    tile_h, tile_w = tile
+    orig_hw = (int(h), int(w))
+    target_hw = (max(h, tile_h), max(w, tile_w))
+
+    if target_hw == orig_hw:
+        return x, orig_hw, target_hw
+
+    x_pad = np.zeros((x.shape[0], target_hw[0], target_hw[1]), dtype=np.float32)
+    x_pad[:, :h, :w] = x
+    return x_pad, orig_hw, target_hw
+
+
+def _crop_logits_chw(
+    logits_chw: torch.Tensor, orig_hw: tuple[int, int]
+) -> torch.Tensor:
+    if logits_chw.ndim != 3:
+        msg = f'logits_chw must be (C,H,W), got {tuple(logits_chw.shape)}'
+        raise ValueError(msg)
+
+    h, w = orig_hw
+    if h > int(logits_chw.shape[1]) or w > int(logits_chw.shape[2]):
+        msg = (
+            f'orig_hw {orig_hw} exceeds logits spatial shape '
+            f'{tuple(logits_chw.shape[1:])}'
+        )
+        raise ValueError(msg)
+    return logits_chw[:, :h, :w].contiguous()
+
+
 def _build_model_bundle(*, ckpt_path: Path, device: torch.device) -> ViewerModelBundle:
     ckpt = load_checkpoint(ckpt_path)
     model_sig = ckpt['model_sig']
@@ -299,16 +335,23 @@ def infer_prob_hw(
     -----
     - This API always returns a single-channel map named "prob", but the
       normalization axis depends on the checkpoint/model settings.
+    - If input `(H, W)` is smaller than `tile=(tile_h, tile_w)`, inference is
+      run on zero-padded `x_chw` internally and cropped back to original size.
+      Padding is applied after per-trace standardization and optional offset
+      channel creation.
     - `softmax_axis="channel"`: probabilities sum to 1 across channels at each
       pixel `(H, W)` (class-probability style, e.g. PSN).
     - `softmax_axis="time"`: probabilities sum to 1 across time/width `W` for
       each trace (distribution-over-time style, typically `out_chans==1`).
+      Logits are cropped to original `(H, W)` before time-softmax so padded
+      area does not affect normalization.
     - `channel` string input is matched after `strip()`; label matching remains
       case-sensitive against `output_ids`.
 
     """
     validate_array(section_hw, allowed_ndims=(2,), name='section_hw', backend='numpy')
     section = np.ascontiguousarray(section_hw, dtype=np.float32)
+    orig_hw = (int(section.shape[0]), int(section.shape[1]))
 
     resolved_device = _resolve_device(device)
     bundle = _get_model_bundle(ckpt_path=ckpt_path, device=resolved_device)
@@ -318,10 +361,14 @@ def infer_prob_hw(
         in_chans=bundle.in_chans,
         offsets_h=offsets_h,
     )
+    x_pad_chw, x_orig_hw, target_hw = _pad_chw_to_min_tile(x_chw, tile=tile)
+    if x_orig_hw != orig_hw:
+        msg = f'x_chw spatial shape {x_orig_hw} != input shape {orig_hw}'
+        raise ValueError(msg)
 
     logits_chw = infer_tiled_chw(
         bundle.model,
-        x_chw,
+        x_pad_chw,
         tile=tile,
         overlap=overlap,
         amp=amp,
@@ -334,15 +381,22 @@ def infer_prob_hw(
     if logits_chw.ndim != 3:
         msg = f'logits_chw must be (C,H,W), got {tuple(logits_chw.shape)}'
         raise ValueError(msg)
-    if tuple(logits_chw.shape[1:]) != section.shape:
+    if int(logits_chw.shape[0]) != bundle.out_chans:
         msg = (
-            f'logits_chw spatial shape {tuple(logits_chw.shape[1:])} '
-            f'!= input shape {tuple(section.shape)}'
+            f'logits_chw channel dim {int(logits_chw.shape[0])} '
+            f'!= out_chans {bundle.out_chans}'
         )
         raise ValueError(msg)
+    if tuple(logits_chw.shape[1:]) != target_hw:
+        msg = (
+            f'logits_chw spatial shape {tuple(logits_chw.shape[1:])} '
+            f'!= padded input shape {target_hw}'
+        )
+        raise ValueError(msg)
+    logits_crop_chw = _crop_logits_chw(logits_chw, orig_hw=orig_hw)
 
     probs_chw = _apply_softmax(
-        logits_chw=logits_chw.to(torch.float32),
+        logits_chw=logits_crop_chw.to(torch.float32),
         softmax_axis=bundle.softmax_axis,
         tau=tau,
         out_chans=bundle.out_chans,
@@ -350,4 +404,7 @@ def infer_prob_hw(
     channel_idx = _resolve_channel_index(channel, output_ids=bundle.output_ids)
 
     prob_hw = probs_chw[channel_idx].detach().cpu().numpy()
+    if tuple(prob_hw.shape) != orig_hw:
+        msg = f'prob_hw shape {tuple(prob_hw.shape)} != input shape {orig_hw}'
+        raise ValueError(msg)
     return np.ascontiguousarray(prob_hw, dtype=np.float32)
