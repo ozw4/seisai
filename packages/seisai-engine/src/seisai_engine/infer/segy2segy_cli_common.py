@@ -122,7 +122,7 @@ def resolve_segy_files(base_dir: Path, segy_files: list[str]) -> list[str]:
 
 
 def select_state_dict(ckpt: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    use_ema = ckpt.get('infer_used_ema') is True
+    use_ema = bool(ckpt.get('infer_used_ema', False))
     if use_ema:
         if 'ema_state_dict' not in ckpt:
             msg = 'checkpoint infer_used_ema=true but ema_state_dict is missing'
