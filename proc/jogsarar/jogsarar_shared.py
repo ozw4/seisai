@@ -68,12 +68,10 @@ def require_npz_key(
     *,
     context: str | None = None,
 ) -> np.ndarray:
-    """Load a required key from npz, raising a clear KeyError if missing."""
-    if key not in z.files:
-        prefix = f'{context}: ' if context else ''
-        msg = f'{prefix}npz missing key={key!r}. available={sorted(z.files)}'
-        raise KeyError(msg)
-    return np.asarray(z[key])
+    """Backward-compatible wrapper of common.npz_io.require_npz_key."""
+    from common.npz_io import require_npz_key as _require_npz_key
+
+    return _require_npz_key(z, key, context=context)
 
 
 def read_trace_field(
@@ -83,26 +81,10 @@ def read_trace_field(
     dtype,
     name: str = 'trace_field',
 ) -> np.ndarray:
-    """Read a SEG-Y trace header field for all traces.
+    """Backward-compatible wrapper of common.segy_io.read_trace_field."""
+    from common.segy_io import read_trace_field as _read_trace_field
 
-    This is a thin wrapper around segyio's attributes().
-
-    Args:
-        src: segyio.SegyFile
-        field: segyio.TraceField.* or int
-        dtype: numpy dtype for output
-        name: label used in error messages
-
-    Returns:
-        (n_traces,) array
-
-    """
-    n_tr = int(src.tracecount)
-    v = np.asarray(src.attributes(field)[:], dtype=dtype)
-    if v.ndim != 1 or v.shape[0] != n_tr:
-        msg = f'{name} must be (n_traces,), got {v.shape}, n_traces={n_tr}'
-        raise ValueError(msg)
-    return v
+    return _read_trace_field(src, field, dtype=dtype, name=name)
 
 
 def valid_pick_mask(

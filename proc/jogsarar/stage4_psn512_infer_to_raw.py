@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import segyio
 import torch
+from common.npz_io import npz_1d, npz_scalar_float, npz_scalar_int
 from common.paths import (
     resolve_sidecar_path as _resolve_sidecar_path_common,
     stage4_pred_crd_path as _stage4_pred_crd_path,
@@ -18,13 +19,17 @@ from common.paths import (
     stem_without_win512 as _stem_without_win512_common,
     win512_lookup_key as _win512_lookup_key,
 )
+from common.segy_io import (
+    load_traces_by_indices,
+    read_trace_field,
+    require_expected_samples,
+    require_matching_tracecount,
+)
 from jogsarar_shared import (
     TilePerTraceStandardize,
     build_key_to_indices,
     compute_residual_statics_metrics,
     find_segy_files,
-    read_trace_field,
-    require_npz_key,
 )
 from seisai_engine.pipelines.common.checkpoint_io import load_checkpoint
 from seisai_engine.pipelines.psn.build_model import build_model as build_psn_model
@@ -371,14 +376,6 @@ def _resolve_sidecar_path(win_path: Path) -> Path | None:
     return _resolve_sidecar_path_common(win_path)
 
 
-def _require_scalar_int(z: np.lib.npyio.NpzFile, key: str) -> int:
-    return int(require_npz_key(z, key, context='sidecar').item())
-
-
-def _require_scalar_float(z: np.lib.npyio.NpzFile, key: str) -> float:
-    return float(require_npz_key(z, key, context='sidecar').item())
-
-
 def _load_sidecar_window_start(
     *,
     sidecar_path: Path,
@@ -390,8 +387,11 @@ def _load_sidecar_window_start(
     cfg: Stage4Cfg = DEFAULT_STAGE4_CFG,
 ) -> np.ndarray:
     with np.load(sidecar_path, allow_pickle=False) as z:
-        window_start_i = require_npz_key(z, 'window_start_i', context='sidecar').astype(
-            np.int64, copy=False
+        window_start_i = npz_1d(
+            z,
+            'window_start_i',
+            context='sidecar',
+            dtype=np.int64,
         )
         if window_start_i.shape != (n_traces,):
             msg = (
@@ -401,12 +401,14 @@ def _load_sidecar_window_start(
             raise ValueError(msg)
 
         side_n_tr = (
-            _require_scalar_int(z, 'n_traces') if 'n_traces' in z.files else None
+            npz_scalar_int(z, 'n_traces', context='sidecar')
+            if 'n_traces' in z.files
+            else None
         )
-        side_ns_in = _require_scalar_int(z, 'n_samples_in')
-        side_ns_out = _require_scalar_int(z, 'n_samples_out')
-        side_dt_in = _require_scalar_float(z, 'dt_sec_in')
-        side_dt_out = _require_scalar_float(z, 'dt_sec_out')
+        side_ns_in = npz_scalar_int(z, 'n_samples_in', context='sidecar')
+        side_ns_out = npz_scalar_int(z, 'n_samples_out', context='sidecar')
+        side_dt_in = npz_scalar_float(z, 'dt_sec_in', context='sidecar')
+        side_dt_out = npz_scalar_float(z, 'dt_sec_out', context='sidecar')
 
     if side_n_tr is not None and side_n_tr != int(n_traces):
         msg = f'sidecar n_traces mismatch: side={side_n_tr}, segy={n_traces}'
@@ -425,36 +427,6 @@ def _load_sidecar_window_start(
         raise ValueError(msg)
 
     return window_start_i
-
-
-def _is_contiguous(idx: np.ndarray) -> bool:
-    if idx.size <= 1:
-        return True
-    return bool(np.all(np.diff(idx) == 1))
-
-
-def _load_traces_by_indices(segy_obj: segyio.SegyFile, idx: np.ndarray) -> np.ndarray:
-    i = np.asarray(idx, dtype=np.int64)
-    if i.ndim != 1:
-        msg = f'idx must be 1D, got {i.shape}'
-        raise ValueError(msg)
-    if i.size == 0:
-        msg = 'idx must be non-empty'
-        raise ValueError(msg)
-
-    if _is_contiguous(i):
-        sl = slice(int(i[0]), int(i[-1]) + 1)
-        data = np.asarray(segy_obj.trace.raw[sl], dtype=np.float32)
-    else:
-        rows = [np.asarray(segy_obj.trace.raw[int(j)], dtype=np.float32) for j in i]
-        data = np.asarray(rows, dtype=np.float32)
-
-    if data.ndim == 1:
-        data = data[None, :]
-    if data.ndim != 2:
-        msg = f'loaded trace block must be 2D, got {data.shape}'
-        raise ValueError(msg)
-    return data.astype(np.float32, copy=False)
 
 
 @dataclass(frozen=True)
@@ -1277,15 +1249,12 @@ def process_one_pair(
         segyio.open(str(raw_path), 'r', ignore_geometry=True) as raw,
         segyio.open(str(win_path), 'r', ignore_geometry=True) as win,
     ):
-        n_tr_raw = int(raw.tracecount)
-        n_tr_win = int(win.tracecount)
-        if n_tr_raw != n_tr_win:
-            msg = (
-                f'tracecount mismatch raw={n_tr_raw} win512={n_tr_win} '
-                f'raw={raw_path} win={win_path}'
-            )
-            raise ValueError(msg)
-        n_traces = int(n_tr_raw)
+        n_traces = require_matching_tracecount(
+            raw,
+            win,
+            raw_path=raw_path,
+            win_path=win_path,
+        )
         if n_traces <= 0:
             msg = f'no traces in raw segy: {raw_path}'
             raise ValueError(msg)
@@ -1298,13 +1267,11 @@ def process_one_pair(
                 f'raw={raw_path} win={win_path}'
             )
             raise ValueError(msg)
-        if n_samples_win != int(cfg.tile_w):
-            msg = (
-                f'win512 segy must have {cfg.tile_w} samples, '
-                f'got {n_samples_win}: {win_path}'
-            )
-            raise ValueError(msg)
-
+        require_expected_samples(
+            win,
+            expected=int(cfg.tile_w),
+            win_path=win_path,
+        )
         dt_us_raw = int(raw.bin[segyio.BinField.Interval])
         dt_us_win = int(win.bin[segyio.BinField.Interval])
         if dt_us_raw <= 0 or dt_us_win <= 0:
@@ -1410,8 +1377,8 @@ def process_one_pair(
                 continue
             chno_g = chno_values[idx].astype(np.int32, copy=False)
             offs_m = offsets[idx].astype(np.float32, copy=False)
-            win_g = _load_traces_by_indices(win, idx)  # (H, 512)
-            raw_g = _load_traces_by_indices(raw, idx)  # (H, ns_raw)
+            win_g = load_traces_by_indices(win, idx)  # (H, 512)
+            raw_g = load_traces_by_indices(raw, idx)  # (H, ns_raw)
             wave_max_g = np.max(np.abs(raw_g), axis=1).astype(np.float32, copy=False)
             invalid_trace_g = (offs_m == 0.0) | (wave_max_g == 0.0)
 

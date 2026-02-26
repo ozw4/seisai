@@ -7,17 +7,18 @@ from pathlib import Path
 import numpy as np
 import segyio
 import torch
+from common.npz_io import npz_1d, npz_scalar_float
 from common.paths import (
     stage1_prob_npz_path as _stage1_prob_npz_path,
     stage2_phase_pick_csr_npz_path as _stage2_phase_pick_csr_npz_path,
     stage2_sidecar_npz_path as _stage2_sidecar_npz_path,
     stage2_win512_segy_path as _stage2_win512_segy_path,
 )
+from common.segy_io import read_basic_segy_info
 from jogsarar_shared import (
     build_groups_by_key,
     find_segy_files,
     read_trace_field,
-    require_npz_key,
     valid_pick_mask,
 )
 from jogsarar_shared import (
@@ -156,7 +157,7 @@ def _load_stage1_local_trend_center_i(
         ok = np.zeros(int(n_traces), dtype=bool)
         return center_i, ok
 
-    dt_npz = float(require_npz_key(z, cfg.local_trend_dt_sec_key))
+    dt_npz = npz_scalar_float(z, cfg.local_trend_dt_sec_key, context='infer npz')
     dt_in = float(dt_sec_in)
     if (not np.isfinite(dt_npz)) or dt_npz <= 0.0:
         msg = f'invalid {cfg.local_trend_dt_sec_key} in infer npz: {dt_npz}'
@@ -174,21 +175,20 @@ def _load_stage1_local_trend_center_i(
         )
         raise ValueError(msg)
 
-    t_sec = require_npz_key(z, cfg.local_trend_t_sec_key).astype(np.float32, copy=False)
-    if t_sec.ndim != 1 or t_sec.shape[0] != int(n_traces):
-        msg = (
-            f'{cfg.local_trend_t_sec_key} must be (n_traces,), got {t_sec.shape}, '
-            f'n_traces={n_traces}'
-        )
-        raise ValueError(msg)
-
-    covered = require_npz_key(z, cfg.local_trend_covered_key).astype(bool, copy=False)
-    if covered.ndim != 1 or covered.shape[0] != int(n_traces):
-        msg = (
-            f'{cfg.local_trend_covered_key} must be (n_traces,), got {covered.shape}, '
-            f'n_traces={n_traces}'
-        )
-        raise ValueError(msg)
+    t_sec = npz_1d(
+        z,
+        cfg.local_trend_t_sec_key,
+        context='infer npz',
+        n=int(n_traces),
+        dtype=np.float32,
+    )
+    covered = npz_1d(
+        z,
+        cfg.local_trend_covered_key,
+        context='infer npz',
+        n=int(n_traces),
+        dtype=bool,
+    )
 
     center_i = (t_sec / float(dt_in)).astype(np.float32, copy=False)
     ok = covered & np.isfinite(center_i) & (center_i > 0.0)
@@ -1346,33 +1346,29 @@ def _load_minimal_inputs_for_thresholds(
         raise FileNotFoundError(msg)
 
     with segyio.open(str(segy_path), 'r', ignore_geometry=True) as src:
-        n_traces = int(src.tracecount)
-        if n_traces <= 0:
-            msg = f'no traces: {segy_path}'
-            raise ValueError(msg)
-
-        ns_in = int(src.samples.size)
-        if ns_in <= 0:
-            msg = f'invalid n_samples: {ns_in}'
-            raise ValueError(msg)
-
-        dt_us_in = int(src.bin[segyio.BinField.Interval])
-        if dt_us_in <= 0:
-            msg = f'invalid dt_us: {dt_us_in}'
-            raise ValueError(msg)
-        dt_sec_in = float(dt_us_in) * 1e-6
+        n_traces, ns_in, _dt_us_in, dt_sec_in = read_basic_segy_info(
+            src,
+            path=segy_path,
+            name='',
+        )
         with np.load(infer_npz, allow_pickle=False) as z:
-            pick_final = require_npz_key(z, cfg.pick_key).astype(np.int64, copy=False)
-            if pick_final.ndim != 1 or pick_final.shape[0] != n_traces:
-                msg = (
-                    f'{cfg.pick_key} must be (n_traces,), got {pick_final.shape}, '
-                    f'n_traces={n_traces}'
-                )
-                raise ValueError(msg)
+            pick_final = npz_1d(
+                z,
+                cfg.pick_key,
+                context='infer npz',
+                n=int(n_traces),
+                dtype=np.int64,
+            )
 
             scores_weight: dict[str, np.ndarray] = {}
             for k in cfg.score_keys_for_weight:
-                scores_weight[k] = require_npz_key(z, k).astype(np.float32, copy=False)
+                scores_weight[k] = npz_1d(
+                    z,
+                    k,
+                    context='infer npz',
+                    n=int(n_traces),
+                    dtype=np.float32,
+                )
 
             trend_center_i_local, local_trend_ok = _load_stage1_local_trend_center_i(
                 z=z,
@@ -1573,41 +1569,37 @@ def process_one_segy(
         pick_csr_npz = out_pick_csr_npz_path_for_out(out_segy, cfg=cfg)
 
     with segyio.open(str(segy_path), 'r', ignore_geometry=True) as src:
-        n_traces = int(src.tracecount)
-        if n_traces <= 0:
-            msg = f'no traces: {segy_path}'
-            raise ValueError(msg)
-
-        ns_in = int(src.samples.size)
-        if ns_in <= 0:
-            msg = f'invalid n_samples: {ns_in}'
-            raise ValueError(msg)
-
-        dt_us_in = int(src.bin[segyio.BinField.Interval])
-        if dt_us_in <= 0:
-            msg = f'invalid dt_us: {dt_us_in}'
-            raise ValueError(msg)
+        n_traces, ns_in, dt_us_in, dt_sec_in = read_basic_segy_info(
+            src,
+            path=segy_path,
+            name='',
+        )
 
         if dt_us_in % int(cfg.up_factor) != 0:
             msg = f'dt_us must be divisible by {cfg.up_factor}. got {dt_us_in}'
             raise ValueError(msg)
 
         dt_us_out = dt_us_in // int(cfg.up_factor)
-        dt_sec_in = float(dt_us_in) * 1e-6
         dt_sec_out = float(dt_us_out) * 1e-6
 
         with np.load(infer_npz, allow_pickle=False) as z:
-            pick_final = require_npz_key(z, cfg.pick_key).astype(np.int64, copy=False)
-            if pick_final.ndim != 1 or pick_final.shape[0] != n_traces:
-                msg = (
-                    f'{cfg.pick_key} must be (n_traces,), got {pick_final.shape}, '
-                    f'n_traces={n_traces}'
-                )
-                raise ValueError(msg)
+            pick_final = npz_1d(
+                z,
+                cfg.pick_key,
+                context='infer npz',
+                n=int(n_traces),
+                dtype=np.int64,
+            )
 
             scores_weight: dict[str, np.ndarray] = {}
             for k in cfg.score_keys_for_weight:
-                scores_weight[k] = require_npz_key(z, k).astype(np.float32, copy=False)
+                scores_weight[k] = npz_1d(
+                    z,
+                    k,
+                    context='infer npz',
+                    n=int(n_traces),
+                    dtype=np.float32,
+                )
 
             trend_center_i_local, local_trend_ok = _load_stage1_local_trend_center_i(
                 z=z,
