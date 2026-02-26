@@ -7,6 +7,12 @@ from pathlib import Path
 import numpy as np
 import segyio
 import torch
+from common.paths import (
+    stage1_prob_npz_path as _stage1_prob_npz_path,
+    stage2_phase_pick_csr_npz_path as _stage2_phase_pick_csr_npz_path,
+    stage2_sidecar_npz_path as _stage2_sidecar_npz_path,
+    stage2_win512_segy_path as _stage2_win512_segy_path,
+)
 from jogsarar_shared import (
     build_groups_by_key,
     find_segy_files,
@@ -106,23 +112,28 @@ class _TrendBuildResult:
 def infer_npz_path_for_segy(
     segy_path: Path, *, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
 ) -> Path:
-    rel = segy_path.relative_to(cfg.in_segy_root)
-    return cfg.in_infer_root / rel.parent / f'{segy_path.stem}.prob.npz'
+    return _stage1_prob_npz_path(
+        segy_path,
+        in_segy_root=cfg.in_segy_root,
+        out_infer_root=cfg.in_infer_root,
+    )
 
 
 def out_segy_path_for_in(
     segy_path: Path, *, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
 ) -> Path:
-    rel = segy_path.relative_to(cfg.in_segy_root)
-    out_rel = rel.with_suffix('')
-    return cfg.out_segy_root / out_rel.parent / f'{out_rel.name}.win512.sgy'
+    return _stage2_win512_segy_path(
+        segy_path,
+        in_segy_root=cfg.in_segy_root,
+        out_segy_root=cfg.out_segy_root,
+    )
 
 
 def out_sidecar_npz_path_for_out(
     out_segy_path: Path, *, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG
 ) -> Path:
     del cfg
-    return out_segy_path.with_suffix('.sidecar.npz')
+    return _stage2_sidecar_npz_path(out_segy_path)
 
 
 def out_pick_csr_npz_path_for_out(
@@ -130,7 +141,7 @@ def out_pick_csr_npz_path_for_out(
 ) -> Path:
     del cfg
     # PSN dataset (load_phase_pick_csr_npz) が読む用
-    return out_segy_path.with_suffix('.phase_pick.csr.npz')
+    return _stage2_phase_pick_csr_npz_path(out_segy_path)
 
 
 def _load_stage1_local_trend_center_i(

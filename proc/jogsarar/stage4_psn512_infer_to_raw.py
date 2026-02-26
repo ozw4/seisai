@@ -10,6 +10,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import segyio
 import torch
+from common.paths import (
+    resolve_sidecar_path as _resolve_sidecar_path_common,
+    stage4_pred_crd_path as _stage4_pred_crd_path,
+    stage4_pred_npz_path as _stage4_pred_npz_path,
+    stage4_pred_out_dir as _stage4_pred_out_dir,
+    stem_without_win512 as _stem_without_win512_common,
+    win512_lookup_key as _win512_lookup_key,
+)
 from jogsarar_shared import (
     TilePerTraceStandardize,
     build_key_to_indices,
@@ -277,10 +285,7 @@ def _build_stage4_parser() -> argparse.ArgumentParser:
 
 
 def _stem_without_win512(stem: str) -> str:
-    tag = '.win512'
-    if stem.endswith(tag):
-        return stem[: -len(tag)]
-    return stem
+    return _stem_without_win512_common(stem)
 
 
 def _replace_edge_picks_if_far(
@@ -352,8 +357,7 @@ def _build_win512_lookup(
     lookup: dict[tuple[str, str], Path] = {}
 
     for p in win_files:
-        rel = p.relative_to(win_root)
-        key = (rel.parent.as_posix(), _stem_without_win512(rel.stem))
+        key = _win512_lookup_key(p, win_root=win_root)
         if key in lookup:
             msg = (
                 f'duplicate win512 mapping key={key}: {lookup[key]} and {p} (ambiguous)'
@@ -364,13 +368,7 @@ def _build_win512_lookup(
 
 
 def _resolve_sidecar_path(win_path: Path) -> Path | None:
-    cands: list[Path] = [win_path.with_suffix('.sidecar.npz')]
-    if not win_path.stem.endswith('.win512'):
-        cands.append(win_path.with_suffix('.win512.sidecar.npz'))
-    for p in cands:
-        if p.is_file():
-            return p
-    return None
+    return _resolve_sidecar_path_common(win_path)
 
 
 def _require_scalar_int(z: np.lib.npyio.NpzFile, key: str) -> int:
@@ -1257,12 +1255,23 @@ def process_one_pair(
     standardize_eps: float,
     cfg: Stage4Cfg = DEFAULT_STAGE4_CFG,
 ) -> None:
-    rel = raw_path.relative_to(cfg.in_raw_segy_root)
-    out_dir = cfg.out_pred_root / rel.parent
+    out_dir = _stage4_pred_out_dir(
+        raw_path,
+        in_raw_root=cfg.in_raw_segy_root,
+        out_pred_root=cfg.out_pred_root,
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    out_npz = out_dir / f'{raw_path.stem}.psn_pred.npz'
-    out_crd = out_dir / f'{raw_path.stem}.fb.crd'
+    out_npz = _stage4_pred_npz_path(
+        raw_path,
+        in_raw_root=cfg.in_raw_segy_root,
+        out_pred_root=cfg.out_pred_root,
+    )
+    out_crd = _stage4_pred_crd_path(
+        raw_path,
+        in_raw_root=cfg.in_raw_segy_root,
+        out_pred_root=cfg.out_pred_root,
+    )
 
     with (
         segyio.open(str(raw_path), 'r', ignore_geometry=True) as raw,

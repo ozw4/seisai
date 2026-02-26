@@ -14,6 +14,7 @@ import numpy as np
 import segyio
 import torch
 from _model import NetAE as EncDec2D
+from common.paths import stage1_out_dir as _stage1_out_dir
 from config_io import (
     build_yaml_defaults,
     coerce_optional_bool,
@@ -49,6 +50,7 @@ from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
 BuildFileInfoFn = Callable[..., Any]
 SnapPicksFn = Callable[..., Any]
 Numpy2FbCrdFn = Callable[..., Any]
+
 
 @dataclass(frozen=True)
 class Stage1Cfg:
@@ -524,8 +526,11 @@ def run_stage1_cfg(
         if not segy_path.is_file():
             msg = f'segy file not found: {segy_path}'
             raise FileNotFoundError(msg)
-        rel = segy_path.relative_to(in_root)
-        per_file_out_dir = out_root / rel.parent
+        per_file_out_dir = _stage1_out_dir(
+            segy_path,
+            in_segy_root=in_root,
+            out_infer_root=out_root,
+        )
         process_one_segy(
             segy_path=segy_path,
             out_dir=per_file_out_dir,
@@ -1820,7 +1825,9 @@ def _validate_stage1_cfg(cfg: Stage1Cfg) -> Stage1Cfg:
     if cfg.viz_dirname == '':
         raise ValueError('viz_dirname must not be empty')
     if cfg.segy_endian not in {'big', 'little'}:
-        raise ValueError(f"segy_endian must be 'big' or 'little', got {cfg.segy_endian!r}")
+        raise ValueError(
+            f"segy_endian must be 'big' or 'little', got {cfg.segy_endian!r}"
+        )
     if cfg.waveform_mode not in {'mmap', 'eager'}:
         raise ValueError(
             f"waveform_mode must be 'mmap' or 'eager', got {cfg.waveform_mode!r}"
@@ -1849,9 +1856,7 @@ def _validate_stage1_cfg(cfg: Stage1Cfg) -> Stage1Cfg:
     if cfg.tiles_per_batch <= 0:
         raise ValueError(f'tiles_per_batch must be > 0, got {cfg.tiles_per_batch}')
     if cfg.viz_every_n_shots < 0:
-        raise ValueError(
-            f'viz_every_n_shots must be >= 0, got {cfg.viz_every_n_shots}'
-        )
+        raise ValueError(f'viz_every_n_shots must be >= 0, got {cfg.viz_every_n_shots}')
     if cfg.plot_end <= cfg.plot_start:
         raise ValueError(
             f'plot_end must be > plot_start, got start={cfg.plot_start}, end={cfg.plot_end}'
