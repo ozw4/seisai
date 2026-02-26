@@ -12,13 +12,14 @@ from seisai_utils.config import (
     require_int,
     require_list_str,
 )
+from seisai_utils.fs import validate_files_exist
 
 from seisai_engine.infer.ffid_segy2segy import Tiled2DConfig, _validate_tiled2d_cfg
 from seisai_engine.infer.segy2segy_cli_common import (
     is_strict_int,
     resolve_segy_files,
 )
-from seisai_engine.pipelines.common import resolve_relpath, validate_files_exist
+from seisai_engine.pipelines.common import resolve_relpath
 
 __all__ = [
     'InferCommonParsed',

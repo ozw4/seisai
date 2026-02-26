@@ -4,10 +4,10 @@ from typing import TYPE_CHECKING
 
 from seisai_dataset import BuildPlan, SegyGatherPairDataset
 from seisai_transforms.augment import RandomCropOrPad, ViewCompose
+from seisai_utils.fs import validate_files_exist
 
 from seisai_engine.pipelines.common.augment import build_train_augment_ops
 from seisai_engine.pipelines.common.noise_add import maybe_build_noise_add_op
-from seisai_engine.pipelines.common.validate_files import validate_files_exist
 
 if TYPE_CHECKING:
     from .config import PairDatasetCfg, PairPaths

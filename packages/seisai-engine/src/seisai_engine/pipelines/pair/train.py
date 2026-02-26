@@ -6,13 +6,13 @@ from pathlib import Path
 
 import torch
 from seisai_utils.config import optional_float, optional_str, require_dict
+from seisai_utils.listfiles import expand_cfg_listfiles
 from seisai_utils.viz_pair import PairTriptychVisConfig
 
 from seisai_engine.infer.runner import TiledHConfig
 from seisai_engine.loss import composite
 from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
-    expand_cfg_listfiles,
     load_cfg_with_base_dir,
     maybe_load_init_weights,
     resolve_device,

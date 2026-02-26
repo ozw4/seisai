@@ -20,11 +20,11 @@ from seisai_utils.config import (
     require_int,
     require_list_str,
 )
+from seisai_utils.fs import validate_files_exist
 
 from seisai_engine.pipelines.common.augment import build_train_augment_ops
 from seisai_engine.pipelines.common.config_keys import raise_if_deprecated_time_len_keys
 from seisai_engine.pipelines.common.noise_add import maybe_build_noise_add_op
-from seisai_engine.pipelines.common.validate_files import validate_files_exist
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 
 from .build_plan import build_plan

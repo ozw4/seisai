@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from seisai_engine.pipelines.common.config_io import load_config
-from seisai_engine.pipelines.common.listfiles import expand_cfg_listfiles
+from seisai_utils.listfiles import expand_cfg_listfiles
 
 
 def _write_file(path: Path, text: str = 'x') -> None:

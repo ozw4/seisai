@@ -15,6 +15,7 @@ from seisai_utils.config import (
     require_list_str,
     require_value,
 )
+from seisai_utils.listfiles import expand_cfg_listfiles
 
 from seisai_engine.pipelines.common.config_keys import (
     format_cfg_key,
@@ -27,7 +28,6 @@ from seisai_engine.pipelines.common.config_loaders import (
 )
 from seisai_engine.pipelines.common.config_io import load_config, resolve_relpath
 from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
-from seisai_engine.pipelines.common.listfiles import expand_cfg_listfiles
 from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
 
 from .schema import (

@@ -17,8 +17,7 @@ from seisai_utils.config import (
     optional_tuple2_float,
     require_list_str,
 )
-
-from .validate_files import validate_files_exist
+from seisai_utils.fs import validate_files_exist
 
 __all__ = ['NoiseTraceSubsetProvider', 'maybe_build_noise_add_op']
 

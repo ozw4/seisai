@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from seisai_utils.config import load_config as _load_config
+from seisai_utils.key_path import split_key_path
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -29,14 +30,6 @@ def resolve_relpath(base_dir: str | Path, p: str) -> str:
     if not pp.is_absolute():
         pp = Path(base_dir) / pp
     return str(pp.resolve())
-
-
-def _split_key_path(key_path: str | Sequence[str]) -> list[str]:
-    parts = key_path.split('.') if isinstance(key_path, str) else list(key_path)
-    if not parts or not all(isinstance(p, str) and p for p in parts):
-        msg = 'key_path must be non-empty str or sequence[str]'
-        raise ValueError(msg)
-    return parts
 
 
 def _resolve_value(base_dir: str | Path, value: Any) -> Any:
@@ -65,7 +58,7 @@ def resolve_cfg_paths(
         msg = 'cfg must be dict'
         raise TypeError(msg)
     for key_path in keys:
-        parts = _split_key_path(key_path)
+        parts = split_key_path(key_path)
         cur: Any = cfg
         for key in parts[:-1]:
             if not isinstance(cur, dict):
