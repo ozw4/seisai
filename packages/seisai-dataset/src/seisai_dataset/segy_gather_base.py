@@ -7,17 +7,16 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-from seisai_transforms.view_projection import (
-    project_fb_idx_view,
-    project_offsets_view,
-    project_time_view,
-)
 from torch.utils.data import Dataset
 
 from .config import LoaderConfig, TraceSubsetSamplerConfig
 from .sample_flow import SampleFlow
 from .trace_subset_preproc import TraceSubsetLoader
 from .trace_subset_sampler import TraceSubsetSampler
+from .transform_flow_utils import (
+    add_view_projection_meta,
+    apply_transform_2d_with_meta,
+)
 
 if TYPE_CHECKING:
     from .file_info import FileInfo
@@ -84,26 +83,31 @@ class SampleTransformer:
         )
 
         # 変換 (Crop/Pad / TimeStretch 等)
-        out = self.transform(x, rng=rng, return_meta=True)
-        x_view, meta = out if isinstance(out, tuple) else (out, {})
-        if not isinstance(meta, dict):
-            msg = f'transform meta must be dict, got {type(meta).__name__}'
-            raise TypeError(msg)
-        if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
-            msg = 'transform は 2D numpy または (2D, meta) を返す必要があります'
-            raise ValueError(msg)
+        x_view, meta = apply_transform_2d_with_meta(
+            self.transform,
+            x,
+            rng,
+            msg_bad_out='transform は 2D numpy または (2D, meta) を返す必要があります',
+            msg_bad_meta='transform meta must be dict, got {type}',
+            exc_bad_out=ValueError,
+            exc_bad_meta=TypeError,
+        )
 
         Hv, W = x_view.shape
         if Hv != H:
             msg = f'transform must keep H: got Hv={Hv}, expected H={H}'
             raise ValueError(msg)
 
-        t_raw = np.arange(W0, dtype=np.float32) * float(info.dt_sec)
-
-        meta['trace_valid'] = trace_valid
-        meta['fb_idx_view'] = project_fb_idx_view(fb_subset, H, W, meta)
-        meta['offsets_view'] = project_offsets_view(offsets, H, meta)
-        meta['time_view'] = project_time_view(t_raw, H, W, meta)
+        add_view_projection_meta(
+            meta,
+            trace_valid=trace_valid,
+            fb_idx=fb_subset,
+            offsets=offsets,
+            dt_sec=float(info.dt_sec),
+            W0=W0,
+            H=H,
+            W=W,
+        )
 
         return x_view, meta, offsets, fb_subset, indices, trace_valid
 

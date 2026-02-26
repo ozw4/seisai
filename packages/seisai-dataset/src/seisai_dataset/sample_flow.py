@@ -13,6 +13,10 @@ import numpy as np
 import torch
 
 from .file_info import FileInfo
+from .transform_flow_utils import (
+    apply_transform_2d_with_meta,
+    pad_indices_offsets_fb as _pad_indices_offsets_fb,
+)
 
 
 class SampleFlow:
@@ -81,41 +85,12 @@ class SampleFlow:
         fb_subset: np.ndarray | None,
         H: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, int]:
-        H0 = int(indices.size)
-        if H0 > H:
-            msg = f'indices length {H0} > loaded H {H}'
-            raise ValueError(msg)
-        if fb_subset is not None and int(fb_subset.size) != H0:
-            msg = f'fb_subset length {fb_subset.size} != indices length {H0}'
-            raise ValueError(
-                msg
-            )
-
-        trace_valid = np.zeros(H, dtype=np.bool_)
-        trace_valid[:H0] = True
-
-        indices = indices.astype(np.int64, copy=False)
-        offsets = offsets.astype(np.float32, copy=False)
-        if fb_subset is not None:
-            fb_subset = np.asarray(fb_subset, dtype=np.int64)
-
-        pad = H - H0
-        if pad > 0:
-            offsets = np.concatenate(
-                [offsets, np.zeros(pad, dtype=np.float32)],
-                axis=0,
-            )
-            indices = np.concatenate(
-                [indices, -np.ones(pad, dtype=np.int64)],
-                axis=0,
-            )
-            if fb_subset is not None:
-                fb_subset = np.concatenate(
-                    [fb_subset, -np.ones(pad, dtype=np.int64)],
-                    axis=0,
-                )
-
-        return indices, offsets, fb_subset, trace_valid, pad
+        return _pad_indices_offsets_fb(
+            indices=indices,
+            offsets=offsets,
+            fb_subset=fb_subset,
+            H=H,
+        )
 
     def apply_transform(
         self,
@@ -134,19 +109,15 @@ class SampleFlow:
         *,
         name: str,
     ) -> tuple[np.ndarray, dict]:
-        out = transform(x, rng=rng, return_meta=True)
-        x_view, meta = out if isinstance(out, tuple) else (out, {})
-        if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
-            msg = f'transform({name}) は 2D numpy または (2D, meta) を返す必要があります'
-            raise ValueError(
-                msg
-            )
-        if not isinstance(meta, dict):
-            msg = f'transform({name}) meta must be dict, got {type(meta).__name__}'
-            raise ValueError(
-                msg
-            )
-        return x_view, meta
+        return apply_transform_2d_with_meta(
+            transform,
+            x,
+            rng,
+            msg_bad_out=f'transform({name}) は 2D numpy または (2D, meta) を返す必要があります',
+            msg_bad_meta=f'transform({name}) meta must be dict, got {{type}}',
+            exc_bad_out=ValueError,
+            exc_bad_meta=ValueError,
+        )
 
     def build_plan_input_base(
         self,

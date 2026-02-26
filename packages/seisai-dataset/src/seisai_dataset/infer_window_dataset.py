@@ -10,9 +10,6 @@ import torch
 from seisai_transforms import (
     PerTraceStandardize,
     ViewCompose,
-    project_fb_idx_view,
-    project_offsets_view,
-    project_time_view,
 )
 from torch.utils.data import Dataset
 
@@ -20,6 +17,11 @@ from .builder.builder import BuildPlan, InputOnlyPlan
 from .config import LoaderConfig
 from .file_info import build_file_info
 from .trace_subset_preproc import TraceSubsetLoader
+from .transform_flow_utils import (
+    add_view_projection_meta,
+    apply_transform_2d_with_meta,
+    pad_indices_offsets_fb,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -338,18 +340,14 @@ class InferenceGatherWindowsDataset(Dataset):
             msg = f'window size {H0} > loaded H {H}'
             raise ValueError(msg)
 
-        trace_valid = np.zeros(H, dtype=np.bool_)
-        trace_valid[:H0] = True
-
         off = info['offsets'][idx_win].astype(np.float32, copy=False)
         fb = info['fb'][idx_win].astype(np.int64, copy=False)
-        indices_pad = np.full((H,), -1, dtype=np.int64)
-        indices_pad[:H0] = idx_win.astype(np.int64, copy=False)
-
-        if H > H0:
-            pad = H - H0
-            off = np.concatenate([off, np.zeros(pad, dtype=np.float32)], axis=0)
-            fb = np.concatenate([fb, -np.ones(pad, dtype=np.int64)], axis=0)
+        indices_pad, off, fb, trace_valid, _pad = pad_indices_offsets_fb(
+            indices=idx_win.astype(np.int64, copy=False),
+            offsets=off,
+            fb_subset=fb,
+            H=H,
+        )
 
         raw_idx_global = np.full((H,), -1, dtype=np.int64)
         raw_idx_global[:H0] = self._file_base[fi] + idx_win.astype(np.int64, copy=False)
@@ -357,11 +355,16 @@ class InferenceGatherWindowsDataset(Dataset):
         abs_h = np.full((H,), -1, dtype=np.int64)
         abs_h[:H0] = np.arange(s, s + H0, dtype=np.int64)
 
-        out = self.transform(x, rng=self._rng, return_meta=True)
-        x_view, meta = out if isinstance(out, tuple) else (out, {})
-        if not isinstance(x_view, np.ndarray) or x_view.ndim != 2:
-            msg = 'transform must return 2D numpy or (2D, meta)'
-            raise ValueError(msg)
+        x_view, meta = apply_transform_2d_with_meta(
+            self.transform,
+            x,
+            self._rng,
+            msg_bad_out='transform must return 2D numpy or (2D, meta)',
+            msg_bad_meta='transform meta must be dict, got {type}',
+            exc_bad_out=ValueError,
+            exc_bad_meta=TypeError,
+            allow_non_dict_meta=True,
+        )
         Hv, W = x_view.shape
         if int(Hv) != H:
             msg = f'transform must keep H: got {int(Hv)}, expected {H}'
@@ -377,15 +380,11 @@ class InferenceGatherWindowsDataset(Dataset):
             x_view = y
             W = Wp
 
-        if not isinstance(meta, dict):
-            meta = {}
         meta.setdefault('hflip', False)
         meta.setdefault('factor_h', 1.0)
         meta.setdefault('factor', 1.0)
         meta.setdefault('start', 0)
 
-        t_raw = np.arange(W0, dtype=np.float32) * float(info['dt_sec'])
-        meta['trace_valid'] = trace_valid
         meta['raw_idx_global'] = raw_idx_global
         meta['abs_h'] = abs_h
         meta['gather_len'] = int(Htot)
@@ -399,9 +398,16 @@ class InferenceGatherWindowsDataset(Dataset):
         meta['dt_eff_sec'] = np.float32(
             float(info['dt_sec']) / float(meta.get('factor', 1.0))
         )
-        meta['offsets_view'] = project_offsets_view(off, H, meta)
-        meta['fb_idx_view'] = project_fb_idx_view(fb, H, int(W), meta)
-        meta['time_view'] = project_time_view(t_raw, H, int(W), meta)
+        add_view_projection_meta(
+            meta,
+            trace_valid=trace_valid,
+            fb_idx=fb,
+            offsets=off,
+            dt_sec=float(info['dt_sec']),
+            W0=W0,
+            H=H,
+            W=int(W),
+        )
 
         sample = {
             'x_view': x_view,
