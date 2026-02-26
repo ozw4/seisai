@@ -6,6 +6,11 @@ from pathlib import Path
 import numpy as np
 import segyio
 import torch
+from common.lineage import (
+    cfg_hash as _cfg_hash,
+    lineage_npz_payload,
+    read_git_sha,
+)
 from jogsarar_shared import (
     compute_conf_rs_from_residual_statics,
     compute_conf_trend_gaussian_var,
@@ -25,6 +30,8 @@ from jogsarar_viz.noop import save_stage1_gather_viz_noop
 BuildFileInfoFn = Callable[..., object]
 SnapPicksFn = Callable[..., object]
 Numpy2FbCrdFn = Callable[..., object]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_GIT_SHA = read_git_sha(_REPO_ROOT)
 
 
 def process_one_segy(
@@ -649,6 +656,15 @@ def process_one_segy(
         stem = segy_path.stem
 
         npz_path = out_dir / f'{stem}.prob.npz'
+        source_model_id = getattr(cfg, 'source_model_id', None)
+        if source_model_id is None or source_model_id == '':
+            source_model_id = Path(cfg.weights_path).name
+        lineage_payload = lineage_npz_payload(
+            iter_id=getattr(cfg, 'iter_id', None),
+            source_model_id=str(source_model_id),
+            cfg_hash=_cfg_hash(cfg),
+            git_sha=_GIT_SHA,
+        )
         np.savez_compressed(
             npz_path,
             prob=prob_all,
@@ -686,6 +702,7 @@ def process_one_segy(
                 f'vmin={TREND_LOCAL_VMIN_MPS},vmax={TREND_LOCAL_VMAX_MPS},'
                 f'sort_offsets={TREND_LOCAL_SORT_OFFSETS},side_split={TREND_SIDE_SPLIT_ENABLE}'
             ),
+            **lineage_payload,
         )
 
         crd_path = out_dir / f'{stem}.fb.crd'

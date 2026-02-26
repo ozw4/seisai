@@ -22,6 +22,8 @@ class Stage1Cfg:
     in_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
     out_infer_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_out')
     weights_path: Path = Path('/home/dcuser/data/model_weight/fbseg_caformer_b36.pth')
+    iter_id: int = 0
+    source_model_id: str | None = None
     segy_exts: tuple[str, ...] = ('.sgy', '.segy')
     recursive: bool = False
     backbone: str = 'caformer_b36.sail_in22k_ft_in1k'
@@ -129,7 +131,7 @@ _OPTIONAL_FLOAT_KEYS = {
     'trend_local_vmin_mps',
     'trend_local_vmax_mps',
 }
-_OPTIONAL_STR_KEYS = {'header_cache_dir'}
+_OPTIONAL_STR_KEYS = {'header_cache_dir', 'source_model_id'}
 
 
 def _coerce_required_int(key: str, value: object) -> int:
@@ -267,6 +269,8 @@ def _validate_stage1_cfg(cfg: Stage1Cfg) -> Stage1Cfg:
         raise ValueError(f'tiles_per_batch must be > 0, got {cfg.tiles_per_batch}')
     if cfg.viz_every_n_shots < 0:
         raise ValueError(f'viz_every_n_shots must be >= 0, got {cfg.viz_every_n_shots}')
+    if cfg.iter_id < 0:
+        raise ValueError(f'iter_id must be >= 0, got {cfg.iter_id}')
     if cfg.plot_end <= cfg.plot_start:
         raise ValueError(
             f'plot_end must be > plot_start, got start={cfg.plot_start}, end={cfg.plot_end}'

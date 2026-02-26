@@ -6,6 +6,14 @@ from typing import Any
 
 import numpy as np
 import segyio
+from common.lineage import (
+    cfg_hash as _cfg_hash,
+    lineage_npz_payload,
+    read_git_sha,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_GIT_SHA = read_git_sha(_REPO_ROOT)
 
 
 def write_win512_segy(
@@ -129,6 +137,14 @@ def write_stage2_sidecar_npz(
     scores_filter: dict[str, np.ndarray] | None = None,
     conf_trend1: np.ndarray | None = None,
 ) -> None:
+    infer_name = str(infer_npz)
+    if infer_name.endswith('.prob.npz'):
+        seed_kind = 'stage1'
+    elif infer_name.endswith('.psn_pred.npz'):
+        seed_kind = 'stage4'
+    else:
+        seed_kind = 'unknown'
+
     sidecar_payload: dict[str, object] = {
         'src_segy': str(segy_path),
         'src_infer_npz': str(infer_npz),
@@ -142,6 +158,15 @@ def write_stage2_sidecar_npz(
         'n_samples_out': np.int32(cfg.out_ns),
         'window_start_i': win_start_i.astype(np.int64, copy=False),
     }
+    sidecar_payload.update(
+        lineage_npz_payload(
+            iter_id=getattr(cfg, 'iter_id', None),
+            source_model_id=getattr(cfg, 'source_model_id', None),
+            cfg_hash=_cfg_hash(cfg),
+            git_sha=_GIT_SHA,
+            seed_kind=seed_kind,
+        )
+    )
 
     if bool(emit_training_artifacts):
         if pick_csr_npz is None:

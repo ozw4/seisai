@@ -16,6 +16,8 @@ class Stage4Cfg:
     out_pred_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512_pred')
     cfg_yaml: Path | None = Path('configs/config_convnext_prestage2_drop005.yaml')
     ckpt_path: Path | None = None
+    iter_id: int = 0
+    source_model_id: str | None = None
     standardize_eps: float = 1.0e-8
     segy_exts: tuple[str, ...] = ('.sgy', '.segy')
     device: str = 'cuda'
@@ -194,7 +196,17 @@ def load_stage4_cfg_yaml(path: Path) -> Stage4Cfg:
             continue
         overrides[key] = value
 
-    return replace(DEFAULT_STAGE4_CFG, **overrides)
+    cfg = replace(DEFAULT_STAGE4_CFG, **overrides)
+    if int(cfg.iter_id) < 0:
+        msg = f'iter_id must be >= 0, got {cfg.iter_id}'
+        raise ValueError(msg)
+    if cfg.source_model_id is not None and not isinstance(cfg.source_model_id, str):
+        msg = (
+            'config[source_model_id] must be str or null, '
+            f'got {type(cfg.source_model_id).__name__}'
+        )
+        raise TypeError(msg)
+    return cfg
 
 
 def _build_stage4_parser() -> argparse.ArgumentParser:

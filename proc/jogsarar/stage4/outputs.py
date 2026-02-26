@@ -51,28 +51,31 @@ def write_stage4_pred_npz(
     rs_valid_mask: np.ndarray,
     pick_rs_i: np.ndarray,
     pick_final: np.ndarray,
+    lineage: dict[str, np.ndarray] | None = None,
 ) -> None:
     trace_indices = np.arange(n_traces, dtype=np.int64)
-    np.savez_compressed(
-        out_npz,
-        dt_sec=np.float32(dt_sec_raw),
-        n_samples_orig=np.int32(n_samples_raw),
-        n_traces=np.int32(n_traces),
-        ffid_values=ffid_values.astype(np.int32, copy=False),
-        chno_values=chno_values.astype(np.int32, copy=False),
-        offsets=offsets.astype(np.float32, copy=False),
-        trace_indices=trace_indices,
-        pick_psn512=pick_psn512.astype(np.int32, copy=False),
-        pmax_psn=pmax_psn.astype(np.float32, copy=False),
-        window_start_i=window_start_i.astype(np.int64, copy=False),
-        pick_psn_orig_f=pick_psn_orig_f.astype(np.float32, copy=False),
-        pick_psn_orig_i=pick_psn_orig_i.astype(np.int32, copy=False),
-        delta_pick_rs=delta_pick_rs.astype(np.float32, copy=False),
-        cmax_rs=cmax_rs.astype(np.float32, copy=False),
-        rs_valid_mask=rs_valid_mask.astype(bool, copy=False),
-        pick_rs_i=pick_rs_i.astype(np.int32, copy=False),
-        pick_final=pick_final.astype(np.int32, copy=False),
-    )
+    payload: dict[str, np.ndarray] = {
+        'dt_sec': np.float32(dt_sec_raw),
+        'n_samples_orig': np.int32(n_samples_raw),
+        'n_traces': np.int32(n_traces),
+        'ffid_values': ffid_values.astype(np.int32, copy=False),
+        'chno_values': chno_values.astype(np.int32, copy=False),
+        'offsets': offsets.astype(np.float32, copy=False),
+        'trace_indices': trace_indices,
+        'pick_psn512': pick_psn512.astype(np.int32, copy=False),
+        'pmax_psn': pmax_psn.astype(np.float32, copy=False),
+        'window_start_i': window_start_i.astype(np.int64, copy=False),
+        'pick_psn_orig_f': pick_psn_orig_f.astype(np.float32, copy=False),
+        'pick_psn_orig_i': pick_psn_orig_i.astype(np.int32, copy=False),
+        'delta_pick_rs': delta_pick_rs.astype(np.float32, copy=False),
+        'cmax_rs': cmax_rs.astype(np.float32, copy=False),
+        'rs_valid_mask': rs_valid_mask.astype(bool, copy=False),
+        'pick_rs_i': pick_rs_i.astype(np.int32, copy=False),
+        'pick_final': pick_final.astype(np.int32, copy=False),
+    }
+    if lineage is not None:
+        payload.update(lineage)
+    np.savez_compressed(out_npz, **payload)
 
 
 def write_stage4_crd(

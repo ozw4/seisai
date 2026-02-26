@@ -55,6 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument('--stage4-cfg-yaml', type=Path, default=None)
     p.add_argument('--stage4-standardize-eps', type=float, default=None)
     p.add_argument('--out-root', type=Path, default=None)
+    p.add_argument('--iter-id', type=int, default=None)
     p.add_argument('--segy-exts', type=str, default=None)
     p.add_argument(
         '--thresh-mode', choices=tuple(sorted(_ALLOWED_THRESH_MODES)), default=None
@@ -101,12 +102,23 @@ def _coerce_thresh_mode_value(value: object) -> str | None:
     return value
 
 
+def _coerce_iter_id_value(value: object) -> int | None:
+    out = coerce_optional_int('iter_id', value)
+    if out is None:
+        return None
+    if int(out) < 0:
+        msg = f'config[iter_id] must be >= 0, got {out}'
+        raise ValueError(msg)
+    return int(out)
+
+
 def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
     loaded = load_yaml_dict(config_path)
 
     allowed_keys = {
         'in_path',
         'out_root',
+        'iter_id',
         'segy_exts',
         'mode',
         'stage1_ckpt',
@@ -122,6 +134,7 @@ def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
     coercers = {
         'in_path': partial(coerce_path, 'in_path', allow_none=False),
         'out_root': partial(coerce_path, 'out_root', allow_none=True),
+        'iter_id': _coerce_iter_id_value,
         'segy_exts': normalize_segy_exts,
         'mode': _coerce_mode_value,
         'stage1_ckpt': partial(coerce_path, 'stage1_ckpt', allow_none=False),
@@ -158,6 +171,9 @@ def main() -> None:
     mode = str(args.mode) if args.mode is not None else 'infer_only'
     if mode not in _ALLOWED_MODES:
         msg = f'mode must be one of {sorted(_ALLOWED_MODES)}, got {mode!r}'
+        raise ValueError(msg)
+    if args.iter_id is not None and int(args.iter_id) < 0:
+        msg = f'--iter-id must be >= 0, got {args.iter_id}'
         raise ValueError(msg)
 
     skip_stage4 = bool(args.skip_stage4) if args.skip_stage4 is not None else False

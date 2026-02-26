@@ -45,6 +45,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument('--stage4-ckpt', type=Path, default=None)
     p.add_argument('--stage4-cfg-yaml', type=Path, default=None)
     p.add_argument('--out-root', type=Path, default=None)
+    p.add_argument('--iter-id', type=int, default=None)
     p.add_argument('--segy-exts', type=str, default=None)
     p.add_argument('--thresh-mode', choices=('global', 'per_segy'), default=None)
     p.add_argument('--viz-every-n-shots', type=int, default=None)
@@ -63,6 +64,16 @@ def _coerce_thresh_mode_value(value: object) -> str | None:
     return value
 
 
+def _coerce_iter_id_value(value: object) -> int | None:
+    out = coerce_optional_int('iter_id', value)
+    if out is None:
+        return None
+    if int(out) < 0:
+        msg = f'config[iter_id] must be >= 0, got {out}'
+        raise ValueError(msg)
+    return int(out)
+
+
 def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
     loaded = load_yaml_dict(config_path)
 
@@ -73,6 +84,7 @@ def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
         'stage4_ckpt',
         'stage4_cfg_yaml',
         'out_root',
+        'iter_id',
         'segy_exts',
         'thresh_mode',
         'viz_every_n_shots',
@@ -84,6 +96,7 @@ def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
         'stage4_ckpt': partial(coerce_path, 'stage4_ckpt', allow_none=False),
         'stage4_cfg_yaml': partial(coerce_path, 'stage4_cfg_yaml', allow_none=True),
         'out_root': partial(coerce_path, 'out_root', allow_none=True),
+        'iter_id': _coerce_iter_id_value,
         'segy_exts': normalize_segy_exts,
         'thresh_mode': _coerce_thresh_mode_value,
         'viz_every_n_shots': partial(coerce_optional_int, 'viz_every_n_shots'),
@@ -108,6 +121,9 @@ def main() -> None:
 
     if args.in_path is None:
         raise ValueError('missing required argument: --in (or config.in_path)')
+    if args.iter_id is not None and int(args.iter_id) < 0:
+        msg = f'--iter-id must be >= 0, got {args.iter_id}'
+        raise ValueError(msg)
     if args.stage1_ckpt is None:
         raise ValueError(
             'missing required argument: --stage1-ckpt (or config.stage1_ckpt)'

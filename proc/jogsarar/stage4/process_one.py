@@ -5,6 +5,11 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from common.lineage import (
+    cfg_hash as _cfg_hash,
+    lineage_npz_payload,
+    read_git_sha,
+)
 from common.segy_io import load_traces_by_indices
 from jogsarar_shared import build_key_to_indices, compute_residual_statics_metrics
 from stage4.io import open_and_load_stage4_inputs
@@ -14,6 +19,25 @@ from stage4.outputs import (
     write_stage4_pred_npz,
 )
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_GIT_SHA = read_git_sha(_REPO_ROOT)
+
+
+def _resolve_source_model_id_from_cfg(cfg) -> str:
+    configured = getattr(cfg, 'source_model_id', None)
+    if isinstance(configured, str) and configured != '':
+        return configured
+
+    ckpt_path = getattr(cfg, 'ckpt_path', None)
+    if ckpt_path is not None:
+        return Path(ckpt_path).name
+
+    cfg_yaml = getattr(cfg, 'cfg_yaml', None)
+    if cfg_yaml is not None:
+        return Path(cfg_yaml).name
+
+    return ''
 
 
 def process_one_pair(
@@ -332,6 +356,12 @@ def process_one_pair(
         rs_valid_mask=rs_valid_mask,
         pick_rs_i=pick_rs_i,
         pick_final=pick_final,
+        lineage=lineage_npz_payload(
+            iter_id=getattr(cfg, 'iter_id', None),
+            source_model_id=_resolve_source_model_id_from_cfg(cfg),
+            cfg_hash=_cfg_hash(cfg),
+            git_sha=_GIT_SHA,
+        ),
     )
 
     write_stage4_crd(

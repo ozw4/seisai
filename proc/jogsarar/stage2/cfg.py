@@ -9,6 +9,8 @@ class Stage2Cfg:
     in_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
     in_infer_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_out')
     out_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_psn512')
+    iter_id: int = 0
+    source_model_id: str | None = None
     segy_exts: tuple[str, ...] = ('.sgy', '.segy')
     half_win: int = 128
     up_factor: int = 2
@@ -51,6 +53,9 @@ DEFAULT_STAGE2_CFG = Stage2Cfg()
 
 
 def _validate_stage2_threshold_cfg(*, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG) -> None:
+    if int(cfg.iter_id) < 0:
+        msg = f'iter_id must be >= 0, got {cfg.iter_id}'
+        raise ValueError(msg)
     if cfg.thresh_mode not in ('global', 'per_segy'):
         msg = f"thresh_mode must be 'global' or 'per_segy', got {cfg.thresh_mode!r}"
         raise ValueError(msg)
@@ -64,6 +69,9 @@ def _validate_stage2_threshold_cfg(*, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG) -> No
 
 def validate_stage2_cfg(*, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG) -> None:
     _validate_stage2_threshold_cfg(cfg=cfg)
+    if int(cfg.iter_id) < 0:
+        msg = f'iter_id must be >= 0, got {cfg.iter_id}'
+        raise ValueError(msg)
 
 
 __all__ = [
