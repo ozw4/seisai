@@ -4,67 +4,28 @@
 
 Examples:
   # directory input
-  # python proc/jogsarar/run_stage124.py --in /data/jogsarar --stage1-ckpt /w/stage1.pth --stage4-ckpt /w/stage4.pt --out-root /data/out
+  # python -m proc.jogsarar.run_stage124 --in /data/jogsarar --stage1-ckpt /w/stage1.pth --stage4-ckpt /w/stage4.pt --out-root /data/out
   # single file input
-  # python proc/jogsarar/run_stage124.py --in /data/jogsarar/a.sgy --stage1-ckpt /w/stage1.pth --stage4-ckpt /w/stage4.pt --stage4-cfg-yaml proc/jogsarar/configs/config_convnext_prestage2_drop005.yaml
+  # python -m proc.jogsarar.run_stage124 --in /data/jogsarar/a.sgy --stage1-ckpt /w/stage1.pth --stage4-ckpt /w/stage4.pt --stage4-cfg-yaml proc/jogsarar/configs/config_convnext_prestage2_drop005.yaml
   # YAML config input
-  # python proc/jogsarar/run_stage124.py --config config_run124.yaml
+  # python -m proc.jogsarar.run_stage124 --config proc/jogsarar/configs/run124.yaml
 
 """
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
 from pathlib import Path
 
-import stage1_fbp_infer_raw as stage1
-import stage2_make_psn512_windows as stage2
-import stage4_psn512_infer_to_raw as stage4
-from jogsarar_shared import find_segy_files
-
-
-def _parse_segy_exts(text: str) -> tuple[str, ...]:
-    vals = [x.strip() for x in text.split(',')]
-    out: list[str] = []
-    for v in vals:
-        if not v:
-            continue
-        e = v.lower()
-        if not e.startswith('.'):
-            e = '.' + e
-        out.append(e)
-    if len(out) == 0:
-        msg = f'--segy-exts produced empty list: {text!r}'
-        raise ValueError(msg)
-    return tuple(out)
-
-
-def _resolve_input_paths(
-    in_path: Path,
-    *,
-    segy_exts: tuple[str, ...],
-) -> tuple[Path, list[Path]]:
-    p = Path(in_path).expanduser().resolve()
-    if not p.exists():
-        msg = f'--in not found: {p}'
-        raise FileNotFoundError(msg)
-
-    if p.is_file():
-        if p.suffix.lower() not in segy_exts:
-            msg = f'--in file extension must be one of {segy_exts}, got {p.suffix}'
-            raise ValueError(msg)
-        return p.parent, [p]
-
-    if not p.is_dir():
-        msg = f'--in must be file or directory: {p}'
-        raise NotADirectoryError(msg)
-
-    segys = find_segy_files(p, exts=segy_exts, recursive=True)
-    if len(segys) == 0:
-        msg = f'no segy files found under: {p}'
-        raise RuntimeError(msg)
-    return p, segys
+from _runner_common import (
+    coerce_optional_int_value,
+    coerce_path_value,
+    load_config,
+    main_common,
+    normalize_segy_exts,
+    parse_args_with_yaml_defaults,
+    resolve_existing_file,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -88,50 +49,24 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _coerce_path_value(
-    key: str, value: object, *, allow_none: bool = False
-) -> Path | None:
-    if value is None:
-        if allow_none:
-            return None
-        msg = f'config[{key}] must not be null'
-        raise TypeError(msg)
-    if isinstance(value, Path):
-        return value
-    if isinstance(value, str):
-        return Path(value)
-    msg = f'config[{key}] must be str or Path, got {type(value).__name__}'
-    raise TypeError(msg)
-
-
 def _coerce_segy_exts_value(value: object) -> tuple[str, ...]:
-    if isinstance(value, str):
-        return _parse_segy_exts(value)
-    if isinstance(value, list):
-        if len(value) == 0:
-            raise ValueError('config[segy_exts] must not be empty')
-        for i, v in enumerate(value):
-            if not isinstance(v, str):
-                msg = f'config[segy_exts][{i}] must be str, got {type(v).__name__}'
-                raise TypeError(msg)
-        return _parse_segy_exts(','.join(value))
-    msg = f'config[segy_exts] must be str or list[str], got {type(value).__name__}'
-    raise TypeError(msg)
+    return normalize_segy_exts(value)
+
+
+def _coerce_thresh_mode_value(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f'config[thresh_mode] must be str, got {type(value).__name__}'
+        raise TypeError(msg)
+    if value not in {'global', 'per_segy'}:
+        msg = f"config[thresh_mode] must be 'global' or 'per_segy', got {value!r}"
+        raise ValueError(msg)
+    return value
 
 
 def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
-    cfg_path = Path(config_path).expanduser().resolve()
-    if not cfg_path.is_file():
-        msg = f'--config not found: {cfg_path}'
-        raise FileNotFoundError(msg)
-
-    import yaml
-
-    with cfg_path.open('r', encoding='utf-8') as f:
-        loaded = yaml.safe_load(f)
-    if not isinstance(loaded, dict):
-        msg = f'config top-level must be dict, got {type(loaded).__name__}'
-        raise TypeError(msg)
+    loaded = load_config(config_path)
 
     allowed_keys = {
         'in_path',
@@ -151,48 +86,29 @@ def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
     defaults: dict[str, object] = {}
     for key, value in loaded.items():
         if key in {'in_path', 'stage1_ckpt', 'stage4_ckpt'}:
-            defaults[key] = _coerce_path_value(key, value, allow_none=False)
+            defaults[key] = coerce_path_value(key, value, allow_none=False)
             continue
         if key in {'stage4_cfg_yaml', 'out_root'}:
-            defaults[key] = _coerce_path_value(key, value, allow_none=True)
+            defaults[key] = coerce_path_value(key, value, allow_none=True)
             continue
         if key == 'segy_exts':
             defaults[key] = _coerce_segy_exts_value(value)
             continue
         if key == 'thresh_mode':
-            if value is None:
-                defaults[key] = None
-                continue
-            if not isinstance(value, str):
-                msg = f'config[{key}] must be str, got {type(value).__name__}'
-                raise TypeError(msg)
-            if value not in {'global', 'per_segy'}:
-                msg = f"config[{key}] must be 'global' or 'per_segy', got {value!r}"
-                raise ValueError(msg)
-            defaults[key] = value
+            defaults[key] = _coerce_thresh_mode_value(value)
             continue
         if key == 'viz_every_n_shots':
-            if value is None:
-                defaults[key] = None
-                continue
-            if not isinstance(value, int) or isinstance(value, bool):
-                msg = f'config[{key}] must be int, got {type(value).__name__}'
-                raise TypeError(msg)
-            defaults[key] = int(value)
+            defaults[key] = coerce_optional_int_value(key, value)
             continue
     return defaults
 
 
 def _parse_args() -> argparse.Namespace:
-    pre = argparse.ArgumentParser(add_help=False)
-    pre.add_argument('--config', type=Path, default=None)
-    pre_args, _unknown = pre.parse_known_args()
-
     parser = _build_parser()
-    if pre_args.config is not None:
-        yaml_defaults = _load_yaml_defaults(pre_args.config)
-        parser.set_defaults(**yaml_defaults)
-    return parser.parse_args()
+    return parse_args_with_yaml_defaults(
+        parser,
+        load_yaml_defaults=_load_yaml_defaults,
+    )
 
 
 def main() -> None:
@@ -209,116 +125,27 @@ def main() -> None:
             'missing required argument: --stage4-ckpt (or config.stage4_ckpt)'
         )
 
-    stage1_ckpt = Path(args.stage1_ckpt).expanduser().resolve()
-    if not stage1_ckpt.is_file():
-        msg = f'--stage1-ckpt not found: {stage1_ckpt}'
-        raise FileNotFoundError(msg)
-
-    stage4_ckpt = Path(args.stage4_ckpt).expanduser().resolve()
-    if not stage4_ckpt.is_file():
-        msg = f'--stage4-ckpt not found: {stage4_ckpt}'
-        raise FileNotFoundError(msg)
+    stage1_ckpt = resolve_existing_file(args.stage1_ckpt, context='--stage1-ckpt')
+    stage4_ckpt = resolve_existing_file(args.stage4_ckpt, context='--stage4-ckpt')
 
     stage4_cfg_yaml: Path | None = None
     if args.stage4_cfg_yaml is not None:
-        stage4_cfg_yaml = Path(args.stage4_cfg_yaml).expanduser().resolve()
-        if not stage4_cfg_yaml.is_file():
-            msg = f'--stage4-cfg-yaml not found: {stage4_cfg_yaml}'
-            raise FileNotFoundError(msg)
+        stage4_cfg_yaml = resolve_existing_file(
+            args.stage4_cfg_yaml, context='--stage4-cfg-yaml'
+        )
 
-    if args.segy_exts is None:
-        segy_exts = tuple(stage2.DEFAULT_STAGE2_CFG.segy_exts)
-    elif isinstance(args.segy_exts, tuple):
-        segy_exts = tuple(args.segy_exts)
-    else:
-        segy_exts = _parse_segy_exts(args.segy_exts)
-
-    in_root, segy_paths = _resolve_input_paths(args.in_path, segy_exts=segy_exts)
-
-    if args.out_root is not None:
-        out_root = Path(args.out_root).expanduser().resolve()
-        if out_root.exists() and not out_root.is_dir():
-            msg = f'--out-root must be a directory path: {out_root}'
-            raise NotADirectoryError(msg)
-        stage1_out = out_root / 'stage1'
-        stage2_out = out_root / 'stage2_win512'
-        stage4_out = out_root / 'stage4_pred'
-    else:
-        stage1_out = Path(stage2.DEFAULT_STAGE2_CFG.in_infer_root)
-        stage2_out = Path(stage2.DEFAULT_STAGE2_CFG.out_segy_root)
-        stage4_out = Path(stage4.DEFAULT_STAGE4_CFG.out_pred_root)
-
-    print(f'[PIPELINE] input_root={in_root} files={len(segy_paths)}')
-    print(f'[PIPELINE] stage1_out={stage1_out}')
-    print(f'[PIPELINE] stage2_out={stage2_out}')
-    print(f'[PIPELINE] stage4_out={stage4_out}')
-
-    print(f'[PIPELINE] stage1 start target={len(segy_paths)} skip=0')
-    stage1.run_stage1(
-        in_segy_root=in_root,
-        out_infer_root=stage1_out,
-        weights_path=stage1_ckpt,
-        segy_paths=segy_paths,
-        segy_exts=segy_exts,
-        recursive=True,
-        viz_every_n_shots=stage1.VIZ_EVERY_N_SHOTS,
-        viz_dirname=stage1.VIZ_DIRNAME,
+    main_common(
+        args,
+        stages=('stage1', 'stage2', 'stage4'),
+        stage1_ckpt=stage1_ckpt,
+        stage2_thresh_mode=str(args.thresh_mode)
+        if args.thresh_mode is not None
+        else None,
+        stage2_emit_training_artifacts=True,
+        stage4_ckpt=stage4_ckpt,
+        stage4_cfg_yaml=stage4_cfg_yaml,
+        completion_message='[PIPELINE] completed stage1->stage2->stage4',
     )
-    print(f'[PIPELINE] stage1 done processed={len(segy_paths)} skip=0')
-
-    stage2_cfg = replace(
-        stage2.DEFAULT_STAGE2_CFG,
-        in_segy_root=in_root,
-        in_infer_root=stage1_out,
-        out_segy_root=stage2_out,
-        segy_exts=segy_exts,
-    )
-    if args.thresh_mode is not None:
-        stage2_cfg = replace(stage2_cfg, thresh_mode=str(args.thresh_mode))
-
-    stage2_skip = 0
-    for p in segy_paths:
-        infer_npz = stage2.infer_npz_path_for_segy(p, cfg=stage2_cfg)
-        if not infer_npz.exists():
-            stage2_skip += 1
-    stage2_target = len(segy_paths) - stage2_skip
-
-    print(f'[PIPELINE] stage2 start target={stage2_target} skip={stage2_skip}')
-    stage2.run_stage2(cfg=stage2_cfg, segy_paths=segy_paths)
-    print(f'[PIPELINE] stage2 done processed={stage2_target} skip={stage2_skip}')
-
-    stage4_cfg = replace(
-        stage4.DEFAULT_STAGE4_CFG,
-        in_raw_segy_root=in_root,
-        in_win512_segy_root=stage2_out,
-        out_pred_root=stage4_out,
-        segy_exts=segy_exts,
-        cfg_yaml=stage4_cfg_yaml,
-        ckpt_path=stage4_ckpt,
-    )
-    if args.viz_every_n_shots is not None:
-        stage4_cfg = replace(stage4_cfg, viz_every_n_shots=int(args.viz_every_n_shots))
-
-    win_lookup = stage4._build_win512_lookup(
-        stage4_cfg.in_win512_segy_root, cfg=stage4_cfg
-    )
-    stage4_skip = 0
-    for raw_path in segy_paths:
-        rel = raw_path.relative_to(stage4_cfg.in_raw_segy_root)
-        key = (rel.parent.as_posix(), rel.stem)
-        win_path = win_lookup.get(key)
-        if win_path is None:
-            stage4_skip += 1
-            continue
-        if stage4._resolve_sidecar_path(win_path) is None:
-            stage4_skip += 1
-            continue
-    stage4_target = len(segy_paths) - stage4_skip
-
-    print(f'[PIPELINE] stage4 start target={stage4_target} skip={stage4_skip}')
-    stage4.run_stage4(cfg=stage4_cfg, raw_paths=segy_paths)
-    print(f'[PIPELINE] stage4 done processed={stage4_target} skip={stage4_skip}')
-    print('[PIPELINE] completed stage1->stage2->stage4')
 
 
 if __name__ == '__main__':

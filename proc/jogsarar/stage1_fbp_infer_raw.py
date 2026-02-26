@@ -988,9 +988,7 @@ def process_one_segy(
                     pick_out_i = pick_ref_i
                     rs_label = f'refine({base_label})'
 
-                hist_last = (
-                    rs_metrics.history[-1] if rs_metrics.history else {}
-                )
+                hist_last = rs_metrics.history[-1] if rs_metrics.history else {}
                 mean_cmax = float(hist_last.get('mean_cmax', 0.0))
                 mean_abs_update = float(hist_last.get('mean_abs_update', 0.0))
                 n_valid_hist = int(hist_last.get('n_valid', 0))

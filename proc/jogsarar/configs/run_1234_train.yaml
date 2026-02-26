@@ -1,6 +1,6 @@
 # proc/jogsarar/configs/run1234_train.yaml
 mode: train
-in_path: /path/to/train_data
+in_path: /home/dcuser/data/ActiveSeisField/jogsarar/infer_only
 stage1_ckpt: /path/to/stage1.pth
 stage3_config: /path/to/stage3_train_config.yaml
 stage4_ckpt: /path/to/stage4.pt

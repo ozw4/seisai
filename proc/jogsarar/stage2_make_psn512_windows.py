@@ -9,13 +9,16 @@ import segyio
 import torch
 from jogsarar_shared import (
     build_groups_by_key,
-    compute_conf_trend1_from_trend as compute_conf_trend1_from_trend_shared,
     find_segy_files,
     read_trace_field,
     require_npz_key,
     valid_pick_mask,
 )
+from jogsarar_shared import (
+    compute_conf_trend1_from_trend as compute_conf_trend1_from_trend_shared,
+)
 from seisai_pick.trend.trend_fit_strategy import TwoPieceIRLSAutoBreakStrategy
+
 
 # =========================
 # CONFIG（ここだけ触ればOK）
@@ -1510,10 +1513,7 @@ def _build_phase_pick_csr_npz(
 
 def _validate_stage2_threshold_cfg(*, cfg: Stage2Cfg = DEFAULT_STAGE2_CFG) -> None:
     if cfg.thresh_mode not in ('global', 'per_segy'):
-        msg = (
-            "thresh_mode must be 'global' or 'per_segy', "
-            f'got {cfg.thresh_mode!r}'
-        )
+        msg = f"thresh_mode must be 'global' or 'per_segy', got {cfg.thresh_mode!r}"
         raise ValueError(msg)
     if (not bool(cfg.emit_training_artifacts)) and cfg.thresh_mode == 'global':
         msg = (
@@ -1761,7 +1761,9 @@ def process_one_segy(
             trend_center_i_global=trend_center_i_global.astype(np.float32, copy=False),
             nn_replaced_mask=nn_replaced_mask.astype(bool, copy=False),
             global_replaced_mask=global_replaced_mask.astype(bool, copy=False),
-            global_missing_filled_mask=global_missing_filled_mask.astype(bool, copy=False),
+            global_missing_filled_mask=global_missing_filled_mask.astype(
+                bool, copy=False
+            ),
             global_edges_all=global_edges_all.astype(np.float32, copy=False),
             global_coef_all=global_coef_all.astype(np.float32, copy=False),
             global_edges_left=global_edges_left.astype(np.float32, copy=False),
