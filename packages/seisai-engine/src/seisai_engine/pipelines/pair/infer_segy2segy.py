@@ -16,12 +16,17 @@ from seisai_utils.config import (
     require_dict,
 )
 from seisai_utils.segy_write import write_segy_float32_like_input_with_text0_append
-from seisai_utils.validator import require_positive_float as _require_positive_float
 
 from seisai_engine.infer.ffid_segy2segy import (
     Tiled2DConfig,
     _infer_hw_denorm_like_input,
     run_ffid_gather_infer_core,
+)
+from seisai_engine.infer.infer_cfg_common import (
+    resolve_standardize_eps as _resolve_standardize_eps,
+)
+from seisai_engine.infer.infer_cfg_common import (
+    resolve_tta_requested as _resolve_tta_requested,
 )
 from seisai_engine.infer.segy2segy_infer_common import parse_infer_common
 from seisai_engine.infer.segy2segy_cli_common import (
@@ -116,36 +121,6 @@ apply_unknown_overrides = partial(
     _apply_unknown_overrides,
     safe_paths=_SAFE_OVERRIDE_PATHS,
 )
-
-
-def _resolve_standardize_eps(cfg: dict[str, Any]) -> float:
-    infer_cfg = require_dict(cfg, 'infer')
-    eps_raw = infer_cfg.get('standardize_eps')
-    if eps_raw is not None:
-        return _require_positive_float(eps_raw, name='infer.standardize_eps')
-
-    transform_cfg = cfg.get('transform')
-    if transform_cfg is not None:
-        if not isinstance(transform_cfg, dict):
-            msg = 'transform must be dict'
-            raise TypeError(msg)
-        if 'standardize_eps' in transform_cfg:
-            return _require_positive_float(
-                transform_cfg['standardize_eps'],
-                name='transform.standardize_eps',
-            )
-
-    return 1.0e-8
-
-
-def _resolve_tta_requested(cfg: dict[str, Any]) -> list[Any]:
-    tta_obj = cfg.get('tta', [])
-    if tta_obj is None:
-        return []
-    if not isinstance(tta_obj, list):
-        msg = 'tta must be list or null'
-        raise TypeError(msg)
-    return list(tta_obj)
 
 
 def _build_model_from_ckpt(
