@@ -2,24 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import numpy as np
-import segyio
 import torch
-from common.paths import (
-    stage4_pred_crd_path as _stage4_pred_crd_path,
-    stage4_pred_npz_path as _stage4_pred_npz_path,
-    stage4_pred_out_dir as _stage4_pred_out_dir,
-)
-from common.segy_io import (
-    load_traces_by_indices,
-    read_trace_field,
-    require_expected_samples,
-    require_matching_tracecount,
-)
+from common.segy_io import load_traces_by_indices
 from jogsarar_shared import build_key_to_indices, compute_residual_statics_metrics
-from seisai_pick.pickio.io_grstat import numpy2fbcrd
+from stage4.io import open_and_load_stage4_inputs
+from stage4.outputs import (
+    resolve_stage4_out_paths,
+    write_stage4_crd,
+    write_stage4_pred_npz,
+)
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 
 
@@ -39,107 +32,26 @@ def process_one_pair(
     align_post_trough_shifts_to_neighbors_fn: Callable[..., np.ndarray],
     save_gather_viz_fn: Callable[..., None],
 ) -> None:
-    out_dir = _stage4_pred_out_dir(
-        raw_path,
-        in_raw_root=cfg.in_raw_segy_root,
-        out_pred_root=cfg.out_pred_root,
-    )
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir, out_npz, out_crd = resolve_stage4_out_paths(raw_path=raw_path, cfg=cfg)
 
-    out_npz = _stage4_pred_npz_path(
-        raw_path,
-        in_raw_root=cfg.in_raw_segy_root,
-        out_pred_root=cfg.out_pred_root,
-    )
-    out_crd = _stage4_pred_crd_path(
-        raw_path,
-        in_raw_root=cfg.in_raw_segy_root,
-        out_pred_root=cfg.out_pred_root,
-    )
-
-    with (
-        segyio.open(str(raw_path), 'r', ignore_geometry=True) as raw,
-        segyio.open(str(win_path), 'r', ignore_geometry=True) as win,
+    with open_and_load_stage4_inputs(
+        raw_path=raw_path,
+        win_path=win_path,
+        sidecar_path=sidecar_path,
+        cfg=cfg,
+        load_sidecar_window_start_fn=load_sidecar_window_start_fn,
+    ) as (
+        inputs,
+        raw,
+        win,
     ):
-        n_traces = require_matching_tracecount(
-            raw,
-            win,
-            raw_path=raw_path,
-            win_path=win_path,
-        )
-        if n_traces <= 0:
-            msg = f'no traces in raw segy: {raw_path}'
-            raise ValueError(msg)
-
-        n_samples_raw = int(raw.samples.size)
-        n_samples_win = int(win.samples.size)
-        if n_samples_raw <= 0 or n_samples_win <= 0:
-            msg = (
-                f'invalid n_samples raw={n_samples_raw} win={n_samples_win} '
-                f'raw={raw_path} win={win_path}'
-            )
-            raise ValueError(msg)
-        require_expected_samples(
-            win,
-            expected=int(cfg.tile_w),
-            win_path=win_path,
-        )
-        dt_us_raw = int(raw.bin[segyio.BinField.Interval])
-        dt_us_win = int(win.bin[segyio.BinField.Interval])
-        if dt_us_raw <= 0 or dt_us_win <= 0:
-            msg = f'invalid dt_us raw={dt_us_raw} win={dt_us_win}'
-            raise ValueError(msg)
-        dt_sec_raw = float(dt_us_raw) * 1.0e-6
-        dt_sec_win = float(dt_us_win) * 1.0e-6
-
-        ffid_values = read_trace_field(
-            raw,
-            segyio.TraceField.FieldRecord,
-            dtype=np.int32,
-            name='raw ffid_values',
-        )
-        chno_values = read_trace_field(
-            raw,
-            segyio.TraceField.TraceNumber,
-            dtype=np.int32,
-            name='raw chno_values',
-        )
-        offsets = read_trace_field(
-            raw,
-            segyio.TraceField.offset,
-            dtype=np.float32,
-            name='raw offsets',
-        )
-
-        ffid_win = read_trace_field(
-            win,
-            segyio.TraceField.FieldRecord,
-            dtype=np.int32,
-            name='win ffid_values',
-        )
-        chno_win = read_trace_field(
-            win,
-            segyio.TraceField.TraceNumber,
-            dtype=np.int32,
-            name='win chno_values',
-        )
-
-        if not np.array_equal(ffid_values, ffid_win):
-            msg = f'raw/win ffid arrays differ (index mapping would break): {raw_path}'
-            raise ValueError(msg)
-        if not np.array_equal(chno_values, chno_win):
-            msg = f'raw/win chno arrays differ (index mapping would break): {raw_path}'
-            raise ValueError(msg)
-
-        window_start_i = load_sidecar_window_start_fn(
-            sidecar_path=sidecar_path,
-            n_traces=n_traces,
-            n_samples_in=n_samples_raw,
-            n_samples_out=n_samples_win,
-            dt_sec_in=dt_sec_raw,
-            dt_sec_out=dt_sec_win,
-            cfg=cfg,
-        )
+        n_traces = int(inputs.n_traces)
+        n_samples_raw = int(inputs.n_samples_raw)
+        dt_sec_raw = float(inputs.dt_sec_raw)
+        ffid_values = inputs.ffid_values
+        chno_values = inputs.chno_values
+        offsets = inputs.offsets
+        window_start_i = inputs.window_start_i
 
         pick_psn512 = np.zeros(n_traces, dtype=np.int32)
         pmax_psn = np.zeros(n_traces, dtype=np.float32)
@@ -402,36 +314,31 @@ def process_one_pair(
                     f'mean_cmax={mean_cmax:.3f}'
                 )
 
-    trace_indices = np.arange(n_traces, dtype=np.int64)
-    np.savez_compressed(
-        out_npz,
-        dt_sec=np.float32(dt_sec_raw),
-        n_samples_orig=np.int32(n_samples_raw),
-        n_traces=np.int32(n_traces),
-        ffid_values=ffid_values.astype(np.int32, copy=False),
-        chno_values=chno_values.astype(np.int32, copy=False),
-        offsets=offsets.astype(np.float32, copy=False),
-        trace_indices=trace_indices,
-        pick_psn512=pick_psn512.astype(np.int32, copy=False),
-        pmax_psn=pmax_psn.astype(np.float32, copy=False),
-        window_start_i=window_start_i.astype(np.int64, copy=False),
-        pick_psn_orig_f=pick_psn_orig_f.astype(np.float32, copy=False),
-        pick_psn_orig_i=pick_psn_orig_i.astype(np.int32, copy=False),
-        delta_pick_rs=delta_pick_rs.astype(np.float32, copy=False),
-        cmax_rs=cmax_rs.astype(np.float32, copy=False),
-        rs_valid_mask=rs_valid_mask.astype(bool, copy=False),
-        pick_rs_i=pick_rs_i.astype(np.int32, copy=False),
-        pick_final=pick_final.astype(np.int32, copy=False),
+    write_stage4_pred_npz(
+        out_npz=out_npz,
+        dt_sec_raw=dt_sec_raw,
+        n_samples_raw=n_samples_raw,
+        n_traces=n_traces,
+        ffid_values=ffid_values,
+        chno_values=chno_values,
+        offsets=offsets,
+        pick_psn512=pick_psn512,
+        pmax_psn=pmax_psn,
+        window_start_i=window_start_i,
+        pick_psn_orig_f=pick_psn_orig_f,
+        pick_psn_orig_i=pick_psn_orig_i,
+        delta_pick_rs=delta_pick_rs,
+        cmax_rs=cmax_rs,
+        rs_valid_mask=rs_valid_mask,
+        pick_rs_i=pick_rs_i,
+        pick_final=pick_final,
     )
 
-    numpy2fbcrd(
-        dt=float(dt_sec_raw * 1000.0),
-        fbnum=fb_mat,
-        gather_range=ffids_sorted,
-        output_name=str(out_crd),
-        original=None,
-        mode='gather',
-        header_comment='machine learning fb pick',
+    write_stage4_crd(
+        out_crd=out_crd,
+        dt_ms=float(dt_sec_raw * 1000.0),
+        fb_mat=fb_mat,
+        ffids_sorted=ffids_sorted,
     )
 
     print(
