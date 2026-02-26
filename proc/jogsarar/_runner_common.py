@@ -7,6 +7,15 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+from config_io import (
+    coerce_optional_bool as _coerce_optional_bool,
+    coerce_optional_float as _coerce_optional_float,
+    coerce_optional_int as _coerce_optional_int,
+    coerce_path as _coerce_path,
+    load_yaml_dict as _load_yaml_dict,
+    normalize_segy_exts as _normalize_segy_exts,
+    parse_args_with_yaml_defaults as _parse_args_with_yaml_defaults,
+)
 import stage1_fbp_infer_raw as stage1
 import stage2_make_psn512_windows as stage2
 import stage4_psn512_infer_to_raw as stage4
@@ -23,19 +32,7 @@ _STAGE_NAMES = {'stage1', 'stage2', 'stage3', 'stage4'}
 
 
 def load_config(config_path: Path) -> dict[str, object]:
-    cfg_path = Path(config_path).expanduser().resolve()
-    if not cfg_path.is_file():
-        msg = f'--config not found: {cfg_path}'
-        raise FileNotFoundError(msg)
-
-    import yaml
-
-    with cfg_path.open('r', encoding='utf-8') as f:
-        loaded = yaml.safe_load(f)
-    if not isinstance(loaded, dict):
-        msg = f'config top-level must be dict, got {type(loaded).__name__}'
-        raise TypeError(msg)
-    return loaded
+    return _load_yaml_dict(config_path)
 
 
 def parse_args_with_yaml_defaults(
@@ -43,84 +40,29 @@ def parse_args_with_yaml_defaults(
     *,
     load_yaml_defaults: Callable[[Path], dict[str, object]],
 ) -> argparse.Namespace:
-    pre = argparse.ArgumentParser(add_help=False)
-    pre.add_argument('--config', type=Path, default=None)
-    pre_args, _unknown = pre.parse_known_args()
-    if pre_args.config is not None:
-        parser.set_defaults(**load_yaml_defaults(pre_args.config))
-    return parser.parse_args()
+    return _parse_args_with_yaml_defaults(parser, load_defaults=load_yaml_defaults)
 
 
 def coerce_path_value(
     key: str, value: object, *, allow_none: bool = False
 ) -> Path | None:
-    if value is None:
-        if allow_none:
-            return None
-        msg = f'config[{key}] must not be null'
-        raise TypeError(msg)
-    if isinstance(value, Path):
-        return value
-    if isinstance(value, str):
-        return Path(value)
-    msg = f'config[{key}] must be str or Path, got {type(value).__name__}'
-    raise TypeError(msg)
+    return _coerce_path(key, value, allow_none=allow_none)
 
 
 def coerce_optional_int_value(key: str, value: object) -> int | None:
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool):
-        msg = f'config[{key}] must be int, got {type(value).__name__}'
-        raise TypeError(msg)
-    return int(value)
+    return _coerce_optional_int(key, value)
 
 
 def coerce_optional_bool_value(key: str, value: object) -> bool | None:
-    if value is None:
-        return None
-    if not isinstance(value, bool):
-        msg = f'config[{key}] must be bool, got {type(value).__name__}'
-        raise TypeError(msg)
-    return bool(value)
+    return _coerce_optional_bool(key, value)
 
 
 def coerce_optional_float_value(key: str, value: object) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        msg = f'config[{key}] must be float, got {type(value).__name__}'
-        raise TypeError(msg)
-    return float(value)
+    return _coerce_optional_float(key, value)
 
 
 def normalize_segy_exts(value: object) -> tuple[str, ...]:
-    if isinstance(value, str):
-        vals = [x.strip() for x in value.split(',')]
-        out: list[str] = []
-        for v in vals:
-            if not v:
-                continue
-            e = v.lower()
-            if not e.startswith('.'):
-                e = '.' + e
-            out.append(e)
-        if len(out) == 0:
-            msg = f'--segy-exts produced empty list: {value!r}'
-            raise ValueError(msg)
-        return tuple(out)
-
-    if isinstance(value, list):
-        if len(value) == 0:
-            raise ValueError('config[segy_exts] must not be empty')
-        for i, v in enumerate(value):
-            if not isinstance(v, str):
-                msg = f'config[segy_exts][{i}] must be str, got {type(v).__name__}'
-                raise TypeError(msg)
-        return normalize_segy_exts(','.join(value))
-
-    msg = f'config[segy_exts] must be str or list[str], got {type(value).__name__}'
-    raise TypeError(msg)
+    return _normalize_segy_exts(value)
 
 
 def collect_inputs(

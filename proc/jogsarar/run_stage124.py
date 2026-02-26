@@ -15,16 +15,17 @@ Examples:
 from __future__ import annotations
 
 import argparse
+from functools import partial
 from pathlib import Path
 
-from _runner_common import (
-    coerce_optional_int_value,
-    coerce_path_value,
-    load_config,
-    main_common,
+from _runner_common import main_common, resolve_existing_file
+from config_io import (
+    build_yaml_defaults,
+    coerce_optional_int,
+    coerce_path,
+    load_yaml_dict,
     normalize_segy_exts,
     parse_args_with_yaml_defaults,
-    resolve_existing_file,
 )
 
 
@@ -49,10 +50,6 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _coerce_segy_exts_value(value: object) -> tuple[str, ...]:
-    return normalize_segy_exts(value)
-
-
 def _coerce_thresh_mode_value(value: object) -> str | None:
     if value is None:
         return None
@@ -66,7 +63,7 @@ def _coerce_thresh_mode_value(value: object) -> str | None:
 
 
 def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
-    loaded = load_config(config_path)
+    loaded = load_yaml_dict(config_path)
 
     allowed_keys = {
         'in_path',
@@ -78,36 +75,28 @@ def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
         'thresh_mode',
         'viz_every_n_shots',
     }
-    unknown = sorted(set(loaded) - allowed_keys)
-    if unknown:
-        msg = f'unknown config keys: {unknown}'
-        raise ValueError(msg)
-
-    defaults: dict[str, object] = {}
-    for key, value in loaded.items():
-        if key in {'in_path', 'stage1_ckpt', 'stage4_ckpt'}:
-            defaults[key] = coerce_path_value(key, value, allow_none=False)
-            continue
-        if key in {'stage4_cfg_yaml', 'out_root'}:
-            defaults[key] = coerce_path_value(key, value, allow_none=True)
-            continue
-        if key == 'segy_exts':
-            defaults[key] = _coerce_segy_exts_value(value)
-            continue
-        if key == 'thresh_mode':
-            defaults[key] = _coerce_thresh_mode_value(value)
-            continue
-        if key == 'viz_every_n_shots':
-            defaults[key] = coerce_optional_int_value(key, value)
-            continue
-    return defaults
+    coercers = {
+        'in_path': partial(coerce_path, 'in_path', allow_none=False),
+        'stage1_ckpt': partial(coerce_path, 'stage1_ckpt', allow_none=False),
+        'stage4_ckpt': partial(coerce_path, 'stage4_ckpt', allow_none=False),
+        'stage4_cfg_yaml': partial(coerce_path, 'stage4_cfg_yaml', allow_none=True),
+        'out_root': partial(coerce_path, 'out_root', allow_none=True),
+        'segy_exts': normalize_segy_exts,
+        'thresh_mode': _coerce_thresh_mode_value,
+        'viz_every_n_shots': partial(coerce_optional_int, 'viz_every_n_shots'),
+    }
+    return build_yaml_defaults(
+        loaded,
+        allowed_keys=allowed_keys,
+        coercers=coercers,
+    )
 
 
 def _parse_args() -> argparse.Namespace:
     parser = _build_parser()
     return parse_args_with_yaml_defaults(
         parser,
-        load_yaml_defaults=_load_yaml_defaults,
+        load_defaults=_load_yaml_defaults,
     )
 
 
