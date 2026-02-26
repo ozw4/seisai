@@ -41,6 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument('--in', dest='in_path', type=Path, default=None)
     p.add_argument('--stage1-ckpt', type=Path, default=None)
+    p.add_argument('--stage1-cfg-yaml', type=Path, default=None)
     p.add_argument('--stage4-ckpt', type=Path, default=None)
     p.add_argument('--stage4-cfg-yaml', type=Path, default=None)
     p.add_argument('--out-root', type=Path, default=None)
@@ -68,6 +69,7 @@ def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
     allowed_keys = {
         'in_path',
         'stage1_ckpt',
+        'stage1_cfg_yaml',
         'stage4_ckpt',
         'stage4_cfg_yaml',
         'out_root',
@@ -78,6 +80,7 @@ def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
     coercers = {
         'in_path': partial(coerce_path, 'in_path', allow_none=False),
         'stage1_ckpt': partial(coerce_path, 'stage1_ckpt', allow_none=False),
+        'stage1_cfg_yaml': partial(coerce_path, 'stage1_cfg_yaml', allow_none=True),
         'stage4_ckpt': partial(coerce_path, 'stage4_ckpt', allow_none=False),
         'stage4_cfg_yaml': partial(coerce_path, 'stage4_cfg_yaml', allow_none=True),
         'out_root': partial(coerce_path, 'out_root', allow_none=True),
@@ -115,6 +118,11 @@ def main() -> None:
         )
 
     stage1_ckpt = resolve_existing_file(args.stage1_ckpt, context='--stage1-ckpt')
+    stage1_cfg_yaml: Path | None = None
+    if args.stage1_cfg_yaml is not None:
+        stage1_cfg_yaml = resolve_existing_file(
+            args.stage1_cfg_yaml, context='--stage1-cfg-yaml'
+        )
     stage4_ckpt = resolve_existing_file(args.stage4_ckpt, context='--stage4-ckpt')
 
     stage4_cfg_yaml: Path | None = None
@@ -127,6 +135,7 @@ def main() -> None:
         args,
         stages=('stage1', 'stage2', 'stage4'),
         stage1_ckpt=stage1_ckpt,
+        stage1_cfg_yaml=stage1_cfg_yaml,
         stage2_thresh_mode=str(args.thresh_mode)
         if args.thresh_mode is not None
         else None,

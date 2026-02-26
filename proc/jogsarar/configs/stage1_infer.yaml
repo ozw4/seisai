@@ -1,0 +1,86 @@
+in_segy_root: /home/dcuser/data/ActiveSeisField/jogsarar
+out_infer_root: /home/dcuser/data/ActiveSeisField/jogsarar_out
+weights_path: /home/dcuser/data/model_weight/fbseg_caformer_b36.pth
+
+segy_exts: [".sgy", ".segy"]
+recursive: false
+
+device: cuda
+backbone: caformer_b36.sail_in22k_ft_in1k
+use_tta: true
+pmax_th: 0.0
+
+segy_endian: big
+waveform_mode: mmap
+header_cache_dir: null
+
+viz_every_n_shots: 100
+viz_dirname: viz
+viz_score_components: true
+viz_score_style: bar
+plot_start: 0
+plot_end: 350
+
+vmin_mask: 100.0
+vmax_mask: 5000.0
+t0_lo_ms: -10.0
+t0_hi_ms: 100.0
+taper_ms: 10.0
+
+tile_h: 128
+tile_w: 6016
+overlap_h: 96
+tiles_per_batch: 8
+polarity_flip: true
+
+use_residual_statics: true
+rs_base_pick: snap
+rs_pre_snap_mode: trough
+rs_pre_snap_ltcor: 3
+rs_pre_samples: 20
+rs_post_samples: 20
+rs_max_lag: 8
+rs_k_neighbors: 5
+rs_n_iter: 2
+rs_mode: diff
+rs_c_th: 0.5
+rs_smooth_method: wls
+rs_lam: 5.0
+rs_subsample: true
+rs_propagate_low_corr: false
+rs_taper: hann
+rs_taper_power: 1.0
+rs_lag_penalty: 0.1
+rs_lag_penalty_power: 1.0
+use_final_snap: true
+final_snap_mode: trough
+final_snap_ltcor: 3
+
+conf_enable: true
+conf_viz_enable: true
+conf_viz_ffid: 2147
+conf_half_win: 20
+
+trend_local_enable: true
+trend_side_split_enable: true
+trend_local_use_abs_offset: false
+trend_local_use_abs_offset_header: true
+trend_local_sort_offsets: false
+trend_local_weight_mode: uniform
+trend_local_section_len: 16
+trend_local_stride: 4
+trend_local_huber_c: 1.345
+trend_local_iters: 3
+trend_local_vmin_mps: 300.0
+trend_local_vmax_mps: 8000.0
+trend_sigma_ms: 6.0
+trend_min_pts: 12
+trend_var_half_win_traces: 8
+trend_var_sigma_std_ms: 6.0
+trend_var_min_count: 3
+
+rs_cmax_th: 0.5
+rs_abs_lag_soft: 8.0
+save_trend_to_npz: true
+trend_source_label: pick_final
+trend_method_label: local_irls_split_sides

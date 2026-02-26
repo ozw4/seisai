@@ -163,6 +163,7 @@ def run_pipeline(
     stage4_out: Path,
     segy_exts: tuple[str, ...],
     stages: tuple[int, ...] | tuple[str, ...],
+    stage1_cfg_yaml: Path | None = None,
     mode: str | None = None,
     skip_stage4: bool = False,
     stage2_thresh_mode: str | None = None,
@@ -189,16 +190,29 @@ def run_pipeline(
 
     if 'stage1' in stage_names:
         print(f'[PIPELINE] stage1 start target={len(segy_paths)} skip=0')
-        stage1.run_stage1(
-            in_segy_root=in_root,
-            out_infer_root=stage1_out,
-            weights_path=stage1_ckpt,
-            segy_paths=segy_paths,
-            segy_exts=segy_exts,
-            recursive=True,
-            viz_every_n_shots=stage1.VIZ_EVERY_N_SHOTS,
-            viz_dirname=stage1.VIZ_DIRNAME,
-        )
+        if stage1_cfg_yaml is None:
+            stage1.run_stage1(
+                in_segy_root=in_root,
+                out_infer_root=stage1_out,
+                weights_path=stage1_ckpt,
+                segy_paths=segy_paths,
+                segy_exts=segy_exts,
+                recursive=True,
+                viz_every_n_shots=stage1.VIZ_EVERY_N_SHOTS,
+                viz_dirname=stage1.VIZ_DIRNAME,
+            )
+        else:
+            print(f'[PIPELINE] stage1 cfg_yaml={stage1_cfg_yaml}')
+            stage1_cfg = stage1.load_stage1_cfg_yaml(stage1_cfg_yaml)
+            stage1_cfg = replace(
+                stage1_cfg,
+                in_segy_root=in_root,
+                out_infer_root=stage1_out,
+                weights_path=stage1_ckpt,
+                segy_exts=segy_exts,
+                recursive=True,
+            )
+            stage1.run_stage1_cfg(stage1_cfg, segy_paths=segy_paths)
         print(f'[PIPELINE] stage1 done processed={len(segy_paths)} skip=0')
 
     if 'stage2' in stage_names:
@@ -287,6 +301,7 @@ def main_common(
     *,
     stages: tuple[int, ...] | tuple[str, ...],
     stage1_ckpt: Path,
+    stage1_cfg_yaml: Path | None = None,
     mode: str | None = None,
     skip_stage4: bool = False,
     stage2_thresh_mode: str | None = None,
@@ -310,11 +325,15 @@ def main_common(
 
     in_root, segy_paths = collect_inputs(args.in_path, segy_exts=segy_exts)
     stage1_out, stage2_out, stage4_out = resolve_out_root(args.out_root)
+    stage1_cfg_yaml_arg = stage1_cfg_yaml
+    if stage1_cfg_yaml_arg is None:
+        stage1_cfg_yaml_arg = getattr(args, 'stage1_cfg_yaml', None)
 
     run_pipeline(
         in_root=in_root,
         segy_paths=segy_paths,
         stage1_ckpt=stage1_ckpt,
+        stage1_cfg_yaml=stage1_cfg_yaml_arg,
         stage1_out=stage1_out,
         stage2_out=stage2_out,
         stage4_out=stage4_out,

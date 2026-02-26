@@ -49,6 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument('--mode', choices=tuple(sorted(_ALLOWED_MODES)), default=None)
     p.add_argument('--in', dest='in_path', type=Path, default=None)
     p.add_argument('--stage1-ckpt', type=Path, default=None)
+    p.add_argument('--stage1-cfg-yaml', type=Path, default=None)
     p.add_argument('--stage3-config', type=Path, default=None)
     p.add_argument('--stage4-ckpt', type=Path, default=None)
     p.add_argument('--stage4-cfg-yaml', type=Path, default=None)
@@ -109,6 +110,7 @@ def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
         'segy_exts',
         'mode',
         'stage1_ckpt',
+        'stage1_cfg_yaml',
         'stage3_config',
         'stage4_ckpt',
         'stage4_cfg_yaml',
@@ -123,6 +125,7 @@ def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
         'segy_exts': normalize_segy_exts,
         'mode': _coerce_mode_value,
         'stage1_ckpt': partial(coerce_path, 'stage1_ckpt', allow_none=False),
+        'stage1_cfg_yaml': partial(coerce_path, 'stage1_cfg_yaml', allow_none=True),
         'stage3_config': partial(coerce_path, 'stage3_config', allow_none=True),
         'stage4_ckpt': partial(coerce_path, 'stage4_ckpt', allow_none=True),
         'stage4_cfg_yaml': partial(coerce_path, 'stage4_cfg_yaml', allow_none=True),
@@ -188,6 +191,11 @@ def main() -> None:
             raise ValueError(msg)
 
     stage1_ckpt = resolve_existing_file(args.stage1_ckpt, context='--stage1-ckpt')
+    stage1_cfg_yaml: Path | None = None
+    if args.stage1_cfg_yaml is not None:
+        stage1_cfg_yaml = resolve_existing_file(
+            args.stage1_cfg_yaml, context='--stage1-cfg-yaml'
+        )
 
     stage3_config: Path | None = None
     if mode == 'train':
@@ -235,6 +243,7 @@ def main() -> None:
         args,
         stages=('stage1', 'stage2', 'stage3', 'stage4'),
         stage1_ckpt=stage1_ckpt,
+        stage1_cfg_yaml=stage1_cfg_yaml,
         mode=mode,
         skip_stage4=skip_stage4,
         stage2_thresh_mode=stage2_thresh_mode,

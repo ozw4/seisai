@@ -2,7 +2,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +14,16 @@ import numpy as np
 import segyio
 import torch
 from _model import NetAE as EncDec2D
+from config_io import (
+    build_yaml_defaults,
+    coerce_optional_bool,
+    coerce_optional_float,
+    coerce_optional_int,
+    coerce_path,
+    load_yaml_dict,
+    normalize_segy_exts,
+    parse_args_with_yaml_defaults,
+)
 from jogsarar_shared import (
     TilePerTraceStandardize,
     compute_conf_rs_from_residual_statics,
@@ -37,152 +50,108 @@ BuildFileInfoFn = Callable[..., Any]
 SnapPicksFn = Callable[..., Any]
 Numpy2FbCrdFn = Callable[..., Any]
 
-# =========================
-# CONFIG (ここだけ直書き)
-# =========================
-INPUT_DIR = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
-OUT_DIR = Path('/home/dcuser/data/ActiveSeisField/jogsarar_out')
-WEIGHTS_PATH = Path('/home/dcuser/data/model_weight/fbseg_caformer_b36.pth')
+@dataclass(frozen=True)
+class Stage1Cfg:
+    in_segy_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar')
+    out_infer_root: Path = Path('/home/dcuser/data/ActiveSeisField/jogsarar_out')
+    weights_path: Path = Path('/home/dcuser/data/model_weight/fbseg_caformer_b36.pth')
+    segy_exts: tuple[str, ...] = ('.sgy', '.segy')
+    recursive: bool = False
+    backbone: str = 'caformer_b36.sail_in22k_ft_in1k'
+    device: str = 'cuda'
+    use_tta: bool = True
+    pmax_th: float = 0.0
+    ltcor: int = 5
+    segy_endian: str = 'big'
+    waveform_mode: str = 'mmap'
+    header_cache_dir: str | None = None
+    viz_every_n_shots: int = 100
+    viz_dirname: str = 'viz'
+    vmin_mask: float = 100.0
+    vmax_mask: float = 5000.0
+    t0_lo_ms: float = -10.0
+    t0_hi_ms: float = 100.0
+    taper_ms: float = 10.0
+    tile_h: int = 128
+    tile_w: int = 6016
+    overlap_h: int = 96
+    tiles_per_batch: int = 8
+    polarity_flip: bool = True
+    lmo_vel_mps: float = 3200.0
+    lmo_bulk_shift_samples: float = 50.0
+    plot_start: int = 0
+    plot_end: int = 350
+    viz_score_components: bool = True
+    viz_score_style: str = 'bar'
+    viz_conf_prob_scale_enable: bool = True
+    viz_conf_prob_pct_lo: float = 5.0
+    viz_conf_prob_pct_hi: float = 99.0
+    viz_conf_prob_pct_eps: float = 1e-12
+    viz_ymax_conf_prob: float | None = 1.0
+    viz_ymax_conf_trend: float | None = 1.0
+    viz_ymax_conf_rs: float | None = 1.0
+    viz_trend_line_enable: bool = True
+    viz_trend_line_lw: float = 1.6
+    viz_trend_line_alpha: float = 0.9
+    viz_trend_line_label: str = 'trend'
+    viz_trend_line_color: str = 'g'
+    use_residual_statics: bool = True
+    rs_base_pick: str = 'snap'
+    rs_pre_snap_mode: str = 'trough'
+    rs_pre_snap_ltcor: int = 3
+    rs_pre_samples: int = 20
+    rs_post_samples: int = 20
+    rs_max_lag: int = 8
+    rs_k_neighbors: int = 5
+    rs_n_iter: int = 2
+    rs_mode: str = 'diff'
+    rs_c_th: float = 0.5
+    rs_smooth_method: str = 'wls'
+    rs_lam: float = 5.0
+    rs_subsample: bool = True
+    rs_propagate_low_corr: bool = False
+    rs_taper: str = 'hann'
+    rs_taper_power: float = 1.0
+    rs_lag_penalty: float = 0.10
+    rs_lag_penalty_power: float = 1.0
+    use_final_snap: bool = True
+    final_snap_mode: str = 'trough'
+    final_snap_ltcor: int = 3
+    conf_enable: bool = True
+    conf_viz_enable: bool = True
+    conf_viz_ffid: int = 2147
+    conf_half_win: int = 20
+    trend_local_enable: bool = True
+    trend_local_use_abs_offset: bool = False
+    trend_local_sort_offsets: bool = False
+    trend_side_split_enable: bool = True
+    trend_local_use_abs_offset_header: bool = True
+    trend_local_section_len: int = 16
+    trend_local_stride: int = 4
+    trend_local_huber_c: float = 1.345
+    trend_local_iters: int = 3
+    trend_local_vmin_mps: float | None = 300.0
+    trend_local_vmax_mps: float | None = 8000.0
+    trend_local_weight_mode: str = 'uniform'
+    trend_sigma_ms: float = 6.0
+    trend_min_pts: int = 12
+    trend_var_half_win_traces: int = 8
+    trend_var_sigma_std_ms: float = 6.0
+    trend_var_min_count: int = 3
+    rs_cmax_th: float = 0.5
+    rs_abs_lag_soft: float = 8.0
+    save_trend_to_npz: bool = True
+    trend_source_label: str = 'pick_final'
+    trend_method_label: str = 'local_irls_split_sides'
 
-BACKBONE = 'caformer_b36.sail_in22k_ft_in1k'
-DEVICE = 'cuda'  # "cpu" も可
-USE_TTA = True
 
-PMAX_TH = 0.0
-LTCOR = 5  # legacy snap (comparison / fallback)
+DEFAULT_STAGE1_CFG = Stage1Cfg()
 
-SEGY_ENDIAN = 'big'  # "big" or "little"
-WAVEFORM_MODE = 'mmap'  # "mmap" or "eager"
-HEADER_CACHE_DIR: str | None = None
-
-# 可視化: 各SEGYファイル内で「50ショットおき」に可視化（0なら無効）
-VIZ_EVERY_N_SHOTS = 100
-VIZ_DIRNAME = 'viz'
-
-# velocity mask params (inference)
-VMIN_MASK = 100.0
-VMAX_MASK = 5000.0
-T0_LO_MS = -10.0
-T0_HI_MS = 100.0
-TAPER_MS = 10.0
-
-# tile params
-TILE_H = 128
-TILE_W = 6016
-OVERLAP_H = 96  # stride_h = 32
-TILES_PER_BATCH = 8
-
-POLARITY_FLIP = True  # model input only
-
-# ---- LMO for visualization (display only) ----
-LMO_VEL_MPS = 3200.0
-LMO_BULK_SHIFT_SAMPLES = 50.0  # positive shifts later samples
-
-PLOT_START = 0
-PLOT_END = 350
-
-VIZ_SCORE_COMPONENTS = True
-VIZ_SCORE_STYLE = 'bar'  # 'bar' or 'line'
-
-# ---- prob_conf 可視化スケーリング（保存値は生のまま） ----
-VIZ_CONF_PROB_SCALE_ENABLE = True
-VIZ_CONF_PROB_PCT_LO = 5.0
-VIZ_CONF_PROB_PCT_HI = 99.0
-VIZ_CONF_PROB_PCT_EPS = 1e-12
-
-# y軸上限（None なら自動）
-# conf_prob は percentile で 0..1 にして描く前提なので、基本は 1.0 推奨
-VIZ_YMAX_CONF_PROB = 1.0
-VIZ_YMAX_CONF_TREND = 1.0
-VIZ_YMAX_CONF_RS = 1.0
-
-# ---- trend line overlay on wiggle ----
-VIZ_TREND_LINE_ENABLE = True
-VIZ_TREND_LINE_LW = 1.6
-VIZ_TREND_LINE_ALPHA = 0.9
-VIZ_TREND_LINE_LABEL = 'trend'
-VIZ_TREND_LINE_COLOR = 'g'
-
-# --- residual statics refine ---
-USE_RESIDUAL_STATICS = True
-
-# RS_BASE_PICK:
-#   'pre'  : snap前（pick0=argmax+threshold）を基準に窓を作ってrefine
-#   'snap' : 一度phase snapしてから（pick_pre_snap）それを基準に窓を作ってrefine
-RS_BASE_PICK = 'snap'  # 'pre' or 'snap'
-
-# RS_BASE_PICK='snap' のときに使う “事前snap” 設定（refine前のsnap）
-RS_PRE_SNAP_MODE = 'trough'
-RS_PRE_SNAP_LTCOR = 3
-
-# 窓切り出し（RS_BASE_PICKで選んだpickを基準に窓を作る）
-RS_PRE_SAMPLES = 20
-RS_POST_SAMPLES = 20
-
-# residual statics params
-RS_MAX_LAG = 8
-RS_K_NEIGHBORS = 5
-RS_N_ITER = 2
-RS_MODE = 'diff'  # 'diff' or 'raw'
-RS_C_TH = 0.5
-RS_SMOOTH_METHOD = 'wls'
-RS_LAM = 5.0
-RS_SUBSAMPLE = True
-RS_PROPAGATE_LOW_CORR = False
-RS_TAPER = 'hann'
-RS_TAPER_POWER = 1.0
-RS_LAG_PENALTY = 0.10
-RS_LAG_PENALTY_POWER = 1.0
-
-# --- optional final snap (after refine) ---
-USE_FINAL_SNAP = True
-FINAL_SNAP_MODE = 'trough'
-FINAL_SNAP_LTCOR = 3
-
-# --- confidence scoring ---
-CONF_ENABLE = True
-CONF_VIZ_ENABLE = True
-CONF_VIZ_FFID = 2147
-CONF_HALF_WIN = 20
-
-# ---- local trend (方針A: windowed IRLS) ----
-TREND_LOCAL_ENABLE = True
-
-# 重要: 左右分け（擬似符号付きoffset）を使うため abs は使わない
-TREND_LOCAL_USE_ABS_OFFSET = False
-
-# 重要: window は trace順で切りたいので、offsetで並べ替えない
-TREND_LOCAL_SORT_OFFSETS = False
-
-# 重要: 左右分割を有効化（ヘッダーが |offset| のみでもOK）
-TREND_SIDE_SPLIT_ENABLE = True
-
-TREND_LOCAL_USE_ABS_OFFSET_HEADER = True  # ヘッダーが絶対値なら True（通常 True）
-TREND_LOCAL_SECTION_LEN = 16  # 小さいほどローカル
-TREND_LOCAL_STRIDE = 4  # section_len/2 くらいが無難
-TREND_LOCAL_HUBER_C = 1.345
-TREND_LOCAL_ITERS = 3
-TREND_LOCAL_VMIN_MPS = 300.0
-TREND_LOCAL_VMAX_MPS = 8000.0
-TREND_LOCAL_WEIGHT_MODE = 'uniform'  # 'uniform' or 'pmax'
-
-# trend residual scoring
-TREND_SIGMA_MS = 6.0
-TREND_MIN_PTS = 12
-
-# trend residual local-variance scoring (trace-direction)
-TREND_VAR_HALF_WIN_TRACES = 8
-TREND_VAR_SIGMA_STD_MS = 6.0
-TREND_VAR_MIN_COUNT = 3
-
-# RS confidence
-RS_CMAX_TH = RS_C_TH
-RS_ABS_LAG_SOFT = float(RS_MAX_LAG)
-
-# ---- trend 保存（npzに残す） ----
-SAVE_TREND_TO_NPZ = True
-TREND_SOURCE_LABEL = 'pick_final'
-TREND_METHOD_LABEL = 'local_irls_split_sides'
+INPUT_DIR = DEFAULT_STAGE1_CFG.in_segy_root
+OUT_DIR = DEFAULT_STAGE1_CFG.out_infer_root
+WEIGHTS_PATH = DEFAULT_STAGE1_CFG.weights_path
+VIZ_EVERY_N_SHOTS = DEFAULT_STAGE1_CFG.viz_every_n_shots
+VIZ_DIRNAME = DEFAULT_STAGE1_CFG.viz_dirname
 
 
 def _plot_score_panel_1d(
@@ -338,7 +307,19 @@ def infer_gather_prob(
     wave_hw: np.ndarray,
     offsets_m: np.ndarray,
     dt_sec: float,
+    cfg: Stage1Cfg = DEFAULT_STAGE1_CFG,
 ) -> tuple[np.ndarray, int]:
+    TILE_W = int(cfg.tile_w)
+    TILE_H = int(cfg.tile_h)
+    OVERLAP_H = int(cfg.overlap_h)
+    TILES_PER_BATCH = int(cfg.tiles_per_batch)
+    POLARITY_FLIP = bool(cfg.polarity_flip)
+    VMIN_MASK = float(cfg.vmin_mask)
+    VMAX_MASK = float(cfg.vmax_mask)
+    T0_LO_MS = float(cfg.t0_lo_ms)
+    T0_HI_MS = float(cfg.t0_hi_ms)
+    TAPER_MS = float(cfg.taper_ms)
+
     device = next(model.parameters()).device
 
     if wave_hw.ndim != 2:
@@ -431,7 +412,17 @@ def _strip_prefix(sd: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
 
 
 def build_model(*, weights_path: Path = WEIGHTS_PATH) -> torch.nn.Module:
-    if DEVICE == 'cuda' and not torch.cuda.is_available():
+    cfg = replace(DEFAULT_STAGE1_CFG, weights_path=Path(weights_path))
+    return build_model_from_cfg(cfg)
+
+
+def build_model_from_cfg(cfg: Stage1Cfg) -> torch.nn.Module:
+    DEVICE = str(cfg.device)
+    BACKBONE = str(cfg.backbone)
+    USE_TTA = bool(cfg.use_tta)
+    weights_path = Path(cfg.weights_path)
+
+    if DEVICE.startswith('cuda') and not torch.cuda.is_available():
         msg = 'CUDA requested but not available'
         raise RuntimeError(msg)
 
@@ -485,15 +476,36 @@ def run_stage1(
     viz_every_n_shots: int = VIZ_EVERY_N_SHOTS,
     viz_dirname: str = VIZ_DIRNAME,
 ) -> None:
-    in_root = Path(in_segy_root).expanduser().resolve()
+    cfg = replace(
+        DEFAULT_STAGE1_CFG,
+        in_segy_root=Path(in_segy_root),
+        out_infer_root=Path(out_infer_root),
+        weights_path=Path(weights_path),
+        segy_exts=tuple(str(x) for x in segy_exts),
+        recursive=bool(recursive),
+        viz_every_n_shots=int(viz_every_n_shots),
+        viz_dirname=str(viz_dirname),
+    )
+    run_stage1_cfg(cfg, segy_paths=segy_paths)
+
+
+def run_stage1_cfg(
+    cfg: Stage1Cfg,
+    *,
+    segy_paths: list[Path] | None = None,
+) -> None:
+    cfg = _validate_stage1_cfg(cfg)
+
+    in_root = Path(cfg.in_segy_root).expanduser().resolve()
     if not in_root.is_dir():
         msg = f'in_segy_root must be an existing directory: {in_root}'
         raise FileNotFoundError(msg)
 
-    out_root = Path(out_infer_root).expanduser().resolve()
+    out_root = Path(cfg.out_infer_root).expanduser().resolve()
+    segy_exts = tuple(str(x) for x in cfg.segy_exts)
 
     if segy_paths is None:
-        segys = find_segy_files(in_root, exts=segy_exts, recursive=bool(recursive))
+        segys = find_segy_files(in_root, exts=segy_exts, recursive=bool(cfg.recursive))
     else:
         segys = [Path(p).expanduser().resolve() for p in segy_paths]
 
@@ -501,7 +513,10 @@ def run_stage1(
         msg = f'no segy files found under: {in_root}'
         raise RuntimeError(msg)
 
-    model = build_model(weights_path=weights_path)
+    used_cfg_path = _write_stage1_used_cfg_yaml(cfg, out_root=out_root)
+    print(f'[CFG][STAGE1] saved {used_cfg_path}')
+
+    model = build_model_from_cfg(cfg)
 
     print(f'[RUN][STAGE1] files={len(segys)} in_root={in_root} out_root={out_root}')
     n_ok = 0
@@ -515,8 +530,9 @@ def run_stage1(
             segy_path=segy_path,
             out_dir=per_file_out_dir,
             model=model,
-            viz_every_n_shots=viz_every_n_shots,
-            viz_dirname=viz_dirname,
+            cfg=cfg,
+            viz_every_n_shots=cfg.viz_every_n_shots,
+            viz_dirname=cfg.viz_dirname,
         )
         n_ok += 1
 
@@ -602,7 +618,18 @@ def _fit_local_trend_sec(
     t_pick_sec: np.ndarray,  # (H,)
     valid_mask: np.ndarray,  # (H,) bool
     pmax: np.ndarray,  # (H,) float32
+    cfg: Stage1Cfg = DEFAULT_STAGE1_CFG,
 ) -> tuple[np.ndarray, np.ndarray]:
+    TREND_LOCAL_USE_ABS_OFFSET = bool(cfg.trend_local_use_abs_offset)
+    TREND_LOCAL_WEIGHT_MODE = str(cfg.trend_local_weight_mode)
+    TREND_LOCAL_SECTION_LEN = int(cfg.trend_local_section_len)
+    TREND_LOCAL_STRIDE = int(cfg.trend_local_stride)
+    TREND_LOCAL_HUBER_C = float(cfg.trend_local_huber_c)
+    TREND_LOCAL_ITERS = int(cfg.trend_local_iters)
+    TREND_LOCAL_VMIN_MPS = cfg.trend_local_vmin_mps
+    TREND_LOCAL_VMAX_MPS = cfg.trend_local_vmax_mps
+    TREND_LOCAL_SORT_OFFSETS = bool(cfg.trend_local_sort_offsets)
+
     x0 = np.asarray(offsets_m, dtype=np.float32)
     x = np.abs(x0) if TREND_LOCAL_USE_ABS_OFFSET else x0
     y = np.asarray(t_pick_sec, dtype=np.float32)
@@ -665,7 +692,10 @@ def _fit_local_trend_split_sides_sec(
     valid_mask: np.ndarray,  # (H,) bool
     pmax: np.ndarray,  # (H,) float32
     invalid: np.ndarray,  # (H,) bool
+    cfg: Stage1Cfg = DEFAULT_STAGE1_CFG,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    TREND_MIN_PTS = int(cfg.trend_min_pts)
+
     x_abs = np.asarray(offsets_abs_m, dtype=np.float32)
     y = np.asarray(t_pick_sec, dtype=np.float32)
     v = np.asarray(valid_mask, dtype=bool)
@@ -733,6 +763,7 @@ def _fit_local_trend_split_sides_sec(
             t_pick_sec=y_side,
             valid_mask=vv,
             pmax=p_side,
+            cfg=cfg,
         )
 
         cur = t_trend[sl]
@@ -757,6 +788,7 @@ def process_one_segy(
     segy_path: Path,
     out_dir: Path,
     model: torch.nn.Module,
+    cfg: Stage1Cfg = DEFAULT_STAGE1_CFG,
     build_file_info_dataclass_fn: BuildFileInfoFn = build_file_info_dataclass,
     TraceSubsetLoaderCls: type[TraceSubsetLoader] = TraceSubsetLoader,
     LoaderConfigCls: type[LoaderConfig] = LoaderConfig,
@@ -765,6 +797,76 @@ def process_one_segy(
     viz_every_n_shots: int = 0,
     viz_dirname: str = 'viz',
 ) -> None:
+    HEADER_CACHE_DIR = cfg.header_cache_dir
+    WAVEFORM_MODE = str(cfg.waveform_mode)
+    SEGY_ENDIAN = str(cfg.segy_endian)
+    TILE_W = int(cfg.tile_w)
+    USE_RESIDUAL_STATICS = bool(cfg.use_residual_statics)
+    RS_BASE_PICK = str(cfg.rs_base_pick)
+    RS_PRE_SNAP_MODE = str(cfg.rs_pre_snap_mode)
+    RS_PRE_SNAP_LTCOR = int(cfg.rs_pre_snap_ltcor)
+    RS_PRE_SAMPLES = int(cfg.rs_pre_samples)
+    RS_POST_SAMPLES = int(cfg.rs_post_samples)
+    RS_MAX_LAG = int(cfg.rs_max_lag)
+    RS_K_NEIGHBORS = int(cfg.rs_k_neighbors)
+    RS_N_ITER = int(cfg.rs_n_iter)
+    RS_MODE = str(cfg.rs_mode)
+    RS_C_TH = float(cfg.rs_c_th)
+    RS_SMOOTH_METHOD = str(cfg.rs_smooth_method)
+    RS_LAM = float(cfg.rs_lam)
+    RS_SUBSAMPLE = bool(cfg.rs_subsample)
+    RS_PROPAGATE_LOW_CORR = bool(cfg.rs_propagate_low_corr)
+    RS_TAPER = str(cfg.rs_taper)
+    RS_TAPER_POWER = float(cfg.rs_taper_power)
+    RS_LAG_PENALTY = float(cfg.rs_lag_penalty)
+    RS_LAG_PENALTY_POWER = float(cfg.rs_lag_penalty_power)
+    USE_FINAL_SNAP = bool(cfg.use_final_snap)
+    FINAL_SNAP_MODE = str(cfg.final_snap_mode)
+    FINAL_SNAP_LTCOR = int(cfg.final_snap_ltcor)
+    PMAX_TH = float(cfg.pmax_th)
+    CONF_ENABLE = bool(cfg.conf_enable)
+    TREND_LOCAL_ENABLE = bool(cfg.trend_local_enable)
+    TREND_MIN_PTS = int(cfg.trend_min_pts)
+    TREND_LOCAL_USE_ABS_OFFSET_HEADER = bool(cfg.trend_local_use_abs_offset_header)
+    TREND_SIDE_SPLIT_ENABLE = bool(cfg.trend_side_split_enable)
+    CONF_HALF_WIN = int(cfg.conf_half_win)
+    TREND_SIGMA_MS = float(cfg.trend_sigma_ms)
+    TREND_VAR_HALF_WIN_TRACES = int(cfg.trend_var_half_win_traces)
+    TREND_VAR_SIGMA_STD_MS = float(cfg.trend_var_sigma_std_ms)
+    TREND_VAR_MIN_COUNT = int(cfg.trend_var_min_count)
+    RS_CMAX_TH = float(cfg.rs_cmax_th)
+    RS_ABS_LAG_SOFT = float(cfg.rs_abs_lag_soft)
+    CONF_VIZ_ENABLE = bool(cfg.conf_viz_enable)
+    CONF_VIZ_FFID = int(cfg.conf_viz_ffid)
+    VIZ_CONF_PROB_SCALE_ENABLE = bool(cfg.viz_conf_prob_scale_enable)
+    VIZ_CONF_PROB_PCT_LO = float(cfg.viz_conf_prob_pct_lo)
+    VIZ_CONF_PROB_PCT_HI = float(cfg.viz_conf_prob_pct_hi)
+    VIZ_CONF_PROB_PCT_EPS = float(cfg.viz_conf_prob_pct_eps)
+    SAVE_TREND_TO_NPZ = bool(cfg.save_trend_to_npz)
+    LMO_VEL_MPS = float(cfg.lmo_vel_mps)
+    LMO_BULK_SHIFT_SAMPLES = float(cfg.lmo_bulk_shift_samples)
+    PLOT_START = int(cfg.plot_start)
+    PLOT_END = int(cfg.plot_end)
+    VIZ_SCORE_COMPONENTS = bool(cfg.viz_score_components)
+    VIZ_TREND_LINE_ENABLE = bool(cfg.viz_trend_line_enable)
+    VIZ_TREND_LINE_LW = float(cfg.viz_trend_line_lw)
+    VIZ_TREND_LINE_ALPHA = float(cfg.viz_trend_line_alpha)
+    VIZ_TREND_LINE_COLOR = str(cfg.viz_trend_line_color)
+    VIZ_TREND_LINE_LABEL = str(cfg.viz_trend_line_label)
+    VIZ_YMAX_CONF_PROB = cfg.viz_ymax_conf_prob
+    VIZ_YMAX_CONF_TREND = cfg.viz_ymax_conf_trend
+    VIZ_YMAX_CONF_RS = cfg.viz_ymax_conf_rs
+    VIZ_SCORE_STYLE = str(cfg.viz_score_style)
+    TREND_SOURCE_LABEL = str(cfg.trend_source_label)
+    TREND_METHOD_LABEL = str(cfg.trend_method_label)
+    TREND_LOCAL_SECTION_LEN = int(cfg.trend_local_section_len)
+    TREND_LOCAL_STRIDE = int(cfg.trend_local_stride)
+    TREND_LOCAL_HUBER_C = float(cfg.trend_local_huber_c)
+    TREND_LOCAL_ITERS = int(cfg.trend_local_iters)
+    TREND_LOCAL_VMIN_MPS = cfg.trend_local_vmin_mps
+    TREND_LOCAL_VMAX_MPS = cfg.trend_local_vmax_mps
+    TREND_LOCAL_SORT_OFFSETS = bool(cfg.trend_local_sort_offsets)
+
     info = build_file_info_dataclass_fn(
         str(segy_path),
         ffid_byte=segyio.TraceField.FieldRecord,
@@ -876,6 +978,7 @@ def process_one_segy(
                 wave_hw=wave_hw,
                 offsets_m=offs_m,
                 dt_sec=dt_sec,
+                cfg=cfg,
             )
 
             if invalid.any():
@@ -1039,6 +1142,7 @@ def process_one_segy(
                                 valid_mask=trend_fit_mask,
                                 pmax=pmax,
                                 invalid=invalid,
+                                cfg=cfg,
                             )
                         )
                         t_trend_sec = t_trend_fit
@@ -1051,6 +1155,7 @@ def process_one_segy(
                             t_pick_sec=t_pick_fit_sec,
                             valid_mask=trend_fit_mask,
                             pmax=pmax,
+                            cfg=cfg,
                         )
                         t_trend_sec = t_trend_fit
                         trend_covered = cov_fit
@@ -1513,17 +1618,286 @@ def process_one_segy(
         info.segy_obj.close()
 
 
-def main() -> None:
-    run_stage1(
-        in_segy_root=INPUT_DIR,
-        out_infer_root=OUT_DIR,
-        weights_path=WEIGHTS_PATH,
-        segy_paths=None,
-        segy_exts=('.sgy', '.segy'),
-        recursive=False,
-        viz_every_n_shots=VIZ_EVERY_N_SHOTS,
-        viz_dirname=VIZ_DIRNAME,
+_STAGE1_CFG_KEYS = tuple(Stage1Cfg.__dataclass_fields__.keys())
+_PATH_KEYS = {'in_segy_root', 'out_infer_root', 'weights_path'}
+_OPTIONAL_FLOAT_KEYS = {
+    'viz_ymax_conf_prob',
+    'viz_ymax_conf_trend',
+    'viz_ymax_conf_rs',
+    'trend_local_vmin_mps',
+    'trend_local_vmax_mps',
+}
+_OPTIONAL_STR_KEYS = {'header_cache_dir'}
+
+
+def _coerce_required_int(key: str, value: object) -> int:
+    out = coerce_optional_int(key, value)
+    if out is None:
+        msg = f'config[{key}] must not be null'
+        raise TypeError(msg)
+    return int(out)
+
+
+def _coerce_required_bool(key: str, value: object) -> bool:
+    out = coerce_optional_bool(key, value)
+    if out is None:
+        msg = f'config[{key}] must not be null'
+        raise TypeError(msg)
+    return bool(out)
+
+
+def _coerce_required_float(key: str, value: object) -> float:
+    out = coerce_optional_float(key, value)
+    if out is None:
+        msg = f'config[{key}] must not be null'
+        raise TypeError(msg)
+    return float(out)
+
+
+def _coerce_optional_float_field(key: str, value: object) -> float | None:
+    out = coerce_optional_float(key, value)
+    if out is None:
+        return None
+    return float(out)
+
+
+def _coerce_required_str(key: str, value: object) -> str:
+    if not isinstance(value, str):
+        msg = f'config[{key}] must be str, got {type(value).__name__}'
+        raise TypeError(msg)
+    if value == '':
+        msg = f'config[{key}] must not be empty'
+        raise ValueError(msg)
+    return value
+
+
+def _coerce_optional_str_field(key: str, value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f'config[{key}] must be str or null, got {type(value).__name__}'
+        raise TypeError(msg)
+    return value
+
+
+def _build_stage1_yaml_coercers() -> dict[str, Callable[[object], object]]:
+    coercers: dict[str, Callable[[object], object]] = {}
+    for key in _STAGE1_CFG_KEYS:
+        if key in _PATH_KEYS:
+            coercers[key] = partial(coerce_path, key, allow_none=False)
+            continue
+        if key == 'segy_exts':
+            coercers[key] = normalize_segy_exts
+            continue
+        if key in _OPTIONAL_FLOAT_KEYS:
+            coercers[key] = partial(_coerce_optional_float_field, key)
+            continue
+        if key in _OPTIONAL_STR_KEYS:
+            coercers[key] = partial(_coerce_optional_str_field, key)
+            continue
+
+        default_value = getattr(DEFAULT_STAGE1_CFG, key)
+        if isinstance(default_value, bool):
+            coercers[key] = partial(_coerce_required_bool, key)
+            continue
+        if isinstance(default_value, int):
+            coercers[key] = partial(_coerce_required_int, key)
+            continue
+        if isinstance(default_value, float):
+            coercers[key] = partial(_coerce_required_float, key)
+            continue
+        if isinstance(default_value, str):
+            coercers[key] = partial(_coerce_required_str, key)
+            continue
+
+        msg = f'unsupported stage1 config key type: key={key}'
+        raise RuntimeError(msg)
+    return coercers
+
+
+def _load_yaml_defaults(config_path: Path) -> dict[str, object]:
+    loaded = load_yaml_dict(config_path)
+    return build_yaml_defaults(
+        loaded,
+        allowed_keys=set(_STAGE1_CFG_KEYS),
+        coercers=_build_stage1_yaml_coercers(),
     )
+
+
+def load_stage1_cfg_yaml(config_path: Path) -> Stage1Cfg:
+    updates = _load_yaml_defaults(config_path)
+    cfg = replace(DEFAULT_STAGE1_CFG, **updates)
+    return _validate_stage1_cfg(cfg)
+
+
+def _write_stage1_used_cfg_yaml(cfg: Stage1Cfg, *, out_root: Path) -> Path:
+    serializable: dict[str, object] = {}
+    for key in _STAGE1_CFG_KEYS:
+        value = getattr(cfg, key)
+        if isinstance(value, Path):
+            serializable[key] = str(value)
+            continue
+        if isinstance(value, tuple):
+            serializable[key] = [str(x) for x in value]
+            continue
+        serializable[key] = value
+
+    target_root = Path(out_root).expanduser().resolve()
+    target_root.mkdir(parents=True, exist_ok=True)
+    out_path = target_root / 'stage1_used.yaml'
+
+    import yaml
+
+    with out_path.open('w', encoding='utf-8') as f:
+        yaml.safe_dump(
+            serializable,
+            f,
+            sort_keys=True,
+        )
+    return out_path
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description='Run stage1 FBP inference.')
+    p.add_argument(
+        '--config',
+        type=Path,
+        default=None,
+        help='YAML config path. CLI options override config values.',
+    )
+    p.add_argument('--in', dest='in_segy_root', type=Path, default=None)
+    p.add_argument('--out', dest='out_infer_root', type=Path, default=None)
+    p.add_argument('--weights', dest='weights_path', type=Path, default=None)
+
+    for key in _STAGE1_CFG_KEYS:
+        if key in {'in_segy_root', 'out_infer_root', 'weights_path'}:
+            p.add_argument(
+                f'--{key.replace("_", "-")}',
+                dest=key,
+                type=Path,
+                default=None,
+                help=argparse.SUPPRESS,
+            )
+            continue
+        if key == 'segy_exts':
+            p.add_argument('--segy-exts', dest='segy_exts', type=str, default=None)
+            continue
+
+        flag = f'--{key.replace("_", "-")}'
+        default_value = getattr(DEFAULT_STAGE1_CFG, key)
+        if isinstance(default_value, bool):
+            p.add_argument(
+                flag,
+                dest=key,
+                action=argparse.BooleanOptionalAction,
+                default=None,
+            )
+            continue
+        if isinstance(default_value, int):
+            p.add_argument(flag, dest=key, type=int, default=None)
+            continue
+        if isinstance(default_value, float):
+            p.add_argument(flag, dest=key, type=float, default=None)
+            continue
+        p.add_argument(flag, dest=key, type=str, default=None)
+    return p
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = _build_parser()
+    return parse_args_with_yaml_defaults(
+        parser,
+        load_defaults=_load_yaml_defaults,
+    )
+
+
+def _validate_stage1_cfg(cfg: Stage1Cfg) -> Stage1Cfg:
+    segy_exts = normalize_segy_exts(list(cfg.segy_exts))
+    cfg = replace(cfg, segy_exts=segy_exts)
+
+    if cfg.device == '':
+        raise ValueError('device must not be empty')
+    if cfg.viz_dirname == '':
+        raise ValueError('viz_dirname must not be empty')
+    if cfg.segy_endian not in {'big', 'little'}:
+        raise ValueError(f"segy_endian must be 'big' or 'little', got {cfg.segy_endian!r}")
+    if cfg.waveform_mode not in {'mmap', 'eager'}:
+        raise ValueError(
+            f"waveform_mode must be 'mmap' or 'eager', got {cfg.waveform_mode!r}"
+        )
+    if cfg.viz_score_style not in {'bar', 'line'}:
+        raise ValueError(
+            f"viz_score_style must be 'bar' or 'line', got {cfg.viz_score_style!r}"
+        )
+    if cfg.rs_base_pick not in {'pre', 'snap'}:
+        raise ValueError(
+            f"rs_base_pick must be 'pre' or 'snap', got {cfg.rs_base_pick!r}"
+        )
+    if cfg.rs_mode not in {'diff', 'raw'}:
+        raise ValueError(f"rs_mode must be 'diff' or 'raw', got {cfg.rs_mode!r}")
+    if cfg.trend_local_weight_mode not in {'uniform', 'pmax'}:
+        raise ValueError(
+            f"trend_local_weight_mode must be 'uniform' or 'pmax', got {cfg.trend_local_weight_mode!r}"
+        )
+
+    if cfg.tile_h <= 0:
+        raise ValueError(f'tile_h must be > 0, got {cfg.tile_h}')
+    if cfg.tile_w <= 0:
+        raise ValueError(f'tile_w must be > 0, got {cfg.tile_w}')
+    if cfg.overlap_h < 0:
+        raise ValueError(f'overlap_h must be >= 0, got {cfg.overlap_h}')
+    if cfg.tiles_per_batch <= 0:
+        raise ValueError(f'tiles_per_batch must be > 0, got {cfg.tiles_per_batch}')
+    if cfg.viz_every_n_shots < 0:
+        raise ValueError(
+            f'viz_every_n_shots must be >= 0, got {cfg.viz_every_n_shots}'
+        )
+    if cfg.plot_end <= cfg.plot_start:
+        raise ValueError(
+            f'plot_end must be > plot_start, got start={cfg.plot_start}, end={cfg.plot_end}'
+        )
+    if cfg.vmax_mask <= 0.0:
+        raise ValueError(f'vmax_mask must be > 0, got {cfg.vmax_mask}')
+    if cfg.vmin_mask < 0.0:
+        raise ValueError(f'vmin_mask must be >= 0, got {cfg.vmin_mask}')
+    if cfg.vmax_mask < cfg.vmin_mask:
+        raise ValueError(
+            f'vmax_mask must be >= vmin_mask, got vmin={cfg.vmin_mask}, vmax={cfg.vmax_mask}'
+        )
+    if cfg.conf_half_win < 0:
+        raise ValueError(f'conf_half_win must be >= 0, got {cfg.conf_half_win}')
+    if cfg.trend_min_pts < 0:
+        raise ValueError(f'trend_min_pts must be >= 0, got {cfg.trend_min_pts}')
+    if cfg.rs_abs_lag_soft < 0.0:
+        raise ValueError(f'rs_abs_lag_soft must be >= 0, got {cfg.rs_abs_lag_soft}')
+
+    return cfg
+
+
+def _cfg_from_namespace(args: argparse.Namespace) -> Stage1Cfg:
+    updates: dict[str, object] = {}
+    for key in _STAGE1_CFG_KEYS:
+        value = getattr(args, key)
+        if value is None:
+            continue
+        if key == 'segy_exts':
+            if isinstance(value, tuple):
+                updates[key] = tuple(str(x) for x in value)
+            else:
+                updates[key] = normalize_segy_exts(value)
+            continue
+        if key in _PATH_KEYS:
+            updates[key] = Path(value)
+            continue
+        updates[key] = value
+    cfg = replace(DEFAULT_STAGE1_CFG, **updates)
+    return _validate_stage1_cfg(cfg)
+
+
+def main() -> None:
+    args = _parse_args()
+    cfg = _cfg_from_namespace(args)
+    run_stage1_cfg(cfg, segy_paths=None)
 
 
 if __name__ == '__main__':
