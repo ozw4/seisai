@@ -16,6 +16,7 @@ from seisai_utils.config import (
     require_dict,
 )
 from seisai_utils.segy_write import write_segy_float32_like_input_with_text0_append
+from seisai_utils.validator import require_positive_float as _require_positive_float
 
 from seisai_engine.infer.ffid_segy2segy import (
     Tiled2DConfig,
@@ -115,17 +116,6 @@ apply_unknown_overrides = partial(
     _apply_unknown_overrides,
     safe_paths=_SAFE_OVERRIDE_PATHS,
 )
-
-
-def _require_positive_float(value: object, *, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        msg = f'{name} must be float'
-        raise TypeError(msg)
-    out = float(value)
-    if not np.isfinite(out) or out <= 0.0:
-        msg = f'{name} must be finite and > 0'
-        raise ValueError(msg)
-    return out
 
 
 def _resolve_standardize_eps(cfg: dict[str, Any]) -> float:

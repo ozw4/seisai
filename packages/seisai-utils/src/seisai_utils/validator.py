@@ -210,6 +210,17 @@ def require_all_finite(x, *, name='x', backend: Backend = 'auto') -> None:
     raise TypeError(msg)
 
 
+def require_positive_float(value: object, *, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f'{name} must be float'
+        raise TypeError(msg)
+    out = float(value)
+    if not np.isfinite(out) or out <= 0.0:
+        msg = f'{name} must be finite and > 0'
+        raise ValueError(msg)
+    return out
+
+
 def require_all_numpy(*xs) -> bool:
     for x in xs:
         if x is None:
