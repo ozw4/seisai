@@ -8,16 +8,15 @@ import numpy as np
 import segyio
 from common.segy_io import read_basic_segy_info
 from stage2.core import run_stage2_core
-from stage2.io import load_stage1_seed_from_infer_npz, resolve_stage2_paths
+from stage2.io import resolve_stage2_paths
 from stage2.outputs import (
     write_phase_pick_csr_npz_if_enabled,
     write_stage2_sidecar_npz,
     write_win512_segy,
 )
+from stage2b.io import load_stage4_seed_from_pred_npz
 
 
-# Keep this module focused on per-file processing by receiving stage-local helpers
-# from the caller (stage2_make_psn512_windows.py).
 def process_one_segy(
     segy_path: Path,
     *,
@@ -37,6 +36,7 @@ def process_one_segy(
     upsample_256_to_512_linear_fn: Callable[..., np.ndarray],
     build_phase_pick_csr_npz_fn: Callable[..., int],
 ) -> None:
+    del load_stage1_local_trend_center_i_fn
     validate_stage2_threshold_cfg_fn(cfg=cfg)
 
     paths = resolve_stage2_paths(
@@ -59,12 +59,11 @@ def process_one_segy(
             msg = f'dt_us must be divisible by {cfg.up_factor}. got {dt_us_in}'
             raise ValueError(msg)
 
-        seed = load_stage1_seed_from_infer_npz(
-            infer_npz=paths.infer_npz,
+        seed = load_stage4_seed_from_pred_npz(
+            pred_npz=paths.infer_npz,
             n_traces=n_traces,
             dt_sec_in=dt_sec_in,
             cfg=cfg,
-            load_stage1_local_trend_center_i_fn=load_stage1_local_trend_center_i_fn,
         )
         core = run_stage2_core(
             src=src,

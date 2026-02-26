@@ -17,11 +17,15 @@ class Stage2Paths:
 
 
 @dataclass(frozen=True)
-class Stage1Seed:
+class Stage2Seed:
     pick_final: np.ndarray
     scores_weight: dict[str, np.ndarray]
     trend_center_i_local: np.ndarray
     local_trend_ok: np.ndarray
+
+
+# Backward-compatible alias.
+Stage1Seed = Stage2Seed
 
 
 def resolve_stage2_paths(
@@ -61,7 +65,7 @@ def load_stage1_seed_from_infer_npz(
     dt_sec_in: float,
     cfg,
     load_stage1_local_trend_center_i_fn: Callable[..., tuple[np.ndarray, np.ndarray]],
-) -> Stage1Seed:
+) -> Stage2Seed:
     with np.load(infer_npz, allow_pickle=False) as z:
         pick_final = npz_1d(
             z,
@@ -88,7 +92,7 @@ def load_stage1_seed_from_infer_npz(
             cfg=cfg,
         )
 
-    return Stage1Seed(
+    return Stage2Seed(
         pick_final=pick_final,
         scores_weight=scores_weight,
         trend_center_i_local=trend_center_i_local,
@@ -98,6 +102,7 @@ def load_stage1_seed_from_infer_npz(
 
 __all__ = [
     'Stage1Seed',
+    'Stage2Seed',
     'Stage2Paths',
     'load_stage1_seed_from_infer_npz',
     'resolve_stage2_paths',
