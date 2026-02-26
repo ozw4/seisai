@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+import torch
 from seisai_utils.config import optional_str, require_dict
 from seisai_utils.overrides import deep_merge_dict, parse_override_token, set_nested_key
 
@@ -13,9 +16,11 @@ from seisai_engine.pipelines.common import resolve_relpath
 __all__ = [
     'apply_unknown_overrides',
     'build_merged_cfg',
+    'build_merged_cfg_with_ckpt_cfg',
     'cfg_hash',
     'get_allow_unsafe_override',
     'is_strict_int',
+    'load_ckpt_cfg_for_merge',
     'merge_with_precedence',
     'resolve_ckpt_path',
     'resolve_segy_files',
@@ -148,7 +153,7 @@ def build_merged_cfg(
     default_cfg: dict[str, Any],
     safe_paths: frozenset[str],
     *,
-    ckpt_cfg_loader: Callable[[dict[str, Any], Path], dict[str, Any]],
+    ckpt_cfg_loader: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     pre_cfg = deep_merge_dict(default_cfg, infer_yaml_cfg)
     pre_cfg = apply_unknown_overrides(
@@ -156,7 +161,11 @@ def build_merged_cfg(
         unknown_overrides=unknown_overrides,
         safe_paths=safe_paths,
     )
-    ckpt_cfg = ckpt_cfg_loader(pre_cfg, base_dir)
+    ckpt_cfg = _call_ckpt_cfg_loader(
+        ckpt_cfg_loader=ckpt_cfg_loader,
+        infer_cfg_for_ckpt=pre_cfg,
+        base_dir=base_dir,
+    )
     merged = merge_with_precedence(default_cfg, ckpt_cfg, infer_yaml_cfg)
     merged = apply_unknown_overrides(
         cfg=merged,
@@ -165,3 +174,70 @@ def build_merged_cfg(
     )
     return merged
 
+
+def _coerce_ckpt_cfg_to_dict(cfg_obj: Any) -> dict[str, Any] | None:
+    if isinstance(cfg_obj, dict):
+        return cfg_obj
+    if cfg_obj is None:
+        return None
+    if is_dataclass(cfg_obj):
+        asdict_obj = asdict(cfg_obj)
+        return asdict_obj if isinstance(asdict_obj, dict) else None
+    try:
+        out = dict(cfg_obj)
+    except (TypeError, ValueError):
+        return None
+    return out if isinstance(out, dict) else None
+
+
+def _call_ckpt_cfg_loader(
+    *,
+    ckpt_cfg_loader: Callable[..., dict[str, Any]],
+    infer_cfg_for_ckpt: dict[str, Any],
+    base_dir: Path,
+) -> dict[str, Any]:
+    try:
+        params = inspect.signature(ckpt_cfg_loader).parameters
+    except (TypeError, ValueError):
+        return ckpt_cfg_loader(infer_cfg_for_ckpt, base_dir)
+    if 'infer_cfg_for_ckpt' in params and 'base_dir' in params:
+        return ckpt_cfg_loader(
+            infer_cfg_for_ckpt=infer_cfg_for_ckpt,
+            base_dir=base_dir,
+        )
+    return ckpt_cfg_loader(infer_cfg_for_ckpt, base_dir)
+
+
+def load_ckpt_cfg_for_merge(
+    *,
+    infer_cfg_for_ckpt: dict[str, Any],
+    base_dir: Path,
+) -> dict[str, Any]:
+    ckpt_path = resolve_ckpt_path(infer_cfg_for_ckpt, base_dir=base_dir)
+    ckpt = torch.load(ckpt_path, map_location='cpu')
+    if not isinstance(ckpt, dict):
+        msg = 'checkpoint must be dict'
+        raise TypeError(msg)
+    cfg_from_ckpt = _coerce_ckpt_cfg_to_dict(ckpt.get('cfg'))
+    if cfg_from_ckpt is None:
+        msg = 'checkpoint must contain dict cfg'
+        raise TypeError(msg)
+    return cfg_from_ckpt
+
+
+def build_merged_cfg_with_ckpt_cfg(
+    *,
+    infer_yaml_cfg: dict[str, Any],
+    base_dir: Path,
+    unknown_overrides: list[str],
+    default_cfg: dict[str, Any],
+    safe_paths: set[str] | frozenset[str],
+) -> dict[str, Any]:
+    return build_merged_cfg(
+        infer_yaml_cfg=infer_yaml_cfg,
+        base_dir=base_dir,
+        unknown_overrides=unknown_overrides,
+        default_cfg=default_cfg,
+        safe_paths=frozenset(safe_paths),
+        ckpt_cfg_loader=load_ckpt_cfg_for_merge,
+    )

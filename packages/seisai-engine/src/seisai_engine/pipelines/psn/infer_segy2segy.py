@@ -31,7 +31,7 @@ from seisai_engine.infer.segy2segy_cli_common import (
     apply_unknown_overrides as _apply_unknown_overrides,
 )
 from seisai_engine.infer.segy2segy_cli_common import (
-    build_merged_cfg as _build_merged_cfg_common,
+    build_merged_cfg_with_ckpt_cfg,
 )
 from seisai_engine.infer.segy2segy_cli_common import cfg_hash as _cfg_hash
 from seisai_engine.infer.segy2segy_cli_common import is_strict_int as _is_strict_int
@@ -607,36 +607,18 @@ def run_infer_and_write(
     return out_paths
 
 
-def _load_ckpt_cfg_for_merge(
-    *,
-    base_dir: Path,
-    infer_cfg_for_ckpt: dict[str, Any],
-) -> dict[str, Any]:
-    ckpt_path = _resolve_ckpt_path(infer_cfg_for_ckpt, base_dir=base_dir)
-    ckpt = load_checkpoint(ckpt_path)
-    cfg_from_ckpt = ckpt.get('cfg')
-    if not isinstance(cfg_from_ckpt, dict):
-        msg = 'checkpoint must contain dict cfg'
-        raise TypeError(msg)
-    return cfg_from_ckpt
-
-
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
     args, unknown = parser.parse_known_args(argv)
 
     infer_yaml_cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
-    merged_cfg = _build_merged_cfg_common(
+    merged_cfg = build_merged_cfg_with_ckpt_cfg(
         infer_yaml_cfg=infer_yaml_cfg,
         base_dir=base_dir,
         unknown_overrides=unknown,
         default_cfg=_default_cfg(),
         safe_paths=_SAFE_OVERRIDE_PATHS,
-        ckpt_cfg_loader=lambda infer_cfg_for_ckpt, local_base_dir: _load_ckpt_cfg_for_merge(
-            base_dir=local_base_dir,
-            infer_cfg_for_ckpt=infer_cfg_for_ckpt,
-        ),
     )
     out_paths = run_infer_and_write(cfg=merged_cfg, base_dir=base_dir)
     for path in out_paths:
