@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import segyio
 import torch
@@ -16,13 +15,12 @@ from jogsarar_shared import (
 from seisai_dataset.config import LoaderConfig
 from seisai_dataset.file_info import build_file_info_dataclass
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
-from seisai_pick.lmo import apply_lmo_linear, lmo_correct_picks
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
 from seisai_pick.score.confidence_from_prob import (
     trace_confidence_from_prob_local_window,
 )
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
-from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
+from jogsarar_viz.noop import save_stage1_gather_viz_noop
 
 BuildFileInfoFn = Callable[..., object]
 SnapPicksFn = Callable[..., object]
@@ -47,7 +45,7 @@ def process_one_segy(
     fit_local_trend_sec_fn: Callable[..., tuple[np.ndarray, np.ndarray]],
     save_conf_scatter_fn: Callable[..., None],
     scale01_by_percentile_fn: Callable[..., tuple[np.ndarray, tuple[float, float]]],
-    plot_score_panel_1d_fn: Callable[..., None],
+    save_gather_viz_fn: Callable[..., None] = save_stage1_gather_viz_noop,
 ) -> None:
     HEADER_CACHE_DIR = cfg.header_cache_dir
     WAVEFORM_MODE = str(cfg.waveform_mode)
@@ -608,206 +606,44 @@ def process_one_segy(
             # Visualization (LMO display only)
             # -----------------
             if viz_ffids and int(ffid) in viz_ffids:
-                if float(np.max(np.abs(wave_pad))) <= 0.0:
-                    continue
-
                 viz_dir = out_dir / viz_dirname
-                viz_dir.mkdir(parents=True, exist_ok=True)
                 png_path = viz_dir / f'{segy_path.stem}.ffid{int(ffid)}.png'
-
-                seis_lmo = apply_lmo_linear(
-                    wave_pad[:, :n_samples_orig],
-                    offs_m,
-                    dt_sec=dt_sec,
-                    vel_mps=float(LMO_VEL_MPS),
-                    fill=0.0,
-                    bulk_shift_samples=float(LMO_BULK_SHIFT_SAMPLES),
+                save_gather_viz_fn(
+                    out_png=png_path,
+                    wave_pad=wave_pad,
+                    n_samples_orig=int(n_samples_orig),
+                    offsets_m=offs_m,
+                    dt_sec=float(dt_sec),
+                    pick_argmax=pick_argmax,
+                    nopick_mask=nopick,
+                    pick_out_i=pick_out_i,
+                    invalid_trace_mask=invalid,
+                    rs_label=rs_label,
+                    plot_start=int(PLOT_START),
+                    plot_end=int(PLOT_END),
+                    lmo_vel_mps=float(LMO_VEL_MPS),
+                    lmo_bulk_shift_samples=float(LMO_BULK_SHIFT_SAMPLES),
+                    viz_score_components=bool(VIZ_SCORE_COMPONENTS),
+                    conf_prob1=conf_prob1,
+                    conf_trend1=conf_trend1,
+                    conf_rs1=conf_rs1,
+                    viz_conf_prob_scale_enable=bool(VIZ_CONF_PROB_SCALE_ENABLE),
+                    viz_conf_prob_pct_lo=float(VIZ_CONF_PROB_PCT_LO),
+                    viz_conf_prob_pct_hi=float(VIZ_CONF_PROB_PCT_HI),
+                    viz_conf_prob_pct_eps=float(VIZ_CONF_PROB_PCT_EPS),
+                    viz_score_style=str(VIZ_SCORE_STYLE),
+                    viz_ymax_conf_prob=VIZ_YMAX_CONF_PROB,
+                    viz_ymax_conf_trend=VIZ_YMAX_CONF_TREND,
+                    viz_ymax_conf_rs=VIZ_YMAX_CONF_RS,
+                    viz_trend_line_enable=bool(VIZ_TREND_LINE_ENABLE),
+                    t_trend_sec=t_trend_sec,
+                    viz_trend_line_lw=float(VIZ_TREND_LINE_LW),
+                    viz_trend_line_alpha=float(VIZ_TREND_LINE_ALPHA),
+                    viz_trend_line_color=str(VIZ_TREND_LINE_COLOR),
+                    viz_trend_line_label=str(VIZ_TREND_LINE_LABEL),
+                    title=f'{segy_path.stem} ffid={int(ffid)} (LMO v={LMO_VEL_MPS:.1f} m/s)',
+                    scale01_by_percentile_fn=scale01_by_percentile_fn,
                 )
-
-                p1_viz = pick_argmax.astype(np.float32, copy=False).copy()
-                p1_viz[nopick] = np.nan
-
-                p2_viz = pick_out_i.astype(np.float32, copy=False).copy()
-                p2_viz[pick_out_i == 0] = np.nan
-                p2_viz[invalid] = np.nan
-
-                p1_lmo = lmo_correct_picks(
-                    p1_viz, offs_m, dt_sec=dt_sec, vel_mps=float(LMO_VEL_MPS)
-                )
-                p2_lmo = lmo_correct_picks(
-                    p2_viz, offs_m, dt_sec=dt_sec, vel_mps=float(LMO_VEL_MPS)
-                )
-
-                seis_win = seis_lmo[:, PLOT_START:PLOT_END].astype(
-                    np.float32, copy=False
-                )
-
-                pred1_win = (
-                    p1_lmo - float(PLOT_START) + float(LMO_BULK_SHIFT_SAMPLES)
-                ).astype(np.float32, copy=False)
-                pred2_win = (
-                    p2_lmo - float(PLOT_START) + float(LMO_BULK_SHIFT_SAMPLES)
-                ).astype(np.float32, copy=False)
-
-                keep = np.max(np.abs(seis_win), axis=1) > 0.0
-                if not np.any(keep):
-                    continue
-
-                x_keep = np.flatnonzero(keep).astype(np.float32)
-
-                seis_win = seis_win[keep]
-                pred1_win = pred1_win[keep]
-                pred2_win = pred2_win[keep]
-
-                seis_win = (seis_win - np.mean(seis_win, axis=1, keepdims=True)) / (
-                    np.std(seis_win, axis=1, keepdims=True) + 1e-10
-                )
-
-                pick_overlays = (
-                    PickOverlay(
-                        pred1_win,
-                        unit='sample',
-                        label='argmax',
-                        marker='o',
-                        size=14.0,
-                        color='r',
-                        alpha=0.9,
-                    ),
-                    PickOverlay(
-                        pred2_win,
-                        unit='sample',
-                        label=rs_label,
-                        marker='x',
-                        size=18.0,
-                        color='b',
-                        alpha=0.9,
-                    ),
-                )
-
-                if VIZ_SCORE_COMPONENTS:
-                    fig, axes = plt.subplots(
-                        4,
-                        1,
-                        figsize=(15, 13),
-                        sharex=True,
-                        gridspec_kw={'height_ratios': [3.2, 1.0, 1.0, 1.0]},
-                    )
-                    ax_wiggle, ax_prob, ax_trend, ax_rs = axes
-                else:
-                    fig, ax_wiggle = plt.subplots(figsize=(15, 10))
-                    ax_prob = ax_trend = ax_rs = None
-
-                plot_wiggle(
-                    seis_win,
-                    ax=ax_wiggle,
-                    cfg=WiggleConfig(
-                        dt=float(dt_sec),
-                        t0=float(PLOT_START) * float(dt_sec),
-                        time_axis=1,
-                        x=x_keep,
-                        normalize='trace',
-                        gain=2.0,
-                        fill_positive=True,
-                        picks=pick_overlays,
-                        show_legend=True,
-                    ),
-                )
-
-                # ---- trend line overlay ----
-                if (
-                    VIZ_TREND_LINE_ENABLE
-                    and ('t_trend_sec' in locals())
-                    and (t_trend_sec is not None)
-                ):
-                    dt = float(dt_sec)
-                    if dt <= 0.0:
-                        msg = f'dt_sec must be positive, got {dt_sec}'
-                        raise ValueError(msg)
-
-                    trend_i = (np.asarray(t_trend_sec, dtype=np.float32) / dt).astype(
-                        np.float32, copy=False
-                    )
-                    trend_i = trend_i.copy()
-                    trend_i[invalid] = np.nan
-
-                    trend_lmo = lmo_correct_picks(
-                        trend_i, offs_m, dt_sec=dt, vel_mps=float(LMO_VEL_MPS)
-                    )
-
-                    trend_win = (
-                        trend_lmo - float(PLOT_START) + float(LMO_BULK_SHIFT_SAMPLES)
-                    ).astype(np.float32, copy=False)
-                    trend_win = trend_win[keep]
-
-                    y_trend_sec = float(PLOT_START) * dt + trend_win * dt
-
-                    ax_wiggle.plot(
-                        x_keep,
-                        y_trend_sec,
-                        lw=float(VIZ_TREND_LINE_LW),
-                        alpha=float(VIZ_TREND_LINE_ALPHA),
-                        color=str(VIZ_TREND_LINE_COLOR),
-                        label=str(VIZ_TREND_LINE_LABEL),
-                        zorder=7,
-                    )
-                    ax_wiggle.legend(loc='best')
-
-                # ---- p1成分スコア（conf_prob1 は percentile scaling で 0..1 描画） ----
-                if ax_prob is not None:
-                    s_prob_raw = np.asarray(conf_prob1, dtype=np.float32)[keep]
-                    if VIZ_CONF_PROB_SCALE_ENABLE:
-                        s_prob_viz01, (plo, phi) = scale01_by_percentile_fn(
-                            s_prob_raw,
-                            pct_lo=float(VIZ_CONF_PROB_PCT_LO),
-                            pct_hi=float(VIZ_CONF_PROB_PCT_HI),
-                            eps=float(VIZ_CONF_PROB_PCT_EPS),
-                        )
-                        prob_title = (
-                            f'conf_prob (p1) viz01 pct[{VIZ_CONF_PROB_PCT_LO:.0f},{VIZ_CONF_PROB_PCT_HI:.0f}] '
-                            f'raw={plo:.3g}..{phi:.3g}'
-                        )
-                        s_prob_plot = s_prob_viz01
-                    else:
-                        prob_title = 'conf_prob (p1) raw'
-                        s_prob_plot = s_prob_raw
-
-                    s_trend = np.asarray(conf_trend1, dtype=np.float32)[keep]
-                    s_rs = np.asarray(conf_rs1, dtype=np.float32)[keep]
-
-                    plot_score_panel_1d_fn(
-                        ax=ax_prob,
-                        x=x_keep,
-                        y=s_prob_plot,
-                        title=prob_title,
-                        ymax=VIZ_YMAX_CONF_PROB,
-                        style=VIZ_SCORE_STYLE,
-                    )
-                    plot_score_panel_1d_fn(
-                        ax=ax_trend,
-                        x=x_keep,
-                        y=s_trend,
-                        title='conf_trend (p1)',
-                        ymax=VIZ_YMAX_CONF_TREND,
-                        style=VIZ_SCORE_STYLE,
-                    )
-                    plot_score_panel_1d_fn(
-                        ax=ax_rs,
-                        x=x_keep,
-                        y=s_rs,
-                        title='conf_rs (p1)',
-                        ymax=VIZ_YMAX_CONF_RS,
-                        style=VIZ_SCORE_STYLE,
-                    )
-                    ax_rs.set_xlabel('trace index')
-
-                ax_wiggle.set_title(
-                    f'{segy_path.stem} ffid={int(ffid)} (LMO v={LMO_VEL_MPS:.1f} m/s)'
-                )
-
-                fig.tight_layout()
-                fig.savefig(png_path, dpi=200)
-                plt.close(fig)
-                print(f'[VIZ] saved {png_path}')
 
         out_dir.mkdir(parents=True, exist_ok=True)
         stem = segy_path.stem

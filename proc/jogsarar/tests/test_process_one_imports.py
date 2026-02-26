@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import builtins
 import importlib
+import sys
 
 import pytest
 
@@ -10,6 +12,49 @@ pytest.importorskip('seisai_engine')
 pytest.importorskip('seisai_models')
 pytest.importorskip('seisai_pick')
 pytest.importorskip('seisai_utils')
+
+
+def _block_viz_backend_imports(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_import = builtins.__import__
+
+    def guarded_import(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ):
+        if name == 'matplotlib' or name.startswith('matplotlib.'):
+            raise AssertionError(f'matplotlib import is forbidden during module import: {name}')
+        if name == 'seisai_utils.viz_wiggle' or name.startswith(
+            'seisai_utils.viz_wiggle.'
+        ):
+            raise AssertionError(
+                f'seisai_utils.viz_wiggle import is forbidden during module import: {name}'
+            )
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, '__import__', guarded_import)
+
+
+@pytest.mark.parametrize(
+    'module_name',
+    (
+        'stage1.process_one',
+        'stage4.process_one',
+        'stage1_fbp_infer_raw',
+        'stage4_psn512_infer_to_raw',
+    ),
+)
+def test_target_modules_import_without_viz_backends(
+    monkeypatch: pytest.MonkeyPatch, module_name: str
+) -> None:
+    _block_viz_backend_imports(monkeypatch)
+
+    if module_name in sys.modules:
+        importlib.reload(sys.modules[module_name])
+        return
+    importlib.import_module(module_name)
 
 
 def test_stage_process_one_modules_importable() -> None:

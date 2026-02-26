@@ -9,7 +9,6 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import segyio
 import torch
@@ -28,25 +27,17 @@ from config_io import (
 from stage1.process_one import process_one_segy as _process_one_segy
 from jogsarar_shared import (
     TilePerTraceStandardize,
-    compute_conf_rs_from_residual_statics,
-    compute_conf_trend_gaussian_var,
-    compute_residual_statics_metrics,
     find_segy_files,
-    valid_pick_mask,
 )
 from seisai_dataset.config import LoaderConfig
 from seisai_dataset.file_info import build_file_info_dataclass
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from seisai_engine.postprocess.velocity_filter_op import apply_velocity_filt_prob
 from seisai_engine.predict import _run_tiled
-from seisai_pick.lmo import apply_lmo_linear, lmo_correct_picks
 from seisai_pick.pickio.io_grstat import numpy2fbcrd
-from seisai_pick.score.confidence_from_prob import (
-    trace_confidence_from_prob_local_window,
-)
 from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 from seisai_pick.trend.trend_fit import robust_linear_trend
-from seisai_utils.viz_wiggle import PickOverlay, WiggleConfig, plot_wiggle
+from jogsarar_viz.noop import save_conf_scatter_noop, save_stage1_gather_viz_noop
 
 BuildFileInfoFn = Callable[..., Any]
 SnapPicksFn = Callable[..., Any]
@@ -155,41 +146,6 @@ OUT_DIR = DEFAULT_STAGE1_CFG.out_infer_root
 WEIGHTS_PATH = DEFAULT_STAGE1_CFG.weights_path
 VIZ_EVERY_N_SHOTS = DEFAULT_STAGE1_CFG.viz_every_n_shots
 VIZ_DIRNAME = DEFAULT_STAGE1_CFG.viz_dirname
-
-
-def _plot_score_panel_1d(
-    *,
-    ax: plt.Axes,
-    x: np.ndarray,
-    y: np.ndarray,
-    title: str,
-    ymax: float | None,
-    style: str,
-) -> None:
-    xx = np.asarray(x, dtype=np.float32)
-    yy = np.asarray(y, dtype=np.float32)
-
-    if xx.ndim != 1 or yy.ndim != 1 or xx.shape != yy.shape:
-        msg = f'x/y must be (N,), got x={xx.shape}, y={yy.shape}'
-        raise ValueError(msg)
-
-    st = str(style).lower()
-    if st not in ('bar', 'line'):
-        msg = f"style must be 'bar' or 'line', got {style!r}"
-        raise ValueError(msg)
-
-    if st == 'bar':
-        ax.bar(xx, yy, width=1.0, alpha=0.8)
-    else:
-        ax.plot(xx, yy, lw=1.2)
-
-    ax.set_title(title, fontsize=10)
-    ax.grid(alpha=0.2)
-
-    if ymax is not None:
-        ax.set_ylim(0.0, float(ymax))
-    else:
-        ax.set_ylim(bottom=0.0)
 
 
 def _scale01_by_percentile(
@@ -545,79 +501,6 @@ def run_stage1_cfg(
     print(f'[DONE][STAGE1] processed={n_ok} out_root={out_root}')
 
 
-def _save_conf_scatter(
-    *,
-    out_png: Path,
-    x_abs: np.ndarray,
-    picks_i: np.ndarray,
-    dt_ms: float,
-    conf_prob_viz01: np.ndarray,
-    conf_rs: np.ndarray,
-    conf_trend: np.ndarray,
-    title: str,
-    trend_hat_ms: np.ndarray | None = None,
-) -> None:
-    x = np.asarray(x_abs, dtype=np.float32)
-    pk = np.asarray(picks_i)
-    if x.ndim != 1 or pk.ndim != 1 or x.shape[0] != pk.shape[0]:
-        msg = f'x_abs/picks_i must be (H,), got {x.shape}, {pk.shape}'
-        raise ValueError(msg)
-
-    y_ms = pk.astype(np.float32, copy=False) * float(dt_ms)
-    valid = valid_pick_mask(pk)
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharex=True, sharey=True)
-    panels = [
-        ('conf_prob(viz01)', np.asarray(conf_prob_viz01, dtype=np.float32)),
-        ('conf_trend', np.asarray(conf_trend, dtype=np.float32)),
-        ('conf_rs', np.asarray(conf_rs, dtype=np.float32)),
-    ]
-
-    for ax, (name, cval) in zip(axes.ravel(), panels, strict=True):
-        if cval.shape != x.shape:
-            msg = f'{name} shape mismatch: {cval.shape}, expected {x.shape}'
-            raise ValueError(msg)
-
-        if np.any(valid):
-            sc = ax.scatter(
-                x[valid],
-                y_ms[valid],
-                c=cval[valid],
-                s=12.0,
-                cmap='viridis',
-                vmin=0.0,
-                vmax=1.0,
-            )
-            if trend_hat_ms is not None:
-                th = np.asarray(trend_hat_ms, dtype=np.float32)
-                if th.shape != x.shape:
-                    msg = f'trend_hat_ms shape mismatch: {th.shape}, expected {x.shape}'
-                    raise ValueError(msg)
-                tmask = valid & np.isfinite(th)
-                if np.any(tmask):
-                    ord_i = np.argsort(x[tmask], kind='mergesort')
-                    ax.plot(
-                        x[tmask][ord_i],
-                        th[tmask][ord_i],
-                        color='white',
-                        lw=1.0,
-                        alpha=0.8,
-                    )
-            fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
-
-        ax.set_title(name)
-        ax.grid(alpha=0.2)
-
-    axes[0].set_xlabel('|offset| [m]')
-    axes[1].set_xlabel('|offset| [m]')
-    axes[2].set_xlabel('|offset| [m]')
-    axes[0].set_ylabel('pick [ms]')
-    fig.suptitle(title)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=200)
-    plt.close(fig)
-
-
 def _fit_local_trend_sec(
     *,
     offsets_m: np.ndarray,  # (H,)
@@ -803,6 +686,18 @@ def process_one_segy(
     viz_every_n_shots: int = 0,
     viz_dirname: str = 'viz',
 ) -> None:
+    save_conf_scatter_fn: Callable[..., None] = save_conf_scatter_noop
+    if bool(cfg.conf_viz_enable):
+        from jogsarar_viz.stage1_conf import save_conf_scatter
+
+        save_conf_scatter_fn = save_conf_scatter
+
+    save_gather_viz_fn: Callable[..., None] = save_stage1_gather_viz_noop
+    if int(viz_every_n_shots) > 0:
+        from jogsarar_viz.stage1_gather import save_stage1_gather_viz
+
+        save_gather_viz_fn = save_stage1_gather_viz
+
     _process_one_segy(
         segy_path=segy_path,
         out_dir=out_dir,
@@ -818,9 +713,9 @@ def process_one_segy(
         infer_gather_prob_fn=infer_gather_prob,
         fit_local_trend_split_sides_sec_fn=_fit_local_trend_split_sides_sec,
         fit_local_trend_sec_fn=_fit_local_trend_sec,
-        save_conf_scatter_fn=_save_conf_scatter,
+        save_conf_scatter_fn=save_conf_scatter_fn,
         scale01_by_percentile_fn=_scale01_by_percentile,
-        plot_score_panel_1d_fn=_plot_score_panel_1d,
+        save_gather_viz_fn=save_gather_viz_fn,
     )
 
 
