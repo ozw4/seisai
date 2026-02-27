@@ -1,0 +1,16 @@
+# run_stage2b.yaml
+in_path: /home/dcuser/data/ActiveSeisField/jogsarar/infer_only
+out_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_out
+
+# stage4_pred を読む元 iter（run1234 の出力が iter00 なので 0）
+iter_in: 0
+
+# stage2b の出力先 iter（上書きしたくないので 1）
+iter_out: 1
+
+segy_exts: [".sgy", ".segy"]
+
+# optional（省略すると stage2 の DEFAULT が使われます）
+emit_training_artifacts: true
+thresh_mode: global
+drop_low_frac: 0.05

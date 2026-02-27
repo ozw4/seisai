@@ -3,11 +3,11 @@ stage4:
   # I/O
   in_raw_segy_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_only
   in_win512_segy_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_out/iter00/stage2_win512
-  out_pred_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_out/iter00/stage4_pred
+  out_pred_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_out/iter01/stage4_pred2
   segy_exts: [".sgy", ".segy"]
 
   # model resolve (YAML mode)
-  cfg_yaml: /workspace/proc/jogsarar/configs/config_convnext_prestage2_drop005.yaml
+  cfg_yaml: /workspace/proc/jogsarar/configs/config_convnext_prestage2_drop005_iter1.yaml
   ckpt_path: null
   standardize_eps: 1.0e-8
   device: cuda
@@ -32,7 +32,7 @@ stage4:
   rs_k_neighbors: 5
   rs_n_iter: 1
   rs_mode: diff
-  rs_c_th: 0.8
+  rs_c_th: 0.9
   rs_smooth_method: wls
   rs_lam: 5.0
   rs_subsample: true
@@ -44,23 +44,23 @@ stage4:
 
   # final snap
   snap_mode: trough
-  snap_ltcor: 3
+  snap_ltcor: 4
   log_gather_rs: true
 
   # post-trough refinement
-  post_trough_max_shift: 24
-  post_trough_scan_ahead: 32
+  post_trough_max_shift: 1
+  post_trough_scan_ahead: 2
   post_trough_peak_search: before_pick   # after_pick | before_pick
   post_trough_smooth_win: 5
   post_trough_offs_abs_min_m: null
   post_trough_offs_abs_max_m: null
-  post_trough_a_th: 0.03
+  post_trough_a_th: 0.1
   post_trough_align_zero_pin_tol: 5
   # align shifts to neighborhood
   post_trough_outlier_radius: 3
   post_trough_outlier_min_support: 3
   post_trough_outlier_max_dev: 2
-  post_trough_align_propagate_zero: True
+  post_trough_align_propagate_zero: False
 
   # debug
   post_trough_debug: false
@@ -73,7 +73,7 @@ stage4:
   edge_pick_max_gap_samples: 5
 
   # viz
-  viz_every_n_shots: 100
+  viz_every_n_shots: 20
   viz_dirname: viz
   viz_plot_start: 0
   viz_plot_end: 1000
