@@ -4,16 +4,17 @@ import inspect
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import torch
 from seisai_models.models.encdec2d import EncDec2D
+from seisai_transforms.mask_inference import cover_all_traces_predict_striped
 from seisai_utils.validator import validate_array
 
 from seisai_engine.infer.segy2segy_cli_common import select_state_dict
 from seisai_engine.pipelines.common import build_encdec2d_model, load_checkpoint
-from seisai_engine.predict import infer_tiled_chw
+from seisai_engine.predict import infer_tiled_bchw, infer_tiled_chw
 
 from .fbpick import _resolve_device
 
@@ -84,6 +85,29 @@ def _validate_overlap(
         msg = f'overlap must satisfy overlap < tile, got overlap={overlap}, tile={tile}'
         raise ValueError(msg)
     return ov_h, ov_w
+
+
+def _require_strict_float(value: object, *, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        msg = f'{name} must be float'
+        raise ValueError(msg)
+    out = float(value)
+    if not np.isfinite(out):
+        msg = f'{name} must be finite'
+        raise ValueError(msg)
+    return out
+
+
+def _validate_mask_ratio(mask_ratio: float) -> float:
+    ratio = _require_strict_float(mask_ratio, name='mask_ratio')
+    if ratio == 0.0:
+        return 0.0
+    if not (0.0 < ratio <= 1.0):
+        msg = f'mask_ratio must be 0 or in (0,1], got {mask_ratio}'
+        raise ValueError(msg)
+    return ratio
 
 
 def _validate_model_sig(model_sig: object) -> tuple[dict[str, Any], int, int]:
@@ -267,6 +291,183 @@ def _infer_tiled(
     )
 
 
+def _tile_starts(full: int, tile_size: int, overlap_size: int) -> list[int]:
+    stride = tile_size - overlap_size
+    if stride <= 0:
+        msg = f'invalid stride: tile_size={tile_size}, overlap_size={overlap_size}'
+        raise ValueError(msg)
+    starts = [0]
+    while starts[-1] + tile_size < full:
+        nxt = starts[-1] + stride
+        if nxt + tile_size >= full:
+            starts.append(max(full - tile_size, 0))
+            break
+        starts.append(nxt)
+    return sorted(set(starts))
+
+
+def _pad_bchw_to_min_tile(
+    x_bchw: torch.Tensor,
+    *,
+    tile: tuple[int, int],
+) -> tuple[torch.Tensor, tuple[int, int], tuple[int, int]]:
+    if not isinstance(x_bchw, torch.Tensor):
+        msg = f'x_bchw must be torch.Tensor, got {type(x_bchw)}'
+        raise TypeError(msg)
+    if x_bchw.ndim != 4:
+        msg = f'x_bchw must be (B,C,H,W), got {tuple(x_bchw.shape)}'
+        raise ValueError(msg)
+    tile_h, tile_w = _validate_tile(tile)
+    _, _, h, w = x_bchw.shape
+    orig_hw = (int(h), int(w))
+    target_hw = (max(int(h), tile_h), max(int(w), tile_w))
+    if target_hw == orig_hw:
+        return x_bchw.contiguous(), orig_hw, target_hw
+    x_pad = torch.zeros(
+        (x_bchw.shape[0], x_bchw.shape[1], target_hw[0], target_hw[1]),
+        device=x_bchw.device,
+        dtype=x_bchw.dtype,
+    )
+    x_pad[:, :, : int(h), : int(w)] = x_bchw
+    return x_pad, orig_hw, target_hw
+
+
+def _make_chunk_blend_weight(
+    chunk_h: int,
+    overlap_h: int,
+    *,
+    has_top: bool,
+    has_bottom: bool,
+    device: torch.device,
+) -> torch.Tensor:
+    if chunk_h <= 0:
+        msg = f'chunk_h must be positive, got {chunk_h}'
+        raise ValueError(msg)
+    w_h = torch.ones((chunk_h,), device=device, dtype=torch.float32)
+    if overlap_h <= 0:
+        return w_h.view(1, 1, chunk_h, 1)
+    edge = min(overlap_h, chunk_h)
+    hann = torch.hann_window(chunk_h, periodic=False, device=device, dtype=torch.float32)
+    hann = torch.clamp(hann, min=1e-3)
+    if has_top:
+        w_h[:edge] *= hann[:edge]
+    if has_bottom:
+        w_h[-edge:] *= hann[-edge:]
+    return w_h.view(1, 1, chunk_h, 1)
+
+
+def _infer_cover_chunked(
+    model: torch.nn.Module,
+    x_chw: np.ndarray,
+    *,
+    device: torch.device,
+    tile: tuple[int, int],
+    overlap: tuple[int, int],
+    amp: bool,
+    tiles_per_batch: int,
+    mask_ratio: float,
+    noise_std: float,
+    mask_noise_mode: Literal['replace', 'add'],
+    seed: int | None,
+    passes_batch: int,
+) -> torch.Tensor:
+    validate_array(x_chw, allowed_ndims=(3,), name='x_chw', backend='numpy')
+    x = np.ascontiguousarray(x_chw, dtype=np.float32)
+    x_bchw = torch.from_numpy(x).unsqueeze(0).to(device=device, dtype=torch.float32)
+    if tuple(x_bchw.shape[:2]) != (1, 1):
+        msg = f'cover input must be (1,1,H,W), got {tuple(x_bchw.shape)}'
+        raise ValueError(msg)
+
+    _, _, h, w = x_bchw.shape
+    tile_h, _ = _validate_tile(tile)
+    overlap_h, _ = _validate_overlap(overlap, tile=tile)
+    starts = _tile_starts(int(h), tile_h, overlap_h)
+
+    y_sum = torch.zeros((1, 1, int(h), int(w)), device=device, dtype=torch.float32)
+    weight_sum = torch.zeros((1, 1, int(h), int(w)), device=device, dtype=torch.float32)
+
+    def _predict_fn(xmb: torch.Tensor) -> torch.Tensor:
+        return infer_tiled_bchw(
+            model,
+            xmb,
+            tile=tile,
+            overlap=overlap,
+            amp=amp,
+            use_tqdm=False,
+            tiles_per_batch=tiles_per_batch,
+        )
+
+    rng_devices: list[int] | None = None
+    if x_bchw.is_cuda:
+        if x_bchw.device.index is None:
+            rng_devices = [torch.cuda.current_device()]
+        else:
+            rng_devices = [int(x_bchw.device.index)]
+
+    with torch.random.fork_rng(devices=rng_devices, enabled=seed is not None):
+        if seed is not None:
+            torch.manual_seed(seed)
+
+        for idx, start in enumerate(starts):
+            stop = min(int(start) + tile_h, int(h))
+            x_chunk = x_bchw[:, :, int(start) : int(stop), :]
+            x_chunk_pad, chunk_hw, chunk_target = _pad_bchw_to_min_tile(
+                x_chunk, tile=tile
+            )
+
+            y_chunk_pad = cover_all_traces_predict_striped(
+                model,
+                x_chunk_pad,
+                mask_ratio=mask_ratio,
+                band_width=1,
+                noise_std=noise_std,
+                mask_noise_mode=mask_noise_mode,
+                use_amp=amp,
+                device=device,
+                offsets=(0,),
+                passes_batch=passes_batch,
+                predict_fn=_predict_fn,
+            )
+            if tuple(y_chunk_pad.shape) != (
+                1,
+                1,
+                int(chunk_target[0]),
+                int(chunk_target[1]),
+            ):
+                msg = (
+                    'cover chunk output shape mismatch: '
+                    f'got {tuple(y_chunk_pad.shape)}, expected '
+                    f'(1,1,{int(chunk_target[0])},{int(chunk_target[1])})'
+                )
+                raise ValueError(msg)
+
+            y_chunk = y_chunk_pad[:, :, : int(chunk_hw[0]), : int(chunk_hw[1])].to(
+                torch.float32
+            )
+            if tuple(y_chunk.shape) != (1, 1, int(stop - start), int(w)):
+                msg = (
+                    'cover chunk crop shape mismatch: '
+                    f'got {tuple(y_chunk.shape)}, expected '
+                    f'(1,1,{int(stop - start)},{int(w)})'
+                )
+                raise ValueError(msg)
+
+            w_chunk = _make_chunk_blend_weight(
+                int(stop - start),
+                overlap_h,
+                has_top=(idx > 0),
+                has_bottom=(idx < (len(starts) - 1)),
+                device=device,
+            )
+            y_sum[:, :, int(start) : int(stop), :] += y_chunk * w_chunk
+            weight_sum[:, :, int(start) : int(stop), :] += w_chunk
+
+    if not torch.all(weight_sum > 0):
+        msg = 'cover chunk blending produced zero-weight pixels'
+        raise RuntimeError(msg)
+    return y_sum / weight_sum
+
+
 def _to_float32_numpy(arr: torch.Tensor | np.ndarray) -> np.ndarray:
     if isinstance(arr, torch.Tensor):
         np_arr = arr.detach().cpu().numpy()
@@ -289,6 +490,11 @@ def infer_denoise_hw(
     amp: bool = True,
     tiles_per_batch: int = 8,
     use_ema: bool | None = None,
+    mask_ratio: float = 0.0,
+    noise_std: float = 1.0,
+    mask_noise_mode: Literal['replace', 'add'] = 'replace',
+    seed: int | None = 12345,
+    passes_batch: int = 4,
 ) -> np.ndarray:
     validate_array(section_hw, allowed_ndims=(2,), name='section_hw', backend='numpy')
     section = np.ascontiguousarray(section_hw, dtype=np.float32)
@@ -305,6 +511,21 @@ def infer_denoise_hw(
     tiles_batch = _require_strict_int(tiles_per_batch, name='tiles_per_batch')
     if tiles_batch <= 0:
         msg = f'tiles_per_batch must be > 0, got {tiles_per_batch}'
+        raise ValueError(msg)
+    mask_ratio_value = _validate_mask_ratio(mask_ratio)
+    noise_std_value = _require_strict_float(noise_std, name='noise_std')
+    if noise_std_value < 0.0:
+        msg = f'noise_std must be >= 0, got {noise_std}'
+        raise ValueError(msg)
+    if mask_noise_mode not in ('replace', 'add'):
+        msg = f'mask_noise_mode must be "replace" or "add", got {mask_noise_mode}'
+        raise ValueError(msg)
+    seed_value = None
+    if seed is not None:
+        seed_value = _require_strict_int(seed, name='seed')
+    passes_batch_value = _require_strict_int(passes_batch, name='passes_batch')
+    if passes_batch_value <= 0:
+        msg = f'passes_batch must be > 0, got {passes_batch}'
         raise ValueError(msg)
 
     resolved_device = _resolve_device(device)
@@ -326,14 +547,30 @@ def infer_denoise_hw(
         msg = f'input shape mismatch: x_orig_hw={x_orig_hw}, orig_hw={orig_hw}'
         raise ValueError(msg)
 
-    y_pred = _infer_tiled(
-        bundle.model,
-        x_pad_chw,
-        tile=tile_hw,
-        overlap=overlap_hw,
-        amp=bool(amp),
-        tiles_per_batch=tiles_batch,
-    )
+    if mask_ratio_value == 0.0:
+        y_pred = _infer_tiled(
+            bundle.model,
+            x_pad_chw,
+            tile=tile_hw,
+            overlap=overlap_hw,
+            amp=bool(amp),
+            tiles_per_batch=tiles_batch,
+        )
+    else:
+        y_pred = _infer_cover_chunked(
+            bundle.model,
+            x_pad_chw,
+            device=resolved_device,
+            tile=tile_hw,
+            overlap=overlap_hw,
+            amp=bool(amp),
+            tiles_per_batch=tiles_batch,
+            mask_ratio=mask_ratio_value,
+            noise_std=noise_std_value,
+            mask_noise_mode=mask_noise_mode,
+            seed=seed_value,
+            passes_batch=passes_batch_value,
+        ).squeeze(0)
     y_chw = _to_float32_numpy(y_pred)
     if y_chw.ndim != 3:
         msg = f'infer output must be (C,H,W), got {tuple(y_chw.shape)}'

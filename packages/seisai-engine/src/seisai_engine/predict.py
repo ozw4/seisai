@@ -172,6 +172,48 @@ def _run_tiled(
 
 
 @torch.no_grad()
+def infer_tiled_bchw(
+    model: torch.nn.Module,
+    x_bchw: torch.Tensor,  # tensor(B,C,H,W) 受け取り
+    *,
+    tile: tuple[int, int] = (128, 128),
+    overlap: tuple[int, int] = (32, 32),
+    amp: bool = True,
+    use_tqdm: bool = False,
+    tiles_per_batch: int = 4,
+    tile_transform: ViewCompose | None = None,
+    post_tile_transform: ViewCompose | None = None,
+) -> torch.Tensor:
+    if not isinstance(x_bchw, torch.Tensor):
+        msg = f'x_bchw must be torch.Tensor, got {type(x_bchw)}'
+        raise TypeError(msg)
+    if x_bchw.ndim != 4:
+        msg = f'x_bchw must be (B,C,H,W), got {tuple(x_bchw.shape)}'
+        raise ValueError(msg)
+    try:
+        model_device = next(model.parameters()).device
+    except StopIteration as exc:
+        msg = 'model must have at least one parameter'
+        raise ValueError(msg) from exc
+    if x_bchw.device != model_device:
+        msg = f'x_bchw.device {x_bchw.device} != model.device {model_device}'
+        raise ValueError(msg)
+
+    x_t = x_bchw.contiguous()
+    return _run_tiled(
+        model,
+        x_t,
+        tile=tile,
+        overlap=overlap,
+        amp=amp,
+        use_tqdm=use_tqdm,
+        tiles_per_batch=tiles_per_batch,
+        tile_transform=tile_transform,
+        post_tile_transform=post_tile_transform,
+    )
+
+
+@torch.no_grad()
 def infer_tiled_chw(
     model: torch.nn.Module,
     x_chw: np.ndarray,  # ndarray(CHW) 受け取り
@@ -195,7 +237,7 @@ def infer_tiled_chw(
     device = next(model.parameters()).device
     x_t = torch.from_numpy(x_np).unsqueeze(0).to(device=device, dtype=torch.float32)
 
-    y = _run_tiled(
+    y = infer_tiled_bchw(
         model,
         x_t,
         tile=tile,

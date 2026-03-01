@@ -1,5 +1,5 @@
 mode: infer_only
-in_path: /home/dcuser/data/ActiveSeisField/jogsarar/infer_only
+in_path: /home/dcuser/data/ActiveSeisField/jogsarar/infer_only2
 stage1_ckpt: /home/dcuser/data/model_weight/fbseg_caformer_b36.pth
 stage4_ckpt: /workspace/proc/jogsarar/configs/runs/prestage2_drop005/ckpt/best.pt
 out_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_out

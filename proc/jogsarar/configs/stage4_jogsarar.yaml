@@ -1,7 +1,7 @@
 # stage4_jogsarar.yaml
 stage4:
   # I/O
-  in_raw_segy_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_only
+  in_raw_segy_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_only2
   in_win512_segy_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_out/iter00/stage2_win512
   out_pred_root: /home/dcuser/data/ActiveSeisField/jogsarar/infer_out/iter00/stage4_pred
   segy_exts: [".sgy", ".segy"]
@@ -44,12 +44,12 @@ stage4:
 
   # final snap
   snap_mode: trough
-  snap_ltcor: 3
+  snap_ltcor: 2
   log_gather_rs: true
 
   # post-trough refinement
-  post_trough_max_shift: 24
-  post_trough_scan_ahead: 32
+  post_trough_max_shift: 0
+  post_trough_scan_ahead: 0
   post_trough_peak_search: before_pick   # after_pick | before_pick
   post_trough_smooth_win: 5
   post_trough_offs_abs_min_m: null
