@@ -55,151 +55,64 @@ done
 - `seisai-models` は `timm` を使います。
 - `seisai-engine` は `mlflow>=2.0` を依存に含みます（tracking を使わない場合でも import には入ります）。
 
-## Quick Start: SegyGatherPipelineDataset
+## Quick Start: Pair トレーニング
 
-「SEG-Y → gather 抽出 → transform → gate → BuildPlan で input/target を組み立て」の最小例です。
+Pair は **入力 SEG-Y** と **ターゲット SEG-Y** を 1:1 のペアとして扱い、同一 gather window（同一 trace subset）を切り出して **波形回帰（mapping）** を学習します。
 
-```python
-from torch.utils.data import DataLoader
+代表ユースケース（例）:
+- ノイズ抑制: `noisy → clean`
+- 低周波数補完: `high-freq → low-freq`（または帯域補完後の波形）
 
-from seisai_dataset import (
-    BuildPlan,
-    FirstBreakGate,
-    FirstBreakGateConfig,
-    SegyGatherPipelineDataset,
-)
-from seisai_dataset.builder.builder import (
-    IdentitySignal,
-    MaskedSignal,
-    SelectStack,
-    # FBGaussMap,
-)
-from seisai_transforms.augment import (
-    PerTraceStandardize,
-    RandomCropOrPad,
-    ViewCompose,
-)
-from seisai_transforms.masking import MaskGenerator
+### 0) 前提（データ整合）
+各ペア（`input_segy_files[i]` と `target_segy_files[i]`）で、少なくとも以下が一致している必要があります。
 
-# ---- 1) transform: (H,W0) -> (H,W)
-transform = ViewCompose([
-    PerTraceStandardize(),
-    RandomCropOrPad(target_len=2048),
-])
+- サンプル数（`n_samples`）
+- トレース数（`n_traces`）
+- サンプリング間隔（`dt`）
 
-# ---- 2) gate: quickstart は安定化のため FBLC を無効化
-fbgate = FirstBreakGate(
-    FirstBreakGateConfig(
-        apply_on="off",
-        min_pick_ratio=0.0,
-    )
-)
+加えて、ファイルリストは **同数** かつ **同じ順序**（同じ行番号がペア）に整列させてください。
 
-# ---- 3) plan: input/target を構成 (例: recon + masking)
-mask_gen = MaskGenerator.traces(
-    ratio=0.25,      # masked trace ratio (per-gather)
-    width=1,
-    mode="replace",  # or "add"
-    noise_std=1.0,
-)
-mask_op = MaskedSignal(
-    mask_gen,
-    src="x_view",
-    dst="x_masked",
-    mask_key="mask_bool",
-)
+### 1) デモ実行（同梱 config）
+サンプル config: `examples/config_train_pair.yaml`
 
-plan = BuildPlan(
-    wave_ops=[
-        IdentitySignal(src="x_view", dst="x_orig", copy=True),
-        mask_op,
-    ],
-    label_ops=[
-        # first-break heatmap が必要なら:
-        # FBGaussMap(dst="fb_map", sigma=1.5, src="fb_idx_view"),
-    ],
-    input_stack=SelectStack(keys="x_masked", dst="input"),
-    target_stack=SelectStack(keys="x_orig", dst="target"),
-)
-
-ds = SegyGatherPipelineDataset(
-    segy_files=["/path/input.sgy"],
-    fb_files=["/path/fb.npy"],
-    transform=transform,
-    fbgate=fbgate,
-    plan=plan,
-    use_header_cache=True,
-)
-
-loader = DataLoader(ds, batch_size=2, num_workers=2)
-batch = next(iter(loader))
-
-# batch は dict
-# 代表的なキー: input, target(※plan が作る), mask_bool(任意), meta, trace_valid(任意),
-#              dt_sec, offsets, indices, file_path, key_name, secondary_key, primary_unique,
-#              fb_idx, did_superwindow
+```bash
+python cli/run_pair_train.py --config examples/config_train_pair.yaml
 ```
 
-## Quick Start: Phase Picks (P/S/Noise)
+> `paths.out_dir` が相対パスの場合、**YAML ファイルのあるディレクトリ基準**で解決されます。
 
-CSR 形式の phase pick から P/S/Noise (3-class) の soft target map を作る例です。
+### 2) 自分のデータで実行（paths だけ差し替え）
+`examples/config_train_pair.yaml` の `paths.*_segy_files` を更新します。
+`paths.*_segy_files` は (A) パス配列の直書き、または (B) listfile（1行1パスのテキスト）を指定できます。
 
-仕様:
-- `docs/spec/phase_pick_files_spec.md`
-- `docs/spec/segy_gather_phase_pipeline_dataset_output_contract.md`
+例（listfile 指定）:
 
-```python
-from torch.utils.data import DataLoader
-
-from seisai_dataset import (
-    BuildPlan,
-    FirstBreakGate,
-    FirstBreakGateConfig,
-    SegyGatherPhasePipelineDataset,
-)
-from seisai_dataset.builder.builder import (
-    IdentitySignal,
-    PhasePSNMap,
-    SelectStack,
-)
-from seisai_transforms.augment import (
-    PerTraceStandardize,
-    RandomCropOrPad,
-    ViewCompose,
-)
-
-transform = ViewCompose([
-    PerTraceStandardize(),
-    RandomCropOrPad(target_len=2048),
-])
-
-fbgate = FirstBreakGate(
-    FirstBreakGateConfig(
-        apply_on="off",
-        min_pick_ratio=0.0,
-    )
-)
-
-plan = BuildPlan(
-    wave_ops=[IdentitySignal(src="x_view", dst="x", copy=False)],
-    label_ops=[PhasePSNMap(dst="psn_map", sigma=1.5)],
-    input_stack=SelectStack(keys="x", dst="input"),
-    target_stack=SelectStack(keys="psn_map", dst="target"),
-)
-
-ds = SegyGatherPhasePipelineDataset(
-    segy_files=["/path/input.sgy"],
-    phase_pick_files=["/path/phase_picks.npz"],
-    transform=transform,
-    fbgate=fbgate,
-    plan=plan,
-    include_empty_gathers=False,
-    use_header_cache=True,
-)
-
-loader = DataLoader(ds, batch_size=1, num_workers=0)
-batch = next(iter(loader))
+```yaml
+paths:
+  input_segy_files:  data/train_input.txt
+  target_segy_files: data/train_target.txt
+  infer_input_segy_files:  data/val_input.txt
+  infer_target_segy_files: data/val_target.txt
+  out_dir: ./_pair_out
 ```
+
+学習設定の注意（最低限）:
+- 学習中評価は固定サンプルのため `infer.num_workers: 0` が必須
+- `tile` セクション必須、かつ `tile.tile_h <= infer.subset_traces`
+
+### 3) 生成物
+- checkpoint: `<out_dir>/ckpt/best.pt`
+- 可視化（triptych: Input/Target/Pred）: `<out_dir>/vis/...`
+
+### 4) 推論（SEG-Y → SEG-Y）
+サンプル config: `examples/config_infer_pair.yaml`
+
+```bash
+python cli/run_pair_infer.py --config examples/config_infer_pair.yaml
+```
+
+詳細（paths / YAML / 制約 / 推論の入口）は `docs/examples/quick_start_pair.md` を参照してください。
+
 
 ## Pair dataset example
 
