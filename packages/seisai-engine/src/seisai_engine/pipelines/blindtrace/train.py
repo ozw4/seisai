@@ -175,6 +175,12 @@ def main(argv: list[str] | None = None) -> None:
     if 'infer_phase_pick_files' in paths_raw:
         path_keys.append('paths.infer_phase_pick_files')
 
+    augment_raw = cfg.get('augment')
+    if isinstance(augment_raw, dict):
+        noise_add_raw = augment_raw.get('noise_add')
+        if isinstance(noise_add_raw, dict) and 'segy_files' in noise_add_raw:
+            path_keys.append('augment.noise_add.segy_files')
+
     expand_cfg_listfiles(cfg, keys=path_keys)
 
     _raise_if_deprecated_time_len_keys(

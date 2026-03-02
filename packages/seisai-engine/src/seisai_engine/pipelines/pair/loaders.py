@@ -293,15 +293,19 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
 def load_train_config(config_path: str | Path) -> PairTrainConfig:
     cfg = load_config(str(config_path))
 
-    expand_cfg_listfiles(
-        cfg,
-        keys=[
-            'paths.input_segy_files',
-            'paths.target_segy_files',
-            'paths.infer_input_segy_files',
-            'paths.infer_target_segy_files',
-        ],
-    )
+    path_keys = [
+        'paths.input_segy_files',
+        'paths.target_segy_files',
+        'paths.infer_input_segy_files',
+        'paths.infer_target_segy_files',
+    ]
+    augment_raw = cfg.get('augment')
+    if isinstance(augment_raw, dict):
+        noise_add_raw = augment_raw.get('noise_add')
+        if isinstance(noise_add_raw, dict) and 'segy_files' in noise_add_raw:
+            path_keys.append('augment.noise_add.segy_files')
+
+    expand_cfg_listfiles(cfg, keys=path_keys)
     return load_pair_train_config(cfg)
 
 

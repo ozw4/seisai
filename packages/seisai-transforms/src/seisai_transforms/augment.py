@@ -330,9 +330,13 @@ class AdditiveNoiseMix:
 
         r = rng or np.random.default_rng()
         if self.prob <= 0.0 or float(r.random()) >= self.prob:
-            meta = {'noise_add_applied': False}
+            meta = {
+                'noise_add_applied': False,
+                'noise_add_gain': 0.0,
+            }
+            if self.snr_db_range is not None:
+                meta['noise_add_snr_db'] = float('nan')
             return (x, meta) if return_meta else x
-
         H, W = int(x.shape[0]), int(x.shape[1])
         noise = np.asarray(self.provider.sample((H, W), rng=r))
         if noise.shape != (H, W):

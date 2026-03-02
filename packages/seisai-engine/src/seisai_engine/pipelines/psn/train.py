@@ -477,15 +477,20 @@ def main(argv: list[str] | None = None) -> None:
     args, _unknown = parser.parse_known_args(argv)
 
     cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
-    expand_cfg_listfiles(
-        cfg,
-        keys=[
-            'paths.segy_files',
-            'paths.phase_pick_files',
-            'paths.infer_segy_files',
-            'paths.infer_phase_pick_files',
-        ],
-    )
+
+    path_keys = [
+        'paths.segy_files',
+        'paths.phase_pick_files',
+        'paths.infer_segy_files',
+        'paths.infer_phase_pick_files',
+    ]
+    augment_raw = cfg.get('augment')
+    if isinstance(augment_raw, dict):
+        noise_add_raw = augment_raw.get('noise_add')
+        if isinstance(noise_add_raw, dict) and 'segy_files' in noise_add_raw:
+            path_keys.append('augment.noise_add.segy_files')
+
+    expand_cfg_listfiles(cfg, keys=path_keys)
 
     train_cfg = require_dict(cfg, 'train')
     device_str = optional_str(train_cfg, 'device', 'auto')

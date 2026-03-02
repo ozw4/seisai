@@ -44,15 +44,19 @@ def main(argv: list[str] | None = None) -> None:
 
     cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
     augment_cfg = cfg.get('augment')
-    expand_cfg_listfiles(
-        cfg,
-        keys=[
-            'paths.input_segy_files',
-            'paths.target_segy_files',
-            'paths.infer_input_segy_files',
-            'paths.infer_target_segy_files',
-        ],
-    )
+
+    path_keys = [
+        'paths.input_segy_files',
+        'paths.target_segy_files',
+        'paths.infer_input_segy_files',
+        'paths.infer_target_segy_files',
+    ]
+    if isinstance(augment_cfg, dict):
+        noise_add_raw = augment_cfg.get('noise_add')
+        if isinstance(noise_add_raw, dict) and 'segy_files' in noise_add_raw:
+            path_keys.append('augment.noise_add.segy_files')
+
+    expand_cfg_listfiles(cfg, keys=path_keys)
 
     train_cfg = require_dict(cfg, 'train')
     device_str = optional_str(train_cfg, 'device', 'auto')
