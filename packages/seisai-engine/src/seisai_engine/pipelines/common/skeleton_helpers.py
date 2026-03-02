@@ -133,3 +133,31 @@ def maybe_save_best_min(
         save_checkpoint(ckpt_path, payload)
         return current_val
     return float(best)
+
+
+def maybe_save_best(
+    best: float | None,
+    current: float,
+    ckpt_path: Path,
+    payload: dict,
+    *,
+    mode: str,
+) -> float:
+    mode = str(mode)
+    current_val = float(current)
+
+    if mode == 'min':
+        is_better = best is None or current_val < float(best)
+    elif mode == 'max':
+        is_better = best is None or current_val > float(best)
+    else:
+        msg = f'unknown mode: {mode} (expected min/max)'
+        raise ValueError(msg)
+
+    if is_better:
+        save_checkpoint(ckpt_path, payload)
+        return current_val
+    if best is None:
+        msg = 'best must not be None when is_better is False'
+        raise RuntimeError(msg)
+    return float(best)

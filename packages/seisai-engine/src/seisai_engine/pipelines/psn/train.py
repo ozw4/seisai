@@ -502,11 +502,16 @@ def main(argv: list[str] | None = None) -> None:
     if not typed.ckpt.save_best_only:
         msg = 'ckpt.save_best_only must be true'
         raise ValueError(msg)
-    if typed.ckpt.metric != 'infer_loss':
-        msg = 'ckpt.metric must be "infer_loss"'
+    ckpt_metric = str(typed.ckpt.metric).strip()
+    ckpt_mode = str(typed.ckpt.mode).strip()
+    if not ckpt_metric:
+        msg = 'ckpt.metric must be non-empty'
         raise ValueError(msg)
-    if typed.ckpt.mode != 'min':
-        msg = 'ckpt.mode must be "min"'
+    if ckpt_mode not in ('min', 'max'):
+        msg = f'ckpt.mode must be "min" or "max" (got {ckpt_mode})'
+        raise ValueError(msg)
+    if ckpt_metric in ('infer_loss', 'infer/loss') and ckpt_mode != 'min':
+        msg = 'ckpt.mode must be "min" when ckpt.metric is infer_loss'
         raise ValueError(msg)
 
     model_sig = asdict(typed.model)
@@ -667,6 +672,8 @@ def main(argv: list[str] | None = None) -> None:
         infer_max_batches=common.infer.infer_max_batches,
         vis_n=common.infer.vis_n,
         infer_epoch_fn=infer_epoch_fn,
+        ckpt_metric=str(typed.ckpt.metric),
+        ckpt_mode=str(typed.ckpt.mode),
         ckpt_extra={'output_ids': ['P', 'S', 'N'], 'softmax_axis': 'channel'},
         print_freq=common.train.print_freq,
     )

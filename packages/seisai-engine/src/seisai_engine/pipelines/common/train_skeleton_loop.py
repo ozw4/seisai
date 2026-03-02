@@ -21,7 +21,7 @@ from seisai_engine.train_loop import train_one_epoch
 from .skeleton_helpers import (
     epoch_vis_dir,
     make_train_worker_init_fn,
-    maybe_save_best_min,
+    maybe_save_best,
     set_dataset_rng,
 )
 from .train_skeleton_checkpoint import build_ckpt_payload
@@ -42,7 +42,7 @@ __all__ = [
 
 @dataclass
 class LoopStats:
-    best_infer_loss: float | None
+    best_ckpt_value: float | None
     best_epoch: int | None
     global_step: int
     total_train_steps: int
@@ -168,7 +168,7 @@ def run_training_loop(
     tracking_state: TrackingRunState,
 ) -> LoopStats:
     lr_sched_spec = None
-    best_infer_loss: float | None = None
+    best_ckpt_value: float | None = None
     best_epoch: int | None = None
     global_step = 0
     total_train_steps = 0
@@ -306,7 +306,26 @@ def run_training_loop(
                     raise ValueError(msg)
 
         ckpt_path = ckpt_dir / 'best.pt'
-        did_update = best_infer_loss is None or infer_loss < best_infer_loss
+        monitor_key = str(spec.ckpt_metric)
+        if monitor_key in ('infer_loss', 'infer/loss'):
+            monitor_val = float(infer_loss)
+        elif monitor_key in infer_extra_metrics:
+            monitor_val = float(infer_extra_metrics[monitor_key])
+        else:
+            msg = (
+                'ckpt.metric not found in infer metrics: '
+                f'{monitor_key} (available: infer_loss and {sorted(infer_extra_metrics)})'
+            )
+            raise ValueError(msg)
+
+        mode = str(spec.ckpt_mode)
+        if mode == 'min':
+            did_update = best_ckpt_value is None or monitor_val < float(best_ckpt_value)
+        elif mode == 'max':
+            did_update = best_ckpt_value is None or monitor_val > float(best_ckpt_value)
+        else:
+            msg = f'unknown ckpt.mode: {mode} (expected min/max)'
+            raise ValueError(msg)
         if did_update:
             best_epoch = int(epoch)
         scheduler_state_dict = None
@@ -329,11 +348,12 @@ def run_training_loop(
             ema_controller=ema_controller,
         )
 
-        best_infer_loss = maybe_save_best_min(
-            best_infer_loss,
-            infer_loss,
+        best_ckpt_value = maybe_save_best(
+            best_ckpt_value,
+            monitor_val,
             ckpt_path,
             ckpt_payload,
+            mode=spec.ckpt_mode,
         )
 
         log_epoch_tracking(
@@ -348,7 +368,7 @@ def run_training_loop(
         )
 
     return LoopStats(
-        best_infer_loss=best_infer_loss,
+        best_ckpt_value=best_ckpt_value,
         best_epoch=best_epoch,
         global_step=int(global_step),
         total_train_steps=int(total_train_steps),

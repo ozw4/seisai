@@ -79,6 +79,8 @@ class TrainSkeletonSpec:
     infer_max_batches: int
     vis_n: int
     infer_epoch_fn: InferEpochFn
+    ckpt_metric: str = 'infer_loss'
+    ckpt_mode: str = 'min'
     ckpt_extra: dict[str, Any] | None = None
     print_freq: int = 10
 
@@ -177,10 +179,12 @@ def run_train_skeleton(spec: TrainSkeletonSpec) -> None:
                 'peak_mem_gb': float(peak_mem_gb),
             },
             'results': {
-                'best_infer_loss': (
+                'best_ckpt_metric': str(spec.ckpt_metric),
+                'best_ckpt_mode': str(spec.ckpt_mode),
+                'best_ckpt_value': (
                     None
-                    if loop_stats.best_infer_loss is None
-                    else float(loop_stats.best_infer_loss)
+                    if loop_stats.best_ckpt_value is None
+                    else float(loop_stats.best_ckpt_value)
                 ),
                 'best_epoch': loop_stats.best_epoch,
             },
