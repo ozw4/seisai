@@ -8,13 +8,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
+from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
+from seisai_dataset.noise_decider import EventDetectConfig
 from seisai_utils.config import (
     optional_bool,
     optional_float,
+    optional_int,
     optional_str,
     require_dict,
     require_list_str,
 )
+from seisai_utils.fs import validate_files_exist
 from seisai_utils.listfiles import expand_cfg_listfiles, get_cfg_listfile_meta
 from seisai_utils.viz_phase import make_title_from_batch_meta, save_psn_debug_png
 
@@ -36,6 +40,9 @@ from .build_dataset import build_dataset, build_infer_transform, build_train_tra
 from .build_model import build_model
 from .config import load_psn_train_config
 from .loss import build_psn_criterion
+from .mix_dataset import MixWithNoiseDataset
+from .noise_dataset import PsnNoiseDataset
+from .train_batch_only import PsnTrainBatchOnlyDataset
 
 if TYPE_CHECKING:
     from torch.utils.data import DataLoader
@@ -69,6 +76,181 @@ def _build_dataset_for_subset(
         transform=transform,
         segy_endian=segy_endian,
         sampling_overrides=sampling_overrides,
+    )
+
+
+def _parse_noise_segy_files(paths_cfg: dict) -> list[str]:
+    raw = paths_cfg.get('noise_segy_files', [])
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        msg = 'config.paths.noise_segy_files must be list[str]'
+        raise TypeError(msg)
+    if not all(isinstance(p, str) for p in raw):
+        msg = 'config.paths.noise_segy_files must be list[str]'
+        raise TypeError(msg)
+    return [str(p) for p in raw]
+
+
+def _build_noise_detect_cfg(noise_cfg: dict) -> EventDetectConfig:
+    detect_cfg_raw = noise_cfg.get('detect')
+    if detect_cfg_raw is None:
+        return EventDetectConfig()
+    if not isinstance(detect_cfg_raw, dict):
+        msg = 'config.noise.detect must be dict'
+        raise TypeError(msg)
+    return EventDetectConfig(**detect_cfg_raw)
+
+
+def _build_noise_sampler_cfg(
+    *,
+    cfg: dict,
+    noise_cfg: dict,
+    subset_traces: int,
+) -> tuple[TraceSubsetSamplerConfig, bool]:
+    ds_cfg = require_dict(cfg, 'dataset')
+    sampler_cfg_raw = noise_cfg.get('sampler')
+    if sampler_cfg_raw is None:
+        sampler_cfg_raw = {}
+    if not isinstance(sampler_cfg_raw, dict):
+        msg = 'config.noise.sampler must be dict'
+        raise TypeError(msg)
+
+    default_primary_keys = validate_primary_keys(ds_cfg.get('primary_keys', ['ffid']))
+    primary_keys = validate_primary_keys(
+        sampler_cfg_raw.get('primary_keys', list(default_primary_keys))
+    )
+
+    weights_raw = sampler_cfg_raw.get('primary_key_weights')
+    if weights_raw is None:
+        primary_key_weights = tuple(1.0 for _ in primary_keys)
+    else:
+        if not isinstance(weights_raw, (list, tuple)):
+            msg = 'config.noise.sampler.primary_key_weights must be list[float]'
+            raise TypeError(msg)
+        if len(weights_raw) != len(primary_keys):
+            msg = (
+                'config.noise.sampler.primary_key_weights length must match '
+                'primary_keys length'
+            )
+            raise ValueError(msg)
+        parsed_weights: list[float] = []
+        for w in weights_raw:
+            if isinstance(w, bool) or not isinstance(w, (int, float)):
+                msg = 'config.noise.sampler.primary_key_weights must be list[float]'
+                raise TypeError(msg)
+            parsed_weights.append(float(w))
+        primary_key_weights = tuple(parsed_weights)
+
+    use_superwindow = optional_bool(sampler_cfg_raw, 'use_superwindow', default=False)
+    sw_halfspan = optional_int(sampler_cfg_raw, 'sw_halfspan', 0)
+    sw_prob = optional_float(sampler_cfg_raw, 'sw_prob', 0.3)
+    secondary_key_fixed = optional_bool(
+        sampler_cfg_raw,
+        'secondary_key_fixed',
+        default=False,
+    )
+    if isinstance(sw_halfspan, bool) or int(sw_halfspan) < 0:
+        msg = 'config.noise.sampler.sw_halfspan must be int >= 0'
+        raise ValueError(msg)
+    if float(sw_prob) < 0.0 or float(sw_prob) > 1.0:
+        msg = 'config.noise.sampler.sw_prob must be in [0, 1]'
+        raise ValueError(msg)
+
+    sampler_cfg = TraceSubsetSamplerConfig(
+        primary_keys=tuple(primary_keys),
+        primary_key_weights=tuple(primary_key_weights),
+        use_superwindow=bool(use_superwindow),
+        sw_halfspan=int(sw_halfspan),
+        sw_prob=float(sw_prob),
+        secondary_key_fixed=bool(secondary_key_fixed),
+        subset_traces=int(subset_traces),
+    )
+    return sampler_cfg, bool(secondary_key_fixed)
+
+
+def _maybe_wrap_train_dataset_with_noise_mix(
+    *,
+    cfg: dict,
+    ds_train_full,
+    train_transform,
+    subset_traces: int,
+):
+    noise_cfg_raw = cfg.get('noise')
+    if noise_cfg_raw is None:
+        return ds_train_full
+    if not isinstance(noise_cfg_raw, dict):
+        msg = 'config.noise must be dict'
+        raise TypeError(msg)
+    noise_cfg = noise_cfg_raw
+
+    mix_prob = optional_float(noise_cfg, 'mix_prob', 0.0)
+    if float(mix_prob) < 0.0 or float(mix_prob) > 1.0:
+        msg = 'config.noise.mix_prob must be in [0, 1]'
+        raise ValueError(msg)
+    if float(mix_prob) <= 0.0:
+        return ds_train_full
+
+    paths_cfg = require_dict(cfg, 'paths')
+    noise_segy_files = _parse_noise_segy_files(paths_cfg)
+    if len(noise_segy_files) == 0:
+        return ds_train_full
+    validate_files_exist(noise_segy_files)
+
+    mix_period = optional_int(noise_cfg, 'mix_period', 256)
+    max_retries = optional_int(noise_cfg, 'max_retries', 1000)
+    if isinstance(mix_period, bool) or int(mix_period) < 1:
+        msg = 'config.noise.mix_period must be int >= 1'
+        raise ValueError(msg)
+    if isinstance(max_retries, bool) or int(max_retries) <= 0:
+        msg = 'config.noise.max_retries must be positive int'
+        raise ValueError(msg)
+
+    ds_cfg = require_dict(cfg, 'dataset')
+    waveform_mode = optional_str(ds_cfg, 'waveform_mode', 'eager').lower()
+    if waveform_mode not in ('eager', 'mmap'):
+        msg = 'dataset.waveform_mode must be "eager" or "mmap"'
+        raise ValueError(msg)
+    segy_endian = optional_str(ds_cfg, 'train_endian', 'big').lower()
+    if segy_endian not in ('big', 'little'):
+        msg = 'dataset.train_endian must be "big" or "little"'
+        raise ValueError(msg)
+    use_header_cache = optional_bool(ds_cfg, 'use_header_cache', default=True)
+
+    detect_cfg = _build_noise_detect_cfg(noise_cfg)
+    sampler_cfg, secondary_key_fixed = _build_noise_sampler_cfg(
+        cfg=cfg,
+        noise_cfg=noise_cfg,
+        subset_traces=int(subset_traces),
+    )
+    loader_cfg = LoaderConfig(pad_traces_to=int(subset_traces))
+    noise_ds = PsnNoiseDataset(
+        segy_files=list(noise_segy_files),
+        subset_traces=int(subset_traces),
+        transform=train_transform,
+        detect_cfg=detect_cfg,
+        sampler_cfg=sampler_cfg,
+        loader_cfg=loader_cfg,
+        max_retries=int(max_retries),
+        secondary_key_fixed=bool(secondary_key_fixed),
+        use_header_cache=bool(use_header_cache),
+        header_cache_dir=None,
+        waveform_mode=str(waveform_mode),
+        segy_endian=str(segy_endian),
+    )
+
+    base_train = PsnTrainBatchOnlyDataset(ds_train_full)
+    noise_train = PsnTrainBatchOnlyDataset(noise_ds)
+    print(
+        'PSN online noise mix enabled: '
+        f'p_noise={float(mix_prob):.4f}, period={int(mix_period)}, '
+        f'noise_files={len(noise_segy_files)}'
+    )
+    return MixWithNoiseDataset(
+        base_train,
+        noise_train,
+        p_noise=float(mix_prob),
+        period=int(mix_period),
     )
 
 
@@ -407,6 +589,12 @@ def main(argv: list[str] | None = None) -> None:
         secondary_key_fixed=bool(train_secondary_key_fixed),
         segy_endian=str(train_endian),
         sampling_overrides=train_sampling_overrides,
+    )
+    ds_train_full = _maybe_wrap_train_dataset_with_noise_mix(
+        cfg=cfg,
+        ds_train_full=ds_train_full,
+        train_transform=train_transform,
+        subset_traces=int(typed.train.subset_traces),
     )
     ds_infer_full = _build_dataset_for_subset(
         cfg,

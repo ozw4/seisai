@@ -3,6 +3,7 @@ paths:
   phase_pick_files: [../test_data//20200623002546_phase_picks.npz]
   infer_segy_files: [../test_data//20200623002546.sgy]
   infer_phase_pick_files: [../test_data//20200623002546_phase_picks.npz]
+  noise_segy_files: [] # 空なら混合しない
   out_dir: ./_psn_out
 
 dataset:
@@ -14,6 +15,35 @@ dataset:
   secondary_key_fixed: false
   train_endian: big
   infer_endian: big
+
+noise:
+  mix_prob: 0.0 # 0なら混合しない
+  mix_period: 256
+  max_retries: 1000
+
+  # sampler は任意。無ければ dataset.primary_keys を使ってデフォルト構築する
+  sampler:
+    # primary_keys: [ffid] など
+    # primary_key_weights: [1.0] など
+    use_superwindow: false
+    sw_halfspan: 0
+    sw_prob: 0.3
+    secondary_key_fixed: false
+
+  # detect は任意。無ければ EventDetectConfig のデフォルトを使う
+  detect:
+    use_envelope: true
+    sta_ms: 10.0
+    lta_ms: 100.0
+    eps: 1e-12
+    threshold: 4.0
+    min_traces: 8
+    min_duration_ms: 20.0
+    thr_on: 4.5
+    thr_off: 1.5
+    min_on_ms: 8.0
+    refr_ms: 80.0
+    win_ms: 30.0
 
 train:
   device: auto # auto | cpu | cuda | cuda:N
