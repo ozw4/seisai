@@ -249,3 +249,145 @@ def infer_tiled_chw(
         post_tile_transform=post_tile_transform,
     )
     return y.squeeze(0)
+
+
+@torch.no_grad()
+def infer_tiled_chw_stream_cpuaccum(
+    model: torch.nn.Module,
+    x_chw: np.ndarray,  # (C,H,W) or (H,W)
+    *,
+    tile: tuple[int, int] = (128, 128),
+    overlap: tuple[int, int] = (32, 32),
+    amp: bool = True,
+    use_tqdm: bool = False,
+    tiles_per_batch: int = 4,
+    tile_transform: ViewCompose | None = None,
+    post_tile_transform: ViewCompose | None = None,
+) -> torch.Tensor:
+    validate_array(x_chw, allowed_ndims=(2, 3), name='x', backend='numpy')
+    if x_chw.ndim == 2:
+        x_chw = x_chw[None, :]
+
+    x_np = np.ascontiguousarray(x_chw, dtype=np.float32)
+    x_cpu = torch.from_numpy(x_np).unsqueeze(0)  # (B=1,C,H,W) on CPU
+
+    device = next(model.parameters()).device
+    if not hasattr(model, 'out_chans'):
+        msg = 'model must have attribute out_chans'
+        raise ValueError(msg)
+    c_out = int(model.out_chans)
+
+    b, c, h, w = x_cpu.shape
+    tile_h, tile_w = tile
+    ov_h, ov_w = overlap
+    if not (0 < tile_h <= h and 0 < tile_w <= w):
+        msg = f'tile {tile} must fit in (H,W)=({h},{w})'
+        raise ValueError(msg)
+    if not (0 <= ov_h < tile_h and 0 <= ov_w < tile_w):
+        msg = f'overlap {overlap} must satisfy 0<=ov<tile'
+        raise ValueError(msg)
+    if tiles_per_batch <= 0:
+        msg = 'tiles_per_batch must be > 0'
+        raise ValueError(msg)
+
+    def _tile_starts(full: int, tile_size: int, overlap_size: int) -> list[int]:
+        stride = tile_size - overlap_size
+        starts = [0]
+        while starts[-1] + tile_size < full:
+            nxt = starts[-1] + stride
+            if nxt + tile_size >= full:
+                starts.append(max(full - tile_size, 0))
+                break
+            starts.append(nxt)
+        return sorted(set(starts))
+
+    def _make_tile_weight_cpu(tile_h: int, tile_w: int) -> torch.Tensor:
+        wy = torch.hann_window(
+            tile_h, periodic=False, device='cpu', dtype=torch.float32
+        )
+        wx = torch.hann_window(
+            tile_w, periodic=False, device='cpu', dtype=torch.float32
+        )
+        w2d = wy.view(tile_h, 1) * wx.view(1, tile_w)
+        w2d = torch.clamp(w2d, min=1e-3)
+        return w2d.view(1, 1, tile_h, tile_w)
+
+    ys = _tile_starts(h, tile_h, ov_h)
+    xs = _tile_starts(w, tile_w, ov_w)
+
+    rects: list[tuple[int, int, int, int]] = []
+    for top in ys:
+        bottom = min(top + tile_h, h)
+        h0 = max(0, bottom - tile_h)
+        ph = bottom - h0
+        for left in xs:
+            right = min(left + tile_w, w)
+            w0 = max(0, right - tile_w)
+            pw = right - w0
+            rects.append((h0, w0, ph, pw))
+
+    total_tiles = len(rects)
+    out_cpu = torch.zeros((b, c_out, h, w), device='cpu', dtype=torch.float32)
+    weight_cpu = torch.zeros((b, 1, h, w), device='cpu', dtype=torch.float32)
+
+    max_slots = tiles_per_batch * b
+    stage_x = torch.empty(
+        (max_slots, c, tile_h, tile_w), device=device, dtype=torch.float32
+    )
+
+    tile_weight_full_cpu = _make_tile_weight_cpu(tile_h, tile_w)
+    use_amp = bool(amp and (device.type == 'cuda'))
+    model.eval()
+
+    if use_tqdm:
+        num_batches = (total_tiles + tiles_per_batch - 1) // tiles_per_batch
+        batch_iter = tqdm(
+            range(0, total_tiles, tiles_per_batch),
+            total=num_batches,
+            desc='tiled inference (stream/cpu-accum)',
+        )
+    else:
+        batch_iter = range(0, total_tiles, tiles_per_batch)
+
+    for start_idx in batch_iter:
+        batch_rects = rects[start_idx : start_idx + tiles_per_batch]
+        slots = len(batch_rects) * b
+        stage_x.zero_()
+
+        for t, (h0, w0, ph, pw) in enumerate(batch_rects):
+            patch_cpu = x_cpu[:, :, h0 : h0 + ph, w0 : w0 + pw]  # CPU
+            patch = patch_cpu.to(device=device, dtype=torch.float32)  # GPU
+
+            if tile_transform is not None:
+                patch = tile_transform(patch, return_meta=False)
+                if patch.shape != (b, c, ph, pw):
+                    msg = f'tile_transform changed shape to {tuple(patch.shape)}'
+                    raise ValueError(msg)
+
+            stage_x[t * b : (t + 1) * b, :, :ph, :pw].copy_(patch)
+
+        with torch.autocast('cuda', enabled=use_amp):
+            yb = model(stage_x[:slots])
+
+        for t, (h0, w0, ph, pw) in enumerate(batch_rects):
+            sl = slice(t * b, (t + 1) * b)
+            yp = yb[sl, :, :ph, :pw].to(torch.float32)
+
+            if post_tile_transform is not None:
+                yp = post_tile_transform(yp, return_meta=False)
+                if yp.shape != (b, c_out, ph, pw):
+                    msg = f'post_tile_transform changed shape to {tuple(yp.shape)}'
+                    raise ValueError(msg)
+                yp = yp.to(torch.float32)
+
+            yp_cpu = yp.cpu()  # GPU -> CPU
+
+            w_patch = tile_weight_full_cpu[:, :, :ph, :pw]  # CPU
+            out_cpu[:, :, h0 : h0 + ph, w0 : w0 + pw] += yp_cpu * w_patch
+            weight_cpu[:, :, h0 : h0 + ph, w0 : w0 + pw] += w_patch
+
+    if not torch.all(weight_cpu > 0):
+        msg = 'Uncovered region exists. Check tile/overlap.'
+        raise ValueError(msg)
+    out_cpu /= weight_cpu
+    return out_cpu.squeeze(0)
