@@ -1,5 +1,6 @@
 import numpy as np
-from seisai_transforms.signal_ops.smoothing.smooth import smooth_1d_np
+import torch
+import torch.nn.functional as F
 from seisai_utils.validator import validate_numpy
 
 
@@ -10,7 +11,12 @@ def detect_event_peaks(
     smooth_window: int = 1,
 ) -> np.ndarray:
     """Step2:
-    1D スコア列 S_t からイベント候補ピークの時刻インデックスを抽出する。.
+    Torch の avg_pool1d と max_pool1d を使って、1D スコア列 S_t から
+    イベント候補ピークの時刻インデックスを抽出する。.
+
+    平滑化は smooth_window > 1 のとき replicate pad + avg_pool1d の移動平均で
+    長さ T を維持し、ピーク検出は抑制窓 (2*min_distance+1) の max_pool1d による
+    1D NMS を使う。plateau(同値最大の連続)は開始点のみ採用する。
 
     パラメータ
     ----------
@@ -36,38 +42,71 @@ def detect_event_peaks(
     if min_score < 0.0:
         msg = 'min_score must be >= 0.0'
         raise ValueError(msg)
+    if smooth_window < 1:
+        msg = 'smooth_window must be >= 1'
+        raise ValueError(msg)
+    if __debug__ and not np.isfinite(S_t).all():
+        msg = 'S_t must contain only finite values'
+        raise ValueError(msg)
 
     T = S_t.size
-    S = smooth_1d_np(S_t, smooth_window)
+    if T == 0:
+        return np.empty(0, dtype=np.int64)
 
-    is_peak = np.zeros(T, dtype=bool)
-    for t in range(T):
-        v = S[t]
-        if v < min_score:
-            continue
-        left = S[t - 1] if t > 0 else v
-        right = S[t + 1] if t < T - 1 else v
-        if v >= left and v >= right:
-            is_peak[t] = True
+    t = torch.as_tensor(S_t, dtype=torch.float32).view(1, 1, T)
 
-    candidate_indices = np.nonzero(is_peak)[0]
-    if candidate_indices.size == 0:
-        return candidate_indices.astype(np.int64)
+    if smooth_window > 1:
+        pad_left = smooth_window // 2
+        pad_right = smooth_window - 1 - pad_left
+        t = F.pad(t, (pad_left, pad_right), mode='replicate')
+        t = F.avg_pool1d(t, kernel_size=smooth_window, stride=1)
 
-    scores = S[candidate_indices]
-    order = np.argsort(scores)[::-1]  # スコア降順
-    selected = []
+    S = t.view(T)
 
-    for idx in candidate_indices[order]:
-        if not selected:
-            selected.append(int(idx))
-            continue
+    k = 2 * min_distance + 1
+    t_nms = F.pad(S.view(1, 1, T), (min_distance, min_distance), mode='replicate')
+    Smax = F.max_pool1d(t_nms, kernel_size=k, stride=1).view(T)
+
+    peak_mask = (S >= float(min_score)) & (S == Smax)
+
+    S_left = torch.empty_like(S)
+    S_left[0] = -torch.inf
+    if T > 1:
+        S_left[1:] = S[:-1]
+    peak_mask = peak_mask & (S > S_left)
+
+    if min_distance == 0:
+        S_right = torch.empty_like(S)
+        S_right[-1] = -torch.inf
+        if T > 1:
+            S_right[:-1] = S[1:]
+        peak_mask = peak_mask & (S >= S_right)
+
+    candidates = torch.nonzero(peak_mask, as_tuple=False).flatten()
+    if candidates.numel() == 0:
+        return np.empty(0, dtype=np.int64)
+
+    candidate_indices = candidates.cpu().numpy().astype(np.int64, copy=False)
+    candidate_scores = S[candidates].cpu().numpy()
+
+    order = np.lexsort((candidate_indices, -candidate_scores))
+    sorted_candidates = candidate_indices[order]
+
+    if sorted_candidates.size == 1:
+        return sorted_candidates.astype(np.int64, copy=False)
+
+    selected: list[int] = []
+    for idx in sorted_candidates:
+        idx_i = int(idx)
         too_close = False
         for s in selected:
-            if abs(idx - s) <= min_distance:
+            if abs(idx_i - s) <= min_distance:
                 too_close = True
                 break
         if not too_close:
-            selected.append(int(idx))
+            selected.append(idx_i)
 
-    return np.array(sorted(selected), dtype=np.int64)
+    if not selected:
+        return np.empty(0, dtype=np.int64)
+
+    return np.sort(np.asarray(selected, dtype=np.int64))
