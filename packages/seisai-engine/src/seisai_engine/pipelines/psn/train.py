@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import inspect
 from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -83,13 +84,46 @@ def _parse_noise_segy_files(paths_cfg: dict) -> list[str]:
     raw = paths_cfg.get('noise_segy_files', [])
     if raw is None:
         return []
-    if not isinstance(raw, list):
+    raw_value: str | list[str]
+    if isinstance(raw, str):
+        raw_value = str(raw)
+    elif isinstance(raw, list):
+        if not all(isinstance(p, str) for p in raw):
+            msg = 'config.paths.noise_segy_files must be list[str] or str'
+            raise TypeError(msg)
+        raw_value = [str(p) for p in raw]
+        if len(raw_value) == 0:
+            return []
+    else:
+        msg = 'config.paths.noise_segy_files must be list[str] or str'
+        raise TypeError(msg)
+
+    raw_list = [raw_value] if isinstance(raw_value, str) else list(raw_value)
+    expanded: object
+    _noise_meta: object | None = None
+    if 'keys' in inspect.signature(expand_cfg_listfiles).parameters:
+        cfg_for_expand = {'paths': {'noise_segy_files': list(raw_list)}}
+        if isinstance(raw_value, str):
+            cfg_for_expand['paths']['noise_segy_files'] = str(raw_value)
+        expand_cfg_listfiles(cfg_for_expand, keys=['paths.noise_segy_files'])
+        expanded = require_list_str(
+            require_dict(cfg_for_expand, 'paths'),
+            'noise_segy_files',
+        )
+        _noise_meta = get_cfg_listfile_meta(
+            cfg_for_expand,
+            key_path='paths.noise_segy_files',
+        )
+    else:
+        expanded, _noise_meta = expand_cfg_listfiles(raw_list)  # type: ignore[misc]
+    _ = _noise_meta
+    if not isinstance(expanded, list):
         msg = 'config.paths.noise_segy_files must be list[str]'
         raise TypeError(msg)
-    if not all(isinstance(p, str) for p in raw):
+    if not all(isinstance(p, str) for p in expanded):
         msg = 'config.paths.noise_segy_files must be list[str]'
         raise TypeError(msg)
-    return [str(p) for p in raw]
+    return [str(p) for p in expanded]
 
 
 def _build_noise_detect_cfg(noise_cfg: dict) -> EventDetectConfig:
@@ -484,6 +518,9 @@ def main(argv: list[str] | None = None) -> None:
         'paths.infer_segy_files',
         'paths.infer_phase_pick_files',
     ]
+    paths_raw = cfg.get('paths')
+    if isinstance(paths_raw, dict) and 'noise_segy_files' in paths_raw:
+        path_keys.append('paths.noise_segy_files')
     augment_raw = cfg.get('augment')
     if isinstance(augment_raw, dict):
         noise_add_raw = augment_raw.get('noise_add')

@@ -1,6 +1,6 @@
 # SegyGatherPairDataset 例外系テスト 技術メモ(保証内容と確認点)
 
-本メモは `tests/test_segy_gather_pair_dataset_exceptions.py` に含まれる例外系 pytest の各テストが、**何を保証し**、**何を確認しているか**を整理したものです。
+本メモは `packages/seisai-dataset/tests/test_segy_gather_pair_dataset.py` に含まれる例外系 pytest の各テストが、**何を保証し**、**何を確認しているか**を整理したものです。
 対象は `SegyGatherPairDataset` の「壊れた入力や契約違反を早期に検知し、明示的に失敗する」挙動です。
 
 ---
