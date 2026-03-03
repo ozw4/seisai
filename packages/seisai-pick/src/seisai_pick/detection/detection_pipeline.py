@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 import numpy as np
-from seisai_utils.validator import validate_numpy
+from seisai_utils.validator import require_ndim_numpy, require_numpy, validate_numpy
 
 # Step1: feature_ht(H,T) -> S_t(T,)
 TimeSupportFn = Callable[[np.ndarray], np.ndarray]
@@ -85,13 +85,11 @@ def run_event_detection_pipeline(
 
     # --- Step2: S_t -> peak_indices (K,) ---
     peak_indices = peak_detector_fn(S_t)
-    validate_numpy(peak_indices, allowed_ndims=(1,), name='peak_indices')
-
+    require_numpy(peak_indices, name='peak_indices')
+    require_ndim_numpy(peak_indices, allowed_ndims=(1,), name='peak_indices')
     if peak_indices.dtype.kind not in ('i', 'u'):
         msg = 'peak_detector_fn must return an integer array for peak_indices'
-        raise TypeError(
-            msg
-        )
+        raise TypeError(msg)
 
     peak_indices = np.asarray(peak_indices, dtype=np.int64)
 
