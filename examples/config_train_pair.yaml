@@ -26,6 +26,9 @@ train:
   # weight_decay: 1.0e-2
   subset_traces: 128
   samples_per_epoch: 4096
+  trace_decimation:
+    prob: 0.0
+    stride_range: [1, 1]
   seed: 42
   use_amp: true
   max_norm: 1.0

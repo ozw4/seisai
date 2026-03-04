@@ -25,6 +25,12 @@ class TraceSubsetSampler:
 
     def __init__(self, cfg: TraceSubsetSamplerConfig) -> None:
         self.cfg = cfg
+        self._trace_decimate_prob = self._validate_trace_decimate_prob(
+            cfg.trace_decimate_prob
+        )
+        self._trace_decimate_stride_range = self._validate_trace_decimate_stride_range(
+            cfg.trace_decimate_stride_range
+        )
         self._valid_primary = {'ffid', 'chno', 'cmp'}
         self._valid_secondary = {'ffid', 'chno', 'offset'}
         self._raw_sampling_override_keys = {
@@ -147,12 +153,27 @@ class TraceSubsetSampler:
             )
         indices = self._stable_lexsort(info, key_name, str(secondary_key), indices)
 
-        # 4) 連続サブセット抽出(最大 subset_traces)
+        # 4) サブセット抽出(必要時のみ secondary 整列後 indices で trace decimation)
         n_total = len(indices)
         H = int(self.cfg.subset_traces)
         if n_total >= H:
-            start_idx = r.randint(0, n_total - H)
-            subset_indices = indices[start_idx : start_idx + H]
+            subset_indices: np.ndarray | None = None
+            if (
+                self._trace_decimate_prob > 0.0
+                and r.random() < self._trace_decimate_prob
+            ):
+                stride = self._sample_trace_decimate_stride(r)
+                if stride > 1:
+                    offset = r.randint(0, stride - 1)
+                    need = offset + (H - 1) * stride + 1
+                    if n_total >= H and n_total >= need:
+                        start = r.randint(0, n_total - need)
+                        dec_start = start + offset
+                        dec_stop = dec_start + H * stride
+                        subset_indices = indices[dec_start:dec_stop:stride]
+            if subset_indices is None:
+                start_idx = r.randint(0, n_total - H)
+                subset_indices = indices[start_idx : start_idx + H]
             pad_len = 0
         else:
             subset_indices = indices
@@ -183,6 +204,48 @@ class TraceSubsetSampler:
         if isinstance(info, dict):
             return info.get(key, default)
         return getattr(info, key, default)
+
+    @staticmethod
+    def _validate_trace_decimate_prob(value: object) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            msg = 'trace_decimate_prob must be float in [0, 1]'
+            raise TypeError(msg)
+        prob = float(value)
+        if not np.isfinite(prob):
+            msg = 'trace_decimate_prob must be finite'
+            raise ValueError(msg)
+        if prob < 0.0 or prob > 1.0:
+            msg = 'trace_decimate_prob must be in [0, 1]'
+            raise ValueError(msg)
+        return prob
+
+    @staticmethod
+    def _validate_trace_decimate_stride_range(value: object) -> tuple[int, int]:
+        if not isinstance(value, tuple) or len(value) != 2:
+            msg = 'trace_decimate_stride_range must be tuple[int, int]'
+            raise TypeError(msg)
+        min_stride, max_stride = value
+        if isinstance(min_stride, bool) or not isinstance(min_stride, (int, np.integer)):
+            msg = 'trace_decimate_stride_range[0] must be int'
+            raise TypeError(msg)
+        if isinstance(max_stride, bool) or not isinstance(max_stride, (int, np.integer)):
+            msg = 'trace_decimate_stride_range[1] must be int'
+            raise TypeError(msg)
+        min_stride_i = int(min_stride)
+        max_stride_i = int(max_stride)
+        if min_stride_i < 1:
+            msg = 'trace_decimate_stride_range[0] must be >= 1'
+            raise ValueError(msg)
+        if min_stride_i > max_stride_i:
+            msg = 'trace_decimate_stride_range requires min <= max'
+            raise ValueError(msg)
+        return min_stride_i, max_stride_i
+
+    def _sample_trace_decimate_stride(self, r: random.Random) -> int:
+        min_stride, max_stride = self._trace_decimate_stride_range
+        if min_stride == max_stride:
+            return int(min_stride)
+        return int(r.randint(min_stride, max_stride))
 
     def _normalize_prebuilt_sampling_override(
         self, override: dict[str, object]

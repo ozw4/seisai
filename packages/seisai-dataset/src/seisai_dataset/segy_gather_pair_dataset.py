@@ -68,6 +68,8 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
         target_segy_endian: str = 'big',
         subset_traces: int = 128,
         secondary_key_fixed: bool = False,
+        trace_decimate_prob: float = 0.0,
+        trace_decimate_stride_range: tuple[int, int] = (1, 1),
         verbose: bool = False,
         progress: bool | None = None,
         standardize_from_input: bool = False,
@@ -122,6 +124,8 @@ class SegyGatherPairDataset(BaseRandomSegyDataset):
             sw_prob=sw_prob,
             secondary_key_fixed=secondary_key_fixed,
             subset_traces=subset_traces,
+            trace_decimate_prob=trace_decimate_prob,
+            trace_decimate_stride_range=trace_decimate_stride_range,
         )
         self.subsetloader = self._build_subset_loader(self.subset_traces)
         self.file_infos: list[PairFileInfo] = []

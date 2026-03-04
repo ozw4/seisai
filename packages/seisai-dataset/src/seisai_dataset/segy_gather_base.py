@@ -245,6 +245,8 @@ class BaseRandomSegyDataset(Dataset, abc.ABC):
         sw_prob: float,
         secondary_key_fixed: bool,
         subset_traces: int,
+        trace_decimate_prob: float = 0.0,
+        trace_decimate_stride_range: tuple[int, int] = (1, 1),
     ) -> TraceSubsetSampler:
         self.primary_keys = tuple(primary_keys) if primary_keys else None
         self.primary_key_weights = (
@@ -255,6 +257,8 @@ class BaseRandomSegyDataset(Dataset, abc.ABC):
         self.sw_prob = float(sw_prob)
         self.secondary_key_fixed = bool(secondary_key_fixed)
         self.subset_traces = int(subset_traces)
+        self.trace_decimate_prob = float(trace_decimate_prob)
+        self.trace_decimate_stride_range = tuple(trace_decimate_stride_range)
         return TraceSubsetSampler(
             TraceSubsetSamplerConfig(
                 primary_keys=self.primary_keys,
@@ -264,6 +268,10 @@ class BaseRandomSegyDataset(Dataset, abc.ABC):
                 sw_prob=self.sw_prob,
                 secondary_key_fixed=self.secondary_key_fixed,
                 subset_traces=int(self.subset_traces),
+                trace_decimate_prob=float(self.trace_decimate_prob),
+                trace_decimate_stride_range=tuple(
+                    self.trace_decimate_stride_range
+                ),
             )
         )
 
@@ -348,6 +356,8 @@ class BaseSegyGatherPipelineDataset(BaseRandomSegyDataset, abc.ABC):
         secondary_key_fixed: bool,
         verbose: bool,
         max_trials: int,
+        trace_decimate_prob: float = 0.0,
+        trace_decimate_stride_range: tuple[int, int] = (1, 1),
         sample_transformer: SampleTransformer | None = None,
         gate_evaluator: GateEvaluator | None = None,
     ) -> None:
@@ -372,6 +382,8 @@ class BaseSegyGatherPipelineDataset(BaseRandomSegyDataset, abc.ABC):
             sw_prob=sw_prob,
             secondary_key_fixed=secondary_key_fixed,
             subset_traces=subset_traces,
+            trace_decimate_prob=trace_decimate_prob,
+            trace_decimate_stride_range=trace_decimate_stride_range,
         )
 
         if sample_transformer is None:

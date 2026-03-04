@@ -79,6 +79,8 @@ def build_pair_dataset(
     input_segy_endian: str,
     target_segy_endian: str,
     standardize_eps: float = 1e-8,
+    trace_decimate_prob: float = 0.0,
+    trace_decimate_stride_range: tuple[int, int] = (1, 1),
 ) -> SegyGatherPairDataset:
     validate_files_exist(list(paths.input_segy_files) + list(paths.target_segy_files))
 
@@ -89,6 +91,8 @@ def build_pair_dataset(
         target_transform=target_transform,
         plan=plan,
         subset_traces=int(subset_traces),
+        trace_decimate_prob=float(trace_decimate_prob),
+        trace_decimate_stride_range=tuple(trace_decimate_stride_range),
         primary_keys=ds_cfg.primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
         waveform_mode=str(ds_cfg.waveform_mode),

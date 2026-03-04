@@ -94,6 +94,9 @@ train:
   epochs: 10
   samples_per_epoch: 256
   subset_traces: 128
+  trace_decimation:
+    prob: 0.0
+    stride_range: [1, 1]
 
 # Optional: choose optimizer via timm (default if omitted: torch.optim.AdamW)
 # optimizer:

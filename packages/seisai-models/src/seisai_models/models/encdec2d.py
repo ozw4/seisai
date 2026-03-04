@@ -77,12 +77,12 @@ class EncDec2D(nn.Module):
             block = []
             if pre_stage_antialias:
                 if stride_h is None or stride_w is None:
-                    raise ValueError(f'Invalid pre_stage stride: {s}')
+                    msg = f'Invalid pre_stage stride: {s}'
+                    raise ValueError(msg)
                 if stride_w > 1:
                     if stride_h != 1:
-                        raise ValueError(
-                            f'pre_stage stride_h must be 1, got {stride_h}'
-                        )
+                        msg = f'pre_stage stride_h must be 1, got {stride_h}'
+                        raise ValueError(msg)
                     block.append(
                         BlurPool2d(
                             taps=pre_stage_aa_taps,

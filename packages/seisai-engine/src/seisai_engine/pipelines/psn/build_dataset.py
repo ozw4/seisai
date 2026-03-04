@@ -163,6 +163,8 @@ def build_dataset(
     cfg: dict,
     *,
     transform: ViewCompose,
+    trace_decimate_prob: float,
+    trace_decimate_stride_range: tuple[int, int],
     segy_endian: str | None = None,
     sampling_overrides: list[dict[str, object] | None] | None = None,
 ) -> SegyGatherPhasePipelineDataset:
@@ -236,6 +238,8 @@ def build_dataset(
         primary_keys=primary_keys,
         secondary_key_fixed=bool(secondary_key_fixed),
         sampling_overrides=sampling_overrides,
+        trace_decimate_prob=float(trace_decimate_prob),
+        trace_decimate_stride_range=tuple(trace_decimate_stride_range),
         waveform_mode=str(waveform_mode),
         segy_endian=str(dataset_endian),
         verbose=bool(verbose),

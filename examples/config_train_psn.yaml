@@ -55,6 +55,9 @@ train:
   subset_traces: 128
   samples_per_epoch: 256
   psn_sigma: 1.5
+  trace_decimation:
+    prob: 0.0
+    stride_range: [1, 1]
   seed: 42
   use_amp: true
   max_norm: 1.0

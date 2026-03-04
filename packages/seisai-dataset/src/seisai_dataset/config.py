@@ -22,6 +22,9 @@ class TraceSubsetSamplerConfig:
     secondary_key_fixed: bool = False
     # 連続サブセット本数(不足時は後段でパディング)
     subset_traces: int = 128
+    # secondary 整列後の trace indices 上で等間隔 decimation を適用
+    trace_decimate_prob: float = 0.0
+    trace_decimate_stride_range: tuple[int, int] = (1, 1)
 
 
 @dataclass(frozen=True)

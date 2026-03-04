@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 from seisai_dataset import (
     TraceSubsetSampler,
@@ -201,3 +203,41 @@ def test_sampler_primary_ranges_reapplied_after_superwindow() -> None:
     assert out['primary_unique'] == '100'
     ffid_values = info['ffid_values'][out['indices']]
     assert np.all(ffid_values == 100)
+
+
+def test_trace_decimation_applies_when_possible() -> None:
+    info = fake_info()
+    info['ffid_unique_keys'] = [100]
+    info['ffid_key_to_indices'] = {100: np.arange(0, 5, dtype=np.int64)}
+    cfg = TraceSubsetSamplerConfig(
+        primary_keys=('ffid',),
+        secondary_key_fixed=True,
+        subset_traces=2,
+        trace_decimate_prob=1.0,
+        trace_decimate_stride_range=(2, 2),
+    )
+    sampler = TraceSubsetSampler(cfg)
+    out = sampler.draw(info, py_random=random.Random(0))
+    idx = out['indices']
+    assert out['pad_len'] == 0
+    assert len(idx) == 2
+    assert np.abs(int(idx[1]) - int(idx[0])) == 2
+
+
+def test_trace_decimation_skips_when_need_is_insufficient() -> None:
+    info = fake_info()
+    info['ffid_unique_keys'] = [100]
+    info['ffid_key_to_indices'] = {100: np.arange(0, 4, dtype=np.int64)}
+    cfg = TraceSubsetSamplerConfig(
+        primary_keys=('ffid',),
+        secondary_key_fixed=True,
+        subset_traces=3,
+        trace_decimate_prob=1.0,
+        trace_decimate_stride_range=(2, 2),
+    )
+    sampler = TraceSubsetSampler(cfg)
+    out = sampler.draw(info, py_random=random.Random(0))
+    idx = out['indices']
+    assert out['pad_len'] == 0
+    assert len(idx) == 3
+    assert np.all(np.diff(idx) == 1)
