@@ -143,6 +143,8 @@ model:
   pre_stage_antialias: true
   pre_stage_aa_taps: 3
   pre_stage_aa_pad_mode: zeros
+  disable_prestage_skip_indices: [] # shallow side indices: 0, 1, 2, ...; [0] disables the highest-resolution prestage skip
+  disable_backbone_skip_indices: [] # shallow side indices: 0, 1, 2, ...; [0] disables the highest-resolution backbone skip
   # decoder_channels: [256, 128, 64, 32]
   # decoder_scales: [2, 2, 2, 2]
   # upsample_mode: bilinear

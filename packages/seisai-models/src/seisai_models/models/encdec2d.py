@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Literal
+
 import timm
 import torch
 import torch.nn.functional as F
@@ -6,6 +9,24 @@ from seisai_models.nn.decoder import UnetDecoder2d
 from seisai_models.nn.heads import SegmentationHead2d
 from seisai_models.ops.stride_pad import override_stage_strides
 from torch import nn
+
+
+@dataclass(frozen=True)
+class _SkipLayoutEntry:
+    source: Literal['backbone', 'prestage']
+    source_shallow_index: int
+    decoder_skip_index: int
+    channels: int
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class _DecoderSkipSlot:
+    source: Literal['extra', 'backbone', 'prestage']
+    decoder_skip_index: int
+    channels: int
+    source_shallow_index: int | None
+    enabled: bool
 
 
 class EncDec2D(nn.Module):
@@ -35,6 +56,8 @@ class EncDec2D(nn.Module):
         pre_stage_antialias: bool = False,
         pre_stage_aa_taps: int = 3,
         pre_stage_aa_pad_mode: str = 'zeros',
+        disable_prestage_skip_indices: tuple[int, ...] | list[int] = (),
+        disable_backbone_skip_indices: tuple[int, ...] | list[int] = (),
         # decoder オプション
         decoder_channels: tuple = (256, 128, 64, 32),
         decoder_scales: tuple = (2, 2, 2, 2),
@@ -45,6 +68,14 @@ class EncDec2D(nn.Module):
         super().__init__()
         self.in_chans = in_chans
         self.out_chans = out_chans
+        self.disable_prestage_skip_indices = self._normalize_disable_skip_indices(
+            disable_prestage_skip_indices,
+            name='disable_prestage_skip_indices',
+        )
+        self.disable_backbone_skip_indices = self._normalize_disable_skip_indices(
+            disable_backbone_skip_indices,
+            name='disable_backbone_skip_indices',
+        )
         if pre_stage_antialias and pre_stage_aa_pad_mode != 'zeros':
             raise ValueError(
                 f'Unsupported pre_stage_aa_pad_mode: {pre_stage_aa_pad_mode}. '
@@ -147,14 +178,33 @@ class EncDec2D(nn.Module):
             c_in = c_out
 
         # 3) ecs を最終確定：extra↓ を先頭に、pre↓ を末尾に
-        ecs = (
-            list(reversed(extra_out_channels)) if extra_out_channels else []
-        ) + ecs_base
-        if self.pre_out_channels:
-            ecs = ecs + self.pre_out_channels[::-1]
+        extra_encoder_channels = tuple(reversed(extra_out_channels))
+        backbone_encoder_channels = tuple(ecs_base)
+        prestage_encoder_channels = tuple(self.pre_out_channels[::-1])
+        self._encoder_channels = (
+            extra_encoder_channels + backbone_encoder_channels + prestage_encoder_channels
+        )
+        (
+            extra_skip_channels,
+            backbone_skip_channels,
+            prestage_skip_channels,
+        ) = self._collect_skip_channel_groups(
+            extra_out_channels=extra_out_channels,
+            backbone_encoder_channels=backbone_encoder_channels,
+            prestage_encoder_channels=prestage_encoder_channels,
+        )
+        self._decoder_skip_slots, self._skip_layout = self._build_skip_layout(
+            extra_skip_channels=extra_skip_channels,
+            backbone_skip_channels=backbone_skip_channels,
+            prestage_skip_channels=prestage_skip_channels,
+        )
+        self._decoder_skip_channels = self._build_decoder_skip_channels(
+            self._decoder_skip_slots
+        )
         # Decoder
         self.decoder = UnetDecoder2d(
-            encoder_channels=ecs,
+            encoder_channels=self._encoder_channels,
+            skip_channels=self._decoder_skip_channels,
             decoder_channels=decoder_channels,
             scale_factors=decoder_scales,
             upsample_mode=upsample_mode,
@@ -169,7 +219,150 @@ class EncDec2D(nn.Module):
         # 推論時の TTA(flip)を使うか
         self.use_tta = True
 
-    def _encode(self, x) -> list[torch.Tensor]:
+    @staticmethod
+    def _normalize_disable_skip_indices(
+        indices: tuple[int, ...] | list[int],
+        *,
+        name: str,
+    ) -> tuple[int, ...]:
+        if not isinstance(indices, (list, tuple)):
+            msg = f'{name} must be list[int]'
+            raise TypeError(msg)
+        out: list[int] = []
+        seen: set[int] = set()
+        for idx, item in enumerate(indices):
+            if isinstance(item, bool) or not isinstance(item, int):
+                msg = f'{name}[{idx}] must be int'
+                raise TypeError(msg)
+            item_int = int(item)
+            if item_int < 0:
+                msg = f'{name}[{idx}] must be >= 0'
+                raise ValueError(msg)
+            if item_int in seen:
+                msg = f'{name} contains duplicate index {item_int}'
+                raise ValueError(msg)
+            seen.add(item_int)
+            out.append(item_int)
+        return tuple(out)
+
+    @staticmethod
+    def _collect_skip_channel_groups(
+        *,
+        extra_out_channels: list[int],
+        backbone_encoder_channels: tuple[int, ...],
+        prestage_encoder_channels: tuple[int, ...],
+    ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+        extra_encoder_channels = tuple(reversed(extra_out_channels))
+        extra_skip_channels = extra_encoder_channels[1:]
+        if extra_encoder_channels:
+            backbone_skip_channels = backbone_encoder_channels
+        else:
+            backbone_skip_channels = backbone_encoder_channels[1:]
+        return extra_skip_channels, backbone_skip_channels, prestage_encoder_channels
+
+    @staticmethod
+    def _validate_disable_skip_indices(
+        indices: tuple[int, ...],
+        *,
+        source: Literal['backbone', 'prestage'],
+        available_count: int,
+    ) -> None:
+        key = f'disable_{source}_skip_indices'
+        for source_index in indices:
+            if source_index >= available_count:
+                msg = (
+                    f'{key} contains out-of-range {source} shallow index '
+                    f'{source_index}; available {source} skip count is {available_count}'
+                )
+                raise ValueError(msg)
+
+    def _build_skip_layout(
+        self,
+        *,
+        extra_skip_channels: tuple[int, ...],
+        backbone_skip_channels: tuple[int, ...],
+        prestage_skip_channels: tuple[int, ...],
+    ) -> tuple[tuple[_DecoderSkipSlot, ...], tuple[_SkipLayoutEntry, ...]]:
+        self._validate_disable_skip_indices(
+            self.disable_backbone_skip_indices,
+            source='backbone',
+            available_count=len(backbone_skip_channels),
+        )
+        self._validate_disable_skip_indices(
+            self.disable_prestage_skip_indices,
+            source='prestage',
+            available_count=len(prestage_skip_channels),
+        )
+
+        decoder_skip_slots: list[_DecoderSkipSlot] = []
+        skip_layout: list[_SkipLayoutEntry] = []
+        decoder_skip_index = 0
+
+        for channels in extra_skip_channels:
+            decoder_skip_slots.append(
+                _DecoderSkipSlot(
+                    source='extra',
+                    source_shallow_index=None,
+                    decoder_skip_index=decoder_skip_index,
+                    channels=int(channels),
+                    enabled=True,
+                )
+            )
+            decoder_skip_index += 1
+
+        for source, source_channels, disabled_indices in (
+            ('backbone', backbone_skip_channels, self.disable_backbone_skip_indices),
+            ('prestage', prestage_skip_channels, self.disable_prestage_skip_indices),
+        ):
+            disabled_set = set(disabled_indices)
+            count = len(source_channels)
+            for local_deep_index, channels in enumerate(source_channels):
+                source_shallow_index = count - 1 - local_deep_index
+                enabled = source_shallow_index not in disabled_set
+                slot = _DecoderSkipSlot(
+                    source=source,
+                    source_shallow_index=source_shallow_index,
+                    decoder_skip_index=decoder_skip_index,
+                    channels=int(channels),
+                    enabled=enabled,
+                )
+                decoder_skip_slots.append(slot)
+                skip_layout.append(
+                    _SkipLayoutEntry(
+                        source=source,
+                        source_shallow_index=source_shallow_index,
+                        decoder_skip_index=decoder_skip_index,
+                        channels=int(channels),
+                        enabled=enabled,
+                    )
+                )
+                decoder_skip_index += 1
+
+        return tuple(decoder_skip_slots), tuple(skip_layout)
+
+    @staticmethod
+    def _build_decoder_skip_channels(
+        decoder_skip_slots: tuple[_DecoderSkipSlot, ...]
+    ) -> tuple[int, ...]:
+        return tuple(
+            slot.channels if slot.enabled else 0 for slot in decoder_skip_slots
+        )
+
+    def _disable_skip_tensors(
+        self, feats: list[torch.Tensor]
+    ) -> list[torch.Tensor | None]:
+        if len(feats) != len(self._encoder_channels):
+            msg = (
+                'encoder feature count mismatch: '
+                f'expected {len(self._encoder_channels)}, got {len(feats)}'
+            )
+            raise ValueError(msg)
+        out: list[torch.Tensor | None] = [feats[0]]
+        for slot, feat in zip(self._decoder_skip_slots, feats[1:], strict=True):
+            out.append(feat if slot.enabled else None)
+        return out
+
+    def _encode(self, x) -> list[torch.Tensor | None]:
         # ★各pre段の出力を控える
         pre_feats = []
         for b in self.pre_down:
@@ -188,7 +381,7 @@ class EncDec2D(nn.Module):
             feats = [top, *feats]
 
         # ★pre_down 出力を浅い側(末尾)に積む
-        return feats + pre_feats[::-1]
+        return self._disable_skip_tensors(feats + pre_feats[::-1])
 
     @torch.inference_mode()
     def _proc_flip(self, x_in):
@@ -209,7 +402,10 @@ class EncDec2D(nn.Module):
 
         if getattr(self, 'print_shapes', False):
             for i, f in enumerate(feats):
-                print(f'Encoder feature {i} shape:', f.shape)
+                if f is None:
+                    print(f'Encoder feature {i} shape: None')
+                else:
+                    print(f'Encoder feature {i} shape:', f.shape)
         dec = self.decoder(feats)
 
         y = self.seg_head(dec[-1])  # 低解像度 → 後段で補間

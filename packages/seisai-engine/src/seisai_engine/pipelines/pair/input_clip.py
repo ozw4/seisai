@@ -6,6 +6,11 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
+from seisai_engine.infer.pair_runtime import (
+    maybe_soft_clip_pair_input as _maybe_soft_clip_pair_input,
+    soft_clip_tanh,
+)
+
 __all__ = [
     'maybe_soft_clip_pair_input',
     'maybe_wrap_pair_input_soft_clip_dataset',
@@ -54,30 +59,12 @@ def resolve_pair_input_soft_clip_abs(cfg: dict[str, Any]) -> float | None:
     )
 
 
-def soft_clip_tanh(x: torch.Tensor, clip_abs: float) -> torch.Tensor:
-    if not isinstance(x, torch.Tensor):
-        msg = 'x must be torch.Tensor'
-        raise TypeError(msg)
-    clip_abs_float = _coerce_clip_abs(
-        clip_abs,
-        type_message='clip_abs must be float > 0',
-        value_message='clip_abs must be > 0',
-    )
-
-    return torch.tanh(x / clip_abs_float) * clip_abs_float
-
-
 def maybe_soft_clip_pair_input(
     x: torch.Tensor,
     *,
     clip_abs: float | None,
 ) -> torch.Tensor:
-    if not isinstance(x, torch.Tensor):
-        msg = 'x must be torch.Tensor'
-        raise TypeError(msg)
-    if clip_abs is None:
-        return x
-    return soft_clip_tanh(x, clip_abs)
+    return _maybe_soft_clip_pair_input(x, clip_abs=clip_abs)
 
 
 class _PairInputSoftClipDataset(Dataset):

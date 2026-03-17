@@ -21,7 +21,7 @@ train:
   device: auto                  # auto | cpu | cuda | cuda:N
   batch_size: 16
   epochs: 20
-  lr: 3.0e-5
+  lr: 1.0e-4
   subset_traces: 128          # 1サンプルで使うtrace本数（H）
   samples_per_epoch: 4028
   seed: 42
@@ -36,7 +36,7 @@ train:
       scope: all
       params: {}
     - kind: fx_mag_mse
-      weight: 0.1
+      weight: 1.0
       scope: all
       params:
         use_log: true
@@ -98,7 +98,7 @@ model:
   pre_stage_antialias: true
   pre_stage_aa_taps: 3
   pre_stage_aa_pad_mode: zeros
-
+  disable_prestage_skip_indices: [0]
 ckpt:
   save_best_only: true
   metric: infer_loss

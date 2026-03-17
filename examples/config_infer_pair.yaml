@@ -29,6 +29,10 @@ tile:
 
 tta: []
 
+model:
+  disable_prestage_skip_indices: [] # shallow side indices: 0, 1, 2, ...; [0] disables the highest-resolution prestage skip
+  disable_backbone_skip_indices: [] # shallow side indices: 0, 1, 2, ...; [0] disables the highest-resolution backbone skip
+
 # Merge precedence: infer.yaml > ckpt cfg > defaults
 # Run:
 # python cli/run_pair_infer.py --config examples/config_infer_pair.yaml

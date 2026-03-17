@@ -21,6 +21,8 @@ _DEFAULTS: dict[str, Any] = {
     'pre_stage_antialias': False,
     'pre_stage_aa_taps': 3,
     'pre_stage_aa_pad_mode': 'zeros',
+    'disable_prestage_skip_indices': (),
+    'disable_backbone_skip_indices': (),
     'decoder_channels': (256, 128, 64, 32),
     'decoder_scales': (2, 2, 2, 2),
     'upsample_mode': 'bilinear',
@@ -91,6 +93,30 @@ def _normalize_optional_stride_list(
     if value is None:
         return None
     return _normalize_stride_list(key, value)
+
+
+def _normalize_disable_skip_indices(
+    key: str, value: list[Any] | tuple[Any, ...]
+) -> tuple[int, ...]:
+    if not isinstance(value, (list, tuple)):
+        msg = f'{_config_key(key)} must be list[int]'
+        raise TypeError(msg)
+    out: list[int] = []
+    seen: set[int] = set()
+    for idx, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, int):
+            msg = f'{_config_key(key)}[{idx}] must be int'
+            raise TypeError(msg)
+        item_int = int(item)
+        if item_int < 0:
+            msg = f'{_config_key(key)}[{idx}] must be >= 0'
+            raise ValueError(msg)
+        if item_int in seen:
+            msg = f'{_config_key(key)} contains duplicate index {item_int}'
+            raise ValueError(msg)
+        seen.add(item_int)
+        out.append(item_int)
+    return tuple(out)
 
 
 def _optional_value(
@@ -281,6 +307,42 @@ def build_encdec2d_kwargs(
     if str(pre_stage_aa_pad_mode) != 'zeros':
         raise ValueError('config.model.pre_stage_aa_pad_mode must be "zeros"')
 
+    disable_prestage_skip_indices_default = _normalize_disable_skip_indices(
+        'disable_prestage_skip_indices',
+        _default_value(
+            defaults,
+            'disable_prestage_skip_indices',
+            _DEFAULTS['disable_prestage_skip_indices'],
+        ),
+    )
+    disable_prestage_skip_indices = _optional_value(
+        model_cfg,
+        'disable_prestage_skip_indices',
+        disable_prestage_skip_indices_default,
+        (list, tuple),
+        allow_none=False,
+        validator=_normalize_disable_skip_indices,
+        type_message='config.model.disable_prestage_skip_indices must be list[int]',
+    )
+
+    disable_backbone_skip_indices_default = _normalize_disable_skip_indices(
+        'disable_backbone_skip_indices',
+        _default_value(
+            defaults,
+            'disable_backbone_skip_indices',
+            _DEFAULTS['disable_backbone_skip_indices'],
+        ),
+    )
+    disable_backbone_skip_indices = _optional_value(
+        model_cfg,
+        'disable_backbone_skip_indices',
+        disable_backbone_skip_indices_default,
+        (list, tuple),
+        allow_none=False,
+        validator=_normalize_disable_skip_indices,
+        type_message='config.model.disable_backbone_skip_indices must be list[int]',
+    )
+
     decoder_channels_default = _normalize_int_seq(
         'decoder_channels',
         _default_value(defaults, 'decoder_channels', _DEFAULTS['decoder_channels']),
@@ -353,6 +415,8 @@ def build_encdec2d_kwargs(
         'pre_stage_antialias': bool(pre_stage_antialias),
         'pre_stage_aa_taps': int(pre_stage_aa_taps),
         'pre_stage_aa_pad_mode': str(pre_stage_aa_pad_mode),
+        'disable_prestage_skip_indices': disable_prestage_skip_indices,
+        'disable_backbone_skip_indices': disable_backbone_skip_indices,
         'decoder_channels': decoder_channels,
         'decoder_scales': decoder_scales,
         'upsample_mode': str(upsample_mode),

@@ -8,8 +8,11 @@ import torch
 from seisai_dataset.ffid_gather_iter import FFIDGatherIterator, SortWithinGather
 from seisai_utils.segy_write import write_segy_like_input
 
+from seisai_engine.infer.pair_runtime import (
+    maybe_soft_clip_pair_input,
+    reconstruct_pair_prediction,
+)
 from seisai_engine.predict import _run_tiled
-from seisai_engine.pipelines.pair.input_clip import maybe_soft_clip_pair_input
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -53,7 +56,6 @@ def _infer_hw_denorm_like_input(
     input_soft_clip_abs: float | None = None,
 ) -> np.ndarray:
     """x_hw(=元スケール) -> per-trace標準化 -> tiled推論 -> denormして元スケールで返す."""
-    from seisai_engine.pipelines.pair.residual import reconstruct_pair_prediction
 
     if x_hw.ndim != 2:
         msg = f'x_hw must be (H,W), got {x_hw.shape}'

@@ -7,8 +7,8 @@ from .blocks import DecoderBlock2d
 class UnetDecoder2d(nn.Module):
     def __init__(
         self,
-        encoder_channels: tuple[int],
-        skip_channels: tuple[int] | None = None,
+        encoder_channels: tuple[int, ...],
+        skip_channels: tuple[int, ...] | None = None,
         decoder_channels: tuple = (256, 128, 64, 32),
         scale_factors: tuple = (2, 2, 2, 2),
         norm_layer: nn.Module = nn.Identity,
@@ -45,10 +45,13 @@ class UnetDecoder2d(nn.Module):
         # skip_channels 安全化
         if skip_channels is None:
             skip_channels = [*list(encoder_channels[1:]), 0]
+        else:
+            skip_channels = list(skip_channels)
         if len(skip_channels) < len(decoder_channels):
             skip_channels += [0] * (len(decoder_channels) - len(skip_channels))
         else:
             skip_channels = skip_channels[: len(decoder_channels)]
+        self.skip_channels = tuple(int(ch) for ch in skip_channels)
 
         in_channels = [encoder_channels[0], *list(decoder_channels[:-1])]
 
@@ -65,12 +68,20 @@ class UnetDecoder2d(nn.Module):
                     self.scale_factors[i],  # ← 調整後を使う
                 )
                 for i, (ic, sc, dc) in enumerate(
-                    zip(in_channels, skip_channels, decoder_channels, strict=False)
+                    zip(
+                        in_channels,
+                        self.skip_channels,
+                        decoder_channels,
+                        strict=False,
+                    )
                 )
             ]
         )
 
-    def forward(self, feats: list[torch.Tensor]):
+    def forward(self, feats: list[torch.Tensor | None]):
+        if len(feats) == 0 or feats[0] is None:
+            msg = 'feats[0] must be bottleneck tensor'
+            raise ValueError(msg)
         res = [feats[0]]
         feats = feats[1:]
         for i, b in enumerate(self.blocks):

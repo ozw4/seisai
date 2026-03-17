@@ -5,6 +5,10 @@ from typing import Any
 
 import torch
 
+from seisai_engine.infer.pair_runtime import (
+    reconstruct_pair_prediction as _reconstruct_pair_prediction,
+)
+
 __all__ = [
     'reconstruct_pair_prediction',
     'resolve_pair_residual_learning',
@@ -37,25 +41,11 @@ def reconstruct_pair_prediction(
     *,
     residual_learning: bool,
 ) -> torch.Tensor:
-    if not isinstance(pred_raw, torch.Tensor):
-        msg = 'pred_raw must be torch.Tensor'
-        raise TypeError(msg)
-    if not residual_learning:
-        return pred_raw
-
-    if not isinstance(x_in, torch.Tensor):
-        msg = 'x_in must be torch.Tensor'
-        raise TypeError(msg)
-    if pred_raw.shape != x_in.shape:
-        msg = f'pred_raw.shape {tuple(pred_raw.shape)} != x_in.shape {tuple(x_in.shape)}'
-        raise ValueError(msg)
-    if pred_raw.dtype != x_in.dtype:
-        msg = f'pred_raw.dtype {pred_raw.dtype} != x_in.dtype {x_in.dtype}'
-        raise TypeError(msg)
-    if pred_raw.device != x_in.device:
-        msg = f'pred_raw.device {pred_raw.device} != x_in.device {x_in.device}'
-        raise ValueError(msg)
-    return x_in + pred_raw
+    return _reconstruct_pair_prediction(
+        pred_raw,
+        x_in,
+        residual_learning=residual_learning,
+    )
 
 
 def wrap_pair_criterion(

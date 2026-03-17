@@ -121,6 +121,8 @@ class PairModelCfg:
     pre_stage_antialias: bool
     pre_stage_aa_taps: int
     pre_stage_aa_pad_mode: str
+    disable_prestage_skip_indices: tuple[int, ...]
+    disable_backbone_skip_indices: tuple[int, ...]
     decoder_channels: tuple[int, ...]
     decoder_scales: tuple[int, ...]
     upsample_mode: str
