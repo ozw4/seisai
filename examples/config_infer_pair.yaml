@@ -3,6 +3,10 @@ paths:
     - ../test_data/ridgecrest_das/20200623002546.sgy
   out_dir: ./_pair_infer_out
 
+pair:
+  residual_learning: false # false: direct prediction, true: final prediction = input + model(input)
+  input_soft_clip_abs: null # null: disabled, 3.0: tanh soft clip on standardized input
+
 infer:
   ckpt_path: ./_pair_out/ckpt/best.pt
   device: auto

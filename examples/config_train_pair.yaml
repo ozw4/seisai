@@ -17,6 +17,10 @@ dataset:
   infer_input_endian: little
   infer_target_endian: little
 
+pair:
+  residual_learning: false # false: direct prediction, true: final prediction = input + model(input)
+  input_soft_clip_abs: null # null: disabled, 3.0: tanh soft clip on standardized input
+
 train:
   device: cuda # auto | cpu | cuda | cuda:N
   batch_size: 32

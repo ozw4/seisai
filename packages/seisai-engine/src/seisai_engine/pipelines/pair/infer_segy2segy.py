@@ -51,6 +51,8 @@ from seisai_engine.pipelines.common import (
     load_checkpoint,
     resolve_device,
 )
+from seisai_engine.pipelines.pair.input_clip import resolve_pair_input_soft_clip_abs
+from seisai_engine.pipelines.pair.residual import resolve_pair_residual_learning
 
 __all__ = [
     'apply_unknown_overrides',
@@ -82,6 +84,8 @@ _SAFE_OVERRIDE_PATHS = frozenset(
         'tile.tiles_per_batch',
         'tile.amp',
         'tile.use_tqdm',
+        'pair.residual_learning',
+        'pair.input_soft_clip_abs',
         'tta',
     }
 )
@@ -112,6 +116,10 @@ def _default_cfg() -> dict[str, Any]:
             'tiles_per_batch': 16,
             'amp': True,
             'use_tqdm': False,
+        },
+        'pair': {
+            'residual_learning': False,
+            'input_soft_clip_abs': None,
         },
         'tta': [],
     }
@@ -219,6 +227,8 @@ def _write_sidecar_json(
     ckpt_cfg_hash: str,
     tile_cfg: Tiled2DConfig,
     standardize_eps: float,
+    residual_learning: bool,
+    input_soft_clip_abs: float | None,
     tta_requested: list[Any],
     inferred_at_utc: str,
     seisai_ver: str,
@@ -245,6 +255,10 @@ def _write_sidecar_json(
             'tiles_per_batch': int(tile_cfg.tiles_per_batch),
             'amp': bool(tile_cfg.amp),
             'use_tqdm': bool(tile_cfg.use_tqdm),
+        },
+        'pair': {
+            'residual_learning': bool(residual_learning),
+            'input_soft_clip_abs': input_soft_clip_abs,
         },
         'standardize_eps': float(standardize_eps),
         'tta_requested': tta_requested,
@@ -282,6 +296,8 @@ def run_infer_and_write(
     infer_cfg = require_dict(cfg, 'infer')
 
     standardize_eps = _resolve_standardize_eps(cfg)
+    residual_learning = resolve_pair_residual_learning(cfg)
+    input_soft_clip_abs = resolve_pair_input_soft_clip_abs(cfg)
     tta_requested = _resolve_tta_requested(cfg)
 
     device = resolve_device(optional_str(infer_cfg, 'device', 'auto'))
@@ -318,6 +334,8 @@ def run_infer_and_write(
                     device=device,
                     cfg=tile_cfg,
                     eps_std=float(standardize_eps),
+                    residual_learning=bool(residual_learning),
+                    input_soft_clip_abs=input_soft_clip_abs,
                 )
 
             out_hw = run_ffid_gather_infer_core(
@@ -366,6 +384,8 @@ def run_infer_and_write(
                 ckpt_cfg_hash=ckpt_cfg_hash,
                 tile_cfg=tile_cfg,
                 standardize_eps=standardize_eps,
+                residual_learning=bool(residual_learning),
+                input_soft_clip_abs=input_soft_clip_abs,
                 tta_requested=tta_requested,
                 inferred_at_utc=inferred_at,
                 seisai_ver=seisai_ver,

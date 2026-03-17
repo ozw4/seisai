@@ -1,0 +1,79 @@
+
+paths:
+  input_segy_files:  train_input.txt
+  target_segy_files: train_target.txt
+  infer_input_segy_files:  val_input.txt
+  infer_target_segy_files: val_target.txt
+  out_dir: ./_pair_out_l1l2
+
+dataset:
+  max_trials: 2048
+  use_header_cache: true
+  verbose: true
+  primary_keys: [ffid]          # gather抽出の主キー（まずはffid推奨）
+  secondary_key_fixed: true
+
+pair:
+  residual_learning: true
+
+train:
+  device: auto                  # auto | cpu | cuda | cuda:N
+  batch_size: 16
+  epochs: 20
+  lr: 1.0e-4
+  subset_traces: 128          # 1サンプルで使うtrace本数（H）
+  samples_per_epoch: 4028
+  seed: 42
+  use_amp: true
+  max_norm: 1.0
+  num_workers: 0                # mmap利用時は必ず0
+
+  loss_scope: all
+  losses:
+    - kind: l1
+      weight: 1.0
+      scope: all
+      params: {}
+    - kind: mse
+      weight: 1.0
+      scope: all
+      params: {}
+transform:
+  time_len: 6016              # 学習時のみ時間方向crop/pad（推論は時間cropしない）
+
+infer:
+  batch_size: 1
+  max_batches: 8
+  subset_traces: 128           # tile.tile_h以上にすること
+  seed: 43
+  num_workers: 0                # 固定推論のため0必須
+
+tile:                           # Pairでは必須
+  tile_h: 64                 # trace方向タイルサイズ（<= infer.subset_traces）
+  overlap_h: 32
+  tiles_per_batch: 16
+  amp: true
+  use_tqdm: false
+
+vis:
+  out_subdir: vis
+  n: 5
+  cmap: seismic
+  vmin: -3
+  vmax: 3
+  transpose_for_trace_time: true
+  per_trace_norm: true
+  per_trace_eps: 1.0e-8
+  figsize: [13.0, 8.0]
+  dpi: 150
+
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 1
+  out_chans: 1
+
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min

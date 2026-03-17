@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 import segyio
+import torch
 
 from seisai_engine.pipelines.common import build_encdec2d_model, save_checkpoint
 
@@ -73,6 +74,8 @@ def make_dummy_ckpt(
     in_chans: int,
     out_chans: int,
     backbone: str = 'resnet18',
+    zero_params: bool = False,
+    cfg: dict[str, Any] | None = None,
 ) -> Path:
     """Create a minimal checkpoint compatible with the segy2segy infer CLIs."""
     model_sig: dict[str, Any] = {
@@ -82,6 +85,10 @@ def make_dummy_ckpt(
         'out_chans': int(out_chans),
     }
     model = build_encdec2d_model(dict(model_sig))
+    if zero_params:
+        with torch.no_grad():
+            for param in model.parameters():
+                param.zero_()
     ckpt = {
         'version': 1,
         'pipeline': str(pipeline),
@@ -90,7 +97,7 @@ def make_dummy_ckpt(
         'model_state_dict': model.state_dict(),
         'model_sig': dict(model_sig),
         # Infer CLIs require this key to exist (used for merge + hashing).
-        'cfg': {},
+        'cfg': {} if cfg is None else dict(cfg),
     }
     ckpt_path = tmp_path / f'{pipeline}_dummy_best.pt'
     save_checkpoint(ckpt_path, ckpt)
@@ -99,6 +106,12 @@ def make_dummy_ckpt(
 
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding='utf-8'))
+
+
+def read_segy_traces(path: Path) -> np.ndarray:
+    with segyio.open(str(path), 'r', ignore_geometry=True) as f:
+        traces = [np.asarray(trace, dtype=np.float32) for trace in f.trace]
+    return np.stack(traces, axis=0)
 
 
 def segy_text_header_contains(path: Path, needle: str) -> bool:

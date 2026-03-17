@@ -1,0 +1,4 @@
+/home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.30.00_NR.sgy
+/home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.31.00_NR.sgy
+/home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.32.00_NR.sgy
+/home/dcuser/data/kshitf22/processed/F1_2025-01-05_15.33.00_NR.sgy

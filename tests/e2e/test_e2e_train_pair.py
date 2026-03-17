@@ -16,7 +16,13 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _run_e2e(*, out_dir: Path, waveform_mode: str | None = None) -> tuple[Path, Path]:
+def _run_e2e(
+    *,
+    out_dir: Path,
+    waveform_mode: str | None = None,
+    residual_learning: bool = False,
+    input_soft_clip_abs: float | None = None,
+) -> tuple[Path, Path]:
     repo_root = _repo_root()
     cfg = repo_root / 'tests' / 'e2e' / 'config_train_pair.yaml'
     if not cfg.is_file():
@@ -43,6 +49,9 @@ def _run_e2e(*, out_dir: Path, waveform_mode: str | None = None) -> tuple[Path, 
     if waveform_mode is not None:
         cfg_data.setdefault('dataset', {})
         cfg_data['dataset']['waveform_mode'] = str(waveform_mode)
+    cfg_data.setdefault('pair', {})
+    cfg_data['pair']['residual_learning'] = bool(residual_learning)
+    cfg_data['pair']['input_soft_clip_abs'] = input_soft_clip_abs
     cfg_data['paths']['out_dir'] = str(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     cfg_tmp = out_dir / 'config_train_pair.yaml'
@@ -101,3 +110,27 @@ def test_e2e_train_pair_one_epoch_mmap(tmp_path: Path) -> None:
     assert model_sig['pretrained'] is False
     assert model_sig['in_chans'] == 1
     assert model_sig['out_chans'] == 1
+
+
+@pytest.mark.e2e
+def test_e2e_train_pair_one_epoch_residual_learning(tmp_path: Path) -> None:
+    out_dir = tmp_path / '_pair_out_residual'
+    png, ckpt = _run_e2e(out_dir=out_dir, residual_learning=True)
+    assert png.is_file()
+    assert png.stat().st_size > 0
+    assert ckpt.is_file()
+    assert ckpt.stat().st_size > 0
+    ckpt_dict = load_checkpoint(ckpt)
+    assert ckpt_dict['cfg']['pair']['residual_learning'] is True
+
+
+@pytest.mark.e2e
+def test_e2e_train_pair_one_epoch_with_input_soft_clip(tmp_path: Path) -> None:
+    out_dir = tmp_path / '_pair_out_soft_clip'
+    png, ckpt = _run_e2e(out_dir=out_dir, input_soft_clip_abs=3.0)
+    assert png.is_file()
+    assert png.stat().st_size > 0
+    assert ckpt.is_file()
+    assert ckpt.stat().st_size > 0
+    ckpt_dict = load_checkpoint(ckpt)
+    assert ckpt_dict['cfg']['pair']['input_soft_clip_abs'] == 3.0

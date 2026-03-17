@@ -9,6 +9,7 @@ from seisai_dataset.ffid_gather_iter import FFIDGatherIterator, SortWithinGather
 from seisai_utils.segy_write import write_segy_like_input
 
 from seisai_engine.predict import _run_tiled
+from seisai_engine.pipelines.pair.input_clip import maybe_soft_clip_pair_input
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -48,8 +49,12 @@ def _infer_hw_denorm_like_input(
     device: torch.device,
     cfg: Tiled2DConfig,
     eps_std: float,
+    residual_learning: bool = False,
+    input_soft_clip_abs: float | None = None,
 ) -> np.ndarray:
     """x_hw(=元スケール) -> per-trace標準化 -> tiled推論 -> denormして元スケールで返す."""
+    from seisai_engine.pipelines.pair.residual import reconstruct_pair_prediction
+
     if x_hw.ndim != 2:
         msg = f'x_hw must be (H,W), got {x_hw.shape}'
         raise ValueError(msg)
@@ -68,6 +73,10 @@ def _infer_hw_denorm_like_input(
     x_bchw = torch.from_numpy(xn[None, None, :, :]).to(
         device=device, dtype=torch.float32
     )
+    x_bchw_clipped = maybe_soft_clip_pair_input(
+        x_bchw,
+        clip_abs=input_soft_clip_abs,
+    )
 
     tile_h = min(int(cfg.tile_h), h)
     tile_w = min(int(cfg.tile_w), w)
@@ -77,9 +86,9 @@ def _infer_hw_denorm_like_input(
     ov_h = 0 if tile_h == 1 else min(ov_h, tile_h - 1)
     ov_w = 0 if tile_w == 1 else min(ov_w, tile_w - 1)
 
-    y = _run_tiled(
+    pred_raw = _run_tiled(
         model,
-        x_bchw,
+        x_bchw_clipped,
         tile=(tile_h, tile_w),
         overlap=(ov_h, ov_w),
         amp=bool(cfg.amp),
@@ -87,7 +96,12 @@ def _infer_hw_denorm_like_input(
         tiles_per_batch=int(cfg.tiles_per_batch),
     )
 
-    y_hw = y[0, 0].detach().cpu().numpy().astype(np.float32, copy=False)
+    pred = reconstruct_pair_prediction(
+        pred_raw,
+        x_bchw_clipped,
+        residual_learning=bool(residual_learning),
+    )
+    y_hw = pred[0, 0].detach().cpu().numpy().astype(np.float32, copy=False)
     return y_hw * s + m
 
 
@@ -271,6 +285,8 @@ def run_ffid_gather_infer_and_write_segy(
     tiled_cfg: Tiled2DConfig | None = None,
     eps_std: float = 1e-8,
     device: torch.device | None = None,
+    residual_learning: bool = False,
+    input_soft_clip_abs: float | None = None,
 ) -> list[Path]:
     """FFID gather 単位で推論して、入力SEGYと同じサイズ/ヘッダ維持でSEGY出力する。.
 
@@ -313,6 +329,8 @@ def run_ffid_gather_infer_and_write_segy(
                     device=device,
                     cfg=cfg,
                     eps_std=float(eps_std),
+                    residual_learning=bool(residual_learning),
+                    input_soft_clip_abs=input_soft_clip_abs,
                 ),
             )
             dst = write_segy_like_input(

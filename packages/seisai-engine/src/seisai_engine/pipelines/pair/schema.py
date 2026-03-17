@@ -13,6 +13,7 @@ __all__ = [
     'PairDatasetCfg',
     'PairInferCfg',
     'PairInferConfig',
+    'PairRuntimeCfg',
     'PairModelCfg',
     'PairPaths',
     'PairTileCfg',
@@ -70,6 +71,12 @@ class PairInferCfg:
     subset_traces: int
     seed: int
     num_workers: int
+
+
+@dataclass(frozen=True)
+class PairRuntimeCfg:
+    residual_learning: bool
+    input_soft_clip_abs: float | None
 
 
 @dataclass(frozen=True)
@@ -133,6 +140,7 @@ class PairTrainConfig:
     common: CommonTrainConfig
     paths: PairPaths
     infer_paths: PairPaths
+    pair: PairRuntimeCfg
     dataset: PairDatasetCfg
     train: PairTrainCfg
     loss_specs_train: tuple[composite.LossSpec, ...]
@@ -148,6 +156,7 @@ class PairTrainConfig:
 @dataclass(frozen=True)
 class PairInferConfig:
     paths: PairPaths
+    pair: PairRuntimeCfg
     dataset: PairDatasetCfg
     infer: PairInferCfg
     tile: PairTileCfg

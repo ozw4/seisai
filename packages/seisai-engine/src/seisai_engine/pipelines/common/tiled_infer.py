@@ -15,6 +15,7 @@ SaveTiledStepFn = Callable[
     [int, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]], None
 ]
 SelectVisInputFn = Callable[[torch.Tensor], torch.Tensor]
+PostPredFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 __all__ = ['run_tiled_infer_epoch']
 
@@ -32,6 +33,7 @@ def run_tiled_infer_epoch(
     save_step_fn: SaveTiledStepFn,
     pass_device_batch_to_criterion: bool,
     select_vis_input_fn: SelectVisInputFn | None = None,
+    post_pred_fn: PostPredFn | None = None,
 ) -> float:
     non_blocking = bool(device.type == 'cuda')
     infer_loss_sum = 0.0
@@ -61,14 +63,20 @@ def run_tiled_infer_epoch(
                 x_tg = batch['target'].to(device=device, non_blocking=non_blocking)
                 criterion_batch = batch
 
-            x_pr = infer_batch_tiled_h(model, x_in, cfg=tiled_cfg)
-            loss = criterion(x_pr, x_tg, criterion_batch)
+            x_pr_raw = infer_batch_tiled_h(model, x_in, cfg=tiled_cfg)
+            loss = criterion(x_pr_raw, x_tg, criterion_batch)
 
             bsize = int(x_in.shape[0])
             infer_loss_sum += float(loss.detach().item()) * bsize
             infer_samples += bsize
 
             if step < int(vis_n):
+                x_pr = x_pr_raw
+                if post_pred_fn is not None:
+                    x_pr = post_pred_fn(x_pr_raw, x_in)
+                    if not torch.is_tensor(x_pr):
+                        msg = 'post_pred_fn must return torch.Tensor'
+                        raise TypeError(msg)
                 x_in_vis = x_in
                 if select_vis_input_fn is not None:
                     x_in_vis = select_vis_input_fn(x_in)

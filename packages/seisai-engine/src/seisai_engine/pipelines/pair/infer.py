@@ -18,6 +18,8 @@ from .build_dataset import build_infer_transform, build_pair_dataset
 from .build_model import build_model
 from .build_plan import build_plan
 from .config import load_infer_config
+from .input_clip import maybe_wrap_pair_input_soft_clip_dataset
+from .residual import reconstruct_pair_prediction
 
 __all__ = ['main', 'run_infer_epoch']
 
@@ -41,6 +43,7 @@ def run_infer_epoch(
     vis_out_dir: str,
     vis_n: int,
     max_batches: int,
+    residual_learning: bool = False,
 ) -> float:
     def _save_step(
         step: int,
@@ -71,6 +74,17 @@ def run_infer_epoch(
         max_batches=int(max_batches),
         save_step_fn=_save_step,
         pass_device_batch_to_criterion=True,
+        post_pred_fn=(
+            (
+                lambda pred_raw, x_in: reconstruct_pair_prediction(
+                    pred_raw,
+                    x_in,
+                    residual_learning=True,
+                )
+            )
+            if residual_learning
+            else None
+        ),
     )
 
 
@@ -127,6 +141,10 @@ def main(argv: list[str] | None = None) -> None:
         target_segy_endian=str(cfg.dataset.infer_target_endian),
         standardize_eps=standardize_eps,
     )
+    ds_infer_full = maybe_wrap_pair_input_soft_clip_dataset(
+        ds_infer_full,
+        clip_abs=cfg.pair.input_soft_clip_abs,
+    )
 
     try:
         infer_ds = Subset(
@@ -169,7 +187,12 @@ def main(argv: list[str] | None = None) -> None:
                 x_in = batch['input'].to(device=device, non_blocking=non_blocking)
                 x_tg = batch['target'].to(device=device, non_blocking=non_blocking)
 
-                x_pr = infer_batch_tiled_h(model, x_in, cfg=tiled_cfg)
+                x_pr_raw = infer_batch_tiled_h(model, x_in, cfg=tiled_cfg)
+                x_pr = reconstruct_pair_prediction(
+                    x_pr_raw,
+                    x_in,
+                    residual_learning=bool(cfg.pair.residual_learning),
+                )
 
                 if step < cfg.vis.n:
                     save_pair_triptych_step_png(

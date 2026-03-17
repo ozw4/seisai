@@ -20,3 +20,6 @@ model:
 
 train:
   init_ckpt: ../../mae/runs/prestage_D3/ckpt/best.pt
+
+train:
+  init_ckpt: your_weight_path

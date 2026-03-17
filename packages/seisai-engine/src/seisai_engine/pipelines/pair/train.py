@@ -32,6 +32,8 @@ from .build_model import build_model
 from .build_plan import build_plan
 from .config import PairPaths, load_pair_train_config
 from .infer import run_infer_epoch
+from .input_clip import maybe_wrap_pair_input_soft_clip_dataset
+from .residual import wrap_pair_criterion
 
 __all__ = ['main']
 
@@ -115,6 +117,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     typed = load_pair_train_config(cfg)
     common = typed.common
+    input_soft_clip_abs = typed.pair.input_soft_clip_abs
 
     out_dir_path = resolve_out_dir(cfg, base_dir)
 
@@ -160,8 +163,14 @@ def main(argv: list[str] | None = None) -> None:
     infer_transform = build_infer_transform(eps=standardize_eps)
 
     plan = build_plan()
-    criterion_train = composite.build_weighted_criterion(list(typed.loss_specs_train))
-    criterion_eval = composite.build_weighted_criterion(list(typed.loss_specs_eval))
+    criterion_train = wrap_pair_criterion(
+        composite.build_weighted_criterion(list(typed.loss_specs_train)),
+        residual_learning=bool(typed.pair.residual_learning),
+    )
+    criterion_eval = wrap_pair_criterion(
+        composite.build_weighted_criterion(list(typed.loss_specs_eval)),
+        residual_learning=bool(typed.pair.residual_learning),
+    )
 
     paths_cfg = PairPaths(
         input_segy_files=list(typed.paths.input_segy_files),
@@ -190,6 +199,10 @@ def main(argv: list[str] | None = None) -> None:
         trace_decimate_prob=float(train_trace_decimate_prob),
         trace_decimate_stride_range=tuple(train_trace_decimate_stride_range),
     )
+    ds_train_full = maybe_wrap_pair_input_soft_clip_dataset(
+        ds_train_full,
+        clip_abs=input_soft_clip_abs,
+    )
 
     infer_paths_cfg = PairPaths(
         input_segy_files=list(typed.infer_paths.input_segy_files),
@@ -210,6 +223,10 @@ def main(argv: list[str] | None = None) -> None:
         standardize_eps=standardize_eps,
         trace_decimate_prob=0.0,
         trace_decimate_stride_range=(1, 1),
+    )
+    ds_infer_full = maybe_wrap_pair_input_soft_clip_dataset(
+        ds_infer_full,
+        clip_abs=input_soft_clip_abs,
     )
 
     model_sig = asdict(typed.model)
@@ -259,6 +276,7 @@ def main(argv: list[str] | None = None) -> None:
             vis_out_dir=str(vis_epoch_dir),
             vis_n=vis_n,
             max_batches=max_batches,
+            residual_learning=bool(typed.pair.residual_learning),
         )
 
     spec = TrainSkeletonSpec(

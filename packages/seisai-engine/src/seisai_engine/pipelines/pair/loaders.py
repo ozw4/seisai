@@ -35,6 +35,7 @@ from .schema import (
     PairDatasetCfg,
     PairInferCfg,
     PairInferConfig,
+    PairRuntimeCfg,
     PairModelCfg,
     PairPaths,
     PairTileCfg,
@@ -43,6 +44,8 @@ from .schema import (
     PairTransformCfg,
     PairVisCfg,
 )
+from .input_clip import resolve_pair_input_soft_clip_abs
+from .residual import resolve_pair_residual_learning
 
 __all__ = [
     '_load_dataset_cfg',
@@ -159,6 +162,13 @@ def _load_model_cfg(model_cfg: dict) -> PairModelCfg:
     return PairModelCfg(**encdec_kwargs)
 
 
+def _load_pair_runtime_cfg(cfg: dict) -> PairRuntimeCfg:
+    return PairRuntimeCfg(
+        residual_learning=resolve_pair_residual_learning(cfg),
+        input_soft_clip_abs=resolve_pair_input_soft_clip_abs(cfg),
+    )
+
+
 def load_pair_train_config(cfg: dict) -> PairTrainConfig:
     common = load_common_train_config(cfg)
 
@@ -240,6 +250,7 @@ def load_pair_train_config(cfg: dict) -> PairTrainConfig:
             target_segy_files=list(infer_target_segy_files),
             out_dir=str(common.output.out_dir),
         ),
+        pair=_load_pair_runtime_cfg(cfg),
         dataset=_load_dataset_cfg(ds_cfg),
         train=PairTrainCfg(
             batch_size=int(common.train.train_batch_size),
@@ -357,6 +368,7 @@ def load_infer_config(config_path: str | Path) -> PairInferConfig:
 
     return PairInferConfig(
         paths=_load_paths(paths, base_dir=base_dir),
+        pair=_load_pair_runtime_cfg(cfg),
         dataset=_load_dataset_cfg(ds_cfg),
         infer=PairInferCfg(
             batch_size=int(infer_batch_size),
