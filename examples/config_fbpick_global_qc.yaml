@@ -1,0 +1,23 @@
+# Role: global QC configuration skeleton.
+# Global QC will read the frozen upstream artifacts from:
+#   <out_dir>/<survey_id>/coarse/coarse_artifact.npz
+#   <out_dir>/<survey_id>/coarse/coarse_meta.json
+#   <out_dir>/<survey_id>/fine/fine_artifact.npz
+#   <out_dir>/<survey_id>/fine/fine_meta.json
+# Global QC will write:
+#   <out_dir>/<survey_id>/global_qc/global_qc_artifact.npz
+#   <out_dir>/<survey_id>/global_qc/global_qc_meta.json
+paths:
+  survey_id: demo_survey
+  out_dir: ./_fbpick_out
+  geometry_path: /path/to/geometry.json
+  inversion_path: /path/to/inversion_result.npz
+
+thresholds:
+  confidence_min: 0.0
+  trace_valid_min_fraction: 0.0
+  qc_reject_confidence_below: 0.0
+
+global_qc:
+  # Geometry, inversion backend, and reject rules will be added in a later phase.
+  backend: not_implemented

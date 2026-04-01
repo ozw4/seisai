@@ -1,0 +1,21 @@
+# Role: fine training configuration skeleton.
+# Fine training consumes local windows in a later phase.
+# The frozen fine artifact layout is:
+#   <out_dir>/<survey_id>/fine/fine_artifact.npz
+#   <out_dir>/<survey_id>/fine/fine_meta.json
+paths:
+  survey_id: demo_survey
+  out_dir: ./_fbpick_out
+  segy_files:
+    - /path/to/train_survey.sgy
+  phase_pick_files:
+    - /path/to/train_first_break.npz
+
+thresholds:
+  confidence_min: 0.0
+  trace_valid_min_fraction: 0.0
+  qc_reject_confidence_below: 0.0
+
+fine:
+  # Local-window dataset, model, and loss settings will be added in a later phase.
+  local_window_len: 512

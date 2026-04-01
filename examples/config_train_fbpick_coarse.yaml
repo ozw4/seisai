@@ -1,0 +1,21 @@
+# Role: coarse training configuration skeleton.
+# This phase freezes only the package layout and artifact contract.
+# Output files are fixed by common/io.py:
+#   <out_dir>/<survey_id>/coarse/coarse_artifact.npz
+#   <out_dir>/<survey_id>/coarse/coarse_meta.json
+paths:
+  survey_id: demo_survey
+  out_dir: ./_fbpick_out
+  segy_files:
+    - /path/to/train_survey.sgy
+  phase_pick_files:
+    - /path/to/train_first_break.npz
+
+thresholds:
+  confidence_min: 0.0
+  trace_valid_min_fraction: 0.0
+  qc_reject_confidence_below: 0.0
+
+train:
+  # Dataset, model, loss, and optimizer settings will be added in a later phase.
+  device: auto

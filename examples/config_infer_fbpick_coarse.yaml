@@ -1,0 +1,18 @@
+# Role: coarse inference configuration skeleton.
+# Coarse inference writes the frozen artifact contract to:
+#   <out_dir>/<survey_id>/coarse/coarse_artifact.npz
+#   <out_dir>/<survey_id>/coarse/coarse_meta.json
+paths:
+  survey_id: demo_survey
+  out_dir: ./_fbpick_out
+  segy_files:
+    - /path/to/infer_survey.sgy
+
+thresholds:
+  confidence_min: 0.0
+  trace_valid_min_fraction: 0.0
+  qc_reject_confidence_below: 0.0
+
+infer:
+  # Checkpoint, tiling, and runtime controls will be added in a later phase.
+  device: auto

@@ -1,0 +1,21 @@
+# Role: fine inference configuration skeleton.
+# Fine inference will load coarse artifacts from the frozen location:
+#   <out_dir>/<survey_id>/coarse/coarse_artifact.npz
+#   <out_dir>/<survey_id>/coarse/coarse_meta.json
+# Fine inference will write:
+#   <out_dir>/<survey_id>/fine/fine_artifact.npz
+#   <out_dir>/<survey_id>/fine/fine_meta.json
+paths:
+  survey_id: demo_survey
+  out_dir: ./_fbpick_out
+  segy_files:
+    - /path/to/infer_survey.sgy
+
+thresholds:
+  confidence_min: 0.0
+  trace_valid_min_fraction: 0.0
+  qc_reject_confidence_below: 0.0
+
+fine:
+  # The fixed-length local probability contract is frozen in Phase 1.
+  local_window_len: 512
