@@ -281,7 +281,13 @@ class MakeOffsetChannel:
 
     """
 
-    def __init__(self, dst: str = 'offset_ch', *, normalize: bool = True) -> None:
+    def __init__(
+        self,
+        dst: str = 'offset_ch',
+        *,
+        normalize: bool = True,
+        mode: Literal['signed', 'abs'] = 'signed',
+    ) -> None:
         """Initialize the offset-channel producer.
 
         Parameters
@@ -293,7 +299,13 @@ class MakeOffsetChannel:
                 invalid traces to 0.
 
         """
-        self.dst, self.normalize = dst, normalize
+        mode_str = str(mode)
+        if mode_str not in ('signed', 'abs'):
+            msg = 'mode must be "signed" or "abs"'
+            raise ValueError(msg)
+        self.dst = dst
+        self.normalize = normalize
+        self.mode = mode_str
 
     def __call__(
         self, sample: dict[str, Any], rng: np.random.Generator | None = None
@@ -324,6 +336,9 @@ class MakeOffsetChannel:
         if trace_valid.shape[0] != off.shape[0]:
             msg = f'trace_valid length {trace_valid.shape[0]} != offsets_view length {off.shape[0]}'
             raise ValueError(msg)
+
+        if self.mode == 'abs':
+            off = np.abs(off).astype(np.float32, copy=False)
 
         if self.normalize:
             valid = trace_valid.astype(np.bool_, copy=False)
