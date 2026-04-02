@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from seisai_engine.pipelines.fbpick.fine import TRAIN_MAIN_TARGET
+from seisai_engine.pipelines.fbpick.fine.train import main as pipeline_main
 
 if __package__:
     from ._entrypoint import run_pipeline_train_entrypoint
@@ -17,19 +17,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = REPO_ROOT / 'examples' / 'config_train_fbpick_fine.yaml'
 
 
-def _pipeline_main(argv: list[str] | None = None) -> None:
-    _ = argv
-    msg = (
-        'fbpick fine train entrypoint is intentionally unavailable in Phase 1. '
-        f'Future implementation target: {TRAIN_MAIN_TARGET}'
-    )
-    raise NotImplementedError(msg)
-
-
 def main(argv: list[str] | None = None) -> None:
     run_pipeline_train_entrypoint(
         default_config_path=DEFAULT_CONFIG_PATH,
-        pipeline_main=_pipeline_main,
+        pipeline_main=pipeline_main,
         argv=argv,
     )
 
