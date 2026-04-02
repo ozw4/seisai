@@ -17,5 +17,5 @@ thresholds:
   qc_reject_confidence_below: 0.0
 
 fine:
-  # Local-window dataset, model, and loss settings will be added in a later phase.
+  # Fine v1 keeps the dataset window fixed-length, but the model input is still 1ch amplitude only.
   local_window_len: 512

@@ -17,5 +17,5 @@ thresholds:
   qc_reject_confidence_below: 0.0
 
 fine:
-  # The fixed-length local probability contract is frozen in Phase 1.
+  # The fixed-length local probability contract is frozen in Phase 1; fine v1 input stays 1ch amplitude only.
   local_window_len: 512
