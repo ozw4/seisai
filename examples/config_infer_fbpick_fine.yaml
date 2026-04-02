@@ -1,10 +1,5 @@
-# Role: fine inference configuration skeleton.
-# Fine inference will load coarse artifacts from the frozen location:
-#   <out_dir>/<survey_id>/coarse/coarse_artifact.npz
-#   <out_dir>/<survey_id>/coarse/coarse_meta.json
-# Fine inference will write:
-#   <out_dir>/<survey_id>/fine/fine_artifact.npz
-#   <out_dir>/<survey_id>/fine/fine_meta.json
+# Role: fine inference configuration skeleton for Phase 5 foundations.
+# Fine v1 consumes coarse seeds but keeps the model input amplitude-only.
 paths:
   survey_id: demo_survey
   out_dir: ./_fbpick_out
@@ -16,6 +11,24 @@ thresholds:
   trace_valid_min_fraction: 0.0
   qc_reject_confidence_below: 0.0
 
-fine:
-  # The fixed-length local probability contract is frozen in Phase 1; fine v1 input stays 1ch amplitude only.
+infer:
+  ckpt_path: ./_fbpick_out/ckpt/best.pt
+  device: auto
+  allow_unsafe_override: false
+
+input:
+  amplitude_key: x_local_amp
+  input_key: input
+  use_offset_channel: false
+  use_relative_time_channel: false
+
+target:
+  sigma: 1.5
+
+window:
   local_window_len: 512
+
+model:
+  backbone: resnet18
+  in_chans: 1
+  out_chans: 1

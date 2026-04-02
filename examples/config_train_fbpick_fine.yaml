@@ -1,21 +1,57 @@
-# Role: fine training configuration skeleton.
-# Fine training consumes local windows in a later phase.
-# The frozen fine artifact layout is:
-#   <out_dir>/<survey_id>/fine/fine_artifact.npz
-#   <out_dir>/<survey_id>/fine/fine_meta.json
+# Role: fine training configuration skeleton for Phase 5 foundations.
+# Fine v1 keeps the model input amplitude-only and predicts a local probability map.
 paths:
   survey_id: demo_survey
   out_dir: ./_fbpick_out
   segy_files:
     - /path/to/train_survey.sgy
-  phase_pick_files:
-    - /path/to/train_first_break.npz
+  fb_files:
+    - /path/to/train_first_break.npy
 
 thresholds:
   confidence_min: 0.0
   trace_valid_min_fraction: 0.0
   qc_reject_confidence_below: 0.0
 
-fine:
-  # Fine v1 keeps the dataset window fixed-length, but the model input is still 1ch amplitude only.
+train:
+  batch_size: 8
+  epochs: 10
+  lr: 1.0e-4
+  samples_per_epoch: 256
+  seed: 42
+  use_amp: true
+  max_norm: 1.0
+  num_workers: 0
+  use_label_valid_mask: true
+
+infer:
+  batch_size: 1
+  max_batches: 4
+  seed: 43
+  num_workers: 0
+
+vis:
+  out_subdir: vis
+  n: 0
+
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min
+
+input:
+  amplitude_key: x_local_amp
+  input_key: input
+  use_offset_channel: false
+  use_relative_time_channel: false
+
+target:
+  sigma: 1.5
+
+window:
   local_window_len: 512
+
+model:
+  backbone: resnet18
+  in_chans: 1
+  out_chans: 1
