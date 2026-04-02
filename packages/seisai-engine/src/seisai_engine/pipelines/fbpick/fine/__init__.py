@@ -23,6 +23,16 @@ from .config import (
     load_fine_train_config,
     resolve_default_coarse_artifact_paths,
 )
+from .infer import (
+    FineInferBatchResult,
+    local_pick_to_raw_pick,
+    local_prob_to_pick_confidence,
+    logits_to_local_prob,
+    run_infer_batch,
+    run_infer_epoch,
+)
+from .infer_from_coarse import run_infer_and_write
+from .loss import build_fine_criterion
 
 STAGE_NAME = 'fine'
 TRAIN_MAIN_TARGET = 'seisai_engine.pipelines.fbpick.fine.train.main'
@@ -34,6 +44,7 @@ __all__ = [
     'FineEvalCfg',
     'FineInferCfg',
     'FineInferConfig',
+    'FineInferBatchResult',
     'FineInputCfg',
     'FineLocalDataset',
     'FineModelCfg',
@@ -47,12 +58,19 @@ __all__ = [
     'build_dataset',
     'build_input_only_plan',
     'build_input_only_plan_from_config',
+    'build_fine_criterion',
     'build_model',
     'build_plan',
     'build_plan_from_config',
     'build_window_dataset',
+    'local_pick_to_raw_pick',
+    'local_prob_to_pick_confidence',
     'load_fine_infer_config',
     'load_fine_train_config',
+    'logits_to_local_prob',
     'resolve_coarse_artifact_paths',
     'resolve_default_coarse_artifact_paths',
+    'run_infer_and_write',
+    'run_infer_batch',
+    'run_infer_epoch',
 ]

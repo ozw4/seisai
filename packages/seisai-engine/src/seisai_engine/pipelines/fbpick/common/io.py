@@ -21,7 +21,9 @@ __all__ = [
     'ArtifactPaths',
     'LoadedArtifact',
     'load_artifact',
+    'load_artifact_from_paths',
     'load_coarse_artifact',
+    'load_coarse_artifact_from_paths',
     'load_fine_artifact',
     'load_global_qc_artifact',
     'require_artifact_files',
@@ -92,6 +94,22 @@ def require_artifact_files(paths_cfg: FbpickPathsCfg, *, stage: str) -> Artifact
         msg = f'required artifact meta json not found: {paths.meta_path}'
         raise FileNotFoundError(msg)
     return paths
+
+
+def _require_explicit_artifact_paths(
+    *,
+    npz_path: str | Path,
+    meta_path: str | Path,
+) -> tuple[Path, Path]:
+    npz = Path(npz_path).expanduser().resolve()
+    meta = Path(meta_path).expanduser().resolve()
+    if not npz.exists():
+        msg = f'required artifact npz not found: {npz}'
+        raise FileNotFoundError(msg)
+    if not meta.exists():
+        msg = f'required artifact meta json not found: {meta}'
+        raise FileNotFoundError(msg)
+    return npz, meta
 
 
 def _expected_keys(spec: ArtifactSpec) -> Sequence[str]:
@@ -348,6 +366,50 @@ def load_artifact(*, paths_cfg: FbpickPathsCfg, stage: str) -> LoadedArtifact:
     return LoadedArtifact(meta=meta, arrays=arrays, paths=paths)
 
 
+def load_artifact_from_paths(
+    *,
+    stage: str,
+    npz_path: str | Path,
+    meta_path: str | Path,
+    survey_id: str,
+) -> LoadedArtifact:
+    spec = get_artifact_spec(stage)
+    npz_resolved, meta_resolved = _require_explicit_artifact_paths(
+        npz_path=npz_path,
+        meta_path=meta_path,
+    )
+    if not isinstance(survey_id, str) or survey_id.strip() == '':
+        msg = 'survey_id must be non-empty str'
+        raise ValueError(msg)
+
+    meta = _load_meta(
+        meta_path=meta_resolved,
+        spec=spec,
+        survey_id=survey_id,
+        npz_filename=npz_resolved.name,
+    )
+    with np.load(npz_resolved, allow_pickle=False) as z:
+        raw_arrays = {key: z[key] for key in z.files}
+    arrays, dims = _normalize_loaded_arrays(spec, raw_arrays)
+    if dims != meta.dimensions:
+        msg = (
+            f'artifact dimensions mismatch between npz and meta for {npz_resolved}: '
+            f'npz={dims}, meta={meta.dimensions}'
+        )
+        raise ValueError(msg)
+
+    return LoadedArtifact(
+        meta=meta,
+        arrays=arrays,
+        paths=ArtifactPaths(
+            survey_dir=meta_resolved.parent.parent,
+            stage_dir=npz_resolved.parent,
+            npz_path=npz_resolved,
+            meta_path=meta_resolved,
+        ),
+    )
+
+
 def save_coarse_artifact(
     *,
     paths_cfg: FbpickPathsCfg,
@@ -392,6 +454,20 @@ def save_global_qc_artifact(
 
 def load_coarse_artifact(*, paths_cfg: FbpickPathsCfg) -> LoadedArtifact:
     return load_artifact(paths_cfg=paths_cfg, stage='coarse')
+
+
+def load_coarse_artifact_from_paths(
+    *,
+    npz_path: str | Path,
+    meta_path: str | Path,
+    survey_id: str,
+) -> LoadedArtifact:
+    return load_artifact_from_paths(
+        stage='coarse',
+        npz_path=npz_path,
+        meta_path=meta_path,
+        survey_id=survey_id,
+    )
 
 
 def load_fine_artifact(*, paths_cfg: FbpickPathsCfg) -> LoadedArtifact:

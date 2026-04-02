@@ -308,6 +308,12 @@ class FineLocalDataset(Dataset):
             dtype=torch.float32,
             expected_len=w_local,
         )
+        sample_raw_sample_idx_local = _to_1d_torch(
+            sample.get('raw_sample_idx_local'),
+            name='raw_sample_idx_local',
+            dtype=torch.int64,
+            expected_len=w_local,
+        )
         raw_sample_idx_local = _to_1d_torch(
             meta.get('raw_sample_idx_local'),
             name='meta.raw_sample_idx_local',
@@ -359,10 +365,14 @@ class FineLocalDataset(Dataset):
         if int(raw_sample_idx_local[int(local_seed_idx[0])]) != int(raw_seed_idx[0]):
             msg = 'raw_sample_idx_local must map local_seed_idx back to raw_seed_idx'
             raise ValueError(msg)
+        if not torch.equal(sample_raw_sample_idx_local, raw_sample_idx_local):
+            msg = 'raw_sample_idx_local and meta.raw_sample_idx_local must match exactly'
+            raise ValueError(msg)
 
         sample['input'] = input_tensor
         sample['x_view_local'] = x_view_local
         sample[self._input_cfg.amplitude_key] = amplitude
+        sample['raw_sample_idx_local'] = raw_sample_idx_local
         sample['trace_valid'] = trace_valid
         sample['label_valid'] = label_valid
         sample['raw_trace_idx'] = raw_trace_idx

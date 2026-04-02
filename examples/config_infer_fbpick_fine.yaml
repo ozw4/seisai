@@ -1,5 +1,7 @@
-# Role: fine inference configuration skeleton for Phase 5 foundations.
-# Fine v1 consumes coarse seeds but keeps the model input amplitude-only.
+# Role: fine inference configuration skeleton for Phase 6.
+# Fine infer uses amplitude-only 1ch input.
+# Raw pick restoration uses raw_sample_idx_local.
+# Pad detection uses raw_sample_idx_local == -1.
 paths:
   survey_id: demo_survey
   out_dir: ./_fbpick_out

@@ -1,5 +1,7 @@
-# Role: fine training configuration skeleton for Phase 5 foundations.
-# Fine v1 keeps the model input amplitude-only and predicts a local probability map.
+# Role: fine training configuration skeleton for Phase 6.
+# Fine train uses amplitude-only 1ch input.
+# Raw pick restoration uses raw_sample_idx_local.
+# Pad detection uses raw_sample_idx_local == -1.
 paths:
   survey_id: demo_survey
   out_dir: ./_fbpick_out
@@ -23,6 +25,12 @@ train:
   max_norm: 1.0
   num_workers: 0
   use_label_valid_mask: true
+  loss_scope: all
+  losses:
+    - kind: time_softmax_kl
+      weight: 1.0
+      scope: all
+      params: {}
 
 infer:
   batch_size: 1
