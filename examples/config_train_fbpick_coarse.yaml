@@ -1,21 +1,103 @@
-# Role: coarse training configuration skeleton.
-# This phase freezes only the package layout and artifact contract.
-# Output files are fixed by common/io.py:
-#   <out_dir>/<survey_id>/coarse/coarse_artifact.npz
-#   <out_dir>/<survey_id>/coarse/coarse_meta.json
 paths:
   survey_id: demo_survey
   out_dir: ./_fbpick_out
   segy_files:
     - /path/to/train_survey.sgy
-  phase_pick_files:
-    - /path/to/train_first_break.npz
+  fb_files:
+    - /path/to/train_first_break.npy
+  infer_segy_files:
+    - /path/to/eval_survey.sgy
+  infer_fb_files:
+    - /path/to/eval_first_break.npy
 
 thresholds:
   confidence_min: 0.0
   trace_valid_min_fraction: 0.0
   qc_reject_confidence_below: 0.0
 
+dataset:
+  max_trials: 2048
+  use_header_cache: true
+  verbose: true
+  progress: true
+  primary_keys: [ffid]
+  secondary_key_fixed: false
+  waveform_mode: eager
+  train_endian: big
+  infer_endian: big
+
 train:
-  # Dataset, model, loss, and optimizer settings will be added in a later phase.
   device: auto
+  batch_size: 4
+  epochs: 10
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  subset_traces: 128
+  samples_per_epoch: 256
+  seed: 42
+  use_amp: true
+  max_norm: 1.0
+  num_workers: 0
+  use_label_valid_mask: true
+  loss_scope: all
+  losses:
+    - kind: time_softmax_kl
+      weight: 1.0
+      scope: all
+      params: {}
+
+transform:
+  time_len: 6016
+  standardize_eps: 1.0e-8
+
+augment:
+  hflip_prob: 0.0
+  polarity_prob: 0.0
+  space:
+    prob: 0.0
+    factor_range: [0.90, 1.10]
+  time:
+    prob: 0.0
+    factor_range: [0.95, 1.05]
+  freq:
+    prob: 0.0
+    kinds: [bandpass, lowpass, highpass]
+    band: [0.05, 0.45]
+    width: [0.10, 0.35]
+    roll: 0.02
+    restandardize: false
+
+vis:
+  out_subdir: vis
+  n: 0
+
+infer:
+  batch_size: 1
+  max_batches: 4
+  subset_traces: 128
+  seed: 43
+  num_workers: 0
+
+tile:
+  tile_w: 6016
+  overlap_w: 1024
+  tiles_per_batch: 16
+  amp: true
+  use_tqdm: false
+
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min
+
+model:
+  backbone: resnet18
+  in_chans: 3
+  out_chans: 1
+
+tracking:
+  enabled: true
+  exp_name: fbpick_coarse
+  tracking_uri: file:./mlruns
+  vis_best_only: true
+  vis_max_files: 50
