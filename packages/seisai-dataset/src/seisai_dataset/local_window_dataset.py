@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,27 +22,6 @@ from .transform_flow_utils import apply_transform_2d_with_meta
 LocalWindowMode = Literal['train', 'eval', 'infer']
 
 __all__ = ['LocalWindowDataset', 'LocalWindowDatasetConfig']
-
-_COARSE_ARTIFACT_VERSION = 1
-
-_COARSE_META_REQUIRED_KEYS = (
-    'artifact_version',
-    'stage',
-    'survey_id',
-    'npz_filename',
-    'source_refs',
-    'dimensions',
-)
-
-_COARSE_FIELD_SPECS = {
-    'prob': ('float32', 2),
-    'pick_idx': ('int32', 1),
-    'confidence': ('float32', 1),
-    'trace_valid': ('bool', 1),
-    'raw_trace_idx': ('int64', 1),
-    'offsets': ('float32', 1),
-    'time_axis': ('float32', 1),
-}
 
 
 @dataclass(frozen=True)
@@ -132,153 +110,28 @@ def _load_label_array(label_path: str | Path, *, expected_len: int) -> np.ndarra
     raise TypeError(msg)
 
 
-def _validate_coarse_meta(*, meta_path: Path, npz_path: Path) -> dict[str, int]:
-    raw = json.loads(meta_path.read_text(encoding='utf-8'))
-    if not isinstance(raw, dict):
-        msg = f'coarse artifact meta must be a JSON object: {meta_path}'
-        raise TypeError(msg)
-    missing = set(_COARSE_META_REQUIRED_KEYS).difference(raw.keys())
-    if missing:
-        msg = f'coarse artifact meta missing required keys {sorted(missing)}: {meta_path}'
-        raise ValueError(msg)
-    artifact_version = raw['artifact_version']
-    if isinstance(artifact_version, bool) or not isinstance(artifact_version, int):
-        msg = f'coarse artifact meta artifact_version must be int: {meta_path}'
-        raise TypeError(msg)
-    if int(artifact_version) != int(_COARSE_ARTIFACT_VERSION):
-        msg = (
-            f'unsupported coarse artifact version {artifact_version}; '
-            f'expected {_COARSE_ARTIFACT_VERSION}'
-        )
-        raise ValueError(msg)
-    if not isinstance(raw['stage'], str):
-        msg = f'coarse artifact meta stage must be str: {meta_path}'
-        raise TypeError(msg)
-    if raw['stage'] != 'coarse':
-        msg = f'coarse artifact meta stage must be "coarse", got {raw["stage"]!r}'
-        raise ValueError(msg)
-    if not isinstance(raw['npz_filename'], str) or raw['npz_filename'] == '':
-        msg = f'coarse artifact meta npz_filename must be a non-empty string: {meta_path}'
-        raise ValueError(msg)
-    if raw['npz_filename'] != npz_path.name:
-        msg = (
-            'coarse artifact meta npz_filename mismatch: '
-            f'expected {npz_path.name}, got {raw["npz_filename"]}'
-        )
-        raise ValueError(msg)
-    if not isinstance(raw['survey_id'], str) or raw['survey_id'] == '':
-        msg = f'coarse artifact meta survey_id must be a non-empty string: {meta_path}'
-        raise ValueError(msg)
-    if not isinstance(raw['source_refs'], dict):
-        msg = f'coarse artifact meta source_refs must be dict[str, str]: {meta_path}'
-        raise TypeError(msg)
-    for key, value in raw['source_refs'].items():
-        if not isinstance(key, str) or not isinstance(value, str):
-            msg = f'coarse artifact meta source_refs must be dict[str, str]: {meta_path}'
-            raise TypeError(msg)
-    dims = raw['dimensions']
-    if not isinstance(dims, dict):
-        msg = f'coarse artifact meta dimensions must be dict[str, int]: {meta_path}'
-        raise TypeError(msg)
-    out: dict[str, int] = {}
-    for key, value in dims.items():
-        if not isinstance(key, str):
-            msg = f'coarse artifact meta dimension names must be str: {meta_path}'
-            raise TypeError(msg)
-        if isinstance(value, bool) or not isinstance(value, int):
-            msg = f'coarse artifact meta dimension values must be int: {meta_path}'
-            raise TypeError(msg)
-        if value <= 0:
-            msg = f'coarse artifact meta dimensions must be positive: {meta_path}'
-            raise ValueError(msg)
-        out[key] = int(value)
-    return out
-
-
 def _load_coarse_artifact(
     *,
     npz_path: str | Path,
     meta_path: str | Path,
 ) -> _LoadedCoarseArtifact:
-    npz_p = Path(npz_path).expanduser().resolve()
-    meta_p = Path(meta_path).expanduser().resolve()
-    if not npz_p.exists():
-        msg = f'coarse artifact npz not found: {npz_p}'
-        raise FileNotFoundError(msg)
-    if not meta_p.exists():
-        msg = f'coarse artifact meta not found: {meta_p}'
-        raise FileNotFoundError(msg)
+    from seisai_engine.pipelines.fbpick.common.io import load_coarse_artifact_from_paths
 
-    dims_from_meta = _validate_coarse_meta(meta_path=meta_p, npz_path=npz_p)
-    with np.load(npz_p, allow_pickle=False) as z:
-        keys = tuple(z.files)
-        expected = set(_COARSE_FIELD_SPECS.keys())
-        actual = set(keys)
-        missing = expected.difference(actual)
-        extra = actual.difference(expected)
-        if missing:
-            msg = f'coarse artifact missing required keys: {sorted(missing)}'
-            raise ValueError(msg)
-        if extra:
-            msg = f'coarse artifact has unsupported keys: {sorted(extra)}'
-            raise ValueError(msg)
-
-        arrays: dict[str, np.ndarray] = {}
-        dims: dict[str, int] = {}
-        for key, (dtype_name, ndim) in _COARSE_FIELD_SPECS.items():
-            arr = np.asarray(z[key])
-            expected_dtype = np.dtype(dtype_name)
-            if arr.dtype != expected_dtype:
-                msg = (
-                    f'coarse artifact key "{key}" must have dtype '
-                    f'{expected_dtype.name}, got {arr.dtype.name}'
-                )
-                raise TypeError(msg)
-            if int(arr.ndim) != int(ndim):
-                msg = (
-                    f'coarse artifact key "{key}" must have {ndim} dims, '
-                    f'got shape {arr.shape}'
-                )
-                raise ValueError(msg)
-            if any(int(size) <= 0 for size in arr.shape):
-                msg = f'coarse artifact key "{key}" has non-positive shape {arr.shape}'
-                raise ValueError(msg)
-            arrays[key] = arr
-
-        n_traces = int(arrays['pick_idx'].shape[0])
-        n_samples = int(arrays['prob'].shape[1])
-        dims['n_traces'] = n_traces
-        dims['n_samples'] = n_samples
-        if arrays['prob'].shape != (n_traces, n_samples):
-            msg = 'coarse artifact prob shape is internally inconsistent'
-            raise ValueError(msg)
-        for key in ('pick_idx', 'confidence', 'trace_valid', 'raw_trace_idx', 'offsets'):
-            if arrays[key].shape != (n_traces,):
-                msg = f'coarse artifact key "{key}" shape {arrays[key].shape} != ({n_traces},)'
-                raise ValueError(msg)
-        if arrays['time_axis'].shape != (n_samples,):
-            msg = (
-                f'coarse artifact key "time_axis" shape {arrays["time_axis"].shape} '
-                f'!= ({n_samples},)'
-            )
-            raise ValueError(msg)
-        if dims_from_meta != dims:
-            msg = (
-                f'coarse artifact meta dimensions {dims_from_meta} do not match '
-                f'array dimensions {dims}'
-            )
-            raise ValueError(msg)
-
-        return _LoadedCoarseArtifact(
-            pick_idx=arrays['pick_idx'],
-            confidence=arrays['confidence'],
-            trace_valid=arrays['trace_valid'],
-            raw_trace_idx=arrays['raw_trace_idx'],
-            offsets=arrays['offsets'],
-            time_axis=arrays['time_axis'],
-            n_traces=n_traces,
-            n_samples=n_samples,
-        )
+    loaded = load_coarse_artifact_from_paths(
+        npz_path=npz_path,
+        meta_path=meta_path,
+    )
+    dims = loaded.meta.dimensions
+    return _LoadedCoarseArtifact(
+        pick_idx=loaded.arrays['pick_idx'],
+        confidence=loaded.arrays['confidence'],
+        trace_valid=loaded.arrays['trace_valid'],
+        raw_trace_idx=loaded.arrays['raw_trace_idx'],
+        offsets=loaded.arrays['offsets'],
+        time_axis=loaded.arrays['time_axis'],
+        n_traces=int(dims['n_traces']),
+        n_samples=int(dims['n_samples']),
+    )
 
 
 def _resolve_local_window(

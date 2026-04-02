@@ -113,7 +113,17 @@ def _require_explicit_artifact_paths(
 
 
 def _expected_keys(spec: ArtifactSpec) -> Sequence[str]:
-    return tuple(field.key for field in spec.fields if field.required)
+    return spec.required_field_keys
+
+
+def _require_non_empty_meta_str(value: Any, *, label: str) -> str:
+    if not isinstance(value, str):
+        msg = f'artifact meta {label} must be str'
+        raise TypeError(msg)
+    if value == '':
+        msg = f'artifact meta {label} must be non-empty'
+        raise ValueError(msg)
+    return value
 
 
 def _check_array_keys(spec: ArtifactSpec, arrays: Mapping[str, Any]) -> None:
@@ -233,7 +243,13 @@ def _meta_to_payload(meta: ArtifactMeta) -> dict[str, Any]:
     }
 
 
-def _load_meta(*, meta_path: Path, spec: ArtifactSpec, survey_id: str, npz_filename: str) -> ArtifactMeta:
+def _load_meta(
+    *,
+    meta_path: Path,
+    spec: ArtifactSpec,
+    survey_id: str | None,
+    npz_filename: str,
+) -> ArtifactMeta:
     raw = json.loads(meta_path.read_text(encoding='utf-8'))
     if not isinstance(raw, dict):
         msg = f'artifact meta must be json object: {meta_path}'
@@ -244,11 +260,15 @@ def _load_meta(*, meta_path: Path, spec: ArtifactSpec, survey_id: str, npz_filen
         raise ValueError(msg)
 
     artifact_version = raw['artifact_version']
-    stage = raw['stage']
-    survey_id_raw = raw['survey_id']
-    npz_filename_raw = raw['npz_filename']
+    stage = _require_non_empty_meta_str(raw['stage'], label='stage')
+    survey_id_raw = _require_non_empty_meta_str(raw['survey_id'], label='survey_id')
+    npz_filename_raw = _require_non_empty_meta_str(raw['npz_filename'], label='npz_filename')
     source_refs_raw = raw['source_refs']
     dimensions_raw = raw['dimensions']
+
+    if isinstance(artifact_version, bool) or not isinstance(artifact_version, int):
+        msg = 'artifact meta artifact_version must be int'
+        raise TypeError(msg)
 
     if artifact_version != ARTIFACT_VERSION:
         msg = (
@@ -259,18 +279,22 @@ def _load_meta(*, meta_path: Path, spec: ArtifactSpec, survey_id: str, npz_filen
     if stage != spec.stage:
         msg = f'artifact meta stage mismatch: expected {spec.stage}, got {stage}'
         raise ValueError(msg)
-    if survey_id_raw != survey_id:
-        msg = (
-            f'artifact meta survey_id mismatch: expected {survey_id}, '
-            f'got {survey_id_raw}'
-        )
-        raise ValueError(msg)
     if npz_filename_raw != npz_filename:
         msg = (
             f'artifact meta npz_filename mismatch: expected {npz_filename}, '
             f'got {npz_filename_raw}'
         )
         raise ValueError(msg)
+    if survey_id is not None:
+        if not isinstance(survey_id, str) or survey_id.strip() == '':
+            msg = 'survey_id must be non-empty str'
+            raise ValueError(msg)
+        if survey_id_raw != survey_id:
+            msg = (
+                f'artifact meta survey_id mismatch: expected {survey_id}, '
+                f'got {survey_id_raw}'
+            )
+            raise ValueError(msg)
     if not isinstance(source_refs_raw, dict):
         msg = 'artifact meta source_refs must be dict[str, str]'
         raise TypeError(msg)
@@ -371,16 +395,13 @@ def load_artifact_from_paths(
     stage: str,
     npz_path: str | Path,
     meta_path: str | Path,
-    survey_id: str,
+    survey_id: str | None = None,
 ) -> LoadedArtifact:
     spec = get_artifact_spec(stage)
     npz_resolved, meta_resolved = _require_explicit_artifact_paths(
         npz_path=npz_path,
         meta_path=meta_path,
     )
-    if not isinstance(survey_id, str) or survey_id.strip() == '':
-        msg = 'survey_id must be non-empty str'
-        raise ValueError(msg)
 
     meta = _load_meta(
         meta_path=meta_resolved,
@@ -460,7 +481,7 @@ def load_coarse_artifact_from_paths(
     *,
     npz_path: str | Path,
     meta_path: str | Path,
-    survey_id: str,
+    survey_id: str | None = None,
 ) -> LoadedArtifact:
     return load_artifact_from_paths(
         stage='coarse',

@@ -31,7 +31,8 @@
 - 想定可能なエラーは **即時失敗**とし、暗黙フォールバックは禁止。
 - 後方互換は考慮しない。今回の新規 pipeline を明示的に追加する。
 - `psn` を無理に拡張して first-break を押し込まない。**`fbpick` を新設**する。
-- 3ch 入力は `amplitude / offset / time` を基本とする。
+- `coarse` は 3ch 入力（`amplitude / offset / time`）を基本とする。
+- `fine` 初版は **amplitude-only の 1ch local window 入力**とする。
 - `global QC` は最初は **学習内蔵ではなく推論後段**として実装する。
 - `fine` は回帰ではなく **確率分布出力**とする。
 
@@ -198,7 +199,7 @@ examples/
 
 入出力:
 
-- 入力: `amplitude + offset + relative time` の 3ch
+- 入力: `amplitude` の 1ch local window（初版）
 - 出力: local window 内の **fine probability**
 - 派生出力: `local_pick_idx`, `raw_pick_idx`, `fine_confidence`
 
@@ -323,16 +324,16 @@ examples/
 
 ### `config.py`
 - fine train / infer config を定義する。
+- 初版は amplitude-only 1ch を固定とする。
 - 必須設定例:
   - `window.half_width_samples` または ms ベース幅
   - `window.target_len`
-  - `use_offset_ch`
-  - `use_relative_time_ch`
   - `coarse_artifact_root`
+- 互換性のため `use_offset_channel` / `use_relative_time_channel` を schema に残してもよいが、初版では **必ず false** を検証する。
 
 ### `build_plan.py`
 - fine 用 `BuildPlan` を作る。
-- 入力は `amplitude + offset + relative time`。
+- 初版入力は `amplitude` の 1ch local window。
 - target は **local window 内の first-break probability**。
 
 ### `build_dataset.py`
@@ -347,7 +348,7 @@ examples/
 
 ### `build_model.py`
 - `EncDec2D` を使って fine model を返す。
-- 初版は `in_chans=3`, `out_chans=1`。
+- 初版は `in_chans=1`, `out_chans=1`。
 
 ### `loss.py`
 - local probability 用 loss を定義する。
@@ -420,11 +421,15 @@ examples/
 
 最低限追加するもの:
 
-- `MakeRelativeTimeChannel`
-  - local window の中心を 0 とする relative time channel を生成する。
 - `FBLocalGaussMap`
   - local window 内の pick index から局所 probability target を生成する。
-- 必要なら `NormalizeOffsetChannel`
+
+将来拡張候補:
+
+- `MakeRelativeTimeChannel`
+  - local window の中心を 0 とする relative time channel を生成する。
+- `NormalizeOffsetChannel`
+  - fine を多チャンネル化するときに offset 正規化が必要なら追加する。
 
 ルール:
 
@@ -515,10 +520,11 @@ CLI は **薄く保つ**。ロジックを書かない。
 
 ### `config_train_fbpick_fine.yaml`
 - fine 学習の最小例。
-- local window 設定を含める。
+- amplitude-only 1ch local window と local window 設定を含める。
 
 ### `config_infer_fbpick_fine.yaml`
 - coarse artifact を入力にする fine 推論の最小例。
+- amplitude-only 1ch local window を前提にする。
 
 ### `config_fbpick_global_qc.yaml`
 - global QC の最小例。
@@ -587,7 +593,7 @@ CLI は **薄く保つ**。ロジックを書かない。
 
 最低限の model 制約:
 
-- `model.in_chans == 3`
+- `model.in_chans == 1`
 - `model.out_chans == 1`
 
 ### 7.3 global QC
@@ -642,7 +648,7 @@ Codex は以下の順に PR を刻むこと。**一度に全部書かない**。
 - `in_chans=3`, `out_chans=1` が検証される
 - 1 本の SEG-Y に対して coarse artifact NPZ が吐ける
 
-### PR-2: local window dataset と fine の最小実装
+### PR-2: local window dataset と amplitude-only fine の最小実装
 
 対象:
 
@@ -657,6 +663,8 @@ Codex は以下の順に PR を刻むこと。**一度に全部書かない**。
 受け入れ条件:
 
 - coarse artifact から local window を作れる
+- amplitude-only 1ch fine config が読み込める
+- `in_chans=1`, `out_chans=1` が検証される
 - fine 推論後に raw 軸の pick を返せる
 - fine artifact が保存される
 
@@ -759,6 +767,7 @@ PR ごとに必ず次を満たすこと。
 
 初版の後で検討してよいもの:
 
+- fine の offset / relative time channel 再導入による多チャンネル化
 - fine 専用 head の `seisai-models` 追加
 - 3D inversion backend 実装の本格化
 - pseudo-label self-training ループ

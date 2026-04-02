@@ -1,3 +1,9 @@
+"""Canonical artifact contracts for fbpick stage outputs.
+
+`common/io.py` is the only loader/saver that should enforce these structural
+contracts. Stage consumers may add only stage-specific semantic checks on top.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -59,6 +65,10 @@ class ArtifactSpec:
     npz_filename: str
     meta_filename: str
     fields: Sequence[ArtifactFieldSpec]
+
+    @property
+    def required_field_keys(self) -> tuple[str, ...]:
+        return tuple(field.key for field in self.fields if field.required)
 
 
 COARSE_ARTIFACT_SPEC = ArtifactSpec(

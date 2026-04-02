@@ -4,7 +4,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from seisai_engine.pipelines.fbpick.common.io import load_artifact_from_paths
+from seisai_engine.pipelines.fbpick.common.artifacts import (
+    COARSE_ARTIFACT_SPEC,
+    ArtifactSpec,
+    FINE_ARTIFACT_SPEC,
+)
+from seisai_engine.pipelines.fbpick.common.io import LoadedArtifact, load_artifact_from_paths
 
 from .config import GlobalQcConfig
 
@@ -19,9 +24,6 @@ def _validate_unique_non_negative_raw_trace_idx(
     *,
     label: str,
 ) -> None:
-    if raw_trace_idx.ndim != 1:
-        msg = f'{label} must be 1D, got shape {raw_trace_idx.shape}'
-        raise ValueError(msg)
     if np.any(raw_trace_idx < 0):
         msg = f'{label} must contain only non-negative values'
         raise ValueError(msg)
@@ -31,9 +33,6 @@ def _validate_unique_non_negative_raw_trace_idx(
 
 
 def _validate_uniform_time_axis(time_axis: np.ndarray) -> float:
-    if time_axis.ndim != 1:
-        msg = f'coarse time_axis must be 1D, got shape {time_axis.shape}'
-        raise ValueError(msg)
     if int(time_axis.shape[0]) < 2:
         msg = 'coarse time_axis must have at least 2 samples to derive sample_interval_sec'
         raise ValueError(msg)
@@ -59,6 +58,14 @@ def _normalize_prob_rows(prob: np.ndarray, *, label: str) -> np.ndarray:
     _require_row_positive_mass(prob, label=label)
     row_sum = np.sum(prob, axis=1, keepdims=True, dtype=np.float64)
     return (prob / row_sum).astype(np.float32, copy=False)
+
+
+def _artifact_arrays(
+    artifact: LoadedArtifact,
+    *,
+    spec: ArtifactSpec,
+) -> dict[str, np.ndarray]:
+    return {field.key: artifact.arrays[field.key] for field in spec.fields}
 
 
 @dataclass(frozen=True)
@@ -139,28 +146,24 @@ def build_global_qc_candidates(cfg: GlobalQcConfig) -> GlobalQcCandidates:
         survey_id=cfg.fbpick.paths.survey_id,
     )
 
-    if coarse.meta.survey_id != fine.meta.survey_id:
-        msg = (
-            'coarse/fine artifact survey_id mismatch: '
-            f'{coarse.meta.survey_id!r} vs {fine.meta.survey_id!r}'
-        )
-        raise ValueError(msg)
+    coarse_arrays = _artifact_arrays(coarse, spec=COARSE_ARTIFACT_SPEC)
+    fine_arrays = _artifact_arrays(fine, spec=FINE_ARTIFACT_SPEC)
 
-    coarse_prob = np.asarray(coarse.arrays['prob'], dtype=np.float32)
-    coarse_pick_idx = np.asarray(coarse.arrays['pick_idx'], dtype=np.int32)
-    coarse_confidence = np.asarray(coarse.arrays['confidence'], dtype=np.float32)
-    trace_valid = np.asarray(coarse.arrays['trace_valid'], dtype=bool)
-    raw_trace_idx = np.asarray(coarse.arrays['raw_trace_idx'], dtype=np.int64)
-    offsets = np.asarray(coarse.arrays['offsets'], dtype=np.float32)
-    time_axis = np.asarray(coarse.arrays['time_axis'], dtype=np.float32)
+    coarse_prob = coarse_arrays['prob']
+    coarse_pick_idx = coarse_arrays['pick_idx']
+    coarse_confidence = coarse_arrays['confidence']
+    trace_valid = coarse_arrays['trace_valid']
+    raw_trace_idx = coarse_arrays['raw_trace_idx']
+    offsets = coarse_arrays['offsets']
+    time_axis = coarse_arrays['time_axis']
 
-    fine_local_prob = np.asarray(fine.arrays['local_prob'], dtype=np.float32)
-    fine_local_pick_idx = np.asarray(fine.arrays['local_pick_idx'], dtype=np.int32)
-    fine_raw_pick_idx_valid = np.asarray(fine.arrays['raw_pick_idx'], dtype=np.int32)
-    fine_window_start = np.asarray(fine.arrays['local_window_start_idx'], dtype=np.int64)
-    fine_window_end = np.asarray(fine.arrays['local_window_end_idx'], dtype=np.int64)
-    fine_raw_trace_idx = np.asarray(fine.arrays['raw_trace_idx'], dtype=np.int64)
-    fine_confidence_valid = np.asarray(fine.arrays['confidence'], dtype=np.float32)
+    fine_local_prob = fine_arrays['local_prob']
+    fine_local_pick_idx = fine_arrays['local_pick_idx']
+    fine_raw_pick_idx_valid = fine_arrays['raw_pick_idx']
+    fine_window_start = fine_arrays['local_window_start_idx']
+    fine_window_end = fine_arrays['local_window_end_idx']
+    fine_raw_trace_idx = fine_arrays['raw_trace_idx']
+    fine_confidence_valid = fine_arrays['confidence']
 
     _validate_unique_non_negative_raw_trace_idx(raw_trace_idx, label='coarse.raw_trace_idx')
     _validate_unique_non_negative_raw_trace_idx(fine_raw_trace_idx, label='fine.raw_trace_idx')
