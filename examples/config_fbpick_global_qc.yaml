@@ -1,23 +1,77 @@
-# Role: global QC configuration skeleton.
-# Global QC will read the frozen upstream artifacts from:
-#   <out_dir>/<survey_id>/coarse/coarse_artifact.npz
-#   <out_dir>/<survey_id>/coarse/coarse_meta.json
-#   <out_dir>/<survey_id>/fine/fine_artifact.npz
-#   <out_dir>/<survey_id>/fine/fine_meta.json
-# Global QC will write:
-#   <out_dir>/<survey_id>/global_qc/global_qc_artifact.npz
-#   <out_dir>/<survey_id>/global_qc/global_qc_meta.json
 paths:
   survey_id: demo_survey
   out_dir: ./_fbpick_out
-  geometry_path: /path/to/geometry.json
-  inversion_path: /path/to/inversion_result.npz
 
-thresholds:
-  confidence_min: 0.0
-  trace_valid_min_fraction: 0.0
-  qc_reject_confidence_below: 0.0
+# Global QC reads frozen upstream artifacts from the frozen survey/stage layout.
+# Phase 8 keeps final artifact keys/paths unchanged and only adds orchestration here.
 
 global_qc:
-  # Geometry, inversion backend, and reject rules will be added in a later phase.
-  backend: not_implemented
+  coarse_artifact:
+    artifact_npz_path: ./_fbpick_out/demo_survey/coarse/coarse_artifact.npz
+    artifact_meta_path: ./_fbpick_out/demo_survey/coarse/coarse_meta.json
+
+  fine_artifact:
+    artifact_npz_path: ./_fbpick_out/demo_survey/fine/fine_artifact.npz
+    artifact_meta_path: ./_fbpick_out/demo_survey/fine/fine_meta.json
+
+  geometry:
+    path: /path/to/geometry.npz
+    # geometry file must contain shot_x/shot_y/shot_z/recv_x/recv_y/recv_z/raw_trace_idx
+    # and may also contain trace_valid/elevation/datum arrays.
+    normalization:
+      origin_x: 0.0
+      origin_y: 0.0
+      origin_z: 0.0
+      xy_scale_to_m: 1.0
+      z_scale_to_m: 1.0
+      flip_z_sign: false
+
+  backend:
+    name: unimplemented
+    source_path: /path/to/inversion_inputs_or_summary.npz
+    # Phase 8 has no concrete inversion backend. The stage will fail explicitly before
+    # travel-time fitting unless run_global_qc(..., backend=...) injects one.
+
+  arrival_band:
+    use_hard_mask: true
+    # When set, this explicit width overrides only the hard feasible mask width.
+    # center_idx / uncertainty remain fractional continuous values from Phase 7 kernels.
+    band_half_width_idx: 12
+    uncertainty_scale: 1.0
+    band_radius_sigma: 2.0
+    min_half_width_idx: 1
+    prior_floor: 0.0
+    prior_power: 1.0
+
+  consistency:
+    adjacent_radius: 1
+    adjacent_sigma_idx: 4.0
+    adjacent_min_count: 1
+    trend_sigma_idx: 6.0
+    outlier_radius: 4
+    outlier_z_scale: 3.0
+    outlier_min_count: 3
+    outlier_mad_floor_idx: 1.0
+    adjacent_weight: 0.4
+    trend_weight: 0.35
+    outlier_weight: 0.25
+
+  confidence:
+    probability_weight: 0.5
+    band_weight: 0.2
+    trend_weight: 0.15
+    consistency_weight: 0.15
+    entropy_floor: 0.2
+    entropy_power: 0.5
+    trend_sigma_idx: 6.0
+
+  reject_policy:
+    min_confidence: 0.4
+    allow_zero_mass_failure: false
+    # false: zero feasible mass aborts the whole survey.
+    # true: only the offending traces become reject_flag=true with pick_global=-1.
+    invalid_handling: reject_to_minus_one
+
+  export:
+    write_csv: true
+    csv_path: ./_fbpick_out/demo_survey/global_qc/global_qc_results.csv
