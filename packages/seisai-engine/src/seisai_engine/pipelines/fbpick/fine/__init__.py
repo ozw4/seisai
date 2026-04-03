@@ -27,7 +27,7 @@ from .config import (
     load_fine_infer_config,
     load_fine_train_config,
 )
-from .infer import run_fine_infer
+from .infer import run_fine_infer, run_fine_local_infer
 from .init_from_coarse import (
     build_fine_init_state_dict,
     load_fine_init_from_coarse_checkpoint,
@@ -78,6 +78,7 @@ __all__ = [
     'load_train_spec',
     'restore_local_pick_to_raw',
     'run_fine_infer',
+    'run_fine_local_infer',
     'run_train',
     'validate_coarse_checkpoint_for_fine',
 ]

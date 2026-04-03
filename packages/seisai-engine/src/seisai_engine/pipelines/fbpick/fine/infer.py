@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -8,17 +9,20 @@ from torch.utils.data import DataLoader
 
 from seisai_dataset import InputOnlyPlan
 
-from seisai_engine.pipelines.fbpick.common import validate_fine_result_payload
-
-from .build_dataset import (
-    build_raw_infer_dataset,
-    collate_input_meta_list,
-    restore_local_pick_to_raw,
+from seisai_engine.pipelines.fbpick.common import (
+    build_fbpick_final_payload,
+    build_lineage_payload,
+    load_coarse_npz,
+    load_robust_npz,
+    save_fbpick_final_npz,
+    validate_fine_result_payload,
 )
-from .build_plan import build_plan
-from .config import load_fine_infer_config
 
-__all__ = ['run_fine_infer']
+from .build_dataset import build_raw_infer_dataset, collate_input_meta_list
+from .build_plan import build_plan
+from .config import FineInferConfig, load_fine_infer_config
+
+__all__ = ['run_fine_infer', 'run_fine_local_infer']
 
 
 def _softmax_last_axis(logits_hw: np.ndarray) -> np.ndarray:
@@ -48,13 +52,7 @@ def _set_or_validate_int(
         raise ValueError(msg)
 
 
-def run_fine_infer(
-    *,
-    model: torch.nn.Module,
-    cfg: dict[str, Any],
-    device: torch.device,
-) -> dict[str, np.ndarray]:
-    typed = load_fine_infer_config(cfg)
+def _validate_fine_infer_inputs(typed: FineInferConfig) -> None:
     if typed.paths.fb_files is not None:
         msg = 'fine infer expects raw-only input; omit paths.fb_files'
         raise ValueError(msg)
@@ -71,6 +69,13 @@ def run_fine_infer(
         msg = 'dataset.waveform_mode="mmap" requires infer.num_workers=0'
         raise ValueError(msg)
 
+
+def _run_fine_local_infer_impl(
+    *,
+    model: torch.nn.Module,
+    typed: FineInferConfig,
+    device: torch.device,
+) -> dict[str, np.ndarray]:
     plan = build_plan(
         sigma_ms=3.0,
         sigma_samples_min=1.5,
@@ -138,7 +143,9 @@ def run_fine_infer(
                     msg = 'fine infer model output W must match transform.time_len'
                     raise ValueError(msg)
 
-                logits_bhw = logits[:, 0, :, :].detach().cpu().numpy().astype(np.float32, copy=False)
+                logits_bhw = (
+                    logits[:, 0, :, :].detach().cpu().numpy().astype(np.float32, copy=False)
+                )
                 for batch_idx, meta in enumerate(metas):
                     raw_idx_global = np.asarray(meta['raw_idx_global'], dtype=np.int64)
                     trace_valid = np.asarray(meta['trace_valid'], dtype=np.bool_)
@@ -206,12 +213,10 @@ def run_fine_infer(
         fine_pick_local_f = fine_pick_local_i.astype(np.float32)
         fine_pmax = prob.max(axis=-1).astype(np.float32)
 
-        final_pick_f = restore_local_pick_to_raw(
-            fine_pick_local_f,
-            window_start_i=window_start_full,
-            n_samples_orig=n_samples_orig,
-        )
-        final_pick_i = final_pick_f.astype(np.int32)
+        final_pick_f = window_start_full.astype(np.float32) + fine_pick_local_f
+        final_pick_i = (
+            window_start_full.astype(np.int64) + fine_pick_local_i.astype(np.int64)
+        ).astype(np.int32)
         final_pick_t_sec = final_pick_f.astype(np.float32) * np.float32(dt_sec)
         final_conf = fine_pmax.copy()
 
@@ -225,8 +230,8 @@ def run_fine_infer(
             'fine_pick_local_f': fine_pick_local_f,
             'fine_pmax': fine_pmax,
             'final_pick_i': final_pick_i,
-            'final_pick_f': final_pick_f,
-            'final_pick_t_sec': final_pick_t_sec,
+            'final_pick_f': final_pick_f.astype(np.float32, copy=False),
+            'final_pick_t_sec': final_pick_t_sec.astype(np.float32, copy=False),
             'final_conf': final_conf,
             'window_start_i': window_start_full.astype(np.int32, copy=False),
             'window_end_i': window_end_full.astype(np.int32, copy=False),
@@ -235,3 +240,75 @@ def run_fine_infer(
         return result
     finally:
         dataset.close()
+
+
+def run_fine_local_infer(
+    *,
+    model: torch.nn.Module,
+    cfg: dict[str, Any],
+    device: torch.device,
+) -> dict[str, np.ndarray]:
+    typed = load_fine_infer_config(cfg)
+    _validate_fine_infer_inputs(typed)
+    return _run_fine_local_infer_impl(model=model, typed=typed, device=device)
+
+
+def _derive_coarse_npz_path_from_robust(robust_npz_path: str | Path) -> Path:
+    path = Path(robust_npz_path).expanduser().resolve()
+    if not path.name.endswith('.robust.npz'):
+        msg = f'expected *.robust.npz input, got {path.name}'
+        raise ValueError(msg)
+    stem = path.name[: -len('.robust.npz')]
+    return path.with_name(f'{stem}.coarse.npz')
+
+
+def _derive_final_npz_path(*, segy_path: str | Path, out_dir: str | Path) -> Path:
+    return Path(out_dir).expanduser().resolve() / f'{Path(segy_path).stem}.fbpick_final.npz'
+
+
+def run_fine_infer(
+    *,
+    model: torch.nn.Module,
+    cfg: dict[str, Any],
+    device: torch.device,
+    coarse_payload: dict[str, np.ndarray] | None = None,
+    robust_payload: dict[str, np.ndarray] | None = None,
+    source_model_id: str | None = None,
+    iter_id: int | str | None = None,
+    repo_root: Path = Path('/workspace'),
+    save_output: bool = True,
+) -> dict[str, np.ndarray]:
+    typed = load_fine_infer_config(cfg)
+    _validate_fine_infer_inputs(typed)
+
+    fine_payload = _run_fine_local_infer_impl(model=model, typed=typed, device=device)
+
+    if robust_payload is None:
+        robust_payload = load_robust_npz(typed.paths.robust_npz_files[0])
+    if coarse_payload is None:
+        coarse_payload = load_coarse_npz(
+            _derive_coarse_npz_path_from_robust(typed.paths.robust_npz_files[0])
+        )
+
+    final_payload = build_fbpick_final_payload(
+        coarse_payload=coarse_payload,
+        robust_payload=robust_payload,
+        fine_payload=fine_payload,
+        high_conf_threshold=typed.infer.high_conf_threshold,
+        lineage=build_lineage_payload(
+            cfg,
+            repo_root=repo_root,
+            source_model_id=source_model_id,
+            iter_id=iter_id,
+        ),
+    )
+
+    if save_output and typed.paths.out_dir is not None:
+        save_fbpick_final_npz(
+            _derive_final_npz_path(
+                segy_path=typed.paths.segy_files[0],
+                out_dir=typed.paths.out_dir,
+            ),
+            **final_payload,
+        )
+    return final_payload

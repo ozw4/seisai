@@ -15,7 +15,10 @@ from seisai_engine.pipelines.common import load_checkpoint
 from seisai_engine.pipelines.fbpick.common import (
     FINE_RESULT_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
+    load_fbpick_final_npz,
+    save_coarse_npz,
     save_robust_npz,
+    validate_fbpick_final_payload,
     validate_fine_result_payload,
 )
 from seisai_engine.pipelines.fbpick.coarse import build_fbgate, build_model as build_coarse_model
@@ -29,6 +32,7 @@ from seisai_engine.pipelines.fbpick.fine import (
     load_fine_train_config,
     load_train_bundle,
     run_fine_infer,
+    run_fine_local_infer,
     run_train,
     restore_local_pick_to_raw,
 )
@@ -190,6 +194,33 @@ def _write_robust_with_n_samples(
         conf_prob1=np.ones(n_traces, dtype=np.float32),
         conf_trend1=np.ones(n_traces, dtype=np.float32),
         conf_rs1=np.ones(n_traces, dtype=np.float32),
+        lineage=np.asarray('synthetic-lineage'),
+    )
+    return str(path.resolve())
+
+
+def _write_coarse_with_n_samples(
+    path: Path,
+    *,
+    coarse_pick_i: np.ndarray,
+    n_samples_orig: int,
+    dt_sec: float,
+) -> str:
+    coarse_pick_i_arr = np.asarray(coarse_pick_i, dtype=np.int32)
+    n_traces = int(coarse_pick_i_arr.shape[0])
+    save_coarse_npz(
+        path,
+        dt_sec=float(dt_sec),
+        n_samples_orig=int(n_samples_orig),
+        n_traces=n_traces,
+        ffid_values=np.ones(n_traces, dtype=np.int32),
+        chno_values=np.arange(1, n_traces + 1, dtype=np.int32),
+        offsets_m=np.arange(n_traces, dtype=np.float32) * 10.0,
+        trace_indices=np.arange(n_traces, dtype=np.int64),
+        coarse_pick_i=coarse_pick_i_arr,
+        coarse_pick_t_sec=coarse_pick_i_arr.astype(np.float32) * np.float32(dt_sec),
+        coarse_pmax=np.ones(n_traces, dtype=np.float32),
+        coarse_prob_summary=np.ones(n_traces, dtype=np.float32),
         lineage=np.asarray('synthetic-lineage'),
     )
     return str(path.resolve())
@@ -414,6 +445,20 @@ def test_load_fine_train_config_rejects_invalid_fixed_contract(
     assert message in str(exc.value)
 
 
+def test_load_fine_infer_config_returns_default_high_conf_threshold(
+    tmp_path: Path,
+) -> None:
+    typed = load_fine_infer_config(
+        _make_fine_infer_config(
+            tmp_path,
+            segy_path='dummy.sgy',
+            robust_path='dummy.robust.npz',
+        )
+    )
+
+    assert typed.infer.high_conf_threshold == pytest.approx(0.5)
+
+
 def test_load_fine_infer_config_rejects_invalid_overlap(tmp_path: Path) -> None:
     cfg = _make_fine_infer_config(
         tmp_path,
@@ -428,6 +473,22 @@ def test_load_fine_infer_config_rejects_invalid_overlap(tmp_path: Path) -> None:
     assert 'infer.overlap_h must satisfy 0 <= overlap_h < transform.trace_len' in str(
         exc.value
     )
+
+
+def test_load_fine_infer_config_rejects_invalid_high_conf_threshold(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['infer']['high_conf_threshold'] = 1.1
+
+    with pytest.raises(ValueError) as exc:
+        load_fine_infer_config(cfg)
+
+    assert 'infer.high_conf_threshold must lie in [0, 1]' in str(exc.value)
 
 
 def test_extract_local_windowed_view_zero_pads_and_restores_indices() -> None:
@@ -791,7 +852,7 @@ def test_fine_run_train_writes_fbpick_ckpt_metadata(
     assert ckpt['model_sig']['out_chans'] == 1
 
 
-def test_run_fine_infer_restores_raw_indices_and_covers_all_traces(
+def test_run_fine_local_infer_restores_raw_indices_and_covers_all_traces(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -820,7 +881,7 @@ def test_run_fine_infer_restores_raw_indices_and_covers_all_traces(
         dt_sec=dt_sec,
     )
 
-    result = run_fine_infer(
+    result = run_fine_local_infer(
         model=_IdentityFineModel(),
         cfg=_make_fine_infer_config(
             tmp_path,
@@ -857,3 +918,62 @@ def test_run_fine_infer_restores_raw_indices_and_covers_all_traces(
         final_pick.astype(np.float32) * np.float32(dt_sec),
         atol=1.0e-6,
     )
+
+
+def test_run_fine_infer_builds_and_saves_final_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 160
+    n_samples = 512
+    dt_sec = 0.002
+    trace_axis = np.arange(n_traces, dtype=np.int32)
+    robust = 220 + ((trace_axis % 7) - 3) * 4
+    offset = ((trace_axis % 5) - 2) * 7
+    final_pick = robust + offset
+
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    for trace_idx, pick_idx in enumerate(final_pick.tolist()):
+        traces[trace_idx, int(pick_idx)] = 10.0 + 0.01 * float(trace_idx)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'fine_public.sgy', traces)
+    coarse_path = _write_coarse_with_n_samples(
+        tmp_path / 'fine_public.coarse.npz',
+        coarse_pick_i=robust.astype(np.int32),
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'fine_public.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+
+    result = run_fine_infer(
+        model=_IdentityFineModel(),
+        cfg=_make_fine_infer_config(
+            tmp_path,
+            segy_path=segy_path,
+            robust_path=robust_path,
+        ),
+        device=torch.device('cpu'),
+    )
+
+    _ = coarse_path
+    validate_fbpick_final_payload(result, high_conf_threshold=0.5)
+    np.testing.assert_array_equal(result['final_pick_i'], final_pick.astype(np.int32))
+    np.testing.assert_array_equal(result['reject_mask'], np.zeros(n_traces, dtype=np.bool_))
+    np.testing.assert_array_equal(result['high_conf_mask'], np.ones(n_traces, dtype=np.bool_))
+    np.testing.assert_array_equal(
+        result['window_end_i'],
+        (result['window_start_i'] + 255).astype(np.int32),
+    )
+
+    saved = load_fbpick_final_npz(tmp_path / 'fine_infer_out' / 'fine_public.fbpick_final.npz')
+    np.testing.assert_array_equal(saved['final_pick_i'], final_pick.astype(np.int32))

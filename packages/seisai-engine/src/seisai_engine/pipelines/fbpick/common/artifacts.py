@@ -12,6 +12,86 @@ ROBUST_SOURCE_COARSE_OBSERVED = 0
 ROBUST_SOURCE_THEORETICAL = 1
 ROBUST_SOURCE_TREND_FILL = 2
 
+COARSE_REQUIRED_KEYS = (
+    'dt_sec',
+    'n_samples_orig',
+    'n_traces',
+    'ffid_values',
+    'chno_values',
+    'offsets_m',
+    'trace_indices',
+    'coarse_pick_i',
+    'coarse_pick_t_sec',
+    'coarse_pmax',
+    'coarse_prob_summary',
+    'lineage',
+)
+
+ROBUST_REQUIRED_KEYS = (
+    'dt_sec',
+    'n_samples_orig',
+    'n_traces',
+    'ffid_values',
+    'chno_values',
+    'offsets_m',
+    'trace_indices',
+    'robust_pick_i',
+    'robust_pick_t_sec',
+    'robust_conf',
+    'robust_source',
+    'used_theoretical_mask',
+    'reason_mask',
+    'conf_prob1',
+    'conf_trend1',
+    'conf_rs1',
+    'lineage',
+)
+
+FINE_RESULT_REQUIRED_KEYS = (
+    'dt_sec',
+    'n_samples_orig',
+    'n_traces',
+    'trace_indices',
+    'fine_pick_local_i',
+    'fine_pick_local_f',
+    'fine_pmax',
+    'final_pick_i',
+    'final_pick_f',
+    'final_pick_t_sec',
+    'final_conf',
+    'window_start_i',
+    'window_end_i',
+)
+
+FINAL_REQUIRED_KEYS = (
+    'dt_sec',
+    'n_samples_orig',
+    'n_traces',
+    'ffid_values',
+    'chno_values',
+    'offsets_m',
+    'trace_indices',
+    'coarse_pick_i',
+    'coarse_pmax',
+    'robust_pick_i',
+    'robust_conf',
+    'robust_source',
+    'used_theoretical_mask',
+    'reason_mask',
+    'window_start_i',
+    'window_end_i',
+    'fine_pick_local_f',
+    'fine_pick_local_i',
+    'fine_pmax',
+    'final_pick_f',
+    'final_pick_i',
+    'final_pick_t_sec',
+    'final_conf',
+    'high_conf_mask',
+    'reject_mask',
+    'lineage',
+)
+
 ROBUST_SOURCE_LABELS = {
     ROBUST_SOURCE_COARSE_OBSERVED: 'coarse_observed',
     ROBUST_SOURCE_THEORETICAL: 'theoretical_replacement',
@@ -29,10 +109,14 @@ REASON_MASK_LABELS = {
 }
 
 __all__ = [
+    'COARSE_REQUIRED_KEYS',
+    'FINAL_REQUIRED_KEYS',
+    'FINE_RESULT_REQUIRED_KEYS',
     'REASON_MASK_FILLED_FROM_TREND',
     'REASON_MASK_INFEASIBLE',
     'REASON_MASK_LABELS',
     'REASON_MASK_LOW_SCORE',
+    'ROBUST_REQUIRED_KEYS',
     'ROBUST_SOURCE_COARSE_OBSERVED',
     'ROBUST_SOURCE_LABELS',
     'ROBUST_SOURCE_THEORETICAL',

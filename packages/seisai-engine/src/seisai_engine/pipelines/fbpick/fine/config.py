@@ -111,6 +111,7 @@ class FineInferRuntimeCfg:
     overlap_h: int
     amp: bool
     use_tqdm: bool
+    high_conf_threshold: float
 
 
 @dataclass(frozen=True)
@@ -437,6 +438,10 @@ def load_fine_infer_config(cfg: dict) -> FineInferConfig:
     if overlap_h < 0 or overlap_h >= transform.trace_len:
         msg = 'infer.overlap_h must satisfy 0 <= overlap_h < transform.trace_len'
         raise ValueError(msg)
+    high_conf_threshold = float(optional_float(infer_cfg, 'high_conf_threshold', 0.5))
+    if high_conf_threshold < 0.0 or high_conf_threshold > 1.0:
+        msg = 'infer.high_conf_threshold must lie in [0, 1]'
+        raise ValueError(msg)
 
     return FineInferConfig(
         paths=_load_paths_cfg(
@@ -454,6 +459,7 @@ def load_fine_infer_config(cfg: dict) -> FineInferConfig:
             overlap_h=overlap_h,
             amp=bool(optional_bool(infer_cfg, 'amp', default=False)),
             use_tqdm=bool(optional_bool(infer_cfg, 'use_tqdm', default=False)),
+            high_conf_threshold=high_conf_threshold,
         ),
         model_sig=_load_model_sig(cfg),
     )
