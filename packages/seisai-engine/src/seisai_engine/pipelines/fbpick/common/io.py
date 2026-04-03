@@ -12,11 +12,13 @@ from .artifacts import (
 
 __all__ = [
     'COARSE_REQUIRED_KEYS',
+    'FINE_RESULT_REQUIRED_KEYS',
     'ROBUST_REQUIRED_KEYS',
     'load_coarse_npz',
     'load_robust_npz',
     'save_coarse_npz',
     'save_robust_npz',
+    'validate_fine_result_payload',
 ]
 
 
@@ -53,6 +55,22 @@ ROBUST_REQUIRED_KEYS = (
     'conf_trend1',
     'conf_rs1',
     'lineage',
+)
+
+FINE_RESULT_REQUIRED_KEYS = (
+    'dt_sec',
+    'n_samples_orig',
+    'n_traces',
+    'trace_indices',
+    'fine_pick_local_i',
+    'fine_pick_local_f',
+    'fine_pmax',
+    'final_pick_i',
+    'final_pick_f',
+    'final_pick_t_sec',
+    'final_conf',
+    'window_start_i',
+    'window_end_i',
 )
 
 
@@ -465,3 +483,72 @@ def load_robust_npz(path: str | Path) -> dict[str, np.ndarray]:
         msg = 'lineage must be scalar'
         raise ValueError(msg)
     return out
+
+
+def validate_fine_result_payload(payload: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    if not isinstance(payload, dict):
+        msg = 'payload must be dict'
+        raise TypeError(msg)
+
+    missing = [key for key in FINE_RESULT_REQUIRED_KEYS if key not in payload]
+    if missing:
+        msg = f'fine result payload missing keys: {missing}'
+        raise KeyError(msg)
+
+    n_traces = int(np.asarray(payload['n_traces']).item())
+    n_samples_orig = int(np.asarray(payload['n_samples_orig']).item())
+    if n_traces <= 0:
+        msg = 'n_traces must be positive'
+        raise ValueError(msg)
+    if n_samples_orig <= 0:
+        msg = 'n_samples_orig must be positive'
+        raise ValueError(msg)
+
+    _require_exact_dtype('dt_sec', np.asarray(payload['dt_sec']), dtype=np.float32)
+    _require_exact_dtype('n_samples_orig', np.asarray(payload['n_samples_orig']), dtype=np.int32)
+    _require_exact_dtype('n_traces', np.asarray(payload['n_traces']), dtype=np.int32)
+
+    vector_specs = (
+        ('trace_indices', np.int64),
+        ('fine_pick_local_i', np.int32),
+        ('fine_pick_local_f', np.float32),
+        ('fine_pmax', np.float32),
+        ('final_pick_i', np.int32),
+        ('final_pick_f', np.float32),
+        ('final_pick_t_sec', np.float32),
+        ('final_conf', np.float32),
+        ('window_start_i', np.int32),
+        ('window_end_i', np.int32),
+    )
+    for key, dtype in vector_specs:
+        arr = np.asarray(payload[key])
+        if arr.ndim != 1 or int(arr.shape[0]) != n_traces:
+            msg = f'{key} must be 1D with length n_traces'
+            raise ValueError(msg)
+        _require_exact_dtype(key, arr, dtype=dtype)
+
+    trace_indices = np.asarray(payload['trace_indices'], dtype=np.int64)
+    if not np.array_equal(trace_indices, np.arange(n_traces, dtype=np.int64)):
+        msg = 'trace_indices must equal np.arange(n_traces)'
+        raise ValueError(msg)
+
+    fine_pick_local_i = np.asarray(payload['fine_pick_local_i'], dtype=np.int32)
+    if np.any(fine_pick_local_i < 0) or np.any(fine_pick_local_i >= 256):
+        msg = 'fine_pick_local_i must lie in [0, 256)'
+        raise ValueError(msg)
+
+    final_pick_i = np.asarray(payload['final_pick_i'], dtype=np.int32)
+    if np.any(final_pick_i < 0) or np.any(final_pick_i >= n_samples_orig):
+        msg = 'final_pick_i must lie in [0, n_samples_orig)'
+        raise ValueError(msg)
+
+    window_start_i = np.asarray(payload['window_start_i'], dtype=np.int32)
+    window_end_i = np.asarray(payload['window_end_i'], dtype=np.int32)
+    if np.any((window_end_i - window_start_i) != 256):
+        msg = 'window_end_i - window_start_i must equal 256 for every trace'
+        raise ValueError(msg)
+
+    _validate_unit_interval('fine_pmax', np.asarray(payload['fine_pmax'], dtype=np.float32))
+    _validate_unit_interval('final_conf', np.asarray(payload['final_conf'], dtype=np.float32))
+
+    return payload

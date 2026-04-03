@@ -1,0 +1,459 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from seisai_utils.config import (
+    optional_bool,
+    optional_float,
+    optional_int,
+    optional_str,
+    require_bool,
+    require_dict,
+    require_float,
+    require_int,
+    require_list_str,
+    require_value,
+)
+
+from seisai_engine.pipelines.common.config_keys import (
+    normalize_endian,
+    raise_if_deprecated_time_len_keys,
+)
+from seisai_engine.pipelines.common.config_loaders import load_common_train_config
+from seisai_engine.pipelines.common.encdec2d_cfg import build_encdec2d_kwargs
+from seisai_engine.pipelines.common.validate_primary_keys import validate_primary_keys
+from seisai_engine.tracking.config import TrackingConfig, load_tracking_config
+
+if TYPE_CHECKING:
+    from seisai_engine.pipelines.common.config_schema import CommonTrainConfig
+
+__all__ = [
+    'FINE_CENTER_INDEX',
+    'FINE_CKPT_OUTPUT_IDS',
+    'FINE_CKPT_PIPELINE',
+    'FINE_CKPT_SOFTMAX_AXIS',
+    'FINE_CKPT_STAGE',
+    'FINE_IN_CHANS',
+    'FINE_OUT_CHANS',
+    'FINE_TIME_LEN',
+    'FINE_TRACE_LEN',
+    'FineCkptCfg',
+    'FineDatasetCfg',
+    'FineInferConfig',
+    'FineInferRuntimeCfg',
+    'FineInitCfg',
+    'FinePaths',
+    'FineTrainCfg',
+    'FineTrainConfig',
+    'FineTransformCfg',
+    'load_fine_infer_config',
+    'load_fine_train_config',
+]
+
+FINE_IN_CHANS = 1
+FINE_OUT_CHANS = 1
+FINE_TRACE_LEN = 128
+FINE_TIME_LEN = 256
+FINE_CENTER_INDEX = 128
+FINE_CKPT_PIPELINE = 'fbpick'
+FINE_CKPT_STAGE = 'fine'
+FINE_CKPT_OUTPUT_IDS = ('P',)
+FINE_CKPT_SOFTMAX_AXIS = 'time'
+
+
+@dataclass(frozen=True)
+class FinePaths:
+    segy_files: tuple[str, ...]
+    fb_files: tuple[str, ...] | None
+    robust_npz_files: tuple[str, ...] | None
+    infer_segy_files: tuple[str, ...] | None
+    infer_fb_files: tuple[str, ...] | None
+    infer_robust_npz_files: tuple[str, ...] | None
+    out_dir: str | None
+
+
+@dataclass(frozen=True)
+class FineDatasetCfg:
+    max_trials: int
+    use_header_cache: bool
+    verbose: bool
+    progress: bool
+    primary_keys: tuple[str, ...]
+    secondary_key_fixed: bool
+    waveform_mode: str
+    train_endian: str
+    infer_endian: str
+
+
+@dataclass(frozen=True)
+class FineTransformCfg:
+    trace_len: int
+    time_len: int
+    center_index: int
+    standardize_eps: float
+
+
+@dataclass(frozen=True)
+class FineTrainCfg:
+    lr: float
+    weight_decay: float
+    fb_sigma_ms: float
+    sigma_samples_min: float
+    sigma_samples_max: float
+
+
+@dataclass(frozen=True)
+class FineInferRuntimeCfg:
+    batch_size: int
+    num_workers: int
+    overlap_h: int
+    amp: bool
+    use_tqdm: bool
+
+
+@dataclass(frozen=True)
+class FineInitCfg:
+    coarse_ckpt_path: str | None
+    use_coarse_init: bool
+    reset_seg_head: bool
+    reset_first_bn_stats: bool
+
+
+@dataclass(frozen=True)
+class FineCkptCfg:
+    save_best_only: bool
+    metric: str
+    mode: str
+    pipeline: str = FINE_CKPT_PIPELINE
+    stage: str = FINE_CKPT_STAGE
+    output_ids: tuple[str, ...] = FINE_CKPT_OUTPUT_IDS
+    softmax_axis: str = FINE_CKPT_SOFTMAX_AXIS
+
+
+@dataclass(frozen=True)
+class FineTrainConfig:
+    common: 'CommonTrainConfig'
+    tracking: TrackingConfig
+    paths: FinePaths
+    dataset: FineDatasetCfg
+    transform: FineTransformCfg
+    train: FineTrainCfg
+    init: FineInitCfg
+    model_sig: dict[str, Any]
+    ckpt: FineCkptCfg
+
+
+@dataclass(frozen=True)
+class FineInferConfig:
+    paths: FinePaths
+    dataset: FineDatasetCfg
+    transform: FineTransformCfg
+    infer: FineInferRuntimeCfg
+    model_sig: dict[str, Any]
+
+
+def _load_optional_str_list(cfg: dict, key: str) -> tuple[str, ...] | None:
+    raw = cfg.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        msg = f'paths.{key} must be list[str] or null'
+        raise TypeError(msg)
+    return tuple(require_list_str(cfg, key))
+
+
+def _load_paths_cfg(
+    cfg: dict,
+    *,
+    allow_missing_infer_pairs: bool,
+    require_fb_files: bool,
+    require_robust_files: bool,
+    require_out_dir: bool,
+) -> FinePaths:
+    paths = require_dict(cfg, 'paths')
+    segy_files = tuple(require_list_str(paths, 'segy_files'))
+    fb_files = _load_optional_str_list(paths, 'fb_files')
+    robust_npz_files = _load_optional_str_list(paths, 'robust_npz_files')
+
+    if require_fb_files and fb_files is None:
+        msg = 'paths.fb_files is required for fbpick fine training'
+        raise ValueError(msg)
+    if require_robust_files and robust_npz_files is None:
+        msg = 'paths.robust_npz_files is required for fbpick fine'
+        raise ValueError(msg)
+
+    if fb_files is not None and len(fb_files) != len(segy_files):
+        msg = 'paths.segy_files and paths.fb_files must have the same length'
+        raise ValueError(msg)
+    if robust_npz_files is not None and len(robust_npz_files) != len(segy_files):
+        msg = 'paths.segy_files and paths.robust_npz_files must have the same length'
+        raise ValueError(msg)
+
+    infer_segy_files = _load_optional_str_list(paths, 'infer_segy_files')
+    infer_fb_files = _load_optional_str_list(paths, 'infer_fb_files')
+    infer_robust_npz_files = _load_optional_str_list(paths, 'infer_robust_npz_files')
+
+    if not allow_missing_infer_pairs:
+        if infer_segy_files is None:
+            infer_segy_files = segy_files
+        if infer_fb_files is None:
+            infer_fb_files = fb_files
+        if infer_robust_npz_files is None:
+            infer_robust_npz_files = robust_npz_files
+
+    if infer_segy_files is not None and infer_fb_files is not None:
+        if len(infer_segy_files) != len(infer_fb_files):
+            msg = 'paths.infer_segy_files and paths.infer_fb_files must have the same length'
+            raise ValueError(msg)
+    if infer_segy_files is not None and infer_robust_npz_files is not None:
+        if len(infer_segy_files) != len(infer_robust_npz_files):
+            msg = (
+                'paths.infer_segy_files and paths.infer_robust_npz_files must have '
+                'the same length'
+            )
+            raise ValueError(msg)
+
+    if require_out_dir:
+        out_dir_value = require_value(
+            paths,
+            'out_dir',
+            str,
+            type_message='config.paths.out_dir must be str',
+        )
+        out_dir = str(out_dir_value)
+    else:
+        out_dir_raw = paths.get('out_dir')
+        if out_dir_raw is None:
+            out_dir = None
+        else:
+            if not isinstance(out_dir_raw, str):
+                msg = 'config.paths.out_dir must be str'
+                raise TypeError(msg)
+            out_dir = str(out_dir_raw)
+
+    return FinePaths(
+        segy_files=segy_files,
+        fb_files=fb_files,
+        robust_npz_files=robust_npz_files,
+        infer_segy_files=infer_segy_files,
+        infer_fb_files=infer_fb_files,
+        infer_robust_npz_files=infer_robust_npz_files,
+        out_dir=out_dir,
+    )
+
+
+def _load_dataset_cfg(cfg: dict) -> FineDatasetCfg:
+    ds_cfg = require_dict(cfg, 'dataset')
+    primary_keys = validate_primary_keys(ds_cfg.get('primary_keys', ['ffid']))
+    train_endian = normalize_endian(
+        value=optional_str(ds_cfg, 'train_endian', 'big'),
+        key_name='dataset.train_endian',
+    )
+    infer_endian = normalize_endian(
+        value=optional_str(ds_cfg, 'infer_endian', train_endian),
+        key_name='dataset.infer_endian',
+    )
+    waveform_mode = optional_str(ds_cfg, 'waveform_mode', 'eager').strip().lower()
+    if waveform_mode not in ('eager', 'mmap'):
+        msg = 'dataset.waveform_mode must be "eager" or "mmap"'
+        raise ValueError(msg)
+    return FineDatasetCfg(
+        max_trials=int(optional_int(ds_cfg, 'max_trials', 2048)),
+        use_header_cache=bool(optional_bool(ds_cfg, 'use_header_cache', default=True)),
+        verbose=bool(optional_bool(ds_cfg, 'verbose', default=True)),
+        progress=bool(optional_bool(ds_cfg, 'progress', default=True)),
+        primary_keys=tuple(primary_keys),
+        secondary_key_fixed=bool(
+            optional_bool(ds_cfg, 'secondary_key_fixed', default=False)
+        ),
+        waveform_mode=str(waveform_mode),
+        train_endian=str(train_endian),
+        infer_endian=str(infer_endian),
+    )
+
+
+def _load_transform_cfg(cfg: dict) -> FineTransformCfg:
+    raise_if_deprecated_time_len_keys(
+        train_cfg=cfg.get('train'),
+        transform_cfg=cfg.get('transform'),
+    )
+    transform_cfg = require_dict(cfg, 'transform')
+    trace_len = int(require_int(transform_cfg, 'trace_len'))
+    time_len = int(require_int(transform_cfg, 'time_len'))
+    center_index = int(require_int(transform_cfg, 'center_index'))
+    if trace_len != FINE_TRACE_LEN:
+        msg = f'transform.trace_len must be {FINE_TRACE_LEN} for fbpick fine'
+        raise ValueError(msg)
+    if time_len != FINE_TIME_LEN:
+        msg = f'transform.time_len must be {FINE_TIME_LEN} for fbpick fine'
+        raise ValueError(msg)
+    if center_index != FINE_CENTER_INDEX:
+        msg = f'transform.center_index must be {FINE_CENTER_INDEX} for fbpick fine'
+        raise ValueError(msg)
+    return FineTransformCfg(
+        trace_len=trace_len,
+        time_len=time_len,
+        center_index=center_index,
+        standardize_eps=float(optional_float(transform_cfg, 'standardize_eps', 1.0e-8)),
+    )
+
+
+def _load_model_sig(cfg: dict) -> dict[str, Any]:
+    model_cfg = require_dict(cfg, 'model')
+    in_chans = int(require_int(model_cfg, 'in_chans'))
+    out_chans = int(require_int(model_cfg, 'out_chans'))
+    if in_chans != FINE_IN_CHANS:
+        msg = f'model.in_chans must be {FINE_IN_CHANS} for fbpick fine'
+        raise ValueError(msg)
+    if out_chans != FINE_OUT_CHANS:
+        msg = f'model.out_chans must be {FINE_OUT_CHANS} for fbpick fine'
+        raise ValueError(msg)
+    return build_encdec2d_kwargs(model_cfg, in_chans=in_chans, out_chans=out_chans)
+
+
+def _load_init_cfg(cfg: dict) -> FineInitCfg:
+    init_cfg = cfg.get('init')
+    if init_cfg is None:
+        init_cfg = {}
+    if not isinstance(init_cfg, dict):
+        msg = 'init must be dict'
+        raise TypeError(msg)
+
+    coarse_ckpt_raw = init_cfg.get('coarse_ckpt_path')
+    if coarse_ckpt_raw is None:
+        coarse_ckpt_path = None
+    else:
+        coarse_ckpt_value = require_value(
+            init_cfg,
+            'coarse_ckpt_path',
+            str,
+            type_message='config.init.coarse_ckpt_path must be str or null',
+        )
+        coarse_ckpt_path = str(coarse_ckpt_value).strip()
+        if not coarse_ckpt_path:
+            msg = 'init.coarse_ckpt_path must be non-empty when provided'
+            raise ValueError(msg)
+
+    use_coarse_init = bool(optional_bool(init_cfg, 'use_coarse_init', default=False))
+    if use_coarse_init and coarse_ckpt_path is None:
+        msg = 'init.coarse_ckpt_path is required when init.use_coarse_init=true'
+        raise ValueError(msg)
+
+    return FineInitCfg(
+        coarse_ckpt_path=coarse_ckpt_path,
+        use_coarse_init=use_coarse_init,
+        reset_seg_head=bool(optional_bool(init_cfg, 'reset_seg_head', default=True)),
+        reset_first_bn_stats=bool(
+            optional_bool(init_cfg, 'reset_first_bn_stats', default=True)
+        ),
+    )
+
+
+def load_fine_train_config(
+    cfg: dict,
+    *,
+    base_dir: str | Path | None = None,
+) -> FineTrainConfig:
+    if not isinstance(cfg, dict):
+        msg = 'cfg must be dict'
+        raise TypeError(msg)
+
+    common = load_common_train_config(cfg)
+    train_cfg = require_dict(cfg, 'train')
+    ckpt_cfg = require_dict(cfg, 'ckpt')
+
+    fb_sigma_ms = float(optional_float(train_cfg, 'fb_sigma_ms', 3.0))
+    if fb_sigma_ms <= 0.0:
+        msg = 'train.fb_sigma_ms must be > 0'
+        raise ValueError(msg)
+
+    sigma_samples_min = float(optional_float(train_cfg, 'sigma_samples_min', 1.5))
+    sigma_samples_max = float(optional_float(train_cfg, 'sigma_samples_max', 12.0))
+    if sigma_samples_min <= 0.0:
+        msg = 'train.sigma_samples_min must be > 0'
+        raise ValueError(msg)
+    if sigma_samples_max <= 0.0:
+        msg = 'train.sigma_samples_max must be > 0'
+        raise ValueError(msg)
+    if sigma_samples_max < sigma_samples_min:
+        msg = 'train.sigma_samples_max must be >= train.sigma_samples_min'
+        raise ValueError(msg)
+
+    tracking_base_dir = Path('.') if base_dir is None else Path(base_dir)
+
+    return FineTrainConfig(
+        common=common,
+        tracking=load_tracking_config(cfg, tracking_base_dir),
+        paths=_load_paths_cfg(
+            cfg,
+            allow_missing_infer_pairs=False,
+            require_fb_files=True,
+            require_robust_files=True,
+            require_out_dir=True,
+        ),
+        dataset=_load_dataset_cfg(cfg),
+        transform=_load_transform_cfg(cfg),
+        train=FineTrainCfg(
+            lr=float(require_float(train_cfg, 'lr')),
+            weight_decay=float(optional_float(train_cfg, 'weight_decay', 0.0)),
+            fb_sigma_ms=fb_sigma_ms,
+            sigma_samples_min=sigma_samples_min,
+            sigma_samples_max=sigma_samples_max,
+        ),
+        init=_load_init_cfg(cfg),
+        model_sig=_load_model_sig(cfg),
+        ckpt=FineCkptCfg(
+            save_best_only=bool(require_bool(ckpt_cfg, 'save_best_only')),
+            metric=str(
+                require_value(
+                    ckpt_cfg,
+                    'metric',
+                    str,
+                    type_message='config.ckpt.metric must be str',
+                )
+            ),
+            mode=str(
+                require_value(
+                    ckpt_cfg,
+                    'mode',
+                    str,
+                    type_message='config.ckpt.mode must be str',
+                )
+            ),
+        ),
+    )
+
+
+def load_fine_infer_config(cfg: dict) -> FineInferConfig:
+    if not isinstance(cfg, dict):
+        msg = 'cfg must be dict'
+        raise TypeError(msg)
+
+    infer_cfg = require_dict(cfg, 'infer')
+    transform = _load_transform_cfg(cfg)
+    overlap_h = int(optional_int(infer_cfg, 'overlap_h', 96))
+    if overlap_h < 0 or overlap_h >= transform.trace_len:
+        msg = 'infer.overlap_h must satisfy 0 <= overlap_h < transform.trace_len'
+        raise ValueError(msg)
+
+    return FineInferConfig(
+        paths=_load_paths_cfg(
+            cfg,
+            allow_missing_infer_pairs=True,
+            require_fb_files=False,
+            require_robust_files=True,
+            require_out_dir=False,
+        ),
+        dataset=_load_dataset_cfg(cfg),
+        transform=transform,
+        infer=FineInferRuntimeCfg(
+            batch_size=int(optional_int(infer_cfg, 'batch_size', 1)),
+            num_workers=int(optional_int(infer_cfg, 'num_workers', 0)),
+            overlap_h=overlap_h,
+            amp=bool(optional_bool(infer_cfg, 'amp', default=False)),
+            use_tqdm=bool(optional_bool(infer_cfg, 'use_tqdm', default=False)),
+        ),
+        model_sig=_load_model_sig(cfg),
+    )

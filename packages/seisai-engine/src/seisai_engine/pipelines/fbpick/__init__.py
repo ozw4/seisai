@@ -1,3 +1,3 @@
-from . import coarse, common, physics
+from . import coarse, common, fine, physics
 
-__all__ = ['coarse', 'common', 'physics']
+__all__ = ['coarse', 'common', 'fine', 'physics']
