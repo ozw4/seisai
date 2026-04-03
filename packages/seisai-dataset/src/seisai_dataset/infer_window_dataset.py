@@ -153,7 +153,7 @@ class InferenceGatherWindowsDataset(Dataset):
     def __init__(
         self,
         segy_files: Sequence[str],
-        fb_files: Sequence[str],
+        fb_files: Sequence[str] | None = None,
         *,
         plan: BuildPlan | InputOnlyPlan,
         cfg: InferenceGatherWindowsConfig | None = None,
@@ -164,15 +164,21 @@ class InferenceGatherWindowsDataset(Dataset):
         use_header_cache: bool = True,
         header_cache_dir: str | None = None,
     ) -> None:
-        if len(segy_files) == 0 or len(fb_files) == 0:
-            msg = 'segy_files / fb_files must be non-empty'
-            raise ValueError(msg)
-        if len(segy_files) != len(fb_files):
-            msg = 'segy_files and fb_files must have the same length'
+        if len(segy_files) == 0:
+            msg = 'segy_files must be non-empty'
             raise ValueError(msg)
 
         self.segy_files = list(segy_files)
-        self.fb_files = list(fb_files)
+        if fb_files is None:
+            self.fb_files: list[str] | None = None
+        else:
+            if len(fb_files) == 0:
+                msg = 'fb_files must be non-empty when provided'
+                raise ValueError(msg)
+            if len(segy_files) != len(fb_files):
+                msg = 'segy_files and fb_files must have the same length'
+                raise ValueError(msg)
+            self.fb_files = list(fb_files)
         self.cfg = cfg or InferenceGatherWindowsConfig()
         if self.cfg.win_size_traces <= 0:
             msg = 'win_size_traces must be positive'
@@ -222,24 +228,36 @@ class InferenceGatherWindowsDataset(Dataset):
         )
 
         self.file_infos: list[dict] = []
-        for segy_path, fb_path in zip(self.segy_files, self.fb_files, strict=True):
-            info = build_file_info(
-                segy_path,
-                ffid_byte=self.ffid_byte,
-                chno_byte=self.chno_byte,
-                cmp_byte=self.cmp_byte,
-                header_cache_dir=self.header_cache_dir,
-                use_header_cache=self.use_header_cache,
-                include_centroids=False,
-            )
-            fb = np.load(fb_path)
-            if int(fb.shape[0]) != int(info['n_traces']):
-                msg = f'fb length {int(fb.shape[0])} != n_traces {int(info["n_traces"])} for {segy_path}'
-                raise ValueError(
-                    msg
+        if self.fb_files is None:
+            for segy_path in self.segy_files:
+                info = build_file_info(
+                    segy_path,
+                    ffid_byte=self.ffid_byte,
+                    chno_byte=self.chno_byte,
+                    cmp_byte=self.cmp_byte,
+                    header_cache_dir=self.header_cache_dir,
+                    use_header_cache=self.use_header_cache,
+                    include_centroids=False,
                 )
-            info['fb'] = fb
-            self.file_infos.append(info)
+                info['fb'] = np.full(int(info['n_traces']), -1, dtype=np.int64)
+                self.file_infos.append(info)
+        else:
+            for segy_path, fb_path in zip(self.segy_files, self.fb_files, strict=True):
+                info = build_file_info(
+                    segy_path,
+                    ffid_byte=self.ffid_byte,
+                    chno_byte=self.chno_byte,
+                    cmp_byte=self.cmp_byte,
+                    header_cache_dir=self.header_cache_dir,
+                    use_header_cache=self.use_header_cache,
+                    include_centroids=False,
+                )
+                fb = np.load(fb_path)
+                if int(fb.shape[0]) != int(info['n_traces']):
+                    msg = f'fb length {int(fb.shape[0])} != n_traces {int(info["n_traces"])} for {segy_path}'
+                    raise ValueError(msg)
+                info['fb'] = fb
+                self.file_infos.append(info)
 
         self._file_base: list[int] = []
         base = 0
@@ -369,8 +387,8 @@ class InferenceGatherWindowsDataset(Dataset):
         if int(Hv) != H:
             msg = f'transform must keep H: got {int(Hv)}, expected {H}'
             raise ValueError(msg)
-        if int(W) < W0:
-            msg = 'transform must not crop time axis in inference'
+        if int(W) != W0:
+            msg = 'transform must keep time axis length in inference'
             raise ValueError(msg)
 
         if int(W) < int(self.cfg.target_len):

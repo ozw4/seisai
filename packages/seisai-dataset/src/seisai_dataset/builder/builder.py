@@ -5,8 +5,9 @@ This module defines small, composable operations that transform an in-memory
 executors that run these operations in sequence.
 
 Main components:
-- Wave producers: IdentitySignal, MaskedSignal, MakeTimeChannel, MakeOffsetChannel
-- Label producers: FBGaussMap
+- Wave producers: IdentitySignal, MaskedSignal, MakeTimeChannel, NormalizeTimeByConst,
+  MakeOffsetChannel, NormalizeOffsetByConst
+- Label producers: FBGaussMap, FBGaussMapMs
 - Stack/selection utilities: SelectStack
 - Pipeline executors: BasePlan, BuildPlan, InputOnlyPlan
 """
@@ -30,6 +31,91 @@ def _to_numpy(x: ArrayLike, dtype: DTypeLike | None = None) -> np.ndarray:
     if isinstance(x, torch.Tensor):
         x = x.detach().cpu().numpy()
     return np.asarray(x, dtype=dtype)
+
+
+def _validate_clip_bounds(clip_lo: float, clip_hi: float) -> tuple[float, float]:
+    lo = float(clip_lo)
+    hi = float(clip_hi)
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        msg = 'clip bounds must be finite'
+        raise ValueError(msg)
+    if hi < lo:
+        msg = f'clip_hi {hi} must be >= clip_lo {lo}'
+        raise ValueError(msg)
+    return lo, hi
+
+
+def _resolve_fb_map_inputs(
+    sample: dict[str, Any],
+    *,
+    src: str,
+) -> tuple[dict[str, Any], int, int, np.ndarray]:
+    if 'x_view' not in sample:
+        msg = "missing 'x_view'"
+        raise KeyError(msg)
+    if 'meta' not in sample or not isinstance(sample['meta'], dict):
+        msg = "missing 'meta' dict"
+        raise KeyError(msg)
+    if src not in sample['meta']:
+        msg = f"missing '{src}' (use ProjectToView before FBGaussMap)"
+        raise KeyError(msg)
+
+    x_view = _to_numpy(sample['x_view'])
+    if x_view.ndim != 2:
+        msg = f'x_view must be 2D, got shape {x_view.shape}'
+        raise ValueError(msg)
+    H, W = x_view.shape
+
+    fb = np.asarray(sample['meta'][src], dtype=np.int64)
+    if fb.shape[0] != H:
+        msg = f'{src} length {fb.shape[0]} != H {H}'
+        raise ValueError(msg)
+    return sample['meta'], H, W, fb
+
+
+def _resolve_trace_valid(meta: dict[str, Any], H: int) -> np.ndarray:
+    trace_valid = meta.get('trace_valid', None)
+    if trace_valid is None:
+        return np.ones(H, dtype=np.bool_)
+    trace_valid_arr = np.asarray(trace_valid, dtype=np.bool_)
+    if trace_valid_arr.shape != (H,):
+        msg = f"meta['trace_valid'] shape {trace_valid_arr.shape} != ({H},)"
+        raise ValueError(msg)
+    return trace_valid_arr
+
+
+def _build_fb_gaussian_map(
+    *,
+    fb: np.ndarray,
+    W: int,
+    sigma_bins: np.ndarray | float,
+    trace_valid: np.ndarray | None = None,
+    require_in_view: bool = False,
+) -> np.ndarray:
+    H = int(fb.shape[0])
+    y = np.zeros((H, W), dtype=np.float32)
+
+    valid = fb > 0
+    if require_in_view:
+        valid &= fb < W
+    if trace_valid is not None:
+        valid &= trace_valid
+
+    if not np.any(valid):
+        return y
+
+    mu = fb[valid].astype(np.float32, copy=False)
+    sigma_arr = np.asarray(sigma_bins, dtype=np.float32)
+    if sigma_arr.ndim == 0:
+        sigma_valid: np.ndarray | float = float(sigma_arr)
+    else:
+        if sigma_arr.shape != (H,):
+            msg = f'sigma_bins shape {sigma_arr.shape} != ({H},)'
+            raise ValueError(msg)
+        sigma_valid = sigma_arr[valid]
+
+    y[valid] = gaussian_probs1d_np(mu, sigma_valid, W)
+    return y
 
 
 # ---------- Wave producers(波形から作る派生物) ----------
@@ -259,6 +345,39 @@ class MakeTimeChannel:
         sample[self.dst] = np.repeat(t[None, :], H, axis=0)
 
 
+class NormalizeTimeByConst:
+    """Normalize a time-channel array by a fixed reference scale and clip the result."""
+
+    def __init__(
+        self,
+        src: str = 'time_ch_raw',
+        dst: str = 'time_ch',
+        *,
+        ref_sec: float,
+        clip_lo: float = 0.0,
+        clip_hi: float = 1.5,
+    ) -> None:
+        ref = float(ref_sec)
+        if not np.isfinite(ref) or ref <= 0.0:
+            msg = f'ref_sec must be finite and > 0, got {ref_sec}'
+            raise ValueError(msg)
+        self.src = src
+        self.dst = dst
+        self.ref_sec = ref
+        self.clip_lo, self.clip_hi = _validate_clip_bounds(clip_lo, clip_hi)
+
+    def __call__(
+        self, sample: dict[str, Any], rng: np.random.Generator | None = None
+    ) -> None:
+        if self.src not in sample:
+            msg = f'missing sample key: {self.src}'
+            raise KeyError(msg)
+        x = _to_numpy(sample[self.src], dtype=np.float32)
+        out = x / self.ref_sec
+        np.clip(out, self.clip_lo, self.clip_hi, out=out)
+        sample[self.dst] = out.astype(np.float32, copy=False)
+
+
 class MakeOffsetChannel:
     """Create a per-trace offset channel from metadata.
 
@@ -340,6 +459,43 @@ class MakeOffsetChannel:
         sample[self.dst] = np.repeat(off[:, None], W, axis=1)
 
 
+class NormalizeOffsetByConst:
+    """Normalize an offset-channel array by a fixed reference scale and clip the result."""
+
+    def __init__(
+        self,
+        src: str = 'offset_ch_raw',
+        dst: str = 'offset_ch',
+        *,
+        ref_m: float,
+        use_abs: bool = True,
+        clip_lo: float = 0.0,
+        clip_hi: float = 1.5,
+    ) -> None:
+        ref = float(ref_m)
+        if not np.isfinite(ref) or ref <= 0.0:
+            msg = f'ref_m must be finite and > 0, got {ref_m}'
+            raise ValueError(msg)
+        self.src = src
+        self.dst = dst
+        self.ref_m = ref
+        self.use_abs = bool(use_abs)
+        self.clip_lo, self.clip_hi = _validate_clip_bounds(clip_lo, clip_hi)
+
+    def __call__(
+        self, sample: dict[str, Any], rng: np.random.Generator | None = None
+    ) -> None:
+        if self.src not in sample:
+            msg = f'missing sample key: {self.src}'
+            raise KeyError(msg)
+        x = _to_numpy(sample[self.src], dtype=np.float32)
+        if self.use_abs:
+            x = np.abs(x)
+        out = x / self.ref_m
+        np.clip(out, self.clip_lo, self.clip_hi, out=out)
+        sample[self.dst] = out.astype(np.float32, copy=False)
+
+
 # ---------- Label producers(ラベルから作る派生物) ----------
 
 
@@ -417,28 +573,88 @@ class FBGaussMap:
         Writes `sample[self.dst]` as a float32 array of shape (H, W).
 
         """
-        if 'x_view' not in sample:
-            msg = "missing 'x_view'"
-            raise KeyError(msg)
-        if self.src not in sample['meta']:
-            msg = f"missing '{self.src}' (use ProjectToView before FBGaussMap)"
-            raise KeyError(msg)
+        _meta, _H, W, fb = _resolve_fb_map_inputs(sample, src=self.src)
+        sample[self.dst] = _build_fb_gaussian_map(
+            fb=fb,
+            W=W,
+            sigma_bins=self.sigma,
+        )
 
-        x_view = _to_numpy(sample['x_view'])
-        H, W = x_view.shape
 
-        fb = np.asarray(sample['meta'][self.src], dtype=np.int64)
-        if fb.shape[0] != H:
-            msg = f'{self.src} length {fb.shape[0]} != H {H}'
+class FBGaussMapMs:
+    """Create a Gaussian FB label map using a fixed sigma in milliseconds."""
+
+    def __init__(
+        self,
+        dst: str = 'y_fb_map',
+        src: str = 'fb_idx_view',
+        *,
+        sigma_ms: float,
+        sigma_samples_min: float,
+        sigma_samples_max: float,
+    ) -> None:
+        sigma_ms_value = float(sigma_ms)
+        if not np.isfinite(sigma_ms_value) or sigma_ms_value <= 0.0:
+            msg = f'sigma_ms must be finite and > 0, got {sigma_ms}'
+            raise ValueError(msg)
+        sigma_min = float(sigma_samples_min)
+        sigma_max = float(sigma_samples_max)
+        if not np.isfinite(sigma_min) or sigma_min <= 0.0:
+            msg = (
+                'sigma_samples_min must be finite and > 0, '
+                f'got {sigma_samples_min}'
+            )
+            raise ValueError(msg)
+        if not np.isfinite(sigma_max) or sigma_max <= 0.0:
+            msg = (
+                'sigma_samples_max must be finite and > 0, '
+                f'got {sigma_samples_max}'
+            )
+            raise ValueError(msg)
+        if sigma_max < sigma_min:
+            msg = (
+                f'sigma_samples_max {sigma_max} must be >= '
+                f'sigma_samples_min {sigma_min}'
+            )
             raise ValueError(msg)
 
-        valid = fb > 0
-        y = np.zeros((H, W), dtype=np.float32)
-        if np.any(valid):
-            mu = fb[valid].astype(np.float32)  # ビンindex中心
-            g = gaussian_probs1d_np(mu, self.sigma, W)  # (Nv, W)
-            y[valid] = g
-        sample[self.dst] = y
+        self.dst = dst
+        self.src = src
+        self.sigma_ms = sigma_ms_value
+        self.sigma_samples_min = sigma_min
+        self.sigma_samples_max = sigma_max
+
+    def __call__(
+        self, sample: dict[str, Any], rng: np.random.Generator | None = None
+    ) -> None:
+        meta, H, W, fb = _resolve_fb_map_inputs(sample, src=self.src)
+        if 'dt_eff_sec' in meta:
+            dt_sec = float(meta['dt_eff_sec'])
+        elif 'dt_sec' in meta:
+            dt_sec = float(meta['dt_sec'])
+        else:
+            msg = "missing 'dt_eff_sec' or 'dt_sec' in meta"
+            raise KeyError(msg)
+        if not np.isfinite(dt_sec) or dt_sec <= 0.0:
+            msg = f'dt_sec must be finite and > 0, got {dt_sec}'
+            raise ValueError(msg)
+
+        sigma_samples = self.sigma_ms / (dt_sec * 1000.0)
+        sigma_samples = float(
+            np.clip(
+                sigma_samples,
+                self.sigma_samples_min,
+                self.sigma_samples_max,
+            )
+        )
+        trace_valid = _resolve_trace_valid(meta, H)
+        sample[self.dst] = _build_fb_gaussian_map(
+            fb=fb,
+            W=W,
+            sigma_bins=sigma_samples,
+            trace_valid=trace_valid,
+            require_in_view=True,
+        )
 
 
 # ---------- Label producers(phase picks) ----------
