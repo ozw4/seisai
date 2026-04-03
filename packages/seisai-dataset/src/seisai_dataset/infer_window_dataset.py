@@ -15,7 +15,7 @@ from torch.utils.data import Dataset
 
 from .builder.builder import BuildPlan, InputOnlyPlan
 from .config import LoaderConfig
-from .file_info import build_file_info
+from .file_info import build_file_info, normalize_segy_endian, normalize_waveform_mode
 from .trace_subset_preproc import TraceSubsetLoader
 from .transform_flow_utils import (
     add_view_projection_meta,
@@ -161,6 +161,8 @@ class InferenceGatherWindowsDataset(Dataset):
         ffid_byte=segyio.TraceField.FieldRecord,
         chno_byte=segyio.TraceField.TraceNumber,
         cmp_byte=segyio.TraceField.CDP,
+        waveform_mode: str = 'eager',
+        segy_endian: str = 'big',
         use_header_cache: bool = True,
         header_cache_dir: str | None = None,
     ) -> None:
@@ -218,6 +220,8 @@ class InferenceGatherWindowsDataset(Dataset):
         self.ffid_byte = ffid_byte
         self.chno_byte = chno_byte
         self.cmp_byte = cmp_byte
+        self.waveform_mode = normalize_waveform_mode(waveform_mode)
+        self.segy_endian = normalize_segy_endian(segy_endian)
         self.use_header_cache = bool(use_header_cache)
         self.header_cache_dir = header_cache_dir
 
@@ -238,6 +242,8 @@ class InferenceGatherWindowsDataset(Dataset):
                     header_cache_dir=self.header_cache_dir,
                     use_header_cache=self.use_header_cache,
                     include_centroids=False,
+                    waveform_mode=self.waveform_mode,
+                    segy_endian=self.segy_endian,
                 )
                 info['fb'] = np.full(int(info['n_traces']), -1, dtype=np.int64)
                 self.file_infos.append(info)
@@ -251,6 +257,8 @@ class InferenceGatherWindowsDataset(Dataset):
                     header_cache_dir=self.header_cache_dir,
                     use_header_cache=self.use_header_cache,
                     include_centroids=False,
+                    waveform_mode=self.waveform_mode,
+                    segy_endian=self.segy_endian,
                 )
                 fb = np.load(fb_path)
                 if int(fb.shape[0]) != int(info['n_traces']):
