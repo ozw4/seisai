@@ -1,17 +1,23 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
+import pytest
 import segyio
 import torch
 from torch.utils.data import DataLoader, Subset
 
+from seisai_engine.pipelines.common import load_checkpoint
 from seisai_engine.pipelines.fbpick.common import COARSE_REQUIRED_KEYS, load_coarse_npz
 from seisai_engine.pipelines.fbpick.coarse import (
     build_fbgate,
     build_plan,
     build_train_dataset,
+    load_coarse_train_config,
     load_train_bundle,
     run_coarse_infer,
+    run_train,
 )
 from seisai_engine.train_loop import train_one_epoch
 
@@ -118,6 +124,65 @@ def _make_training_config(tmp_path: Path, *, segy_path: str, fb_path: str) -> di
     }
 
 
+def test_load_coarse_train_config_returns_fixed_contract_values(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
+
+    typed = load_coarse_train_config(cfg)
+
+    assert typed.transform.time_len == 6016
+    assert typed.train.fb_sigma_ms == pytest.approx(10.0)
+    assert typed.model_sig['in_chans'] == 3
+    assert typed.model_sig['out_chans'] == 1
+    assert typed.ckpt.pipeline == 'fbpick'
+    assert typed.ckpt.output_ids == ('P',)
+    assert typed.ckpt.softmax_axis == 'time'
+
+
+@pytest.mark.parametrize(
+    ('mutate', 'message'),
+    [
+        (
+            lambda cfg: cfg['model'].__setitem__('in_chans', 1),
+            'model.in_chans must be 3',
+        ),
+        (
+            lambda cfg: cfg['model'].__setitem__('out_chans', 2),
+            'model.out_chans must be 1',
+        ),
+        (
+            lambda cfg: cfg['transform'].__setitem__('time_len', 6000),
+            'transform.time_len must be 6016',
+        ),
+        (
+            lambda cfg: cfg['train'].__setitem__('fb_sigma_ms', 0.0),
+            'train.fb_sigma_ms must be > 0',
+        ),
+        (
+            lambda cfg: cfg['norm_refs'].__setitem__('time_ref_sec', 0.0),
+            'norm_refs.time_ref_sec must be > 0',
+        ),
+        (
+            lambda cfg: cfg['norm_refs'].__setitem__('offset_ref_m', 0.0),
+            'norm_refs.offset_ref_m must be > 0',
+        ),
+    ],
+)
+def test_load_coarse_train_config_rejects_invalid_fixed_contract(
+    tmp_path: Path,
+    mutate,
+    message: str,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
+    mutate(cfg)
+
+    with pytest.raises(ValueError) as exc:
+        load_coarse_train_config(cfg)
+
+    assert message in str(exc.value)
+
+
 def test_coarse_build_plan_produces_expected_shapes() -> None:
     plan = _make_plan()
     sample = {
@@ -201,6 +266,7 @@ def test_coarse_train_smoke_one_epoch(tmp_path: Path) -> None:
     cfg = _make_training_config(tmp_path, segy_path=segy_path, fb_path=fb_path)
     cfg_path = tmp_path / 'config_train_fbpick_coarse.yaml'
     import yaml
+
     cfg_path.write_text(yaml.safe_dump(cfg), encoding='utf-8')
 
     bundle = load_train_bundle(cfg_path, device=torch.device('cpu'))
@@ -231,6 +297,33 @@ def test_coarse_train_smoke_one_epoch(tmp_path: Path) -> None:
     assert stats['loss'] >= 0.0
     assert stats['steps'] == 1.0
     assert stats['samples'] == 1.0
+
+
+def test_coarse_run_train_writes_fbpick_ckpt_metadata(tmp_path: Path) -> None:
+    n_traces = 128
+    n_samples = 6016
+    t = np.linspace(-1.0, 1.0, n_samples, dtype=np.float32)
+    traces = np.stack([t + (0.01 * i) for i in range(n_traces)], axis=0)
+    segy_path = str(tmp_path / 'train_skeleton.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+    fb = np.full((n_traces,), 3000, dtype=np.int64)
+    fb_path = str(tmp_path / 'train_skeleton_fb.npy')
+    np.save(fb_path, fb)
+
+    cfg = _make_training_config(tmp_path, segy_path=segy_path, fb_path=fb_path)
+    cfg_path = tmp_path / 'config_train_fbpick_coarse_skeleton.yaml'
+    import yaml
+
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding='utf-8')
+
+    run_train(cfg_path, device=torch.device('cpu'))
+
+    ckpt = load_checkpoint(tmp_path / 'train_out' / 'ckpt' / 'best.pt')
+    assert ckpt['pipeline'] == 'fbpick'
+    assert ckpt['output_ids'] == ['P']
+    assert ckpt['softmax_axis'] == 'time'
+    assert ckpt['model_sig']['in_chans'] == 3
+    assert ckpt['model_sig']['out_chans'] == 1
 
 
 class _TimeChannelModel(torch.nn.Module):

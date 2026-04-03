@@ -30,6 +30,12 @@ if TYPE_CHECKING:
     from seisai_engine.pipelines.common.config_schema import CommonTrainConfig
 
 __all__ = [
+    'COARSE_CKPT_OUTPUT_IDS',
+    'COARSE_CKPT_PIPELINE',
+    'COARSE_CKPT_SOFTMAX_AXIS',
+    'COARSE_IN_CHANS',
+    'COARSE_OUT_CHANS',
+    'COARSE_TIME_LEN',
     'CoarseCkptCfg',
     'CoarseDatasetCfg',
     'CoarseInferConfig',
@@ -42,6 +48,13 @@ __all__ = [
     'load_coarse_infer_config',
     'load_coarse_train_config',
 ]
+
+COARSE_IN_CHANS = 3
+COARSE_OUT_CHANS = 1
+COARSE_TIME_LEN = 6016
+COARSE_CKPT_PIPELINE = 'fbpick'
+COARSE_CKPT_OUTPUT_IDS = ('P',)
+COARSE_CKPT_SOFTMAX_AXIS = 'time'
 
 
 @dataclass(frozen=True)
@@ -105,6 +118,9 @@ class CoarseCkptCfg:
     save_best_only: bool
     metric: str
     mode: str
+    pipeline: str = COARSE_CKPT_PIPELINE
+    output_ids: tuple[str, ...] = COARSE_CKPT_OUTPUT_IDS
+    softmax_axis: str = COARSE_CKPT_SOFTMAX_AXIS
 
 
 @dataclass(frozen=True)
@@ -258,8 +274,8 @@ def _load_transform_cfg(cfg: dict) -> CoarseTransformCfg:
     )
     transform_cfg = require_dict(cfg, 'transform')
     time_len = int(require_int(transform_cfg, 'time_len'))
-    if time_len <= 0:
-        msg = 'transform.time_len must be positive'
+    if time_len != COARSE_TIME_LEN:
+        msg = f'transform.time_len must be {COARSE_TIME_LEN} for fbpick coarse'
         raise ValueError(msg)
     return CoarseTransformCfg(
         time_len=time_len,
@@ -271,11 +287,11 @@ def _load_model_sig(cfg: dict) -> dict[str, Any]:
     model_cfg = require_dict(cfg, 'model')
     in_chans = int(require_int(model_cfg, 'in_chans'))
     out_chans = int(require_int(model_cfg, 'out_chans'))
-    if in_chans != 3:
-        msg = 'model.in_chans must be 3 for fbpick coarse'
+    if in_chans != COARSE_IN_CHANS:
+        msg = f'model.in_chans must be {COARSE_IN_CHANS} for fbpick coarse'
         raise ValueError(msg)
-    if out_chans != 1:
-        msg = 'model.out_chans must be 1 for fbpick coarse'
+    if out_chans != COARSE_OUT_CHANS:
+        msg = f'model.out_chans must be {COARSE_OUT_CHANS} for fbpick coarse'
         raise ValueError(msg)
     return build_encdec2d_kwargs(model_cfg, in_chans=in_chans, out_chans=out_chans)
 
@@ -293,6 +309,11 @@ def load_coarse_train_config(cfg: dict) -> CoarseTrainConfig:
     trace_decimate_prob, trace_decimate_stride_range = _parse_trace_decimation_cfg(
         train_cfg
     )
+    fb_sigma_ms = float(optional_float(train_cfg, 'fb_sigma_ms', 10.0))
+    if fb_sigma_ms <= 0.0:
+        msg = 'train.fb_sigma_ms must be > 0'
+        raise ValueError(msg)
+
     return CoarseTrainConfig(
         common=common,
         paths=_load_paths_cfg(cfg, allow_missing_infer_pairs=False),
@@ -303,7 +324,7 @@ def load_coarse_train_config(cfg: dict) -> CoarseTrainConfig:
             lr=float(require_float(train_cfg, 'lr')),
             weight_decay=float(optional_float(train_cfg, 'weight_decay', 0.0)),
             subset_traces=int(require_int(train_cfg, 'subset_traces')),
-            fb_sigma_ms=float(optional_float(train_cfg, 'fb_sigma_ms', 10.0)),
+            fb_sigma_ms=float(fb_sigma_ms),
             trace_decimate_prob=float(trace_decimate_prob),
             trace_decimate_stride_range=tuple(trace_decimate_stride_range),
         ),

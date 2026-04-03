@@ -14,7 +14,14 @@ from .config import (
 )
 from .infer import run_coarse_infer
 from .loss import build_criterion
-from .train import CoarseTrainBundle, build_train_bundle, load_train_bundle
+from .train import (
+    CoarseTrainBundle,
+    build_train_bundle,
+    build_train_spec,
+    load_train_bundle,
+    load_train_spec,
+    run_train,
+)
 
 __all__ = [
     'CoarseInferConfig',
@@ -28,8 +35,11 @@ __all__ = [
     'build_raw_infer_dataset',
     'build_train_bundle',
     'build_train_dataset',
+    'build_train_spec',
     'load_coarse_infer_config',
     'load_coarse_train_config',
     'load_train_bundle',
+    'load_train_spec',
     'run_coarse_infer',
+    'run_train',
 ]
