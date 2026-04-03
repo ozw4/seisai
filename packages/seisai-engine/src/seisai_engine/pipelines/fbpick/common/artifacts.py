@@ -8,7 +8,38 @@ import numpy as np
 
 from seisai_engine.infer.segy2segy_cli_common import cfg_hash
 
-__all__ = ['build_lineage_payload', 'read_git_sha']
+ROBUST_SOURCE_COARSE_OBSERVED = 0
+ROBUST_SOURCE_THEORETICAL = 1
+ROBUST_SOURCE_TREND_FILL = 2
+
+ROBUST_SOURCE_LABELS = {
+    ROBUST_SOURCE_COARSE_OBSERVED: 'coarse_observed',
+    ROBUST_SOURCE_THEORETICAL: 'theoretical_replacement',
+    ROBUST_SOURCE_TREND_FILL: 'trend_or_global_fill',
+}
+
+REASON_MASK_INFEASIBLE = 1 << 0
+REASON_MASK_LOW_SCORE = 1 << 1
+REASON_MASK_FILLED_FROM_TREND = 1 << 2
+
+REASON_MASK_LABELS = {
+    REASON_MASK_INFEASIBLE: 'infeasible',
+    REASON_MASK_LOW_SCORE: 'low_score',
+    REASON_MASK_FILLED_FROM_TREND: 'filled_from_trend',
+}
+
+__all__ = [
+    'REASON_MASK_FILLED_FROM_TREND',
+    'REASON_MASK_INFEASIBLE',
+    'REASON_MASK_LABELS',
+    'REASON_MASK_LOW_SCORE',
+    'ROBUST_SOURCE_COARSE_OBSERVED',
+    'ROBUST_SOURCE_LABELS',
+    'ROBUST_SOURCE_THEORETICAL',
+    'ROBUST_SOURCE_TREND_FILL',
+    'build_lineage_payload',
+    'read_git_sha',
+]
 
 
 def _resolve_git_dir(repo_root: Path) -> Path:
@@ -83,19 +114,27 @@ def read_git_sha(repo_root: Path) -> str:
     return sha
 
 
+def _normalize_iter_id(iter_id: int | str | None) -> int | str | None:
+    if iter_id is None:
+        return None
+    if isinstance(iter_id, str):
+        return iter_id
+    return int(iter_id)
+
+
 def build_lineage_payload(
     cfg: dict[str, Any],
     *,
     repo_root: Path,
     source_model_id: str | None,
-    iter_id: int | None,
+    iter_id: int | str | None,
 ) -> np.ndarray:
     if not isinstance(cfg, dict):
         msg = 'cfg must be dict'
         raise TypeError(msg)
 
     payload = {
-        'iter_id': None if iter_id is None else int(iter_id),
+        'iter_id': _normalize_iter_id(iter_id),
         'source_model_id': source_model_id,
         'cfg_hash': cfg_hash(cfg),
         'git_sha': read_git_sha(repo_root),
