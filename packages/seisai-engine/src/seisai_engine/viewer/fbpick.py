@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +16,7 @@ from seisai_engine.predict import infer_tiled_chw
 
 from .model_cache import ViewerModelBundle, get_or_create_model_bundle
 
-__all__ = ['infer_prob_hw']
+__all__ = ['infer_prob_hw', 'render_fbpick_overview', 'save_fbpick_overview_png']
 
 _CHANNEL_PATTERN = re.compile(r'ch(\d+)')
 
@@ -408,3 +409,125 @@ def infer_prob_hw(
         msg = f'prob_hw shape {tuple(prob_hw.shape)} != input shape {orig_hw}'
         raise ValueError(msg)
     return np.ascontiguousarray(prob_hw, dtype=np.float32)
+
+
+def _require_overview_vector(
+    final_payload: Mapping[str, np.ndarray],
+    name: str,
+    *,
+    length: int,
+) -> np.ndarray:
+    if name not in final_payload:
+        msg = f'final payload missing key: {name}'
+        raise KeyError(msg)
+    arr = np.asarray(final_payload[name])
+    if arr.ndim != 1 or int(arr.shape[0]) != int(length):
+        msg = f'{name} must be 1D with length {length}'
+        raise ValueError(msg)
+    return arr
+
+
+def _resolve_overview_clip(raw_wave_hw: np.ndarray, *, clip_percentile: float) -> float:
+    percentile = float(clip_percentile)
+    if percentile <= 0.0 or percentile > 100.0:
+        msg = 'clip_percentile must lie in (0, 100]'
+        raise ValueError(msg)
+    clip_value = float(np.percentile(np.abs(raw_wave_hw), percentile))
+    if not np.isfinite(clip_value) or clip_value <= 0.0:
+        msg = 'clip_percentile must produce a positive finite amplitude bound'
+        raise ValueError(msg)
+    return clip_value
+
+
+def render_fbpick_overview(
+    raw_wave_hw: np.ndarray,
+    final_payload: Mapping[str, np.ndarray],
+    *,
+    title: str | None = None,
+    clip_percentile: float = 99.0,
+):
+    import matplotlib.pyplot as plt
+
+    wave = np.ascontiguousarray(np.asarray(raw_wave_hw, dtype=np.float32))
+    if wave.ndim != 2:
+        msg = f'raw_wave_hw must be 2D, got {wave.shape}'
+        raise ValueError(msg)
+
+    n_traces, _ = wave.shape
+    clip_value = _resolve_overview_clip(wave, clip_percentile=clip_percentile)
+    coarse_pick_i = _require_overview_vector(final_payload, 'coarse_pick_i', length=n_traces)
+    robust_pick_i = _require_overview_vector(final_payload, 'robust_pick_i', length=n_traces)
+    window_start_i = _require_overview_vector(final_payload, 'window_start_i', length=n_traces)
+    window_end_i = _require_overview_vector(final_payload, 'window_end_i', length=n_traces)
+    final_pick_i = _require_overview_vector(final_payload, 'final_pick_i', length=n_traces)
+    high_conf_mask = np.asarray(
+        _require_overview_vector(final_payload, 'high_conf_mask', length=n_traces),
+        dtype=np.bool_,
+    )
+
+    fig_width = max(10.0, float(n_traces) / 16.0)
+    fig, ax = plt.subplots(figsize=(fig_width, 8.0))
+    ax.imshow(
+        wave.T,
+        cmap='gray',
+        aspect='auto',
+        interpolation='nearest',
+        origin='upper',
+        vmin=-clip_value,
+        vmax=clip_value,
+    )
+
+    x = np.arange(n_traces, dtype=np.float32)
+    ax.plot(x, coarse_pick_i.astype(np.float32), color='#7fd3ff', lw=1.0, alpha=0.9, label='coarse_pick_i')
+    ax.plot(x, robust_pick_i.astype(np.float32), color='yellow', lw=1.0, alpha=0.9, label='robust_pick_i')
+    ax.plot(x, window_start_i.astype(np.float32), color='yellow', lw=0.9, ls='--', alpha=0.8, label='window_start_i')
+    ax.plot(x, window_end_i.astype(np.float32), color='yellow', lw=0.9, ls='--', alpha=0.8, label='window_end_i')
+    ax.plot(x, final_pick_i.astype(np.float32), color='red', lw=1.2, alpha=0.95, label='final_pick_i')
+    ax.scatter(
+        x[high_conf_mask],
+        final_pick_i.astype(np.float32)[high_conf_mask],
+        color='lime',
+        s=14.0,
+        alpha=0.95,
+        label='high_conf_final_pick',
+        zorder=5,
+    )
+
+    ax.set_xlabel('Trace Index')
+    ax.set_ylabel('Sample Index')
+    ax.set_title('fbpick overview' if title is None else str(title))
+    ax.legend(loc='upper right', fontsize=8)
+    return fig, ax
+
+
+def save_fbpick_overview_png(
+    out_png: str | Path,
+    *,
+    raw_wave_hw: np.ndarray,
+    final_payload: Mapping[str, np.ndarray],
+    title: str | None = None,
+    dpi: int = 150,
+    clip_percentile: float = 99.0,
+) -> Path:
+    import matplotlib.pyplot as plt
+
+    dpi_int = int(dpi)
+    if dpi_int <= 0:
+        msg = 'dpi must be > 0'
+        raise ValueError(msg)
+
+    out_path = Path(out_png).expanduser().resolve()
+    if not out_path.parent.is_dir():
+        msg = f'overview output directory not found: {out_path.parent}'
+        raise FileNotFoundError(msg)
+
+    fig, _ = render_fbpick_overview(
+        raw_wave_hw,
+        final_payload,
+        title=title,
+        clip_percentile=clip_percentile,
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=dpi_int)
+    plt.close(fig)
+    return out_path

@@ -1,0 +1,9 @@
+paths:
+  coarse_npz_path: REPLACE_ME_input.coarse.npz
+  out_path: ./_fbpick_physics_out/REPLACE_ME_output.robust.npz
+
+feasible_band: {}
+trend: {}
+residual_statics: {}
+keep_reject: {}
+robust_center: {}

@@ -24,6 +24,7 @@ from .config import (
     FINE_TRACE_LEN,
     FineInferConfig,
     FineTrainConfig,
+    FineViewerCfg,
     load_fine_infer_config,
     load_fine_train_config,
 )
@@ -58,6 +59,7 @@ __all__ = [
     'FineLocalWindowSampleTransformer',
     'FineTrainBundle',
     'FineTrainConfig',
+    'FineViewerCfg',
     'build_criterion',
     'build_fine_init_state_dict',
     'build_infer_transform',

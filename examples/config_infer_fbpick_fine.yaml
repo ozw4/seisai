@@ -1,12 +1,27 @@
 paths:
   segy_files:
-    - ../test_data/ridgecrest_das/20200623002546.sgy
+    - REPLACE_ME_infer_fine.sgy
   robust_npz_files:
-    - ./_fbpick_physics_out/20200623002546.robust.npz
+    - REPLACE_ME_infer_fine.robust.npz
   out_dir: ./_fbpick_fine_infer_out
 
+dataset:
+  use_header_cache: true
+  verbose: true
+  progress: true
+  primary_keys: [ffid]
+  waveform_mode: eager
+  train_endian: big
+  infer_endian: big
+
+transform:
+  trace_len: 128
+  time_len: 256
+  center_index: 128
+  standardize_eps: 1.0e-8
+
 infer:
-  ckpt_path: ./_fbpick_fine_train_out/ckpt/best.pt
+  ckpt_path: REPLACE_ME_fine_best.pt
   device: auto
   batch_size: 1
   num_workers: 0
@@ -18,9 +33,14 @@ infer:
   iter_id: null
   allow_unsafe_override: false
 
-# dataset / transform / model are merged from the fine training checkpoint cfg.
-# Run:
-# python cli/run_fbpick_fine_infer.py --config examples/config_infer_fbpick_fine.yaml
-# Unknown override examples:
-# python cli/run_fbpick_fine_infer.py --config examples/config_infer_fbpick_fine.yaml infer.high_conf_threshold=0.7
-# python cli/run_fbpick_fine_infer.py --config examples/config_infer_fbpick_fine.yaml paths.out_dir=./_fbpick_fine_infer_debug
+viewer:
+  enabled: true
+  save_overview_png: true
+  dpi: 150
+  clip_percentile: 99.0
+
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 1
+  out_chans: 1

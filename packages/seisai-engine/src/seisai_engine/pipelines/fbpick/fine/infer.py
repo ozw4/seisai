@@ -69,6 +69,10 @@ _SAFE_OVERRIDE_PATHS = frozenset(
         'infer.source_model_id',
         'infer.iter_id',
         'infer.allow_unsafe_override',
+        'viewer.enabled',
+        'viewer.save_overview_png',
+        'viewer.dpi',
+        'viewer.clip_percentile',
     }
 )
 
@@ -107,6 +111,12 @@ def _default_cfg() -> dict[str, Any]:
             'source_model_id': None,
             'iter_id': None,
             'allow_unsafe_override': False,
+        },
+        'viewer': {
+            'enabled': False,
+            'save_overview_png': True,
+            'dpi': 150,
+            'clip_percentile': 99.0,
         },
         'model': {
             'backbone': 'resnet18',
@@ -162,11 +172,23 @@ def _validate_fine_infer_inputs(typed: FineInferConfig) -> None:
         raise ValueError(msg)
 
 
+def _extract_raw_wave_hw(*, info, n_traces: int, n_samples_orig: int) -> np.ndarray:
+    raw_wave_hw = np.ascontiguousarray(np.asarray(info['mmap'], dtype=np.float32))
+    if raw_wave_hw.shape != (n_traces, n_samples_orig):
+        msg = (
+            'raw waveform gather must have shape '
+            f'({n_traces}, {n_samples_orig}), got {raw_wave_hw.shape}'
+        )
+        raise ValueError(msg)
+    return raw_wave_hw
+
+
 def _run_fine_local_infer_impl(
     *,
     model: torch.nn.Module,
     typed: FineInferConfig,
     device: torch.device,
+    raw_wave_hw_out: dict[str, np.ndarray] | None = None,
 ) -> dict[str, np.ndarray]:
     plan = build_plan(
         sigma_ms=3.0,
@@ -203,6 +225,13 @@ def _run_fine_local_infer_impl(
         n_samples_orig = int(info['n_samples'])
         dt_sec = float(info['dt_sec'])
         time_len = int(typed.transform.time_len)
+
+        if raw_wave_hw_out is not None:
+            raw_wave_hw_out['raw_wave_hw'] = _extract_raw_wave_hw(
+                info=info,
+                n_traces=n_traces,
+                n_samples_orig=n_samples_orig,
+            )
 
         logits_sum = np.zeros((n_traces, time_len), dtype=np.float32)
         counts = np.zeros((n_traces,), dtype=np.int32)
@@ -356,6 +385,10 @@ def _derive_coarse_npz_path_from_robust(robust_npz_path: str | Path) -> Path:
 
 def _derive_final_npz_path(*, segy_path: str | Path, out_dir: str | Path) -> Path:
     return Path(out_dir).expanduser().resolve() / f'{Path(segy_path).stem}.fbpick_final.npz'
+
+
+def _derive_overview_png_path(*, segy_path: str | Path, out_dir: str | Path) -> Path:
+    return Path(out_dir).expanduser().resolve() / f'{Path(segy_path).stem}.overview.png'
 
 
 def _load_fine_ckpt_cfg_for_merge(
@@ -515,7 +548,25 @@ def run_fine_infer(
     typed = load_fine_infer_config(cfg)
     _validate_fine_infer_inputs(typed)
 
-    fine_payload = _run_fine_local_infer_impl(model=model, typed=typed, device=device)
+    save_overview = bool(
+        save_output and typed.viewer.enabled and typed.viewer.save_overview_png
+    )
+    if save_overview and typed.paths.out_dir is None:
+        msg = 'viewer overview export requires paths.out_dir'
+        raise ValueError(msg)
+
+    raw_wave_hw_out: dict[str, np.ndarray] | None
+    if save_overview:
+        raw_wave_hw_out = {}
+    else:
+        raw_wave_hw_out = None
+
+    fine_payload = _run_fine_local_infer_impl(
+        model=model,
+        typed=typed,
+        device=device,
+        raw_wave_hw_out=raw_wave_hw_out,
+    )
 
     if robust_payload is None:
         robust_payload = load_robust_npz(typed.paths.robust_npz_files[0])
@@ -545,12 +596,30 @@ def run_fine_infer(
             ),
             **final_payload,
         )
+
+    if save_overview:
+        if raw_wave_hw_out is None or 'raw_wave_hw' not in raw_wave_hw_out:
+            msg = 'raw waveform gather is required for overview export'
+            raise RuntimeError(msg)
+        from seisai_engine.viewer.fbpick import save_fbpick_overview_png
+
+        save_fbpick_overview_png(
+            _derive_overview_png_path(
+                segy_path=typed.paths.segy_files[0],
+                out_dir=typed.paths.out_dir,
+            ),
+            raw_wave_hw=raw_wave_hw_out['raw_wave_hw'],
+            final_payload=final_payload,
+            title=Path(typed.paths.segy_files[0]).stem,
+            dpi=typed.viewer.dpi,
+            clip_percentile=typed.viewer.clip_percentile,
+        )
     return final_payload
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
+    parser.add_argument('--config', required=True)
     args, unknown = parser.parse_known_args(argv)
 
     infer_yaml_cfg, base_dir = load_cfg_with_base_dir(Path(args.config))

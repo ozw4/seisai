@@ -43,6 +43,7 @@ __all__ = [
     'FineDatasetCfg',
     'FineInferConfig',
     'FineInferRuntimeCfg',
+    'FineViewerCfg',
     'FineInitCfg',
     'FinePaths',
     'FineTrainCfg',
@@ -115,6 +116,14 @@ class FineInferRuntimeCfg:
 
 
 @dataclass(frozen=True)
+class FineViewerCfg:
+    enabled: bool
+    save_overview_png: bool
+    dpi: int
+    clip_percentile: float
+
+
+@dataclass(frozen=True)
 class FineInitCfg:
     coarse_ckpt_path: str | None
     use_coarse_init: bool
@@ -152,6 +161,7 @@ class FineInferConfig:
     dataset: FineDatasetCfg
     transform: FineTransformCfg
     infer: FineInferRuntimeCfg
+    viewer: FineViewerCfg
     model_sig: dict[str, Any]
 
 
@@ -298,6 +308,34 @@ def _load_transform_cfg(cfg: dict) -> FineTransformCfg:
         time_len=time_len,
         center_index=center_index,
         standardize_eps=float(optional_float(transform_cfg, 'standardize_eps', 1.0e-8)),
+    )
+
+
+def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
+    viewer_cfg = cfg.get('viewer')
+    if viewer_cfg is None:
+        viewer_cfg = {}
+    if not isinstance(viewer_cfg, dict):
+        msg = 'viewer must be dict'
+        raise TypeError(msg)
+
+    dpi = int(optional_int(viewer_cfg, 'dpi', 150))
+    if dpi <= 0:
+        msg = 'viewer.dpi must be > 0'
+        raise ValueError(msg)
+
+    clip_percentile = float(optional_float(viewer_cfg, 'clip_percentile', 99.0))
+    if clip_percentile <= 0.0 or clip_percentile > 100.0:
+        msg = 'viewer.clip_percentile must lie in (0, 100]'
+        raise ValueError(msg)
+
+    return FineViewerCfg(
+        enabled=bool(optional_bool(viewer_cfg, 'enabled', default=False)),
+        save_overview_png=bool(
+            optional_bool(viewer_cfg, 'save_overview_png', default=True)
+        ),
+        dpi=dpi,
+        clip_percentile=clip_percentile,
     )
 
 
@@ -461,5 +499,6 @@ def load_fine_infer_config(cfg: dict) -> FineInferConfig:
             use_tqdm=bool(optional_bool(infer_cfg, 'use_tqdm', default=False)),
             high_conf_threshold=high_conf_threshold,
         ),
+        viewer=_load_viewer_cfg(cfg),
         model_sig=_load_model_sig(cfg),
     )

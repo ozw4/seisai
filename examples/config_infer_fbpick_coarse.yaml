@@ -1,0 +1,40 @@
+paths:
+  segy_files:
+    - REPLACE_ME_infer_coarse.sgy
+  out_dir: ./_fbpick_coarse_infer_out
+
+dataset:
+  use_header_cache: true
+  verbose: true
+  progress: true
+  primary_keys: [ffid]
+  waveform_mode: eager
+  train_endian: big
+  infer_endian: big
+
+transform:
+  time_len: 6016
+  standardize_eps: 1.0e-8
+
+norm_refs:
+  time_ref_sec: 20.0
+  offset_ref_m: 2000.0
+
+infer:
+  ckpt_path: REPLACE_ME_coarse_best.pt
+  device: auto
+  subset_traces: 128
+  batch_size: 1
+  num_workers: 0
+  overlap_h: 96
+  tile_w: 6016
+  overlap_w: 1024
+  tiles_per_batch: 16
+  amp: false
+  use_tqdm: false
+
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 3
+  out_chans: 1

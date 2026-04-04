@@ -1,0 +1,58 @@
+paths:
+  segy_files:
+    - REPLACE_ME_train_coarse.sgy
+  fb_files:
+    - REPLACE_ME_train_coarse_fb.npy
+  out_dir: ./_fbpick_coarse_train_out
+
+dataset:
+  use_header_cache: true
+  verbose: true
+  progress: true
+  primary_keys: [ffid]
+  waveform_mode: eager
+  train_endian: big
+  infer_endian: big
+
+transform:
+  time_len: 6016
+  standardize_eps: 1.0e-8
+
+norm_refs:
+  time_ref_sec: 20.0
+  offset_ref_m: 2000.0
+
+train:
+  seed: 0
+  epochs: 10
+  samples_per_epoch: 128
+  batch_size: 4
+  num_workers: 0
+  max_norm: 1.0
+  use_amp: false
+  lr: 1.0e-3
+  weight_decay: 0.0
+  subset_traces: 128
+  fb_sigma_ms: 10.0
+
+infer:
+  seed: 0
+  batch_size: 1
+  num_workers: 0
+  max_batches: 8
+  subset_traces: 128
+
+vis:
+  n: 0
+  out_subdir: vis
+
+ckpt:
+  save_best_only: true
+  metric: infer_loss
+  mode: min
+
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 3
+  out_chans: 1
