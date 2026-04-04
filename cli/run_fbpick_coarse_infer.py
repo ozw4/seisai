@@ -4,25 +4,37 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-from seisai_utils.listfiles import expand_cfg_listfiles
+__all__ = ['main', 'run_pipeline']
 
-from seisai_engine.infer.segy2segy_cli_common import select_state_dict
-from seisai_engine.pipelines.common import (
-    load_cfg_with_base_dir,
-    load_checkpoint,
-    resolve_cfg_paths,
-    resolve_device,
-)
-from seisai_engine.pipelines.fbpick.coarse import (
-    build_model,
-    load_coarse_infer_config,
-    run_coarse_infer,
-)
 
-__all__ = ['main']
+def _load_runtime() -> SimpleNamespace:
+    from seisai_utils.listfiles import expand_cfg_listfiles
 
+    from seisai_engine.infer.segy2segy_cli_common import select_state_dict
+    from seisai_engine.pipelines.common import (
+        load_cfg_with_base_dir,
+        load_checkpoint,
+        resolve_cfg_paths,
+        resolve_device,
+    )
+    from seisai_engine.pipelines.fbpick.coarse.build_model import build_model
+    from seisai_engine.pipelines.fbpick.coarse.config import load_coarse_infer_config
+    from seisai_engine.pipelines.fbpick.coarse.infer import run_coarse_infer
+
+    return SimpleNamespace(
+        expand_cfg_listfiles=expand_cfg_listfiles,
+        select_state_dict=select_state_dict,
+        load_cfg_with_base_dir=load_cfg_with_base_dir,
+        load_checkpoint=load_checkpoint,
+        resolve_cfg_paths=resolve_cfg_paths,
+        resolve_device=resolve_device,
+        build_model=build_model,
+        load_coarse_infer_config=load_coarse_infer_config,
+        run_coarse_infer=run_coarse_infer,
+    )
 
 
 def _require_infer_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -33,10 +45,14 @@ def _require_infer_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
     return infer_cfg
 
 
-
-def _prepare_cfg(cfg: dict[str, Any], *, base_dir: Path) -> dict[str, Any]:
-    expand_cfg_listfiles(cfg, keys=['paths.segy_files'])
-    resolve_cfg_paths(
+def _prepare_cfg(
+    cfg: dict[str, Any],
+    *,
+    base_dir: Path,
+    runtime: SimpleNamespace,
+) -> dict[str, Any]:
+    runtime.expand_cfg_listfiles(cfg, keys=['paths.segy_files'])
+    runtime.resolve_cfg_paths(
         cfg,
         base_dir,
         keys=['paths.segy_files', 'paths.out_dir', 'infer.ckpt_path'],
@@ -44,15 +60,13 @@ def _prepare_cfg(cfg: dict[str, Any], *, base_dir: Path) -> dict[str, Any]:
     return cfg
 
 
-
-def _resolve_cli_device(cfg: dict[str, Any]):
+def _resolve_cli_device(cfg: dict[str, Any], *, runtime: SimpleNamespace):
     infer_cfg = _require_infer_cfg(cfg)
     device_raw = infer_cfg.get('device', 'auto')
     if device_raw is not None and not isinstance(device_raw, str):
         msg = 'infer.device must be str or null'
         raise TypeError(msg)
-    return resolve_device(device_raw)
-
+    return runtime.resolve_device(device_raw)
 
 
 def _resolve_ckpt_path(cfg: dict[str, Any]) -> Path:
@@ -66,7 +80,6 @@ def _resolve_ckpt_path(cfg: dict[str, Any]) -> Path:
         msg = f'checkpoint not found: {path}'
         raise FileNotFoundError(msg)
     return path
-
 
 
 def _validate_checkpoint_for_infer(ckpt: dict[str, Any], *, model_sig: dict[str, Any]) -> None:
@@ -99,30 +112,29 @@ def _validate_checkpoint_for_infer(ckpt: dict[str, Any], *, model_sig: dict[str,
         raise ValueError(msg)
 
 
-
 def run_pipeline(config_path: str | Path) -> Path:
-    cfg, base_dir = load_cfg_with_base_dir(Path(config_path))
-    prepared = _prepare_cfg(cfg, base_dir=base_dir)
-    typed = load_coarse_infer_config(prepared)
+    runtime = _load_runtime()
+    cfg, base_dir = runtime.load_cfg_with_base_dir(Path(config_path))
+    prepared = _prepare_cfg(cfg, base_dir=base_dir, runtime=runtime)
+    typed = runtime.load_coarse_infer_config(prepared)
     ckpt_path = _resolve_ckpt_path(prepared)
-    device = _resolve_cli_device(prepared)
+    device = _resolve_cli_device(prepared, runtime=runtime)
 
-    ckpt = load_checkpoint(ckpt_path)
+    ckpt = runtime.load_checkpoint(ckpt_path)
     _validate_checkpoint_for_infer(ckpt, model_sig=typed.model_sig)
 
-    model = build_model(dict(typed.model_sig))
-    state_dict, _ = select_state_dict(ckpt)
+    model = runtime.build_model(dict(typed.model_sig))
+    state_dict, _ = runtime.select_state_dict(ckpt)
     model.load_state_dict(state_dict)
     model.to(device)
 
-    out_path = run_coarse_infer(
+    out_path = runtime.run_coarse_infer(
         model=model,
         cfg=prepared,
         device=device,
     )
     print(str(out_path))
     return out_path
-
 
 
 def main(argv: list[str] | None = None) -> None:

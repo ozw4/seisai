@@ -5,12 +5,18 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from seisai_engine.pipelines.fbpick.fine import run_train
+__all__ = ['main', 'run_pipeline']
 
-__all__ = ['main']
+
+def _load_run_train():
+    # Delay pipeline import so CLI module import stays lightweight in test envs.
+    from seisai_engine.pipelines.fbpick.fine.train import run_train
+
+    return run_train
 
 
 def run_pipeline(config_path: str | Path) -> None:
+    run_train = _load_run_train()
     run_train(config_path)
 
 

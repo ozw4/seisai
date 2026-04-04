@@ -3,18 +3,14 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-from seisai_dataset.builder import MakeOffsetChannel
-from seisai_transforms.augment import PerTraceStandardize
 from seisai_utils.validator import validate_array
 
-from seisai_engine.infer.ckpt_meta import resolve_output_ids, resolve_softmax_axis
-from seisai_engine.pipelines.common import load_checkpoint
-from seisai_engine.predict import infer_tiled_chw
-
-from .model_cache import ViewerModelBundle, get_or_create_model_bundle
+if TYPE_CHECKING:
+    from .model_cache import ViewerModelBundle
 
 __all__ = ['infer_prob_hw', 'render_fbpick_overview', 'save_fbpick_overview_png']
 
@@ -163,6 +159,9 @@ def _build_input_chw(
     in_chans: int,
     offsets_h: np.ndarray | None,
 ) -> np.ndarray:
+    from seisai_dataset.builder import MakeOffsetChannel
+    from seisai_transforms.augment import PerTraceStandardize
+
     waveform_hw = np.ascontiguousarray(section_hw, dtype=np.float32)
     standardize = PerTraceStandardize()
     standardized_hw = standardize(waveform_hw)
@@ -253,6 +252,11 @@ def _crop_logits_chw(
 
 
 def _build_model_bundle(*, ckpt_path: Path, device: torch.device) -> ViewerModelBundle:
+    from seisai_engine.infer.ckpt_meta import resolve_output_ids, resolve_softmax_axis
+    from seisai_engine.pipelines.common import load_checkpoint
+
+    from .model_cache import ViewerModelBundle
+
     ckpt = load_checkpoint(ckpt_path)
     model_sig = ckpt['model_sig']
     if not isinstance(model_sig, dict):
@@ -307,6 +311,8 @@ def _build_model_bundle(*, ckpt_path: Path, device: torch.device) -> ViewerModel
 def _get_model_bundle(
     *, ckpt_path: str | Path, device: torch.device
 ) -> ViewerModelBundle:
+    from .model_cache import get_or_create_model_bundle
+
     return get_or_create_model_bundle(
         ckpt_path=ckpt_path,
         device_str=str(device),
@@ -350,6 +356,8 @@ def infer_prob_hw(
       case-sensitive against `output_ids`.
 
     """
+    from seisai_engine.predict import infer_tiled_chw
+
     validate_array(section_hw, allowed_ndims=(2,), name='section_hw', backend='numpy')
     section = np.ascontiguousarray(section_hw, dtype=np.float32)
     orig_hw = (int(section.shape[0]), int(section.shape[1]))

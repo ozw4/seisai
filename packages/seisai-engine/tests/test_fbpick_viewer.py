@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -8,11 +10,33 @@ matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 
-from seisai_engine.viewer.fbpick import (
-    render_fbpick_overview,
-    save_fbpick_overview_png,
-)
+
+def _block_heavy_modules(monkeypatch: pytest.MonkeyPatch) -> None:
+    for prefix in ('segyio', 'timm'):
+        for name in list(sys.modules):
+            if name == prefix or name.startswith(prefix + '.'):
+                monkeypatch.delitem(sys.modules, name, raising=False)
+        monkeypatch.setitem(sys.modules, prefix, None)
+
+
+def _clear_viewer_modules(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in list(sys.modules):
+        if name == 'seisai_engine.viewer' or name.startswith('seisai_engine.viewer.'):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+
+def _import_viewer_package(monkeypatch: pytest.MonkeyPatch):
+    _block_heavy_modules(monkeypatch)
+    _clear_viewer_modules(monkeypatch)
+    return importlib.import_module('seisai_engine.viewer')
+
+
+def _import_viewer_fbpick(monkeypatch: pytest.MonkeyPatch):
+    _block_heavy_modules(monkeypatch)
+    _clear_viewer_modules(monkeypatch)
+    return importlib.import_module('seisai_engine.viewer.fbpick')
 
 
 def _make_final_payload(*, n_traces: int) -> dict[str, np.ndarray]:
@@ -32,11 +56,55 @@ def _make_final_payload(*, n_traces: int) -> dict[str, np.ndarray]:
     }
 
 
-def test_save_fbpick_overview_png_writes_png(tmp_path: Path) -> None:
+def test_viewer_package_import_is_safe_without_segyio_or_timm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _import_viewer_package(monkeypatch)
+
+    assert module.__name__ == 'seisai_engine.viewer'
+    assert 'seisai_engine.viewer.denoise' not in sys.modules
+    assert 'seisai_engine.viewer.fbpick' not in sys.modules
+
+
+def test_viewer_fbpick_import_is_safe_without_segyio_or_timm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _import_viewer_fbpick(monkeypatch)
+
+    assert callable(module.render_fbpick_overview)
+    assert callable(module.save_fbpick_overview_png)
+
+
+def test_render_fbpick_overview_creates_figure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _import_viewer_fbpick(monkeypatch)
+    raw_wave_hw = np.linspace(-1.0, 1.0, 4 * 256, dtype=np.float32).reshape(4, 256)
+    final_payload = _make_final_payload(n_traces=4)
+
+    fig, ax = module.render_fbpick_overview(
+        raw_wave_hw,
+        final_payload,
+        title='synthetic',
+        clip_percentile=99.0,
+    )
+    try:
+        assert fig.axes[0] is ax
+        assert len(ax.lines) >= 5
+        assert len(ax.collections) >= 1
+    finally:
+        plt.close(fig)
+
+
+def test_save_fbpick_overview_png_writes_png(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _import_viewer_fbpick(monkeypatch)
     raw_wave_hw = np.linspace(-1.0, 1.0, 4 * 256, dtype=np.float32).reshape(4, 256)
     out_path = tmp_path / 'synthetic.overview.png'
 
-    saved = save_fbpick_overview_png(
+    saved = module.save_fbpick_overview_png(
         out_path,
         raw_wave_hw=raw_wave_hw,
         final_payload=_make_final_payload(n_traces=4),
@@ -50,11 +118,14 @@ def test_save_fbpick_overview_png_writes_png(tmp_path: Path) -> None:
     assert out_path.stat().st_size > 0
 
 
-def test_render_fbpick_overview_draws_inclusive_window_end_contract() -> None:
+def test_render_fbpick_overview_draws_inclusive_window_end_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _import_viewer_fbpick(monkeypatch)
     raw_wave_hw = np.linspace(-1.0, 1.0, 4 * 256, dtype=np.float32).reshape(4, 256)
     final_payload = _make_final_payload(n_traces=4)
 
-    fig, ax = render_fbpick_overview(
+    fig, ax = module.render_fbpick_overview(
         raw_wave_hw,
         final_payload,
         title='inclusive-end',
@@ -71,5 +142,6 @@ def test_render_fbpick_overview_draws_inclusive_window_end_contract() -> None:
             final_payload['window_end_i'] - final_payload['window_start_i'],
             np.full((4,), 255, dtype=np.int32),
         )
+        assert len(ax.collections) >= 1
     finally:
         plt.close(fig)

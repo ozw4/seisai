@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import argparse
 
-from seisai_engine.pipelines.fbpick.fine.infer import main as pipeline_main
-
 __all__ = ['main']
+
+pipeline_main = None
+
+
+def _load_pipeline_main():
+    # Delay pipeline import so CLI module import stays lightweight in test envs.
+    from seisai_engine.pipelines.fbpick.fine.infer import main as pipeline_main
+
+    return pipeline_main
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -23,7 +30,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.no_save_overview:
         pipeline_args += ['viewer.save_overview_png=false']
     pipeline_args += unknown
-    pipeline_main(argv=pipeline_args)
+
+    loaded_pipeline_main = pipeline_main or _load_pipeline_main()
+    loaded_pipeline_main(argv=pipeline_args)
 
 
 if __name__ == '__main__':

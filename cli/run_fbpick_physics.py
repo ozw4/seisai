@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-from seisai_engine.pipelines.common import load_cfg_with_base_dir, resolve_cfg_paths
-from seisai_engine.pipelines.fbpick.physics import run_physics_lite
+__all__ = ['main', 'run_pipeline']
 
-__all__ = ['main']
+
+def _load_runtime() -> SimpleNamespace:
+    from seisai_engine.pipelines.common import load_cfg_with_base_dir, resolve_cfg_paths
+    from seisai_engine.pipelines.fbpick.physics.run import run_physics_lite
+
+    return SimpleNamespace(
+        load_cfg_with_base_dir=load_cfg_with_base_dir,
+        resolve_cfg_paths=resolve_cfg_paths,
+        run_physics_lite=run_physics_lite,
+    )
 
 
 def _require_paths(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -21,7 +30,8 @@ def _require_paths(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_pipeline(config_path: str | Path) -> Path:
-    cfg, base_dir = load_cfg_with_base_dir(Path(config_path))
+    runtime = _load_runtime()
+    cfg, base_dir = runtime.load_cfg_with_base_dir(Path(config_path))
     paths = _require_paths(cfg)
     if 'coarse_npz_path' not in paths:
         msg = 'config missing key: paths.coarse_npz_path'
@@ -29,7 +39,7 @@ def run_pipeline(config_path: str | Path) -> Path:
     path_keys = ['paths.coarse_npz_path']
     if paths.get('out_path') is not None:
         path_keys.append('paths.out_path')
-    resolve_cfg_paths(cfg, base_dir, keys=path_keys)
+    runtime.resolve_cfg_paths(cfg, base_dir, keys=path_keys)
 
     coarse_npz_path = paths['coarse_npz_path']
     if not isinstance(coarse_npz_path, str):
@@ -40,7 +50,7 @@ def run_pipeline(config_path: str | Path) -> Path:
         msg = 'config.paths.out_path must be str or null'
         raise TypeError(msg)
 
-    result = run_physics_lite(
+    result = runtime.run_physics_lite(
         coarse_npz_path,
         cfg=cfg,
         out_path=out_path,
