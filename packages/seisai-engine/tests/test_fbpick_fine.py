@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cli.run_fbpick_fine_infer as fine_infer_cli
 import numpy as np
 import pytest
 import torch
@@ -36,6 +37,7 @@ from seisai_engine.pipelines.fbpick.fine import (
     run_train,
     restore_local_pick_to_raw,
 )
+from seisai_engine.pipelines.fbpick.fine.infer import main as run_fine_infer_main
 from seisai_engine.pipelines.fbpick.fine.init_from_coarse import (
     build_fine_init_state_dict,
     load_fine_init_from_coarse_checkpoint,
@@ -348,6 +350,33 @@ def _write_coarse_ckpt(tmp_path: Path) -> str:
         'lr_scheduler_sig': None,
         'lr_scheduler_state_dict': None,
         'cfg': {},
+        'output_ids': ['P'],
+        'softmax_axis': 'time',
+    }
+    torch.save(ckpt, path)
+    return str(path.resolve())
+
+
+def _write_fine_ckpt_for_infer(tmp_path: Path) -> str:
+    path = tmp_path / 'fine_infer.pt'
+    model = build_fine_model(_fine_model_sig())
+    ckpt = {
+        'version': 1,
+        'pipeline': 'fbpick',
+        'stage': 'fine',
+        'epoch': 0,
+        'global_step': 0,
+        'model_sig': _fine_model_sig(),
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': {},
+        'lr_scheduler_sig': None,
+        'lr_scheduler_state_dict': None,
+        'cfg': _make_fine_train_config(
+            tmp_path,
+            segy_path='train.sgy',
+            fb_path='train_fb.npy',
+            robust_path='train.robust.npz',
+        ),
         'output_ids': ['P'],
         'softmax_axis': 'time',
     }
@@ -977,3 +1006,81 @@ def test_run_fine_infer_builds_and_saves_final_payload(
 
     saved = load_fbpick_final_npz(tmp_path / 'fine_infer_out' / 'fine_public.fbpick_final.npz')
     np.testing.assert_array_equal(saved['final_pick_i'], final_pick.astype(np.int32))
+
+
+def test_fine_infer_main_merges_ckpt_cfg_and_writes_final_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    n_traces = 160
+    n_samples = 512
+    dt_sec = 0.002
+    trace_axis = np.arange(n_traces, dtype=np.int32)
+    robust = 220 + ((trace_axis % 7) - 3) * 4
+
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    for trace_idx, pick_idx in enumerate(robust.tolist()):
+        traces[trace_idx, int(pick_idx)] = 5.0 + 0.01 * float(trace_idx)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'fine_cli.sgy', traces)
+    _write_coarse_with_n_samples(
+        tmp_path / 'fine_cli.coarse.npz',
+        coarse_pick_i=robust.astype(np.int32),
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'fine_cli.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    ckpt_path = _write_fine_ckpt_for_infer(tmp_path)
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+
+    cfg = {
+        'paths': {
+            'segy_files': [segy_path],
+            'robust_npz_files': [robust_path],
+            'out_dir': str(tmp_path / 'fine_cli_out'),
+        },
+        'infer': {
+            'ckpt_path': ckpt_path,
+            'device': 'cpu',
+            'batch_size': 2,
+            'num_workers': 0,
+            'overlap_h': 96,
+            'amp': False,
+            'use_tqdm': False,
+            'high_conf_threshold': 0.5,
+        },
+    }
+    cfg_path = tmp_path / 'config_infer_fbpick_fine.yaml'
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding='utf-8')
+
+    run_fine_infer_main(['--config', str(cfg_path)])
+
+    out_path = tmp_path / 'fine_cli_out' / 'fine_cli.fbpick_final.npz'
+    saved = load_fbpick_final_npz(out_path)
+    validate_fbpick_final_payload(saved, high_conf_threshold=0.5)
+    assert capsys.readouterr().out.strip() == str(out_path)
+
+
+def test_run_fbpick_fine_infer_cli_forwards_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, list[str] | None] = {}
+
+    def _fake_pipeline_main(argv: list[str] | None = None) -> None:
+        captured['argv'] = argv
+
+    monkeypatch.setattr(fine_infer_cli, 'pipeline_main', _fake_pipeline_main)
+
+    fine_infer_cli.main(['--config', 'dummy.yaml'])
+
+    assert captured['argv'] == ['--config', 'dummy.yaml']

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +10,20 @@ import torch
 from torch.utils.data import DataLoader
 
 from seisai_dataset import InputOnlyPlan
+from seisai_utils.listfiles import expand_cfg_listfiles
 
+from seisai_engine.infer.segy2segy_cli_common import (
+    build_merged_cfg,
+    load_ckpt_cfg_for_merge,
+    resolve_ckpt_path,
+    select_state_dict,
+)
+from seisai_engine.pipelines.common import (
+    load_cfg_with_base_dir,
+    load_checkpoint,
+    resolve_cfg_paths,
+    resolve_device,
+)
 from seisai_engine.pipelines.fbpick.common import (
     build_fbpick_final_payload,
     build_lineage_payload,
@@ -19,10 +34,87 @@ from seisai_engine.pipelines.fbpick.common import (
 )
 
 from .build_dataset import build_raw_infer_dataset, collate_input_meta_list
+from .build_model import build_model
 from .build_plan import build_plan
 from .config import FineInferConfig, load_fine_infer_config
 
-__all__ = ['run_fine_infer', 'run_fine_local_infer']
+__all__ = [
+    'main',
+    'run_fine_infer',
+    'run_fine_local_infer',
+    'run_infer_and_write',
+]
+
+
+DEFAULT_CONFIG_PATH = Path('examples/config_infer_fbpick_fine.yaml')
+_SAFE_OVERRIDE_PATHS = frozenset(
+    {
+        'paths.segy_files',
+        'paths.robust_npz_files',
+        'paths.out_dir',
+        'dataset.use_header_cache',
+        'dataset.verbose',
+        'dataset.progress',
+        'dataset.waveform_mode',
+        'dataset.infer_endian',
+        'transform.standardize_eps',
+        'infer.ckpt_path',
+        'infer.device',
+        'infer.batch_size',
+        'infer.num_workers',
+        'infer.overlap_h',
+        'infer.amp',
+        'infer.use_tqdm',
+        'infer.high_conf_threshold',
+        'infer.source_model_id',
+        'infer.iter_id',
+        'infer.allow_unsafe_override',
+    }
+)
+
+
+def _default_cfg() -> dict[str, Any]:
+    return {
+        'paths': {
+            'segy_files': [],
+            'robust_npz_files': [],
+            'out_dir': './_fbpick_fine_infer_out',
+        },
+        'dataset': {
+            'use_header_cache': True,
+            'verbose': True,
+            'progress': True,
+            'primary_keys': ['ffid'],
+            'waveform_mode': 'eager',
+            'train_endian': 'big',
+            'infer_endian': 'big',
+        },
+        'transform': {
+            'trace_len': 128,
+            'time_len': 256,
+            'center_index': 128,
+            'standardize_eps': 1.0e-8,
+        },
+        'infer': {
+            'ckpt_path': '',
+            'device': 'auto',
+            'batch_size': 1,
+            'num_workers': 0,
+            'overlap_h': 96,
+            'amp': False,
+            'use_tqdm': False,
+            'high_conf_threshold': 0.5,
+            'source_model_id': None,
+            'iter_id': None,
+            'allow_unsafe_override': False,
+        },
+        'model': {
+            'backbone': 'resnet18',
+            'pretrained': False,
+            'in_chans': 1,
+            'out_chans': 1,
+        },
+    }
 
 
 def _softmax_last_axis(logits_hw: np.ndarray) -> np.ndarray:
@@ -266,6 +358,148 @@ def _derive_final_npz_path(*, segy_path: str | Path, out_dir: str | Path) -> Pat
     return Path(out_dir).expanduser().resolve() / f'{Path(segy_path).stem}.fbpick_final.npz'
 
 
+def _load_fine_ckpt_cfg_for_merge(
+    *,
+    infer_cfg_for_ckpt: dict[str, Any],
+    base_dir: Path,
+) -> dict[str, Any]:
+    ckpt_cfg = deepcopy(
+        load_ckpt_cfg_for_merge(
+            infer_cfg_for_ckpt=infer_cfg_for_ckpt,
+            base_dir=base_dir,
+        )
+    )
+    ckpt_cfg.pop('paths', None)
+    return ckpt_cfg
+
+
+def _prepare_fine_infer_cfg(cfg: dict[str, Any], *, base_dir: Path) -> dict[str, Any]:
+    prepared = deepcopy(cfg)
+    expand_cfg_listfiles(prepared, keys=['paths.segy_files', 'paths.robust_npz_files'])
+    path_keys: list[str] = ['paths.segy_files', 'paths.robust_npz_files']
+    paths = prepared.get('paths')
+    if not isinstance(paths, dict):
+        msg = 'paths must be dict'
+        raise TypeError(msg)
+    if paths.get('out_dir') is not None:
+        path_keys.append('paths.out_dir')
+    resolve_cfg_paths(prepared, base_dir, keys=path_keys)
+    return prepared
+
+
+def _get_infer_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    infer_cfg = cfg.get('infer')
+    if not isinstance(infer_cfg, dict):
+        msg = 'infer must be dict'
+        raise TypeError(msg)
+    return infer_cfg
+
+
+def _resolve_cli_device(cfg: dict[str, Any]) -> torch.device:
+    infer_cfg = _get_infer_cfg(cfg)
+    device_raw = infer_cfg.get('device', 'auto')
+    if device_raw is not None and not isinstance(device_raw, str):
+        msg = 'infer.device must be str or null'
+        raise TypeError(msg)
+    return resolve_device(device_raw)
+
+
+def _resolve_lineage_args(cfg: dict[str, Any]) -> tuple[str | None, int | str | None]:
+    infer_cfg = _get_infer_cfg(cfg)
+
+    source_model_id = infer_cfg.get('source_model_id')
+    if source_model_id is not None:
+        if not isinstance(source_model_id, str):
+            msg = 'infer.source_model_id must be str or null'
+            raise TypeError(msg)
+        source_model_id = source_model_id.strip() or None
+
+    iter_id = infer_cfg.get('iter_id')
+    if isinstance(iter_id, bool) or not isinstance(iter_id, (int, str, type(None))):
+        msg = 'infer.iter_id must be int, str, or null'
+        raise TypeError(msg)
+
+    return source_model_id, iter_id
+
+
+def _validate_fine_checkpoint_for_infer(
+    ckpt: dict[str, Any],
+    *,
+    model_sig: dict[str, Any],
+) -> None:
+    pipeline = ckpt.get('pipeline')
+    if pipeline != 'fbpick':
+        msg = f'fine infer checkpoint pipeline must be "fbpick", got {pipeline!r}'
+        raise ValueError(msg)
+
+    stage = ckpt.get('stage')
+    if stage != 'fine':
+        msg = f'fine infer checkpoint stage must be "fine", got {stage!r}'
+        raise ValueError(msg)
+
+    ckpt_model_sig = ckpt.get('model_sig')
+    if not isinstance(ckpt_model_sig, dict):
+        msg = 'checkpoint model_sig must be dict'
+        raise TypeError(msg)
+    for key, value in ckpt_model_sig.items():
+        if key in model_sig and model_sig[key] != value:
+            msg = f'checkpoint model_sig mismatch for {key}: {value!r} != {model_sig[key]!r}'
+            raise ValueError(msg)
+
+    output_ids = ckpt.get('output_ids')
+    if output_ids is not None:
+        if not isinstance(output_ids, (list, tuple)):
+            msg = 'checkpoint output_ids must be list[str] or tuple[str, ...]'
+            raise TypeError(msg)
+        if list(output_ids) != ['P']:
+            msg = f'fine infer checkpoint output_ids must be ["P"], got {output_ids!r}'
+            raise ValueError(msg)
+
+    softmax_axis = ckpt.get('softmax_axis')
+    if softmax_axis is not None and softmax_axis != 'time':
+        msg = (
+            'fine infer checkpoint softmax_axis must be "time", '
+            f'got {softmax_axis!r}'
+        )
+        raise ValueError(msg)
+
+
+def run_infer_and_write(
+    *,
+    cfg: dict[str, Any],
+    base_dir: Path,
+) -> Path:
+    prepared = _prepare_fine_infer_cfg(cfg, base_dir=base_dir)
+    typed = load_fine_infer_config(prepared)
+    if typed.paths.out_dir is None:
+        msg = 'paths.out_dir is required for fbpick fine infer'
+        raise ValueError(msg)
+
+    ckpt_path = resolve_ckpt_path(prepared, base_dir=base_dir)
+    device = _resolve_cli_device(prepared)
+    source_model_id, iter_id = _resolve_lineage_args(prepared)
+
+    ckpt = load_checkpoint(ckpt_path)
+    _validate_fine_checkpoint_for_infer(ckpt, model_sig=typed.model_sig)
+
+    model = build_model(dict(typed.model_sig))
+    state_dict, _ = select_state_dict(ckpt)
+    model.load_state_dict(state_dict)
+    model.to(device)
+
+    run_fine_infer(
+        model=model,
+        cfg=prepared,
+        device=device,
+        source_model_id=source_model_id,
+        iter_id=iter_id,
+    )
+    return _derive_final_npz_path(
+        segy_path=typed.paths.segy_files[0],
+        out_dir=typed.paths.out_dir,
+    )
+
+
 def run_fine_infer(
     *,
     model: torch.nn.Module,
@@ -312,3 +546,25 @@ def run_fine_infer(
             **final_payload,
         )
     return final_payload
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
+    args, unknown = parser.parse_known_args(argv)
+
+    infer_yaml_cfg, base_dir = load_cfg_with_base_dir(Path(args.config))
+    merged_cfg = build_merged_cfg(
+        infer_yaml_cfg=infer_yaml_cfg,
+        base_dir=base_dir,
+        unknown_overrides=unknown,
+        default_cfg=_default_cfg(),
+        safe_paths=_SAFE_OVERRIDE_PATHS,
+        ckpt_cfg_loader=_load_fine_ckpt_cfg_for_merge,
+    )
+    out_path = run_infer_and_write(cfg=merged_cfg, base_dir=base_dir)
+    print(str(out_path))
+
+
+if __name__ == '__main__':
+    main()
