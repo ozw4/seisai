@@ -36,7 +36,7 @@ def build_robust_payload_from_coarse(
     cfg: dict[str, Any] | None,
     source_model_id: str | None = None,
     iter_id: int | str | None = '',
-    repo_root: Path = Path('/workspace'),
+    repo_root: Path | None = None,
 ) -> dict[str, np.ndarray]:
     typed_cfg = load_physics_lite_config(cfg)
     canonical_cfg = physics_lite_config_to_dict(typed_cfg)
@@ -83,7 +83,7 @@ def run_physics_lite(
     out_path: str | Path | None = None,
     source_model_id: str | None = None,
     iter_id: int | str | None = '',
-    repo_root: Path = Path('/workspace'),
+    repo_root: Path | None = None,
 ) -> Path:
     coarse_path = Path(coarse_npz_path).expanduser().resolve()
     payload = build_robust_payload_from_coarse(

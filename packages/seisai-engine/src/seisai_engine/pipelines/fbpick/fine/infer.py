@@ -542,7 +542,7 @@ def run_fine_infer(
     robust_payload: dict[str, np.ndarray] | None = None,
     source_model_id: str | None = None,
     iter_id: int | str | None = None,
-    repo_root: Path = Path('/workspace'),
+    repo_root: Path | None = None,
     save_output: bool = True,
 ) -> dict[str, np.ndarray]:
     typed = load_fine_infer_config(cfg)

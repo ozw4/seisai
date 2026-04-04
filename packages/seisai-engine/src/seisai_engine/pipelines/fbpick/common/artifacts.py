@@ -126,11 +126,15 @@ __all__ = [
 ]
 
 
-def _resolve_git_dir(repo_root: Path) -> Path:
-    git_path = repo_root / '.git'
-    if git_path.is_dir():
-        return git_path
-    if git_path.is_file():
+def _resolve_git_dir(repo_root: Path) -> Path | None:
+    resolved_root = repo_root.resolve()
+    for candidate_root in (resolved_root, *resolved_root.parents):
+        git_path = candidate_root / '.git'
+        if git_path.is_dir():
+            return git_path
+        if not git_path.is_file():
+            continue
+
         text = git_path.read_text(encoding='utf-8').strip()
         prefix = 'gitdir:'
         if not text.startswith(prefix):
@@ -139,13 +143,12 @@ def _resolve_git_dir(repo_root: Path) -> Path:
         rel = text[len(prefix) :].strip()
         git_dir = Path(rel)
         if not git_dir.is_absolute():
-            git_dir = (repo_root / git_dir).resolve()
+            git_dir = (candidate_root / git_dir).resolve()
         if not git_dir.is_dir():
             msg = f'git dir not found: {git_dir}'
             raise FileNotFoundError(msg)
         return git_dir
-    msg = f'.git not found under repo root: {repo_root}'
-    raise FileNotFoundError(msg)
+    return None
 
 
 def _lookup_packed_ref(*, git_dir: Path, ref_name: str) -> str:
@@ -166,12 +169,16 @@ def _lookup_packed_ref(*, git_dir: Path, ref_name: str) -> str:
     raise FileNotFoundError(msg)
 
 
-def read_git_sha(repo_root: Path) -> str:
+def read_git_sha(repo_root: Path | None = None) -> str | None:
+    if repo_root is None:
+        repo_root = Path.cwd()
     if not isinstance(repo_root, Path):
         msg = 'repo_root must be Path'
         raise TypeError(msg)
 
-    git_dir = _resolve_git_dir(repo_root.resolve())
+    git_dir = _resolve_git_dir(repo_root)
+    if git_dir is None:
+        return None
     head_path = git_dir / 'HEAD'
     if not head_path.is_file():
         msg = f'git HEAD not found: {head_path}'
@@ -209,7 +216,7 @@ def _normalize_iter_id(iter_id: int | str | None) -> int | str | None:
 def build_lineage_payload(
     cfg: dict[str, Any],
     *,
-    repo_root: Path,
+    repo_root: Path | None = None,
     source_model_id: str | None,
     iter_id: int | str | None,
 ) -> np.ndarray:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
 
 from seisai_engine.pipelines.fbpick.common import (
+    build_lineage_payload,
     REASON_MASK_FILLED_FROM_TREND,
     REASON_MASK_INFEASIBLE,
     REASON_MASK_LOW_SCORE,
@@ -13,6 +15,7 @@ from seisai_engine.pipelines.fbpick.common import (
     ROBUST_SOURCE_TREND_FILL,
     load_coarse_npz,
     load_robust_npz,
+    read_git_sha,
     save_coarse_npz,
     save_robust_npz,
 )
@@ -68,6 +71,13 @@ def _make_coarse_payload(
         'coarse_prob_summary': pmax.copy(),
         'lineage': np.asarray('{"stage":"coarse-test"}'),
     }
+
+
+def _write_git_repo(repo_root: Path, *, sha: str) -> None:
+    ref_path = repo_root / '.git' / 'refs' / 'heads' / 'main'
+    ref_path.parent.mkdir(parents=True)
+    (repo_root / '.git' / 'HEAD').write_text('ref: refs/heads/main\n', encoding='utf-8')
+    ref_path.write_text(f'{sha}\n', encoding='utf-8')
 
 
 def test_normalize_coarse_pick_table_preserves_contract(tmp_path: Path) -> None:
@@ -234,9 +244,12 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
         cfg={},
         source_model_id='coarse-model',
         iter_id='',
-        repo_root=Path('/workspace'),
+        repo_root=tmp_path,
     )
     robust = load_robust_npz(out_path)
+    lineage = json.loads(np.asarray(robust['lineage']).item())
+
+    assert lineage['git_sha'] is None
 
     assert out_path.name == 'synthetic.robust.npz'
     assert robust['robust_pick_i'].shape == (n_traces,)
@@ -250,7 +263,7 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     assert np.all(np.isfinite(robust['robust_pick_t_sec']))
 
 
-def test_build_robust_payload_from_coarse_returns_required_keys() -> None:
+def test_build_robust_payload_from_coarse_returns_required_keys(tmp_path: Path) -> None:
     payload = build_robust_payload_from_coarse(
         _make_coarse_payload(
             coarse_pick_i=np.array([100, 102, 104, 106], dtype=np.int32),
@@ -260,10 +273,34 @@ def test_build_robust_payload_from_coarse_returns_required_keys() -> None:
         cfg={},
         source_model_id='coarse-model',
         iter_id='',
-        repo_root=Path('/workspace'),
+        repo_root=tmp_path,
     )
+    lineage = json.loads(np.asarray(payload['lineage']).item())
 
     assert set(ROBUST_REQUIRED_KEYS).issubset(payload.keys())
     assert payload['robust_pick_i'].dtype == np.int32
     assert payload['robust_pick_t_sec'].dtype == np.float32
     assert payload['robust_source'].dtype == np.uint8
+    assert lineage['source_model_id'] == 'coarse-model'
+    assert lineage['git_sha'] is None
+
+
+def test_build_lineage_payload_reads_git_sha_from_ancestor_repo_root(tmp_path: Path) -> None:
+    repo_root = tmp_path / 'repo'
+    nested_root = repo_root / 'packages' / 'seisai-engine'
+    sha = 'deadbeef1234567890abcdef1234567890abcdef'
+
+    nested_root.mkdir(parents=True)
+    _write_git_repo(repo_root, sha=sha)
+
+    assert read_git_sha(nested_root) == sha
+
+    lineage = json.loads(
+        np.asarray(
+            build_lineage_payload({}, repo_root=nested_root, source_model_id='coarse-model', iter_id='i0')
+        ).item()
+    )
+
+    assert lineage['source_model_id'] == 'coarse-model'
+    assert lineage['iter_id'] == 'i0'
+    assert lineage['git_sha'] == sha

@@ -35,7 +35,7 @@ def run_coarse_infer(
     device: torch.device,
     source_model_id: str | None = None,
     iter_id: int | None = None,
-    repo_root: Path = Path('/workspace'),
+    repo_root: Path | None = None,
 ) -> Path:
     typed = load_coarse_infer_config(cfg)
     if typed.paths.fb_files is not None:

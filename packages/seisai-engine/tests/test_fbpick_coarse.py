@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -392,6 +393,7 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
         device=torch.device('cpu'),
         source_model_id='coarse-smoke',
         iter_id=7,
+        repo_root=tmp_path,
     )
     data = load_coarse_npz(out_path)
 
@@ -413,3 +415,8 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
         atol=1.0e-6,
     )
     assert np.asarray(data['lineage']).ndim == 0
+    lineage = json.loads(np.asarray(data['lineage']).item())
+    assert lineage['iter_id'] == 7
+    assert lineage['source_model_id'] == 'coarse-smoke'
+    assert lineage['cfg_hash']
+    assert lineage['git_sha'] is None
