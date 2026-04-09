@@ -119,10 +119,21 @@ def test_run_fbpick_coarse_infer_cli_is_thin_wrapper(
     cfg_path.write_text('placeholder: true\n', encoding='utf-8')
     model = _DummyModel()
     out_path = tmp_path / 'coarse_out' / 'synthetic.coarse.npz'
+    expected_out_path = tmp_path / 'coarse_out' / 'site54__synthetic.coarse.npz'
     out_path.parent.mkdir()
 
+    def _fake_run_coarse_infer(*, model, cfg, device):
+        out_path.touch()
+        return out_path
+
     runtime = SimpleNamespace(
-        load_cfg_with_base_dir=lambda path: ({'infer': {'device': 'cpu'}}, tmp_path),
+        load_cfg_with_base_dir=lambda path: (
+            {
+                'paths': {'segy_files': ['site54/synthetic.sgy'], 'out_dir': str(out_path.parent)},
+                'infer': {'device': 'cpu'},
+            },
+            tmp_path,
+        ),
         expand_cfg_listfiles=lambda cfg, *, keys: None,
         resolve_cfg_paths=lambda cfg, base_dir, *, keys: None,
         load_coarse_infer_config=lambda cfg: SimpleNamespace(
@@ -135,7 +146,7 @@ def test_run_fbpick_coarse_infer_cli_is_thin_wrapper(
         resolve_device=lambda device_raw: 'cpu',
         build_model=lambda model_sig: model,
         select_state_dict=lambda ckpt: ({'weight': 1}, False),
-        run_coarse_infer=lambda *, model, cfg, device: out_path,
+        run_coarse_infer=_fake_run_coarse_infer,
     )
     monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
     monkeypatch.setattr(module, '_resolve_ckpt_path', lambda cfg: tmp_path / 'dummy.pt')
@@ -147,10 +158,12 @@ def test_run_fbpick_coarse_infer_cli_is_thin_wrapper(
 
     result = module.run_pipeline(cfg_path)
 
-    assert result == out_path
+    assert result == expected_out_path
     assert model.loaded_state_dict == {'weight': 1}
     assert model.device == 'cpu'
-    assert capsys.readouterr().out.strip() == str(out_path)
+    assert not out_path.exists()
+    assert expected_out_path.exists()
+    assert capsys.readouterr().out.strip() == str(expected_out_path)
 
 
 def test_run_fbpick_physics_cli_is_thin_wrapper(
@@ -233,4 +246,82 @@ def test_run_fbpick_fine_infer_cli_is_thin_wrapper_with_overview_overrides(
         '--config',
         'fine-infer.yaml',
         'viewer.save_overview_png=false',
+    ]
+
+
+def test_run_fbpick_coarse_infer_cli_loops_over_multiple_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_cli_module('run_fbpick_coarse_infer.py', monkeypatch)
+    cfg_path = tmp_path / 'config_infer_fbpick_coarse_multi.yaml'
+    cfg_path.write_text('placeholder: true\n', encoding='utf-8')
+    model = _DummyModel()
+    captured_cfgs: list[dict[str, object]] = []
+    out_paths = [
+        tmp_path / 'coarse_out' / 'survey_a.coarse.npz',
+        tmp_path / 'coarse_out' / 'survey_b.coarse.npz',
+    ]
+    expected_out_paths = [
+        tmp_path / 'coarse_out' / 'site54__survey_a.coarse.npz',
+        tmp_path / 'coarse_out' / 'site55__survey_b.coarse.npz',
+    ]
+    out_paths[0].parent.mkdir()
+
+    def _fake_run_coarse_infer(*, model, cfg, device):
+        captured_cfgs.append(cfg)
+        out_path = out_paths[len(captured_cfgs) - 1]
+        out_path.touch()
+        return out_path
+
+    runtime = SimpleNamespace(
+        load_cfg_with_base_dir=lambda path: (
+            {
+                'paths': {
+                    'segy_files': ['site54/survey_a.sgy', 'site55/survey_b.sgy'],
+                    'out_dir': str(out_paths[0].parent),
+                },
+                'infer': {'device': 'cpu'},
+            },
+            tmp_path,
+        ),
+        expand_cfg_listfiles=lambda cfg, *, keys: None,
+        resolve_cfg_paths=lambda cfg, base_dir, *, keys: None,
+        load_coarse_infer_config=lambda cfg: SimpleNamespace(
+            model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1}
+        ),
+        load_checkpoint=lambda path: {
+            'pipeline': 'fbpick',
+            'model_sig': {'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+        },
+        resolve_device=lambda device_raw: 'cpu',
+        build_model=lambda model_sig: model,
+        select_state_dict=lambda ckpt: ({'weight': 1}, False),
+        run_coarse_infer=_fake_run_coarse_infer,
+    )
+    monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
+    monkeypatch.setattr(module, '_resolve_ckpt_path', lambda cfg: tmp_path / 'dummy.pt')
+    monkeypatch.setattr(
+        module,
+        '_validate_checkpoint_for_infer',
+        lambda ckpt, *, model_sig: None,
+    )
+
+    result = module.run_pipeline(cfg_path)
+
+    assert result == expected_out_paths[-1]
+    assert model.loaded_state_dict == {'weight': 1}
+    assert model.device == 'cpu'
+    assert [cfg['paths']['segy_files'] for cfg in captured_cfgs] == [
+        ['site54/survey_a.sgy'],
+        ['site55/survey_b.sgy'],
+    ]
+    assert not out_paths[0].exists()
+    assert not out_paths[1].exists()
+    assert expected_out_paths[0].exists()
+    assert expected_out_paths[1].exists()
+    assert capsys.readouterr().out.strip().splitlines() == [
+        str(expected_out_paths[0]),
+        str(expected_out_paths[1]),
     ]

@@ -27,6 +27,7 @@ ruff.toml
 *.env
 
 # 実行ログや中間ファイル
+*.npz
 *.log
 *.out
 *.bak

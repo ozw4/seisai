@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -112,6 +113,46 @@ def _validate_checkpoint_for_infer(ckpt: dict[str, Any], *, model_sig: dict[str,
         raise ValueError(msg)
 
 
+def _build_out_path(*, segy_path: str | Path, out_dir: str | Path) -> Path:
+    segy = Path(segy_path)
+    parent_name = segy.parent.name
+    if not parent_name:
+        msg = 'coarse infer output prefix parent dir name is empty'
+        raise ValueError(msg)
+    return Path(out_dir) / (parent_name + '__' + segy.stem + '.coarse.npz')
+
+
+def _iter_single_segy_cfgs(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    paths = cfg.get('paths')
+    if not isinstance(paths, dict):
+        msg = 'paths must be dict'
+        raise TypeError(msg)
+    segy_files = paths.get('segy_files')
+    if not isinstance(segy_files, list):
+        msg = 'paths.segy_files must be list[str]'
+        raise TypeError(msg)
+    out_dir = paths.get('out_dir')
+    if not isinstance(out_dir, str):
+        msg = 'paths.out_dir must be str'
+        raise TypeError(msg)
+
+    out_paths = [_build_out_path(segy_path=segy_path, out_dir=out_dir) for segy_path in segy_files]
+    if len(set(out_paths)) != len(out_paths):
+        msg = 'coarse infer output path collision in paths.segy_files'
+        raise ValueError(msg)
+
+    return [
+        {
+            **deepcopy(cfg),
+            'paths': {
+                **deepcopy(paths),
+                'segy_files': [segy_path],
+            },
+        }
+        for segy_path in segy_files
+    ]
+
+
 def run_pipeline(config_path: str | Path) -> Path:
     runtime = _load_runtime()
     cfg, base_dir = runtime.load_cfg_with_base_dir(Path(config_path))
@@ -128,12 +169,23 @@ def run_pipeline(config_path: str | Path) -> Path:
     model.load_state_dict(state_dict)
     model.to(device)
 
-    out_path = runtime.run_coarse_infer(
-        model=model,
-        cfg=prepared,
-        device=device,
-    )
-    print(str(out_path))
+    out_path: Path | None = None
+    for single_cfg in _iter_single_segy_cfgs(prepared):
+        paths = single_cfg['paths']
+        segy_path = paths['segy_files'][0]
+        target_out_path = _build_out_path(segy_path=segy_path, out_dir=paths['out_dir'])
+        out_path = runtime.run_coarse_infer(
+            model=model,
+            cfg=single_cfg,
+            device=device,
+        )
+        if out_path != target_out_path:
+            out_path = out_path.replace(target_out_path)
+        print(str(out_path))
+
+    if out_path is None:
+        msg = 'paths.segy_files must contain at least one entry'
+        raise ValueError(msg)
     return out_path
 
 

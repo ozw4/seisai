@@ -28,7 +28,7 @@ norm_refs:
 
 train:
   seed: 0
-  epochs: 10
+  epochs: 50
   samples_per_epoch: 128
   batch_size: 4
   num_workers: 0
@@ -67,3 +67,10 @@ model:
     - [1, 2]
   pre_stage_channels: [16, 32, 32]
   pre_stage_kernels: [3, 3]
+
+  enabled: true
+  exp_name: site54_coarse
+  experiment_prefix: seisai
+  tracking_uri: file:./mlruns
+  vis_best_only: true
+  vis_max_files: 50

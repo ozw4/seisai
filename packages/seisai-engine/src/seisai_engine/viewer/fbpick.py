@@ -484,22 +484,56 @@ def _extract_batch_vector(value: object, *, b: int, name: str) -> np.ndarray:
     raise TypeError(msg)
 
 
-def _make_debug_title(batch: Mapping[str, object], *, b: int) -> str | None:
+def _extract_title_field(
+    batch: Mapping[str, object],
+    *,
+    b: int,
+    key: str,
+) -> str | None:
+    value = batch.get(key)
+    if value is not None:
+        scalar = _extract_batch_scalar(value, b=b)
+        text = str(scalar).strip()
+        if text:
+            return text
+
     meta_obj = batch.get("meta")
-    if not isinstance(meta_obj, Mapping):
-        return None
+    if isinstance(meta_obj, Mapping) and key in meta_obj:
+        scalar = _extract_batch_scalar(meta_obj[key], b=b)
+        text = str(scalar).strip()
+        if text:
+            return text
+    return None
+
+
+def _make_debug_title(batch: Mapping[str, object], *, b: int) -> str | None:
+    file_path = _extract_title_field(batch, b=b, key="file_path")
+    key_name = _extract_title_field(batch, b=b, key="key_name")
+    primary_unique = _extract_title_field(batch, b=b, key="primary_unique")
+    secondary_key = _extract_title_field(batch, b=b, key="secondary_key")
+
+    line1: list[str] = []
+    if file_path is not None:
+        line1.append(Path(file_path).name)
+
+    line2: list[str] = []
+    if key_name is not None and primary_unique is not None:
+        line2.append(f"{key_name}={primary_unique}")
+    elif key_name is not None:
+        line2.append(key_name)
+    elif primary_unique is not None:
+        line2.append(primary_unique)
+    if secondary_key is not None:
+        line2.append(f"secondary={secondary_key}")
 
     parts: list[str] = []
-    for key in ("key_name", "primary_unique"):
-        if key not in meta_obj:
-            continue
-        value = _extract_batch_scalar(meta_obj[key], b=b)
-        text = str(value).strip()
-        if text:
-            parts.append(text)
+    if line1:
+        parts.append(" ".join(line1))
+    if line2:
+        parts.append(" | ".join(line2))
     if not parts:
         return None
-    return " | ".join(parts)
+    return "\n".join(parts)
 
 
 def save_fbpick_debug_png(
@@ -642,7 +676,9 @@ def save_fbpick_debug_png(
 
     if title_text is not None:
         fig.suptitle(str(title_text))
-    fig.tight_layout()
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92))
+    else:
+        fig.tight_layout()
     fig.savefig(out_path, dpi=dpi_int)
     plt.close(fig)
     return out_path

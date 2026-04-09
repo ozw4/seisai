@@ -21,7 +21,7 @@ transform:
   standardize_eps: 1.0e-8
 
 infer:
-  ckpt_path: REPLACE_ME_fine_best.pt
+  ckpt_path: /workspace/proc/fbpick/site54/fbpick_coarse_train_out/ckpt/best.pt
   device: auto
   batch_size: 1
   num_workers: 0

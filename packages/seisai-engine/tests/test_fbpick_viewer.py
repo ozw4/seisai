@@ -11,6 +11,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+import torch
 
 
 def _block_heavy_modules(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,6 +95,26 @@ def test_render_fbpick_overview_creates_figure(
         assert len(ax.collections) >= 1
     finally:
         plt.close(fig)
+
+
+def test_make_debug_title_includes_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _import_viewer_fbpick(monkeypatch)
+    batch = {
+        'secondary_key': ['chno'],
+        'meta': {
+            'file_path': ['/tmp/data/AIRAS_TRCTAB_shinjo22_wolmo.sgy'],
+            'key_name': ['ffid'],
+            'primary_unique': [5401],
+            'trace_valid': torch.ones((1, 4), dtype=torch.bool),
+            'fb_idx_view': torch.ones((1, 4), dtype=torch.int64),
+        },
+    }
+
+    title = module._make_debug_title(batch, b=0)
+
+    assert title == 'AIRAS_TRCTAB_shinjo22_wolmo.sgy\nffid=5401 | secondary=chno'
 
 
 def test_save_fbpick_overview_png_writes_png(
