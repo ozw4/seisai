@@ -1,0 +1,46 @@
+paths:
+  segy_files:
+    - REPLACE_ME_infer_fine.sgy
+  robust_npz_files:
+    - REPLACE_ME_infer_fine.robust.npz
+  out_dir: ./_fbpick_fine_infer_out
+
+dataset:
+  use_header_cache: true
+  verbose: true
+  progress: true
+  primary_keys: [ffid]
+  waveform_mode: eager
+  train_endian: big
+  infer_endian: big
+
+transform:
+  trace_len: 128
+  time_len: 256
+  center_index: 128
+  standardize_eps: 1.0e-8
+
+infer:
+  ckpt_path: REPLACE_ME_fine_best.pt
+  device: auto
+  batch_size: 1
+  num_workers: 0
+  overlap_h: 96
+  amp: false
+  use_tqdm: false
+  high_conf_threshold: 0.5
+  source_model_id: null
+  iter_id: null
+  allow_unsafe_override: false
+
+viewer:
+  enabled: true
+  save_overview_png: true
+  dpi: 150
+  clip_percentile: 99.0
+
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 1
+  out_chans: 1

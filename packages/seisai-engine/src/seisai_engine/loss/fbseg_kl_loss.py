@@ -105,7 +105,7 @@ class FbSegKLLossView:
                 category=UserWarning,
                 stacklevel=2,
             )
-            return torch.zeros((), dtype=per_trace.dtype, device=per_trace.device)
+            return pred.sum() * 0.0
         if reduction == 'sum':
             return sel_vals.sum()
         return sel_vals.mean()

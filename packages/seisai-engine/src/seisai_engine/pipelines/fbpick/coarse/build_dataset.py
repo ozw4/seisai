@@ -69,7 +69,7 @@ class PickAwareCropSampleTransformer(SampleTransformer):
 
         picks = np.asarray(fb_subset[valid], dtype=np.int64)
         start_lo = max(0, int(picks.max()) - (self.target_len - 1))
-        start_hi = min(int(picks.min()), int(W0) - self.target_len)
+        start_hi = min(int(picks.min()) - 1, int(W0) - self.target_len)
         if start_lo > start_hi:
             return None
         if self.start_mode == 'random':

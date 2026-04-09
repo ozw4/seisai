@@ -12,7 +12,12 @@ from seisai_utils.validator import validate_array
 if TYPE_CHECKING:
     from .model_cache import ViewerModelBundle
 
-__all__ = ['infer_prob_hw', 'render_fbpick_overview', 'save_fbpick_overview_png']
+__all__ = [
+    'infer_prob_hw',
+    'render_fbpick_overview',
+    'save_fbpick_debug_png',
+    'save_fbpick_overview_png',
+]
 
 _CHANNEL_PATTERN = re.compile(r'ch(\d+)')
 
@@ -445,6 +450,202 @@ def _resolve_overview_clip(raw_wave_hw: np.ndarray, *, clip_percentile: float) -
         msg = 'clip_percentile must produce a positive finite amplitude bound'
         raise ValueError(msg)
     return clip_value
+
+
+def _extract_batch_scalar(value: object, *, b: int) -> object:
+    if torch.is_tensor(value):
+        if value.ndim == 0:
+            return value.detach().cpu().item()
+        return value[b].detach().cpu().item()
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return value.item()
+        return value[b].item()
+    if isinstance(value, (list, tuple)):
+        return value[b]
+    return value
+
+
+def _extract_batch_vector(value: object, *, b: int, name: str) -> np.ndarray:
+    if torch.is_tensor(value):
+        if value.ndim < 2:
+            msg = f"{name} must be batched with shape (B,H), got {tuple(value.shape)}"
+            raise ValueError(msg)
+        return value[b].detach().cpu().numpy()
+    if isinstance(value, np.ndarray):
+        if value.ndim < 2:
+            msg = f"{name} must be batched with shape (B,H), got {value.shape}"
+            raise ValueError(msg)
+        return np.asarray(value[b])
+    if isinstance(value, (list, tuple)):
+        item = value[b]
+        return np.asarray(item)
+    msg = f"{name} must be tensor, ndarray, list, or tuple"
+    raise TypeError(msg)
+
+
+def _make_debug_title(batch: Mapping[str, object], *, b: int) -> str | None:
+    meta_obj = batch.get("meta")
+    if not isinstance(meta_obj, Mapping):
+        return None
+
+    parts: list[str] = []
+    for key in ("key_name", "primary_unique"):
+        if key not in meta_obj:
+            continue
+        value = _extract_batch_scalar(meta_obj[key], b=b)
+        text = str(value).strip()
+        if text:
+            parts.append(text)
+    if not parts:
+        return None
+    return " | ".join(parts)
+
+
+def save_fbpick_debug_png(
+    out_png: str | Path,
+    *,
+    x_bchw: torch.Tensor,
+    target_bchw: torch.Tensor,
+    pred_bchw: torch.Tensor,
+    batch: Mapping[str, object],
+    b: int = 0,
+    title: str | None = None,
+    dpi: int = 150,
+    clip_percentile: float = 99.0,
+) -> Path:
+    import matplotlib.pyplot as plt
+
+    if x_bchw.ndim != 4:
+        msg = f"x_bchw must be (B,C,H,W), got {tuple(x_bchw.shape)}"
+        raise ValueError(msg)
+    if target_bchw.ndim != 4:
+        msg = f"target_bchw must be (B,C,H,W), got {tuple(target_bchw.shape)}"
+        raise ValueError(msg)
+    if pred_bchw.ndim != 4:
+        msg = f"pred_bchw must be (B,C,H,W), got {tuple(pred_bchw.shape)}"
+        raise ValueError(msg)
+
+    out_path = Path(out_png).expanduser().resolve()
+    if not out_path.parent.is_dir():
+        msg = f"debug output directory not found: {out_path.parent}"
+        raise FileNotFoundError(msg)
+
+    dpi_int = int(dpi)
+    if dpi_int <= 0:
+        msg = "dpi must be > 0"
+        raise ValueError(msg)
+
+    wave_hw = x_bchw[b, 0].detach().cpu().numpy().astype(np.float32, copy=False)
+    target_hw = target_bchw[b, 0].detach().cpu().numpy().astype(np.float32, copy=False)
+    pred_logits_hw = pred_bchw[b, 0].detach().cpu().to(torch.float32)
+    pred_hw = torch.softmax(pred_logits_hw, dim=-1).numpy().astype(np.float32, copy=False)
+
+    if wave_hw.ndim != 2 or target_hw.ndim != 2 or pred_hw.ndim != 2:
+        msg = "fbpick debug views must be 2D (H,W)"
+        raise ValueError(msg)
+    if wave_hw.shape != target_hw.shape or wave_hw.shape != pred_hw.shape:
+        msg = (
+            "fbpick debug tensors must share the same spatial shape, got "
+            f"wave={wave_hw.shape} target={target_hw.shape} pred={pred_hw.shape}"
+        )
+        raise ValueError(msg)
+
+    trace_valid = None
+    fb_idx_view = None
+    meta_obj = batch.get("meta")
+    if isinstance(meta_obj, Mapping):
+        if "trace_valid" in meta_obj:
+            trace_valid = np.asarray(
+                _extract_batch_vector(meta_obj["trace_valid"], b=b, name="meta[trace_valid]"),
+                dtype=np.bool_,
+            )
+        if "fb_idx_view" in meta_obj:
+            fb_idx_view = np.asarray(
+                _extract_batch_vector(meta_obj["fb_idx_view"], b=b, name="meta[fb_idx_view]"),
+                dtype=np.int64,
+            )
+
+    if trace_valid is None:
+        trace_valid = np.ones((wave_hw.shape[0],), dtype=np.bool_)
+    if fb_idx_view is None:
+        fb_idx_view = np.full((wave_hw.shape[0],), -1, dtype=np.int64)
+    if trace_valid.shape != (wave_hw.shape[0],):
+        msg = f"meta[trace_valid] must have shape ({wave_hw.shape[0]},)"
+        raise ValueError(msg)
+    if fb_idx_view.shape != (wave_hw.shape[0],):
+        msg = f"meta[fb_idx_view] must have shape ({wave_hw.shape[0]},)"
+        raise ValueError(msg)
+
+    clip_value = _resolve_overview_clip(wave_hw, clip_percentile=clip_percentile)
+    title_text = title if title is not None else _make_debug_title(batch, b=b)
+    target_pick_i = np.argmax(target_hw, axis=-1).astype(np.float32, copy=False)
+    pred_pick_i = np.argmax(pred_hw, axis=-1).astype(np.float32, copy=False)
+    valid_pick_mask = trace_valid & (fb_idx_view >= 0)
+    x = np.arange(wave_hw.shape[0], dtype=np.float32)
+    heat_vmax = float(max(np.max(target_hw), np.max(pred_hw), 1e-6))
+
+    fig, axes = plt.subplots(1, 3, figsize=(15.0, 5.0))
+    axes[0].imshow(
+        wave_hw.T,
+        cmap="gray",
+        aspect="auto",
+        interpolation="nearest",
+        origin="upper",
+        vmin=-clip_value,
+        vmax=clip_value,
+    )
+    axes[0].plot(
+        x[valid_pick_mask],
+        target_pick_i[valid_pick_mask],
+        color="yellow",
+        lw=1.0,
+        alpha=0.9,
+        label="target",
+    )
+    axes[0].plot(
+        x[valid_pick_mask],
+        pred_pick_i[valid_pick_mask],
+        color="#00d7ff",
+        lw=1.0,
+        alpha=0.9,
+        label="pred",
+    )
+    axes[0].set_title("wave")
+    axes[0].set_xlabel("Trace Index")
+    axes[0].set_ylabel("Sample Index")
+    axes[0].legend(loc="upper right", fontsize=8)
+
+    axes[1].imshow(
+        target_hw.T,
+        cmap="magma",
+        aspect="auto",
+        interpolation="nearest",
+        origin="upper",
+        vmin=0.0,
+        vmax=heat_vmax,
+    )
+    axes[1].set_title("target")
+    axes[1].set_xlabel("Trace Index")
+
+    axes[2].imshow(
+        pred_hw.T,
+        cmap="magma",
+        aspect="auto",
+        interpolation="nearest",
+        origin="upper",
+        vmin=0.0,
+        vmax=heat_vmax,
+    )
+    axes[2].set_title("prediction")
+    axes[2].set_xlabel("Trace Index")
+
+    if title_text is not None:
+        fig.suptitle(str(title_text))
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=dpi_int)
+    plt.close(fig)
+    return out_path
 
 
 def render_fbpick_overview(

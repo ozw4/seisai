@@ -8,6 +8,7 @@ import torch
 from seisai_utils.listfiles import expand_cfg_listfiles, get_cfg_listfile_meta
 
 from seisai_engine.optim import build_optimizer
+from seisai_engine.viewer.fbpick import save_fbpick_debug_png
 from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
     load_cfg_with_base_dir,
@@ -110,11 +111,16 @@ def _run_infer_epoch(
     loader,
     device: torch.device,
     criterion,
+    vis_out_dir: str | Path,
+    vis_n: int,
     max_batches: int,
 ) -> float:
     non_blocking = bool(device.type == 'cuda')
     infer_loss_sum = 0.0
     infer_samples = 0
+
+    if int(vis_n) > 0:
+        Path(vis_out_dir).mkdir(parents=True, exist_ok=True)
 
     with torch.no_grad():
         for step, batch in enumerate(loader):
@@ -131,6 +137,16 @@ def _run_infer_epoch(
             bsize = int(x.shape[0])
             infer_loss_sum += float(loss.detach().item()) * bsize
             infer_samples += bsize
+
+            if step < int(vis_n):
+                out_path = Path(vis_out_dir) / f'step_{int(step):04d}.png'
+                save_fbpick_debug_png(
+                    out_path,
+                    x_bchw=batch['input'],
+                    target_bchw=batch['target'],
+                    pred_bchw=pred.detach().cpu(),
+                    batch=batch,
+                )
 
     if infer_samples <= 0:
         msg = 'no inference samples were processed'
@@ -272,12 +288,13 @@ def build_train_spec(
     criterion_eval = build_criterion()
 
     def infer_epoch_fn(model, loader, device, vis_epoch_dir, vis_n, max_batches):
-        _ = (vis_epoch_dir, vis_n)
         return _run_infer_epoch(
             model=model,
             loader=loader,
             device=device,
             criterion=criterion_eval,
+            vis_out_dir=vis_epoch_dir,
+            vis_n=vis_n,
             max_batches=max_batches,
         )
 
