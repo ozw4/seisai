@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     'infer_prob_hw',
+    'save_fbpick_physics_qc_gather_png',
+    'save_fbpick_physics_qc_cdf_png',
     'render_fbpick_overview',
     'save_fbpick_debug_png',
     'save_fbpick_overview_png',
@@ -744,6 +746,232 @@ def render_fbpick_overview(
     ax.legend(loc='upper right', fontsize=8)
     return fig, ax
 
+
+
+def save_fbpick_physics_qc_gather_png(
+    out_png: str | Path,
+    *,
+    raw_wave_hw: np.ndarray,
+    gt_pick_i: np.ndarray,
+    coarse_pick_i: np.ndarray,
+    robust_pick_i: np.ndarray,
+    title: str | None = None,
+    dpi: int = 150,
+    clip_percentile: float = 99.0,
+) -> Path:
+    import matplotlib.pyplot as plt
+
+    wave = np.ascontiguousarray(np.asarray(raw_wave_hw, dtype=np.float32))
+    if wave.ndim != 2:
+        msg = f'raw_wave_hw must be 2D, got {wave.shape}'
+        raise ValueError(msg)
+
+    n_traces, n_samples = wave.shape
+    if n_traces <= 0 or n_samples <= 0:
+        msg = 'raw_wave_hw must be non-empty'
+        raise ValueError(msg)
+
+    gt = np.asarray(gt_pick_i, dtype=np.int64)
+    coarse = np.asarray(coarse_pick_i, dtype=np.int64)
+    robust = np.asarray(robust_pick_i, dtype=np.int64)
+    for name, arr in (
+        ('gt_pick_i', gt),
+        ('coarse_pick_i', coarse),
+        ('robust_pick_i', robust),
+    ):
+        if arr.ndim != 1 or int(arr.shape[0]) != n_traces:
+            msg = f'{name} must be 1D with length {n_traces}'
+            raise ValueError(msg)
+
+    dpi_int = int(dpi)
+    if dpi_int <= 0:
+        msg = 'dpi must be > 0'
+        raise ValueError(msg)
+
+    valid_gt = (gt > 0) & (gt < int(n_samples))
+    robust_window_start = robust.astype(np.int64) - 128
+    robust_window_end = robust.astype(np.int64) + 127
+    in_robust_window = valid_gt & (gt >= robust_window_start) & (gt <= robust_window_end)
+    coarse_err = coarse.astype(np.float32) - gt.astype(np.float32)
+    robust_err = robust.astype(np.float32) - gt.astype(np.float32)
+    coarse_err[~valid_gt] = np.nan
+    robust_err[~valid_gt] = np.nan
+
+    x = np.arange(n_traces, dtype=np.float32)
+    clip_value = _resolve_overview_clip(wave, clip_percentile=clip_percentile)
+    fig_width = max(14.0, float(n_traces) / 12.0)
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(fig_width, 6.0),
+        gridspec_kw={'width_ratios': [2.2, 1.5, 0.7]},
+    )
+
+    axes[0].imshow(
+        wave.T,
+        cmap='gray',
+        aspect='auto',
+        interpolation='nearest',
+        origin='upper',
+        vmin=-clip_value,
+        vmax=clip_value,
+    )
+    axes[0].plot(
+        x[valid_gt],
+        gt.astype(np.float32)[valid_gt],
+        color='lime',
+        lw=1.2,
+        alpha=0.95,
+        label='GT pick',
+    )
+    axes[0].plot(
+        x[valid_gt],
+        coarse.astype(np.float32)[valid_gt],
+        color='#00a6ff',
+        lw=1.0,
+        alpha=0.9,
+        label='coarse pick',
+    )
+    axes[0].plot(
+        x[valid_gt],
+        robust.astype(np.float32)[valid_gt],
+        color='yellow',
+        lw=1.0,
+        alpha=0.95,
+        label='robust pick',
+    )
+    axes[0].plot(
+        x[valid_gt],
+        np.clip(robust_window_start, 0, n_samples - 1).astype(np.float32)[valid_gt],
+        color='yellow',
+        lw=0.8,
+        ls='--',
+        alpha=0.75,
+        label='robust window start',
+    )
+    axes[0].plot(
+        x[valid_gt],
+        np.clip(robust_window_end, 0, n_samples - 1).astype(np.float32)[valid_gt],
+        color='yellow',
+        lw=0.8,
+        ls=':',
+        alpha=0.75,
+        label='robust window end',
+    )
+    axes[0].set_title('waveform and picks')
+    axes[0].set_xlabel('Trace Index')
+    axes[0].set_ylabel('Sample Index')
+    axes[0].legend(loc='upper right', fontsize=8)
+
+    axes[1].plot(x, coarse_err, color='#00a6ff', lw=1.0, label='coarse - GT')
+    axes[1].plot(x, robust_err, color='yellow', lw=1.0, label='robust - GT')
+    for y in (0, 32, -32, 64, -64, 127, -127):
+        if y == 0:
+            axes[1].axhline(y, color='black', lw=0.9, alpha=0.8)
+        elif abs(y) == 32:
+            axes[1].axhline(y, color='gray', lw=0.8, ls='--', alpha=0.7)
+        elif abs(y) == 64:
+            axes[1].axhline(y, color='gray', lw=0.8, ls=':', alpha=0.7)
+        else:
+            axes[1].axhline(y, color='red', lw=0.8, ls='--', alpha=0.65)
+    axes[1].set_title('pick error')
+    axes[1].set_xlabel('Trace Index')
+    axes[1].set_ylabel('Sample Error')
+    axes[1].legend(loc='upper right', fontsize=8)
+
+    mask_values = in_robust_window.astype(np.float32)[None, :]
+    axes[2].imshow(
+        mask_values,
+        cmap='gray_r',
+        aspect='auto',
+        interpolation='nearest',
+        origin='upper',
+        vmin=0.0,
+        vmax=1.0,
+    )
+    axes[2].set_title('GT in robust window')
+    axes[2].set_xlabel('Trace Index')
+    axes[2].set_yticks([0])
+    axes[2].set_yticklabels(['mask'])
+
+    if title is not None:
+        fig.suptitle(str(title))
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.93))
+    else:
+        fig.tight_layout()
+
+    out_path = Path(out_png).expanduser().resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=dpi_int)
+    plt.close(fig)
+    return out_path
+
+
+def save_fbpick_physics_qc_cdf_png(
+    out_png: str | Path,
+    *,
+    coarse_abs_err: np.ndarray,
+    robust_abs_err: np.ndarray,
+    title: str | None = None,
+    dpi: int = 150,
+) -> Path:
+    import matplotlib.pyplot as plt
+
+    coarse = np.asarray(coarse_abs_err, dtype=np.float64).reshape(-1)
+    robust = np.asarray(robust_abs_err, dtype=np.float64).reshape(-1)
+    coarse = coarse[np.isfinite(coarse)]
+    robust = robust[np.isfinite(robust)]
+
+    dpi_int = int(dpi)
+    if dpi_int <= 0:
+        msg = 'dpi must be > 0'
+        raise ValueError(msg)
+
+    fig, ax = plt.subplots(figsize=(8.0, 5.5))
+    if coarse.size > 0:
+        x_coarse = np.sort(coarse)
+        y_coarse = np.arange(1, int(x_coarse.size) + 1, dtype=np.float64) / float(
+            x_coarse.size
+        )
+        ax.plot(x_coarse, y_coarse, color='#00a6ff', lw=1.6, label='coarse')
+    if robust.size > 0:
+        x_robust = np.sort(robust)
+        y_robust = np.arange(1, int(x_robust.size) + 1, dtype=np.float64) / float(
+            x_robust.size
+        )
+        ax.plot(x_robust, y_robust, color='orange', lw=1.6, label='robust')
+
+    for threshold in (32, 64, 127):
+        ax.axvline(
+            threshold,
+            color='gray',
+            lw=0.8,
+            ls='--',
+            alpha=0.55,
+        )
+    if coarse.size == 0 and robust.size == 0:
+        ax.text(
+            0.5,
+            0.5,
+            'no valid GT traces',
+            ha='center',
+            va='center',
+            transform=ax.transAxes,
+        )
+
+    ax.set_title('pick absolute error CDF' if title is None else str(title))
+    ax.set_xlabel('Absolute Error (samples)')
+    ax.set_ylabel('CDF')
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc='lower right', fontsize=9)
+    fig.tight_layout()
+
+    out_path = Path(out_png).expanduser().resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=dpi_int)
+    plt.close(fig)
+    return out_path
 
 def save_fbpick_overview_png(
     out_png: str | Path,
