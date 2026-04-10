@@ -1,6 +1,7 @@
 paths:
-  coarse_npz_path: REPLACE_ME_input.coarse.npz
-  out_path: ./_fbpick_physics_out/REPLACE_ME_output.robust.npz
+  segy_files: /workspace/proc/tools/configs/sgy_list_train_site54.txt
+  coarse_npz_dir: /workspace/proc/fbpick/site54/fbpick_coarse_infer_out
+  out_dir: /workspace/proc/fbpick/site54/fbpick_physics_out
 
 feasible_band: {}
 trend: {}

@@ -56,6 +56,7 @@ def _load_cli_module(file_name: str, monkeypatch: pytest.MonkeyPatch):
         'run_fbpick_coarse_train.py',
         'run_fbpick_coarse_infer.py',
         'run_fbpick_physics.py',
+        'run_fbpick_physics_batch.py',
         'run_fbpick_fine_train.py',
         'run_fbpick_fine_infer.py',
     ],
@@ -75,6 +76,7 @@ def test_cli_modules_import_without_segyio_or_timm(
         ('run_fbpick_coarse_train.py', 'main'),
         ('run_fbpick_coarse_infer.py', 'main'),
         ('run_fbpick_physics.py', 'main'),
+        ('run_fbpick_physics_batch.py', 'main'),
         ('run_fbpick_fine_train.py', 'main'),
         ('run_fbpick_fine_infer.py', 'main'),
     ],
@@ -204,6 +206,88 @@ def test_run_fbpick_physics_cli_is_thin_wrapper(
     assert captured['cfg']['paths']['coarse_npz_path'] == 'input.coarse.npz'
     assert captured['out_path'] == 'output.robust.npz'
     assert capsys.readouterr().out.strip() == 'output.robust.npz'
+
+
+def test_run_fbpick_physics_batch_cli_loops_over_multiple_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_cli_module('run_fbpick_physics_batch.py', monkeypatch)
+    cfg_path = tmp_path / 'config_run_fbpick_physics_batch.yaml'
+    cfg_path.write_text('placeholder: true\n', encoding='utf-8')
+    coarse_dir = tmp_path / 'coarse_out'
+    out_dir = tmp_path / 'physics_out'
+    coarse_dir.mkdir()
+    captured_calls: list[dict[str, object]] = []
+    coarse_paths = [
+        coarse_dir / 'site54__survey_a.coarse.npz',
+        coarse_dir / 'site55__survey_b.coarse.npz',
+    ]
+    out_paths = [
+        out_dir / 'site54__survey_a.robust.npz',
+        out_dir / 'site55__survey_b.robust.npz',
+    ]
+    for coarse_path in coarse_paths:
+        coarse_path.touch()
+
+    def _fake_run_physics_lite(coarse_npz_path, *, cfg, out_path):
+        captured_calls.append(
+            {
+                'coarse_npz_path': coarse_npz_path,
+                'cfg': cfg,
+                'out_path': out_path,
+            }
+        )
+        path = Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        return path
+
+    runtime = SimpleNamespace(
+        load_cfg_with_base_dir=lambda path: (
+            {
+                'paths': {
+                    'segy_files': ['site54/survey_a.sgy', 'site55/survey_b.sgy'],
+                    'coarse_npz_dir': str(coarse_dir),
+                    'out_dir': str(out_dir),
+                }
+            },
+            tmp_path,
+        ),
+        expand_cfg_listfiles=lambda cfg, *, keys: None,
+        resolve_cfg_paths=lambda cfg, base_dir, *, keys: None,
+        run_physics_lite=_fake_run_physics_lite,
+    )
+    monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
+
+    result = module.run_pipeline(cfg_path)
+
+    assert result == out_paths[-1]
+    assert [call['coarse_npz_path'] for call in captured_calls] == [
+        str(coarse_paths[0]),
+        str(coarse_paths[1]),
+    ]
+    assert [call['out_path'] for call in captured_calls] == [
+        str(out_paths[0]),
+        str(out_paths[1]),
+    ]
+    assert [call['cfg']['paths']['segy_files'] for call in captured_calls] == [
+        ['site54/survey_a.sgy'],
+        ['site55/survey_b.sgy'],
+    ]
+    assert [call['cfg']['paths']['coarse_npz_path'] for call in captured_calls] == [
+        str(coarse_paths[0]),
+        str(coarse_paths[1]),
+    ]
+    assert [call['cfg']['paths']['out_path'] for call in captured_calls] == [
+        str(out_paths[0]),
+        str(out_paths[1]),
+    ]
+    assert capsys.readouterr().out.strip().splitlines() == [
+        str(out_paths[0]),
+        str(out_paths[1]),
+    ]
 
 
 def test_run_fbpick_fine_train_cli_is_thin_wrapper(
