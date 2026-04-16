@@ -22,16 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          lfs: false
           fetch-depth: 0
-
-      - name: Ensure LFS files are present
-        shell: bash
-        run: |
-          set -euxo pipefail
-          git lfs install --local
-          git lfs pull
-          git lfs checkout
 
       - name: Set up Python
         uses: actions/setup-python@v5
