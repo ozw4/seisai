@@ -38,6 +38,7 @@ train:
   weight_decay: 0.0
   subset_traces: 128
   fb_sigma_ms: 10.0
+  device: cuda:1
 
 infer:
   seed: 0

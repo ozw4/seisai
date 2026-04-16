@@ -260,7 +260,10 @@ def rectify_one(
 					dst.text[i] = block
 
 			dst.bin = src.bin
-			dst.bin.update(Samples=ns, Interval=dt, Format=spec.format)
+			dst.bin = src.bin
+			dst.bin[segyio.BinField.Samples] = ns
+			dst.bin[segyio.BinField.Interval] = dt
+			dst.bin[segyio.BinField.Format] = spec.format
 
 			out_idx = 0
 			for ff in u_ff.tolist():

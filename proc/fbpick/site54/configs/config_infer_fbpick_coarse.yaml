@@ -21,7 +21,7 @@ norm_refs:
 
 infer:
   ckpt_path: /workspace/proc/fbpick/site54/fbpick_coarse_train_out/ckpt/best.pt
-  device: auto
+  device: cuda:1
   subset_traces: 128
   batch_size: 1
   num_workers: 0
