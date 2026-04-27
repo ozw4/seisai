@@ -276,10 +276,10 @@ def select_trace_anchors(
     if mode_norm == 'random' and rng is None:
         rng = np.random.default_rng()
 
-    offsets = _validate_offsets(offsets_m)
+    offsets = np.asarray(offsets_m)
     indices = _validate_raw_indices(raw_indices, expected_size=int(offsets.size))
     segments = split_trace_segments_by_offset_gap(
-        offsets,
+        offsets_m,
         gap_ratio=gap_ratio,
         min_gap_m=min_gap_m,
     )
