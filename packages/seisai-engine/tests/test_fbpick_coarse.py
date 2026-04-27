@@ -88,6 +88,12 @@ def _make_training_config(tmp_path: Path, *, segy_path: str, fb_path: str) -> di
             'time_len': 2048,
             'standardize_eps': 1.0e-8,
         },
+        'trace_anchor': {
+            'gap_ratio': 5.0,
+            'min_gap_m': None,
+            'train_mode': 'random',
+            'infer_mode': 'center',
+        },
         'norm_refs': {
             'time_ref_sec': 20.0,
             'offset_ref_m': 2000.0,
@@ -140,6 +146,10 @@ def test_load_coarse_train_config_returns_fixed_contract_values(
     assert typed.coarse.input_mode == 'global_anchor_resize'
     assert typed.transform.trace_len == 256
     assert typed.transform.time_len == 2048
+    assert typed.trace_anchor.gap_ratio == pytest.approx(5.0)
+    assert typed.trace_anchor.min_gap_m is None
+    assert typed.trace_anchor.train_mode == 'random'
+    assert typed.trace_anchor.infer_mode == 'center'
     assert typed.train.fb_sigma_ms == pytest.approx(10.0)
     assert typed.model_sig['in_chans'] == 3
     assert typed.model_sig['out_chans'] == 1
@@ -159,6 +169,8 @@ def test_load_coarse_infer_config_returns_global_anchor_contract(
     assert typed.coarse.input_mode == 'global_anchor_resize'
     assert typed.transform.trace_len == 256
     assert typed.transform.time_len == 2048
+    assert typed.trace_anchor.gap_ratio == pytest.approx(5.0)
+    assert typed.trace_anchor.infer_mode == 'center'
     assert typed.model_sig['in_chans'] == 3
 
 
@@ -184,6 +196,22 @@ def test_load_coarse_infer_config_returns_global_anchor_contract(
         (
             lambda cfg: cfg['transform'].__setitem__('time_len', 6000),
             'transform.time_len must be 2048',
+        ),
+        (
+            lambda cfg: cfg['trace_anchor'].__setitem__('gap_ratio', 1.0),
+            'trace_anchor.gap_ratio must be > 1.0',
+        ),
+        (
+            lambda cfg: cfg['trace_anchor'].__setitem__('min_gap_m', 0.0),
+            'trace_anchor.min_gap_m must be null or > 0',
+        ),
+        (
+            lambda cfg: cfg['trace_anchor'].__setitem__('train_mode', 'center'),
+            'trace_anchor.train_mode must be "random"',
+        ),
+        (
+            lambda cfg: cfg['trace_anchor'].__setitem__('infer_mode', 'random'),
+            'trace_anchor.infer_mode must be "center"',
         ),
         (
             lambda cfg: cfg['train'].__setitem__('fb_sigma_ms', 0.0),
@@ -401,6 +429,12 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
             'trace_len': 256,
             'time_len': 2048,
             'standardize_eps': 1.0e-8,
+        },
+        'trace_anchor': {
+            'gap_ratio': 5.0,
+            'min_gap_m': None,
+            'train_mode': 'random',
+            'infer_mode': 'center',
         },
         'norm_refs': {
             'time_ref_sec': 20.0,
