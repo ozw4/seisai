@@ -241,3 +241,118 @@ def test_trace_decimation_skips_when_need_is_insufficient() -> None:
     assert out['pad_len'] == 0
     assert len(idx) == 3
     assert np.all(np.diff(idx) == 1)
+
+
+def test_draw_full_gather_returns_all_traces_for_selected_primary() -> None:
+    info = fake_info()
+    info['sampling_override'] = {
+        'primary_keys': ['ffid'],
+        'primary_ranges': {'ffid': [[101, 101]]},
+    }
+    cfg = TraceSubsetSamplerConfig(
+        primary_keys=('ffid',),
+        secondary_key_fixed=True,
+        subset_traces=3,
+    )
+    sampler = TraceSubsetSampler(cfg)
+    out = sampler.draw_full_gather(info, py_random=random.Random(0))
+
+    assert {
+        'indices',
+        'key_name',
+        'primary_value',
+        'secondary_key',
+        'did_super',
+        'trace_count',
+    } <= set(out.keys())
+    assert out['key_name'] == 'ffid'
+    assert out['primary_value'] == 101
+    assert out['trace_count'] == 5
+    assert len(out['indices']) == 5
+    assert np.array_equal(out['indices'], np.arange(5, 10, dtype=np.int64))
+    assert out['primary_unique'] == '101'
+
+
+def test_draw_full_gather_does_not_apply_subset_crop() -> None:
+    info = fake_info()
+    info['ffid_unique_keys'] = [100]
+    info['ffid_key_to_indices'] = {100: np.arange(0, 5, dtype=np.int64)}
+    cfg = TraceSubsetSamplerConfig(
+        primary_keys=('ffid',),
+        secondary_key_fixed=True,
+        subset_traces=3,
+    )
+    sampler = TraceSubsetSampler(cfg)
+
+    cropped = sampler.draw(info, py_random=random.Random(0))
+    full = sampler.draw_full_gather(info, py_random=random.Random(0))
+
+    assert len(cropped['indices']) == 3
+    assert cropped['pad_len'] == 0
+    assert len(full['indices']) == 5
+    assert full['trace_count'] == 5
+
+
+def test_draw_full_gather_preserves_secondary_sort() -> None:
+    info = fake_info()
+    info['ffid_unique_keys'] = [100]
+    info['ffid_key_to_indices'] = {
+        100: np.asarray([2, 0, 4, 1, 3], dtype=np.int64)
+    }
+    info['chno_values'] = np.asarray(
+        [30, 10, 40, 20, 0, 50, 60, 70, 80, 90], dtype=np.int64
+    )
+    cfg = TraceSubsetSamplerConfig(
+        primary_keys=('ffid',),
+        secondary_key_fixed=True,
+        subset_traces=3,
+    )
+    sampler = TraceSubsetSampler(cfg)
+
+    out = sampler.draw_full_gather(info, py_random=random.Random(0))
+
+    assert out['secondary_key'] == 'chno'
+    assert np.array_equal(out['indices'], np.asarray([4, 1, 3, 0, 2], dtype=np.int64))
+
+
+def test_draw_full_gather_honors_sampling_overrides_like_draw() -> None:
+    info = fake_info()
+    info['sampling_override'] = {
+        'primary_keys': ['ffid'],
+        'primary_ranges': {'ffid': [[101, 101]]},
+        'secondary_key': {'ffid': 'offset'},
+    }
+    cfg = TraceSubsetSamplerConfig(
+        primary_keys=('chno',),
+        secondary_key_fixed=True,
+        subset_traces=3,
+    )
+    sampler = TraceSubsetSampler(cfg)
+
+    cropped = sampler.draw(info, py_random=random.Random(11))
+    full = sampler.draw_full_gather(info, py_random=random.Random(11))
+
+    assert cropped['key_name'] == full['key_name'] == 'ffid'
+    assert cropped['secondary_key'] == full['secondary_key'] == 'offset'
+    assert full['primary_value'] == 101
+    assert np.all(info['ffid_values'][full['indices']] == 101)
+
+
+def test_draw_full_gather_is_deterministic_with_fixed_py_random() -> None:
+    info = fake_info()
+    cfg = TraceSubsetSamplerConfig(
+        primary_keys=('ffid', 'chno'),
+        primary_key_weights=(0.5, 0.5),
+        secondary_key_fixed=False,
+        subset_traces=3,
+    )
+    sampler = TraceSubsetSampler(cfg)
+
+    first = sampler.draw_full_gather(info, py_random=random.Random(123))
+    second = sampler.draw_full_gather(info, py_random=random.Random(123))
+
+    assert first['key_name'] == second['key_name']
+    assert first['primary_value'] == second['primary_value']
+    assert first['secondary_key'] == second['secondary_key']
+    assert first['trace_count'] == second['trace_count']
+    assert np.array_equal(first['indices'], second['indices'])

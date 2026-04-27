@@ -56,6 +56,70 @@ class TraceSubsetSampler:
         self, info: dict | FileInfo, *, py_random: random.Random | None = None
     ) -> dict:
         r = py_random or random
+        gather = self._resolve_sorted_gather(info, r=r)
+        indices = gather['indices']
+
+        # サブセット抽出(必要時のみ secondary 整列後 indices で trace decimation)
+        n_total = len(indices)
+        H = int(self.cfg.subset_traces)
+        if n_total >= H:
+            subset_indices: np.ndarray | None = None
+            if (
+                self._trace_decimate_prob > 0.0
+                and r.random() < self._trace_decimate_prob
+            ):
+                stride = self._sample_trace_decimate_stride(r)
+                if stride > 1:
+                    offset = r.randint(0, stride - 1)
+                    need = offset + (H - 1) * stride + 1
+                    if n_total >= H and n_total >= need:
+                        start = r.randint(0, n_total - need)
+                        dec_start = start + offset
+                        dec_stop = dec_start + H * stride
+                        subset_indices = indices[dec_start:dec_stop:stride]
+            if subset_indices is None:
+                start_idx = r.randint(0, n_total - H)
+                subset_indices = indices[start_idx : start_idx + H]
+            pad_len = 0
+        else:
+            subset_indices = indices
+            pad_len = H - n_total
+
+        subset_indices = np.asarray(subset_indices, dtype=np.int64)
+        primary_unique_str = self._format_primary_unique(
+            info, key_name=str(gather['key_name']), indices=subset_indices
+        )
+
+        return {
+            'indices': subset_indices,
+            'pad_len': pad_len,
+            'key_name': gather['key_name'],
+            'secondary_key': gather['secondary_key'],
+            'did_super': gather['did_super'],
+            'primary_unique': primary_unique_str,
+        }
+
+    def draw_full_gather(
+        self, info: dict | FileInfo, *, py_random: random.Random | None = None
+    ) -> dict:
+        r = py_random or random
+        gather = self._resolve_sorted_gather(info, r=r)
+        indices = np.asarray(gather['indices'], dtype=np.int64)
+        key_name = str(gather['key_name'])
+        return {
+            'indices': indices,
+            'pad_len': 0,
+            'key_name': key_name,
+            'primary_value': int(gather['primary_value']),
+            'secondary_key': gather['secondary_key'],
+            'did_super': gather['did_super'],
+            'trace_count': int(indices.size),
+            'primary_unique': self._format_primary_unique(
+                info, key_name=key_name, indices=indices
+            ),
+        }
+
+    def _resolve_sorted_gather(self, info: dict | FileInfo, *, r: Any) -> dict:
         sampling_override = self._resolve_sampling_override(info)
 
         cmp_available = (
@@ -153,51 +217,23 @@ class TraceSubsetSampler:
             )
         indices = self._stable_lexsort(info, key_name, str(secondary_key), indices)
 
-        # 4) サブセット抽出(必要時のみ secondary 整列後 indices で trace decimation)
-        n_total = len(indices)
-        H = int(self.cfg.subset_traces)
-        if n_total >= H:
-            subset_indices: np.ndarray | None = None
-            if (
-                self._trace_decimate_prob > 0.0
-                and r.random() < self._trace_decimate_prob
-            ):
-                stride = self._sample_trace_decimate_stride(r)
-                if stride > 1:
-                    offset = r.randint(0, stride - 1)
-                    need = offset + (H - 1) * stride + 1
-                    if n_total >= H and n_total >= need:
-                        start = r.randint(0, n_total - need)
-                        dec_start = start + offset
-                        dec_stop = dec_start + H * stride
-                        subset_indices = indices[dec_start:dec_stop:stride]
-            if subset_indices is None:
-                start_idx = r.randint(0, n_total - H)
-                subset_indices = indices[start_idx : start_idx + H]
-            pad_len = 0
-        else:
-            subset_indices = indices
-            pad_len = H - n_total
-
-        subset_indices = np.asarray(subset_indices, dtype=np.int64)
-
-        # 5) ログ用 primary ユニーク
-        valid_subset = subset_indices >= 0
-        if np.any(valid_subset):
-            prim_vals_sel = info[f'{key_name}_values'][subset_indices[valid_subset]]
-            primary_label_values = np.unique(prim_vals_sel.astype(np.int64, copy=False))
-            primary_unique_str = ','.join(map(str, primary_label_values.tolist()))
-        else:
-            primary_unique_str = ''
-
         return {
-            'indices': subset_indices,
-            'pad_len': pad_len,
+            'indices': np.asarray(indices, dtype=np.int64),
             'key_name': key_name,
+            'primary_value': key,
             'secondary_key': secondary_key,
             'did_super': did_super,
-            'primary_unique': primary_unique_str,
         }
+
+    def _format_primary_unique(
+        self, info: dict | FileInfo, *, key_name: str, indices: np.ndarray
+    ) -> str:
+        valid_subset = indices >= 0
+        if not np.any(valid_subset):
+            return ''
+        prim_vals_sel = info[f'{key_name}_values'][indices[valid_subset]]
+        primary_label_values = np.unique(prim_vals_sel.astype(np.int64, copy=False))
+        return ','.join(map(str, primary_label_values.tolist()))
 
     @staticmethod
     def _info_get(info: dict | FileInfo, key: str, default=None):
