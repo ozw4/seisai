@@ -21,6 +21,15 @@ from .config import (
 )
 from .infer import run_coarse_infer
 from .loss import build_criterion
+from .time_axis import (
+    CoarseTimeGrid,
+    build_coarse_fb_labels_for_anchors,
+    build_coarse_time_grid,
+    build_time_channel,
+    project_coarse_indices_to_raw_time,
+    project_fb_indices_to_coarse_time,
+    resample_waveform_time_axis,
+)
 from .trace_anchor import (
     TraceAnchorSelection,
     TraceSegment,
@@ -44,6 +53,7 @@ __all__ = [
     'COARSE_TRACE_LEN',
     'CoarseInferConfig',
     'CoarseModeCfg',
+    'CoarseTimeGrid',
     'CoarseTraceAnchorCfg',
     'CoarseTrainBundle',
     'CoarseTrainConfig',
@@ -51,10 +61,13 @@ __all__ = [
     'TraceSegment',
     'build_criterion',
     'build_fbgate',
+    'build_coarse_fb_labels_for_anchors',
+    'build_coarse_time_grid',
     'build_labeled_infer_dataset',
     'build_model',
     'build_plan',
     'build_raw_infer_dataset',
+    'build_time_channel',
     'build_train_bundle',
     'build_train_dataset',
     'build_train_spec',
@@ -62,6 +75,9 @@ __all__ = [
     'load_coarse_train_config',
     'load_train_bundle',
     'load_train_spec',
+    'project_coarse_indices_to_raw_time',
+    'project_fb_indices_to_coarse_time',
+    'resample_waveform_time_axis',
     'run_coarse_infer',
     'run_train',
     'select_trace_anchors',
