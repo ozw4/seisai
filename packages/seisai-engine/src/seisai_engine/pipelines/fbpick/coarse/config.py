@@ -34,12 +34,16 @@ __all__ = [
     'COARSE_CKPT_PIPELINE',
     'COARSE_CKPT_SOFTMAX_AXIS',
     'COARSE_IN_CHANS',
+    'COARSE_INPUT_CHANNELS',
+    'COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE',
     'COARSE_OUT_CHANS',
+    'COARSE_TRACE_LEN',
     'COARSE_TIME_LEN',
     'CoarseCkptCfg',
     'CoarseDatasetCfg',
     'CoarseInferConfig',
     'CoarseInferRuntimeCfg',
+    'CoarseModeCfg',
     'CoarsePaths',
     'CoarseTrainCfg',
     'CoarseTrainConfig',
@@ -49,9 +53,12 @@ __all__ = [
     'load_coarse_train_config',
 ]
 
+COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE = 'global_anchor_resize'
+COARSE_TRACE_LEN = 256
 COARSE_IN_CHANS = 3
 COARSE_OUT_CHANS = 1
-COARSE_TIME_LEN = 6016
+COARSE_TIME_LEN = 2048
+COARSE_INPUT_CHANNELS = ('waveform', 'offset_ch', 'time_ch')
 COARSE_CKPT_PIPELINE = 'fbpick'
 COARSE_CKPT_OUTPUT_IDS = ('P',)
 COARSE_CKPT_SOFTMAX_AXIS = 'time'
@@ -80,7 +87,13 @@ class CoarseDatasetCfg:
 
 
 @dataclass(frozen=True)
+class CoarseModeCfg:
+    input_mode: str
+
+
+@dataclass(frozen=True)
 class CoarseTransformCfg:
+    trace_len: int
     time_len: int
     standardize_eps: float
 
@@ -126,6 +139,7 @@ class CoarseCkptCfg:
 @dataclass(frozen=True)
 class CoarseTrainConfig:
     common: 'CommonTrainConfig'
+    coarse: CoarseModeCfg
     paths: CoarsePaths
     dataset: CoarseDatasetCfg
     transform: CoarseTransformCfg
@@ -138,6 +152,7 @@ class CoarseTrainConfig:
 
 @dataclass(frozen=True)
 class CoarseInferConfig:
+    coarse: CoarseModeCfg
     paths: CoarsePaths
     dataset: CoarseDatasetCfg
     transform: CoarseTransformCfg
@@ -267,17 +282,42 @@ def _load_dataset_cfg(cfg: dict) -> CoarseDatasetCfg:
     )
 
 
+def _load_coarse_mode_cfg(cfg: dict) -> CoarseModeCfg:
+    coarse_cfg = require_dict(cfg, 'coarse')
+    input_mode = str(
+        require_value(
+            coarse_cfg,
+            'input_mode',
+            str,
+            type_message='config.coarse.input_mode must be str',
+        )
+    )
+    if input_mode != COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE:
+        msg = (
+            'coarse.input_mode must be '
+            f'{COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE!r} for fbpick coarse, '
+            f'got {input_mode!r}'
+        )
+        raise ValueError(msg)
+    return CoarseModeCfg(input_mode=input_mode)
+
+
 def _load_transform_cfg(cfg: dict) -> CoarseTransformCfg:
     raise_if_deprecated_time_len_keys(
         train_cfg=cfg.get('train'),
         transform_cfg=cfg.get('transform'),
     )
     transform_cfg = require_dict(cfg, 'transform')
+    trace_len = int(require_int(transform_cfg, 'trace_len'))
+    if trace_len != COARSE_TRACE_LEN:
+        msg = f'transform.trace_len must be {COARSE_TRACE_LEN} for fbpick coarse'
+        raise ValueError(msg)
     time_len = int(require_int(transform_cfg, 'time_len'))
     if time_len != COARSE_TIME_LEN:
         msg = f'transform.time_len must be {COARSE_TIME_LEN} for fbpick coarse'
         raise ValueError(msg)
     return CoarseTransformCfg(
+        trace_len=trace_len,
         time_len=time_len,
         standardize_eps=float(optional_float(transform_cfg, 'standardize_eps', 1.0e-8)),
     )
@@ -316,6 +356,7 @@ def load_coarse_train_config(cfg: dict) -> CoarseTrainConfig:
 
     return CoarseTrainConfig(
         common=common,
+        coarse=_load_coarse_mode_cfg(cfg),
         paths=_load_paths_cfg(cfg, allow_missing_infer_pairs=False),
         dataset=_load_dataset_cfg(cfg),
         transform=_load_transform_cfg(cfg),
@@ -367,6 +408,7 @@ def load_coarse_infer_config(cfg: dict) -> CoarseInferConfig:
         raise ValueError(msg)
 
     return CoarseInferConfig(
+        coarse=_load_coarse_mode_cfg(cfg),
         paths=_load_paths_cfg(cfg, allow_missing_infer_pairs=True),
         dataset=_load_dataset_cfg(cfg),
         transform=_load_transform_cfg(cfg),
@@ -376,7 +418,7 @@ def load_coarse_infer_config(cfg: dict) -> CoarseInferConfig:
             batch_size=int(optional_int(infer_cfg, 'batch_size', 1)),
             num_workers=int(optional_int(infer_cfg, 'num_workers', 0)),
             overlap_h=overlap_h,
-            tile_w=int(optional_int(infer_cfg, 'tile_w', 6016)),
+            tile_w=int(optional_int(infer_cfg, 'tile_w', COARSE_TIME_LEN)),
             overlap_w=int(optional_int(infer_cfg, 'overlap_w', 1024)),
             tiles_per_batch=int(optional_int(infer_cfg, 'tiles_per_batch', 16)),
             amp=bool(optional_bool(infer_cfg, 'amp', default=False)),

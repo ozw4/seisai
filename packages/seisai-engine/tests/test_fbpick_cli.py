@@ -168,6 +168,50 @@ def test_run_fbpick_coarse_infer_cli_is_thin_wrapper(
     assert capsys.readouterr().out.strip() == str(expected_out_path)
 
 
+def test_run_fbpick_coarse_infer_rejects_legacy_ckpt_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_cli_module('run_fbpick_coarse_infer.py', monkeypatch)
+    ckpt = {
+        'pipeline': 'fbpick',
+        'model_sig': {'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+        'output_ids': ['P'],
+        'softmax_axis': 'time',
+    }
+
+    with pytest.raises(ValueError) as exc:
+        module._validate_checkpoint_for_infer(
+            ckpt,
+            model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+        )
+
+    assert "expected coarse_input_mode='global_anchor_resize', got None" in str(
+        exc.value
+    )
+    assert 'legacy tiled coarse pipeline' in str(exc.value)
+
+
+def test_run_fbpick_coarse_infer_accepts_global_anchor_ckpt_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_cli_module('run_fbpick_coarse_infer.py', monkeypatch)
+    ckpt = {
+        'pipeline': 'fbpick',
+        'model_sig': {'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+        'output_ids': ['P'],
+        'softmax_axis': 'time',
+        'coarse_input_mode': 'global_anchor_resize',
+        'coarse_trace_len': 256,
+        'coarse_time_len': 2048,
+        'coarse_in_chans': 3,
+    }
+
+    module._validate_checkpoint_for_infer(
+        ckpt,
+        model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+    )
+
+
 def test_run_fbpick_physics_cli_is_thin_wrapper(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

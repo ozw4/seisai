@@ -5,6 +5,9 @@ paths:
     - REPLACE_ME_train_coarse_fb.npy
   out_dir: ./_fbpick_coarse_train_out
 
+coarse:
+  input_mode: global_anchor_resize
+
 dataset:
   use_header_cache: true
   verbose: true
@@ -15,7 +18,8 @@ dataset:
   infer_endian: big
 
 transform:
-  time_len: 6016
+  trace_len: 256
+  time_len: 2048
   standardize_eps: 1.0e-8
 
 norm_refs:
@@ -32,7 +36,7 @@ train:
   use_amp: false
   lr: 1.0e-3
   weight_decay: 0.0
-  subset_traces: 128
+  subset_traces: 256
   fb_sigma_ms: 10.0
 
 infer:
@@ -40,7 +44,7 @@ infer:
   batch_size: 1
   num_workers: 0
   max_batches: 8
-  subset_traces: 128
+  subset_traces: 256
 
 vis:
   n: 0

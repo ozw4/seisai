@@ -84,6 +84,13 @@ def _resolve_ckpt_path(cfg: dict[str, Any]) -> Path:
 
 
 def _validate_checkpoint_for_infer(ckpt: dict[str, Any], *, model_sig: dict[str, Any]) -> None:
+    from seisai_engine.pipelines.fbpick.coarse.config import (
+        COARSE_IN_CHANS,
+        COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE,
+        COARSE_TIME_LEN,
+        COARSE_TRACE_LEN,
+    )
+
     pipeline = ckpt.get('pipeline')
     if pipeline != 'fbpick':
         msg = f'coarse infer checkpoint pipeline must be "fbpick", got {pipeline!r}'
@@ -111,6 +118,27 @@ def _validate_checkpoint_for_infer(ckpt: dict[str, Any], *, model_sig: dict[str,
     if softmax_axis is not None and softmax_axis != 'time':
         msg = f'coarse infer checkpoint softmax_axis must be "time", got {softmax_axis!r}'
         raise ValueError(msg)
+
+    expected_meta = {
+        'coarse_input_mode': COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE,
+        'coarse_trace_len': COARSE_TRACE_LEN,
+        'coarse_time_len': COARSE_TIME_LEN,
+        'coarse_in_chans': COARSE_IN_CHANS,
+    }
+    for key, expected in expected_meta.items():
+        actual = ckpt.get(key)
+        if actual != expected:
+            legacy_hint = ''
+            if key == 'coarse_input_mode' and actual is None:
+                legacy_hint = (
+                    ' This checkpoint appears to be from the legacy tiled coarse '
+                    'pipeline.'
+                )
+            msg = (
+                f'Invalid fbpick-coarse checkpoint: expected {key}={expected!r}, '
+                f'got {actual!r}.{legacy_hint}'
+            )
+            raise ValueError(msg)
 
 
 def _build_out_path(*, segy_path: str | Path, out_dir: str | Path) -> Path:

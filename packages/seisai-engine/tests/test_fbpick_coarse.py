@@ -15,6 +15,7 @@ from seisai_engine.pipelines.fbpick.coarse import (
     build_fbgate,
     build_plan,
     build_train_dataset,
+    load_coarse_infer_config,
     load_coarse_train_config,
     load_train_bundle,
     run_coarse_infer,
@@ -79,8 +80,12 @@ def _make_training_config(tmp_path: Path, *, segy_path: str, fb_path: str) -> di
             'train_endian': 'big',
             'infer_endian': 'big',
         },
+        'coarse': {
+            'input_mode': 'global_anchor_resize',
+        },
         'transform': {
-            'time_len': 6016,
+            'trace_len': 256,
+            'time_len': 2048,
             'standardize_eps': 1.0e-8,
         },
         'norm_refs': {
@@ -97,7 +102,7 @@ def _make_training_config(tmp_path: Path, *, segy_path: str, fb_path: str) -> di
             'use_amp': False,
             'lr': 1.0e-3,
             'weight_decay': 0.0,
-            'subset_traces': 128,
+            'subset_traces': 256,
             'fb_sigma_ms': 10.0,
         },
         'infer': {
@@ -105,7 +110,7 @@ def _make_training_config(tmp_path: Path, *, segy_path: str, fb_path: str) -> di
             'batch_size': 1,
             'num_workers': 0,
             'max_batches': 1,
-            'subset_traces': 128,
+            'subset_traces': 256,
         },
         'vis': {
             'n': 0,
@@ -132,13 +137,29 @@ def test_load_coarse_train_config_returns_fixed_contract_values(
 
     typed = load_coarse_train_config(cfg)
 
-    assert typed.transform.time_len == 6016
+    assert typed.coarse.input_mode == 'global_anchor_resize'
+    assert typed.transform.trace_len == 256
+    assert typed.transform.time_len == 2048
     assert typed.train.fb_sigma_ms == pytest.approx(10.0)
     assert typed.model_sig['in_chans'] == 3
     assert typed.model_sig['out_chans'] == 1
     assert typed.ckpt.pipeline == 'fbpick'
     assert typed.ckpt.output_ids == ('P',)
     assert typed.ckpt.softmax_axis == 'time'
+
+
+def test_load_coarse_infer_config_returns_global_anchor_contract(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
+    cfg['paths'].pop('fb_files')
+
+    typed = load_coarse_infer_config(cfg)
+
+    assert typed.coarse.input_mode == 'global_anchor_resize'
+    assert typed.transform.trace_len == 256
+    assert typed.transform.time_len == 2048
+    assert typed.model_sig['in_chans'] == 3
 
 
 @pytest.mark.parametrize(
@@ -153,8 +174,16 @@ def test_load_coarse_train_config_returns_fixed_contract_values(
             'model.out_chans must be 1',
         ),
         (
+            lambda cfg: cfg['coarse'].__setitem__('input_mode', 'legacy_tiled'),
+            "coarse.input_mode must be 'global_anchor_resize'",
+        ),
+        (
+            lambda cfg: cfg['transform'].__setitem__('trace_len', 128),
+            'transform.trace_len must be 256',
+        ),
+        (
             lambda cfg: cfg['transform'].__setitem__('time_len', 6000),
-            'transform.time_len must be 6016',
+            'transform.time_len must be 2048',
         ),
         (
             lambda cfg: cfg['train'].__setitem__('fb_sigma_ms', 0.0),
@@ -254,7 +283,7 @@ def test_pick_aware_crop_keeps_all_valid_picks_in_view(tmp_path: Path) -> None:
 
 
 def test_coarse_train_smoke_one_epoch(tmp_path: Path) -> None:
-    n_traces = 128
+    n_traces = 256
     n_samples = 6200
     t = np.linspace(-1.0, 1.0, n_samples, dtype=np.float32)
     traces = np.stack([t + (0.01 * i) for i in range(n_traces)], axis=0)
@@ -301,7 +330,7 @@ def test_coarse_train_smoke_one_epoch(tmp_path: Path) -> None:
 
 
 def test_coarse_run_train_writes_fbpick_ckpt_metadata(tmp_path: Path) -> None:
-    n_traces = 128
+    n_traces = 256
     n_samples = 6016
     t = np.linspace(-1.0, 1.0, n_samples, dtype=np.float32)
     traces = np.stack([t + (0.01 * i) for i in range(n_traces)], axis=0)
@@ -323,6 +352,11 @@ def test_coarse_run_train_writes_fbpick_ckpt_metadata(tmp_path: Path) -> None:
     assert ckpt['pipeline'] == 'fbpick'
     assert ckpt['output_ids'] == ['P']
     assert ckpt['softmax_axis'] == 'time'
+    assert ckpt['coarse_input_mode'] == 'global_anchor_resize'
+    assert ckpt['coarse_trace_len'] == 256
+    assert ckpt['coarse_time_len'] == 2048
+    assert ckpt['coarse_in_chans'] == 3
+    assert ckpt['coarse_input_channels'] == ['waveform', 'offset_ch', 'time_ch']
     assert ckpt['model_sig']['in_chans'] == 3
     assert ckpt['model_sig']['out_chans'] == 1
 
@@ -339,8 +373,8 @@ class _TimeChannelModel(torch.nn.Module):
 
 
 def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
-    n_traces = 160
-    n_samples = 7000
+    n_traces = 256
+    n_samples = 2048
     t = np.linspace(-1.0, 1.0, n_samples, dtype=np.float32)
     traces = np.stack([t + float(i) for i in range(n_traces)], axis=0)
     segy_path = str(tmp_path / 'coarse_infer.sgy')
@@ -360,8 +394,12 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
             'train_endian': 'big',
             'infer_endian': 'big',
         },
+        'coarse': {
+            'input_mode': 'global_anchor_resize',
+        },
         'transform': {
-            'time_len': 6016,
+            'trace_len': 256,
+            'time_len': 2048,
             'standardize_eps': 1.0e-8,
         },
         'norm_refs': {
@@ -369,11 +407,11 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
             'offset_ref_m': 2000.0,
         },
         'infer': {
-            'subset_traces': 128,
+            'subset_traces': 256,
             'batch_size': 2,
             'num_workers': 0,
-            'overlap_h': 96,
-            'tile_w': 6016,
+            'overlap_h': 192,
+            'tile_w': 2048,
             'overlap_w': 1024,
             'tiles_per_batch': 4,
             'amp': False,

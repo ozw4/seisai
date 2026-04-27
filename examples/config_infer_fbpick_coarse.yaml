@@ -3,6 +3,9 @@ paths:
     - REPLACE_ME_infer_coarse.sgy
   out_dir: ./_fbpick_coarse_infer_out
 
+coarse:
+  input_mode: global_anchor_resize
+
 dataset:
   use_header_cache: true
   verbose: true
@@ -13,7 +16,8 @@ dataset:
   infer_endian: big
 
 transform:
-  time_len: 6016
+  trace_len: 256
+  time_len: 2048
   standardize_eps: 1.0e-8
 
 norm_refs:
@@ -23,11 +27,11 @@ norm_refs:
 infer:
   ckpt_path: REPLACE_ME_coarse_best.pt
   device: auto
-  subset_traces: 128
+  subset_traces: 256
   batch_size: 1
   num_workers: 0
-  overlap_h: 96
-  tile_w: 6016
+  overlap_h: 192
+  tile_w: 2048
   overlap_w: 1024
   tiles_per_batch: 16
   amp: false

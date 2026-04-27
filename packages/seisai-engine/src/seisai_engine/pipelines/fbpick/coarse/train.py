@@ -27,7 +27,14 @@ from .build_dataset import (
 )
 from .build_model import build_model
 from .build_plan import build_plan
-from .config import CoarseTrainConfig, load_coarse_train_config
+from .config import (
+    COARSE_IN_CHANS,
+    COARSE_INPUT_CHANNELS,
+    COARSE_TIME_LEN,
+    COARSE_TRACE_LEN,
+    CoarseTrainConfig,
+    load_coarse_train_config,
+)
 from .loss import build_criterion
 
 __all__ = [
@@ -310,6 +317,11 @@ def build_train_spec(
         ckpt_extra={
             'output_ids': list(typed.ckpt.output_ids),
             'softmax_axis': str(typed.ckpt.softmax_axis),
+            'coarse_input_mode': str(typed.coarse.input_mode),
+            'coarse_trace_len': COARSE_TRACE_LEN,
+            'coarse_time_len': COARSE_TIME_LEN,
+            'coarse_in_chans': COARSE_IN_CHANS,
+            'coarse_input_channels': list(COARSE_INPUT_CHANNELS),
         },
         print_freq=common.train.print_freq,
     )

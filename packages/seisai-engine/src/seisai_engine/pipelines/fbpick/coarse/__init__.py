@@ -7,7 +7,13 @@ from .build_dataset import (
 from .build_model import build_model
 from .build_plan import build_plan
 from .config import (
+    COARSE_IN_CHANS,
+    COARSE_INPUT_CHANNELS,
+    COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE,
+    COARSE_TIME_LEN,
+    COARSE_TRACE_LEN,
     CoarseInferConfig,
+    CoarseModeCfg,
     CoarseTrainConfig,
     load_coarse_infer_config,
     load_coarse_train_config,
@@ -24,7 +30,13 @@ from .train import (
 )
 
 __all__ = [
+    'COARSE_IN_CHANS',
+    'COARSE_INPUT_CHANNELS',
+    'COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE',
+    'COARSE_TIME_LEN',
+    'COARSE_TRACE_LEN',
     'CoarseInferConfig',
+    'CoarseModeCfg',
     'CoarseTrainBundle',
     'CoarseTrainConfig',
     'build_criterion',
