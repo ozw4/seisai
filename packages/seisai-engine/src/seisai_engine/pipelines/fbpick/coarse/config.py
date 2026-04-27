@@ -45,6 +45,7 @@ __all__ = [
     'CoarseInferRuntimeCfg',
     'CoarseModeCfg',
     'CoarsePaths',
+    'CoarseTraceAnchorCfg',
     'CoarseTrainCfg',
     'CoarseTrainConfig',
     'CoarseTrainInferCfg',
@@ -99,6 +100,14 @@ class CoarseTransformCfg:
 
 
 @dataclass(frozen=True)
+class CoarseTraceAnchorCfg:
+    gap_ratio: float
+    min_gap_m: float | None
+    train_mode: str
+    infer_mode: str
+
+
+@dataclass(frozen=True)
 class CoarseTrainCfg:
     lr: float
     weight_decay: float
@@ -143,6 +152,7 @@ class CoarseTrainConfig:
     paths: CoarsePaths
     dataset: CoarseDatasetCfg
     transform: CoarseTransformCfg
+    trace_anchor: CoarseTraceAnchorCfg
     norm_refs: FBPickNormRefs
     train: CoarseTrainCfg
     infer: CoarseTrainInferCfg
@@ -156,6 +166,7 @@ class CoarseInferConfig:
     paths: CoarsePaths
     dataset: CoarseDatasetCfg
     transform: CoarseTransformCfg
+    trace_anchor: CoarseTraceAnchorCfg
     norm_refs: FBPickNormRefs
     infer: CoarseInferRuntimeCfg
     model_sig: dict[str, Any]
@@ -323,6 +334,73 @@ def _load_transform_cfg(cfg: dict) -> CoarseTransformCfg:
     )
 
 
+def _load_trace_anchor_cfg(cfg: dict) -> CoarseTraceAnchorCfg:
+    anchor_cfg = require_dict(cfg, 'trace_anchor')
+
+    gap_ratio_raw = require_value(
+        anchor_cfg,
+        'gap_ratio',
+        (int, float),
+        type_message='config.trace_anchor.gap_ratio must be float',
+    )
+    if isinstance(gap_ratio_raw, bool):
+        msg = 'config.trace_anchor.gap_ratio must be float'
+        raise TypeError(msg)
+    gap_ratio = float(gap_ratio_raw)
+    if (not math.isfinite(gap_ratio)) or gap_ratio <= 1.0:
+        msg = 'trace_anchor.gap_ratio must be > 1.0'
+        raise ValueError(msg)
+
+    min_gap_raw = require_value(
+        anchor_cfg,
+        'min_gap_m',
+        (int, float),
+        allow_none=True,
+        type_message='config.trace_anchor.min_gap_m must be float or null',
+    )
+    if min_gap_raw is None:
+        min_gap_m = None
+    else:
+        if isinstance(min_gap_raw, bool):
+            msg = 'config.trace_anchor.min_gap_m must be float or null'
+            raise TypeError(msg)
+        min_gap_m = float(min_gap_raw)
+        if (not math.isfinite(min_gap_m)) or min_gap_m <= 0.0:
+            msg = 'trace_anchor.min_gap_m must be null or > 0'
+            raise ValueError(msg)
+
+    train_mode = str(
+        require_value(
+            anchor_cfg,
+            'train_mode',
+            str,
+            type_message='config.trace_anchor.train_mode must be str',
+        )
+    )
+    if train_mode != 'random':
+        msg = 'trace_anchor.train_mode must be "random"'
+        raise ValueError(msg)
+
+    infer_mode = str(
+        require_value(
+            anchor_cfg,
+            'infer_mode',
+            str,
+            type_message='config.trace_anchor.infer_mode must be str',
+        )
+    )
+    if infer_mode != 'center':
+        msg = 'trace_anchor.infer_mode must be "center"'
+        raise ValueError(msg)
+
+    return CoarseTraceAnchorCfg(
+        gap_ratio=gap_ratio,
+        min_gap_m=min_gap_m,
+        train_mode=train_mode,
+        infer_mode=infer_mode,
+    )
+
+
 def _load_model_sig(cfg: dict) -> dict[str, Any]:
     model_cfg = require_dict(cfg, 'model')
     in_chans = int(require_int(model_cfg, 'in_chans'))
@@ -360,6 +438,7 @@ def load_coarse_train_config(cfg: dict) -> CoarseTrainConfig:
         paths=_load_paths_cfg(cfg, allow_missing_infer_pairs=False),
         dataset=_load_dataset_cfg(cfg),
         transform=_load_transform_cfg(cfg),
+        trace_anchor=_load_trace_anchor_cfg(cfg),
         norm_refs=load_norm_refs_cfg(cfg),
         train=CoarseTrainCfg(
             lr=float(require_float(train_cfg, 'lr')),
@@ -412,6 +491,7 @@ def load_coarse_infer_config(cfg: dict) -> CoarseInferConfig:
         paths=_load_paths_cfg(cfg, allow_missing_infer_pairs=True),
         dataset=_load_dataset_cfg(cfg),
         transform=_load_transform_cfg(cfg),
+        trace_anchor=_load_trace_anchor_cfg(cfg),
         norm_refs=load_norm_refs_cfg(cfg),
         infer=CoarseInferRuntimeCfg(
             subset_traces=subset_traces,

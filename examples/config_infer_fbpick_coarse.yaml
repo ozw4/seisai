@@ -20,6 +20,12 @@ transform:
   time_len: 2048
   standardize_eps: 1.0e-8
 
+trace_anchor:
+  gap_ratio: 5.0
+  min_gap_m: null
+  train_mode: random
+  infer_mode: center
+
 norm_refs:
   time_ref_sec: 20.0
   offset_ref_m: 2000.0

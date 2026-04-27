@@ -14,12 +14,19 @@ from .config import (
     COARSE_TRACE_LEN,
     CoarseInferConfig,
     CoarseModeCfg,
+    CoarseTraceAnchorCfg,
     CoarseTrainConfig,
     load_coarse_infer_config,
     load_coarse_train_config,
 )
 from .infer import run_coarse_infer
 from .loss import build_criterion
+from .trace_anchor import (
+    TraceAnchorSelection,
+    TraceSegment,
+    select_trace_anchors,
+    split_trace_segments_by_offset_gap,
+)
 from .train import (
     CoarseTrainBundle,
     build_train_bundle,
@@ -37,8 +44,11 @@ __all__ = [
     'COARSE_TRACE_LEN',
     'CoarseInferConfig',
     'CoarseModeCfg',
+    'CoarseTraceAnchorCfg',
     'CoarseTrainBundle',
     'CoarseTrainConfig',
+    'TraceAnchorSelection',
+    'TraceSegment',
     'build_criterion',
     'build_fbgate',
     'build_labeled_infer_dataset',
@@ -54,4 +64,6 @@ __all__ = [
     'load_train_spec',
     'run_coarse_infer',
     'run_train',
+    'select_trace_anchors',
+    'split_trace_segments_by_offset_gap',
 ]
