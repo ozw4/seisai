@@ -58,3 +58,7 @@ tracking/
 
 test_data/
 proc/mobara
+.work
+.work/
+vendor/issue_forge
+vendor/issue_forge/
