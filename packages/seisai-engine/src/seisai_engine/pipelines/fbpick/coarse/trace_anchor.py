@@ -30,8 +30,8 @@ class TraceAnchorSelection:
     trace_valid: np.ndarray
     segment_id: np.ndarray
     segments: tuple[TraceSegment, ...]
-    anchor_bin_start_pos: np.ndarray | None = None
-    anchor_bin_stop_pos: np.ndarray | None = None
+    anchor_bin_start_pos: np.ndarray
+    anchor_bin_stop_pos: np.ndarray
 
 
 def _validate_offsets(offsets_m: np.ndarray) -> np.ndarray:
