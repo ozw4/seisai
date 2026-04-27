@@ -38,6 +38,7 @@ ruff.toml
 *.pth
 *.csv
 *.json
+*.npz
 data/
 result/
 tmp_code/
@@ -57,3 +58,7 @@ tracking/
 
 test_data/
 proc/mobara
+.work
+.work/
+vendor/issue_forge
+vendor/issue_forge/
