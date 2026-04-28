@@ -124,7 +124,7 @@ def test_run_fbpick_coarse_infer_cli_is_thin_wrapper(
     expected_out_path = tmp_path / 'coarse_out' / 'site54__synthetic.coarse.npz'
     out_path.parent.mkdir()
 
-    def _fake_run_coarse_infer(*, model, cfg, device):
+    def _fake_run_coarse_infer(*, model, cfg, device, ckpt):
         out_path.touch()
         return out_path
 
@@ -397,7 +397,7 @@ def test_run_fbpick_coarse_infer_cli_loops_over_multiple_inputs(
     ]
     out_paths[0].parent.mkdir()
 
-    def _fake_run_coarse_infer(*, model, cfg, device):
+    def _fake_run_coarse_infer(*, model, cfg, device, ckpt):
         captured_cfgs.append(cfg)
         out_path = out_paths[len(captured_cfgs) - 1]
         out_path.touch()
