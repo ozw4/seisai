@@ -195,6 +195,8 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
         )
         trace_valid = np.asarray(selection.trace_valid, dtype=np.bool_)
         anchor_raw_indices = np.asarray(selection.anchor_raw_indices, dtype=np.int64)
+        anchor_source_pos = np.asarray(selection.anchor_source_pos, dtype=np.int64)
+        anchor_offsets_m = np.asarray(selection.anchor_offsets_m, dtype=np.float32)
 
         valid_indices = anchor_raw_indices[trace_valid]
         subset_loader = TraceSubsetLoader(
@@ -227,7 +229,7 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
 
         fb_idx_raw_for_anchors = np.full((self.trace_len,), -1, dtype=np.int64)
         valid_source_pos = np.asarray(
-            selection.anchor_source_pos[trace_valid],
+            anchor_source_pos[trace_valid],
             dtype=np.int64,
         )
         fb_idx_raw_for_anchors[trace_valid] = fb_full[valid_source_pos]
@@ -251,7 +253,7 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
             'trace_valid': trace_valid,
             'fb_idx': fb_idx_raw_for_anchors,
             'fb_idx_view': fb_idx_coarse_for_anchors,
-            'offsets_view': np.asarray(selection.anchor_offsets_m, dtype=np.float32),
+            'offsets_view': anchor_offsets_m,
             'time_view': np.asarray(grid.time_view_sec, dtype=np.float32),
             'dt_sec': np.float32(grid.dt_sec),
             'dt_eff_sec': np.float32(grid.dt_eff_sec),
@@ -259,15 +261,6 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
             'coarse_time_len': int(grid.coarse_time_len),
             'raw_to_coarse_factor': np.float32(grid.raw_to_coarse_factor),
             'coarse_to_raw_factor': np.float32(grid.coarse_to_raw_factor),
-            'anchor_raw_indices': anchor_raw_indices,
-            'anchor_source_pos': np.asarray(
-                selection.anchor_source_pos,
-                dtype=np.int64,
-            ),
-            'anchor_offsets_m': np.asarray(
-                selection.anchor_offsets_m,
-                dtype=np.float32,
-            ),
             'segment_id': np.asarray(selection.segment_id, dtype=np.int64),
             'anchor_bin_start_pos': np.asarray(
                 selection.anchor_bin_start_pos,
@@ -299,7 +292,7 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
         sample_for_plan = self.sample_flow.build_plan_input_base(
             meta=meta,
             dt_sec=float(grid.dt_eff_sec),
-            offsets=np.asarray(selection.anchor_offsets_m, dtype=np.float32),
+            offsets=anchor_offsets_m,
             indices=anchor_raw_indices,
             key_name=str(sample['key_name']),
             secondary_key=str(sample['secondary_key']),
@@ -313,11 +306,13 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
         )
         self.sample_flow.run_plan(sample_for_plan, rng=self._rng)
 
+        # ``indices`` is the generic dataset convention for selected raw trace ids.
+        # Keep ``anchor_raw_indices`` as the explicit global-anchor debug alias.
         out = self.sample_flow.build_output_base(
             sample_for_plan,
             meta=meta,
             dt_sec=float(grid.dt_eff_sec),
-            offsets=np.asarray(selection.anchor_offsets_m, dtype=np.float32),
+            offsets=anchor_offsets_m,
             indices=anchor_raw_indices,
             key_name=str(sample['key_name']),
             secondary_key=str(sample['secondary_key']),
@@ -328,12 +323,8 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
                 'file_path': info.path,
                 'did_superwindow': bool(sample['did_super']),
                 'anchor_raw_indices': torch.from_numpy(anchor_raw_indices),
-                'anchor_source_pos': torch.from_numpy(
-                    np.asarray(selection.anchor_source_pos, dtype=np.int64)
-                ),
-                'anchor_offsets_m': torch.from_numpy(
-                    np.asarray(selection.anchor_offsets_m, dtype=np.float32)
-                ),
+                'anchor_source_pos': torch.from_numpy(anchor_source_pos),
+                'anchor_offsets_m': torch.from_numpy(anchor_offsets_m),
             },
         )
         self._add_trace_valid_output(out, trace_valid)

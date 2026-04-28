@@ -158,6 +158,53 @@ def test_load_coarse_train_config_returns_fixed_contract_values(
     assert typed.ckpt.softmax_axis == 'time'
 
 
+@pytest.mark.parametrize(
+    'mutate_paths',
+    [
+        lambda paths: paths.__setitem__('infer_segy_files', ['valid.sgy']),
+        lambda paths: paths.__setitem__('infer_fb_files', ['valid.npy']),
+    ],
+)
+def test_load_coarse_train_config_rejects_partial_infer_pairs(
+    tmp_path: Path,
+    mutate_paths,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='train.sgy', fb_path='train.npy')
+    mutate_paths(cfg['paths'])
+
+    with pytest.raises(ValueError) as exc:
+        load_coarse_train_config(cfg)
+
+    assert (
+        'paths.infer_segy_files and paths.infer_fb_files must be provided together'
+        in str(exc.value)
+    )
+
+
+def test_load_coarse_train_config_defaults_missing_infer_pairs_to_training_pairs(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='train.sgy', fb_path='train.npy')
+
+    typed = load_coarse_train_config(cfg)
+
+    assert typed.paths.infer_segy_files == typed.paths.segy_files
+    assert typed.paths.infer_fb_files == typed.paths.fb_files
+
+
+def test_load_coarse_train_config_uses_explicit_infer_pairs(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='train.sgy', fb_path='train.npy')
+    cfg['paths']['infer_segy_files'] = ['valid.sgy']
+    cfg['paths']['infer_fb_files'] = ['valid.npy']
+
+    typed = load_coarse_train_config(cfg)
+
+    assert typed.paths.infer_segy_files == ('valid.sgy',)
+    assert typed.paths.infer_fb_files == ('valid.npy',)
+
+
 def test_load_coarse_infer_config_returns_global_anchor_contract(
     tmp_path: Path,
 ) -> None:
@@ -313,6 +360,24 @@ def test_global_anchor_train_dataset_returns_fixed_shape_and_masks_pad_rows(
     trace_valid = np.asarray(sample['meta']['trace_valid'], dtype=np.bool_)
     assert tuple(sample['input'].shape) == (3, 256, 2048)
     assert tuple(sample['target'].shape) == (1, 256, 2048)
+    assert 'anchor_raw_indices' in sample
+    assert 'anchor_source_pos' in sample
+    assert 'anchor_offsets_m' in sample
+    assert 'anchor_raw_indices' not in sample['meta']
+    assert 'anchor_source_pos' not in sample['meta']
+    assert 'anchor_offsets_m' not in sample['meta']
+    for key in (
+        'trace_valid',
+        'fb_idx_view',
+        'offsets_view',
+        'time_view',
+        'dt_eff_sec',
+    ):
+        assert key in sample['meta']
+    np.testing.assert_array_equal(
+        np.asarray(sample['indices'], dtype=np.int64),
+        sample['anchor_raw_indices'].numpy(),
+    )
     np.testing.assert_array_equal(trace_valid[:n_traces], np.ones(n_traces, dtype=bool))
     assert not np.any(trace_valid[n_traces:])
     torch.testing.assert_close(
@@ -337,6 +402,54 @@ def test_global_anchor_train_dataset_returns_fixed_shape_and_masks_pad_rows(
     assert sample['meta']['time_view'][-1] == pytest.approx((n_samples - 1) * 0.002)
     assert sample['meta']['fb_idx_coarse_for_anchors'][0] == 0
     assert sample['meta']['fb_idx_coarse_for_anchors'][n_traces - 1] == 2047
+
+
+def test_build_train_bundle_uses_train_and_infer_endian_for_dataset_builders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import seisai_engine.pipelines.fbpick.coarse.train as coarse_train
+
+    cfg = _make_training_config(tmp_path, segy_path='train.sgy', fb_path='train.npy')
+    cfg['paths']['infer_segy_files'] = ['valid.sgy']
+    cfg['paths']['infer_fb_files'] = ['valid.npy']
+    cfg['dataset']['train_endian'] = 'little'
+    cfg['dataset']['infer_endian'] = 'big'
+
+    seen_endian: dict[str, str] = {}
+
+    class StubDataset:
+        def close(self) -> None:
+            return None
+
+    def fake_build_train_dataset(**kwargs):
+        seen_endian['train'] = kwargs['segy_endian']
+        return StubDataset()
+
+    def fake_build_labeled_infer_dataset(**kwargs):
+        seen_endian['infer'] = kwargs['segy_endian']
+        return StubDataset()
+
+    monkeypatch.setattr(coarse_train, 'build_train_dataset', fake_build_train_dataset)
+    monkeypatch.setattr(
+        coarse_train,
+        'build_labeled_infer_dataset',
+        fake_build_labeled_infer_dataset,
+    )
+    monkeypatch.setattr(
+        coarse_train,
+        'build_model',
+        lambda _model_sig: torch.nn.Conv2d(3, 1, kernel_size=1),
+    )
+
+    bundle = coarse_train.build_train_bundle(
+        cfg,
+        base_dir=tmp_path,
+        device=torch.device('cpu'),
+    )
+
+    assert seen_endian == {'train': 'little', 'infer': 'big'}
+    assert bundle.ds_train_full is not bundle.ds_infer_full
 
 
 def test_global_anchor_train_dataset_uses_random_anchors(tmp_path: Path) -> None:

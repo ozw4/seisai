@@ -63,6 +63,10 @@ COARSE_INPUT_CHANNELS = ('waveform', 'offset_ch', 'time_ch')
 COARSE_CKPT_PIPELINE = 'fbpick'
 COARSE_CKPT_OUTPUT_IDS = ('P',)
 COARSE_CKPT_SOFTMAX_AXIS = 'time'
+INFER_PAIR_MESSAGE = (
+    'paths.infer_segy_files and paths.infer_fb_files must be provided together, '
+    'or omit both to reuse the training segy/fb pairs'
+)
 
 
 @dataclass(frozen=True)
@@ -228,6 +232,11 @@ def _load_paths_cfg(cfg: dict, *, allow_missing_infer_pairs: bool) -> CoarsePath
 
     infer_segy_raw = paths.get('infer_segy_files')
     infer_fb_raw = paths.get('infer_fb_files')
+    infer_segy_provided = infer_segy_raw is not None
+    infer_fb_provided = infer_fb_raw is not None
+    if not allow_missing_infer_pairs and infer_segy_provided != infer_fb_provided:
+        raise ValueError(INFER_PAIR_MESSAGE)
+
     if infer_segy_raw is None:
         infer_segy_files = None
     else:
@@ -237,7 +246,7 @@ def _load_paths_cfg(cfg: dict, *, allow_missing_infer_pairs: bool) -> CoarsePath
     else:
         infer_fb_files = tuple(require_list_str(paths, 'infer_fb_files'))
 
-    if not allow_missing_infer_pairs and infer_segy_files is None:
+    if not allow_missing_infer_pairs and not infer_segy_provided:
         infer_segy_files = segy_files
         infer_fb_files = fb_files
     if infer_segy_files is not None and infer_fb_files is not None:

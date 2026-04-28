@@ -32,6 +32,7 @@ from .config import (
     COARSE_INPUT_CHANNELS,
     COARSE_TIME_LEN,
     COARSE_TRACE_LEN,
+    INFER_PAIR_MESSAGE,
     CoarseTrainConfig,
     load_coarse_train_config,
 )
@@ -181,11 +182,7 @@ def build_train_bundle(
         msg = 'paths.fb_files is required for coarse training'
         raise ValueError(msg)
     if typed.paths.infer_segy_files is None or typed.paths.infer_fb_files is None:
-        msg = (
-            'coarse train infer dataset requires labels; provide infer files '
-            'or fb_files'
-        )
-        raise ValueError(msg)
+        raise ValueError(INFER_PAIR_MESSAGE)
 
     plan = build_plan(
         sigma_ms=typed.train.fb_sigma_ms,
@@ -238,7 +235,7 @@ def build_train_bundle(
         max_trials=typed.dataset.max_trials,
         use_header_cache=typed.dataset.use_header_cache,
         waveform_mode=typed.dataset.waveform_mode,
-        segy_endian=typed.dataset.train_endian,
+        segy_endian=typed.dataset.infer_endian,
     )
 
     model_sig = dict(typed.model_sig)
