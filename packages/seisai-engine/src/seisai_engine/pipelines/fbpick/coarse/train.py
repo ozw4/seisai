@@ -8,7 +8,6 @@ import torch
 from seisai_utils.listfiles import expand_cfg_listfiles, get_cfg_listfile_meta
 
 from seisai_engine.optim import build_optimizer
-from seisai_engine.viewer.fbpick import save_fbpick_debug_png
 from seisai_engine.pipelines.common import (
     TrainSkeletonSpec,
     load_cfg_with_base_dir,
@@ -19,6 +18,7 @@ from seisai_engine.pipelines.common import (
     run_train_skeleton,
     seed_all,
 )
+from seisai_engine.viewer.fbpick import save_fbpick_debug_png
 
 from .build_dataset import (
     build_fbgate,
@@ -181,7 +181,10 @@ def build_train_bundle(
         msg = 'paths.fb_files is required for coarse training'
         raise ValueError(msg)
     if typed.paths.infer_segy_files is None or typed.paths.infer_fb_files is None:
-        msg = 'coarse train infer dataset requires labels; provide infer files or fb_files'
+        msg = (
+            'coarse train infer dataset requires labels; provide infer files '
+            'or fb_files'
+        )
         raise ValueError(msg)
 
     plan = build_plan(
@@ -198,8 +201,12 @@ def build_train_bundle(
         plan=plan,
         fbgate=fbgate,
         subset_traces=typed.train.subset_traces,
+        trace_len=typed.transform.trace_len,
         time_len=typed.transform.time_len,
         standardize_eps=typed.transform.standardize_eps,
+        anchor_mode=typed.trace_anchor.train_mode,
+        gap_ratio=typed.trace_anchor.gap_ratio,
+        min_gap_m=typed.trace_anchor.min_gap_m,
         trace_decimate_prob=typed.train.trace_decimate_prob,
         trace_decimate_stride_range=typed.train.trace_decimate_stride_range,
         primary_keys=typed.dataset.primary_keys,
@@ -218,8 +225,12 @@ def build_train_bundle(
         plan=plan,
         fbgate=fbgate,
         subset_traces=typed.infer.subset_traces,
+        trace_len=typed.transform.trace_len,
         time_len=typed.transform.time_len,
         standardize_eps=typed.transform.standardize_eps,
+        anchor_mode=typed.trace_anchor.infer_mode,
+        gap_ratio=typed.trace_anchor.gap_ratio,
+        min_gap_m=typed.trace_anchor.min_gap_m,
         primary_keys=typed.dataset.primary_keys,
         secondary_key_fixed=typed.dataset.secondary_key_fixed,
         verbose=typed.dataset.verbose,

@@ -7,12 +7,10 @@ import numpy as np
 import pytest
 import segyio
 import torch
-from torch.utils.data import DataLoader, Subset
-
 from seisai_engine.pipelines.common import load_checkpoint
-from seisai_engine.pipelines.fbpick.common import COARSE_REQUIRED_KEYS, load_coarse_npz
 from seisai_engine.pipelines.fbpick.coarse import (
     build_fbgate,
+    build_labeled_infer_dataset,
     build_plan,
     build_train_dataset,
     load_coarse_infer_config,
@@ -21,7 +19,9 @@ from seisai_engine.pipelines.fbpick.coarse import (
     run_coarse_infer,
     run_train,
 )
+from seisai_engine.pipelines.fbpick.common import COARSE_REQUIRED_KEYS, load_coarse_npz
 from seisai_engine.train_loop import train_one_epoch
+from torch.utils.data import DataLoader, Subset
 
 
 def write_unstructured_segy(path: str, traces: np.ndarray, dt_us: int) -> None:
@@ -261,17 +261,22 @@ def test_coarse_build_plan_produces_expected_shapes() -> None:
     assert tuple(sample['target'].shape) == (1, 4, 8)
 
 
-def test_pick_aware_crop_keeps_all_valid_picks_in_view(tmp_path: Path) -> None:
+def test_global_anchor_train_dataset_returns_fixed_shape_and_masks_pad_rows(
+    tmp_path: Path,
+) -> None:
     n_traces = 128
-    n_samples = 7000
+    n_samples = 4097
     traces = np.stack(
-        [np.linspace(-1.0, 1.0, n_samples, dtype=np.float32) + i for i in range(n_traces)],
+        [
+            np.linspace(-1.0, 1.0, n_samples, dtype=np.float32) + i
+            for i in range(n_traces)
+        ],
         axis=0,
     )
-    segy_path = str(tmp_path / 'pick_crop.sgy')
+    segy_path = str(tmp_path / 'global_train_pad.sgy')
     write_unstructured_segy(segy_path, traces, dt_us=2000)
-    fb = np.linspace(6400, 6500, n_traces, dtype=np.int64)
-    fb_path = str(tmp_path / 'pick_crop_fb.npy')
+    fb = np.linspace(0, n_samples - 1, n_traces, dtype=np.int64)
+    fb_path = str(tmp_path / 'global_train_pad_fb.npy')
     np.save(fb_path, fb)
 
     ds = build_train_dataset(
@@ -280,9 +285,13 @@ def test_pick_aware_crop_keeps_all_valid_picks_in_view(tmp_path: Path) -> None:
         sampling_overrides=None,
         plan=_make_plan(),
         fbgate=build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
-        subset_traces=128,
-        time_len=6016,
+        subset_traces=256,
+        trace_len=256,
+        time_len=2048,
         standardize_eps=1.0e-8,
+        anchor_mode='random',
+        gap_ratio=5.0,
+        min_gap_m=None,
         trace_decimate_prob=0.0,
         trace_decimate_stride_range=(1, 1),
         primary_keys=('ffid',),
@@ -301,13 +310,139 @@ def test_pick_aware_crop_keeps_all_valid_picks_in_view(tmp_path: Path) -> None:
     finally:
         ds.close()
 
-    fb_idx_view = np.asarray(sample['meta']['fb_idx_view'], dtype=np.int64)
     trace_valid = np.asarray(sample['meta']['trace_valid'], dtype=np.bool_)
-    assert int(sample['meta']['start']) > 0
-    assert np.all(fb_idx_view[trace_valid] > 0)
-    assert np.all(fb_idx_view[trace_valid] < 6016)
-    assert tuple(sample['input'].shape) == (3, 128, 6016)
-    assert tuple(sample['target'].shape) == (1, 128, 6016)
+    assert tuple(sample['input'].shape) == (3, 256, 2048)
+    assert tuple(sample['target'].shape) == (1, 256, 2048)
+    np.testing.assert_array_equal(trace_valid[:n_traces], np.ones(n_traces, dtype=bool))
+    assert not np.any(trace_valid[n_traces:])
+    torch.testing.assert_close(
+        sample['input'][0, n_traces:],
+        torch.zeros_like(sample['input'][0, n_traces:]),
+    )
+    torch.testing.assert_close(
+        sample['input'][1, n_traces:],
+        torch.zeros_like(sample['input'][1, n_traces:]),
+    )
+    torch.testing.assert_close(
+        sample['target'][:, n_traces:],
+        torch.zeros_like(sample['target'][:, n_traces:]),
+    )
+    np.testing.assert_array_equal(
+        sample['meta']['fb_idx_coarse_for_anchors'][n_traces:],
+        np.full((256 - n_traces,), -1, dtype=np.int64),
+    )
+    assert int(sample['meta']['raw_time_len']) == n_samples
+    assert int(sample['meta']['coarse_time_len']) == 2048
+    assert sample['meta']['time_view'][0] == pytest.approx(0.0)
+    assert sample['meta']['time_view'][-1] == pytest.approx((n_samples - 1) * 0.002)
+    assert sample['meta']['fb_idx_coarse_for_anchors'][0] == 0
+    assert sample['meta']['fb_idx_coarse_for_anchors'][n_traces - 1] == 2047
+
+
+def test_global_anchor_train_dataset_uses_random_anchors(tmp_path: Path) -> None:
+    n_traces = 512
+    n_samples = 2049
+    traces = np.stack(
+        [
+            np.linspace(-1.0, 1.0, n_samples, dtype=np.float32) + i
+            for i in range(n_traces)
+        ],
+        axis=0,
+    )
+    segy_path = str(tmp_path / 'global_train_random.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+    fb = np.full((n_traces,), 1000, dtype=np.int64)
+    fb_path = str(tmp_path / 'global_train_random_fb.npy')
+    np.save(fb_path, fb)
+
+    ds = build_train_dataset(
+        segy_files=[segy_path],
+        fb_files=[fb_path],
+        sampling_overrides=None,
+        plan=_make_plan(),
+        fbgate=build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
+        subset_traces=256,
+        trace_len=256,
+        time_len=2048,
+        standardize_eps=1.0e-8,
+        anchor_mode='random',
+        gap_ratio=5.0,
+        min_gap_m=None,
+        trace_decimate_prob=0.0,
+        trace_decimate_stride_range=(1, 1),
+        primary_keys=('ffid',),
+        secondary_key_fixed=False,
+        verbose=False,
+        progress=False,
+        max_trials=8,
+        use_header_cache=False,
+        waveform_mode='eager',
+        segy_endian='big',
+    )
+
+    try:
+        ds._rng = np.random.default_rng(123)
+        first = ds[0]
+        ds._rng = np.random.default_rng(124)
+        second = ds[0]
+    finally:
+        ds.close()
+
+    assert tuple(first['input'].shape) == (3, 256, 2048)
+    assert tuple(second['target'].shape) == (1, 256, 2048)
+    assert not torch.equal(first['anchor_source_pos'], second['anchor_source_pos'])
+
+
+def test_global_anchor_validation_dataset_is_deterministic(tmp_path: Path) -> None:
+    n_traces = 512
+    n_samples = 2049
+    traces = np.stack(
+        [
+            np.linspace(-1.0, 1.0, n_samples, dtype=np.float32) + i
+            for i in range(n_traces)
+        ],
+        axis=0,
+    )
+    segy_path = str(tmp_path / 'global_validation.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+    fb = np.full((n_traces,), 1000, dtype=np.int64)
+    fb_path = str(tmp_path / 'global_validation_fb.npy')
+    np.save(fb_path, fb)
+
+    ds = build_labeled_infer_dataset(
+        segy_files=[segy_path],
+        fb_files=[fb_path],
+        sampling_overrides=None,
+        plan=_make_plan(),
+        fbgate=build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
+        subset_traces=256,
+        trace_len=256,
+        time_len=2048,
+        standardize_eps=1.0e-8,
+        anchor_mode='center',
+        gap_ratio=5.0,
+        min_gap_m=None,
+        primary_keys=('ffid',),
+        secondary_key_fixed=False,
+        verbose=False,
+        progress=False,
+        max_trials=8,
+        use_header_cache=False,
+        waveform_mode='eager',
+        segy_endian='big',
+    )
+
+    try:
+        first = ds[0]
+        second = ds[0]
+    finally:
+        ds.close()
+
+    assert tuple(first['input'].shape) == (3, 256, 2048)
+    assert tuple(first['target'].shape) == (1, 256, 2048)
+    torch.testing.assert_close(first['input'], second['input'])
+    torch.testing.assert_close(first['target'], second['target'])
+    assert torch.equal(first['anchor_source_pos'], second['anchor_source_pos'])
 
 
 def test_coarse_train_smoke_one_epoch(tmp_path: Path) -> None:
