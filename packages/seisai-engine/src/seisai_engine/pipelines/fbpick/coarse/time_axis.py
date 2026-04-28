@@ -268,8 +268,8 @@ def build_time_channel(
     time_view_sec: np.ndarray,
     *,
     trace_len: int,
-    normalize: bool,
 ) -> np.ndarray:
+    """Build a raw seconds time channel by broadcasting ``time_view_sec`` over traces."""
     t = np.asarray(time_view_sec, dtype=np.float32)
     if t.ndim != 1:
         msg = f'time_view_sec must be 1D, got shape={t.shape}'
@@ -285,14 +285,7 @@ def build_time_channel(
         msg = 'trace_len must be > 0'
         raise ValueError(msg)
 
-    values = t
-    if bool(normalize):
-        denom = float(t[-1])
-        if not math.isfinite(denom) or denom <= 0.0:
-            msg = 'time_view_sec[-1] must be finite and > 0 when normalize=True'
-            raise ValueError(msg)
-        values = np.asarray(t / np.float32(denom), dtype=np.float32)
-    return np.repeat(values[None, :], h, axis=0).astype(np.float32, copy=False)
+    return np.repeat(t[None, :], h, axis=0).astype(np.float32, copy=False)
 
 
 def build_coarse_fb_labels_for_anchors(

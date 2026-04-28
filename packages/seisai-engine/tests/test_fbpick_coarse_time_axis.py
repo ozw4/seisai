@@ -85,17 +85,42 @@ def test_project_indices_rejects_non_integer_and_out_of_range_values() -> None:
         )
 
 
-def test_build_time_channel_repeats_seconds_or_normalized_time() -> None:
-    time_view = np.asarray([0.0, 0.25, 0.5], dtype=np.float32)
+def test_build_time_channel_repeats_raw_seconds() -> None:
+    time_view = np.asarray([0.0, 0.5, 1.0, 1.5], dtype=np.float32)
 
-    seconds = build_time_channel(time_view, trace_len=2, normalize=False)
-    normalized = build_time_channel(time_view, trace_len=2, normalize=True)
+    out = build_time_channel(time_view, trace_len=3)
 
-    assert seconds.shape == (2, 3)
-    assert seconds.dtype == np.float32
-    np.testing.assert_allclose(seconds[0], time_view)
-    np.testing.assert_allclose(seconds[1], time_view)
-    np.testing.assert_allclose(normalized[0], np.asarray([0.0, 0.5, 1.0]))
+    assert out.shape == (3, 4)
+    assert out.dtype == np.float32
+    np.testing.assert_allclose(out[0], time_view)
+    np.testing.assert_allclose(out[1], time_view)
+    np.testing.assert_allclose(out[2], time_view)
+
+
+def test_build_time_channel_does_not_normalize_by_last_time() -> None:
+    time_view = np.asarray([0.0, 3.0, 6.0], dtype=np.float32)
+
+    out = build_time_channel(time_view, trace_len=2)
+
+    np.testing.assert_allclose(out[:, -1], np.asarray([6.0, 6.0], dtype=np.float32))
+    assert not np.any(out[:, -1] == np.float32(1.0))
+
+
+def test_build_time_channel_rejects_invalid_inputs() -> None:
+    with pytest.raises(ValueError, match='1D'):
+        build_time_channel(np.zeros((2, 2), dtype=np.float32), trace_len=2)
+
+    with pytest.raises(ValueError, match='length'):
+        build_time_channel(np.asarray([0.0], dtype=np.float32), trace_len=2)
+
+    with pytest.raises(ValueError, match='finite'):
+        build_time_channel(np.asarray([0.0, np.nan], dtype=np.float32), trace_len=2)
+
+    with pytest.raises(ValueError, match='finite'):
+        build_time_channel(np.asarray([0.0, np.inf], dtype=np.float32), trace_len=2)
+
+    with pytest.raises(ValueError, match='trace_len'):
+        build_time_channel(np.asarray([0.0, 1.0], dtype=np.float32), trace_len=0)
 
 
 def test_build_coarse_fb_labels_for_anchors_ignores_invalid_trace_rows() -> None:
