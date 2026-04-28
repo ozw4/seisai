@@ -1,4 +1,5 @@
 from .build_dataset import (
+    GlobalAnchorCoarseDataset,
     build_fbgate,
     build_labeled_infer_dataset,
     build_raw_infer_dataset,
@@ -46,9 +47,9 @@ from .train import (
 )
 
 __all__ = [
-    'COARSE_IN_CHANS',
     'COARSE_INPUT_CHANNELS',
     'COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE',
+    'COARSE_IN_CHANS',
     'COARSE_TIME_LEN',
     'COARSE_TRACE_LEN',
     'CoarseInferConfig',
@@ -57,12 +58,13 @@ __all__ = [
     'CoarseTraceAnchorCfg',
     'CoarseTrainBundle',
     'CoarseTrainConfig',
+    'GlobalAnchorCoarseDataset',
     'TraceAnchorSelection',
     'TraceSegment',
-    'build_criterion',
-    'build_fbgate',
     'build_coarse_fb_labels_for_anchors',
     'build_coarse_time_grid',
+    'build_criterion',
+    'build_fbgate',
     'build_labeled_infer_dataset',
     'build_model',
     'build_plan',

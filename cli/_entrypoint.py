@@ -21,3 +21,4 @@ def run_pipeline_train_entrypoint(
 
 	pipeline_args = ['--config', str(args.config)]
 	pipeline_args += unknown
+	pipeline_main(pipeline_args)
