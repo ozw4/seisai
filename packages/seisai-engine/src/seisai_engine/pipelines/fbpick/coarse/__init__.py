@@ -1,9 +1,11 @@
 from .build_dataset import (
     GlobalAnchorCoarseDataset,
+    GlobalAnchorCoarseRawInferDataset,
     build_fbgate,
     build_labeled_infer_dataset,
     build_raw_infer_dataset,
     build_train_dataset,
+    collate_input_meta_list,
 )
 from .build_model import build_model
 from .build_plan import build_plan
@@ -20,7 +22,11 @@ from .config import (
     load_coarse_infer_config,
     load_coarse_train_config,
 )
-from .infer import run_coarse_infer
+from .infer import (
+    restore_anchor_predictions_to_full_traces,
+    run_coarse_infer,
+    validate_checkpoint_for_global_anchor_infer,
+)
 from .loss import build_criterion
 from .time_axis import (
     CoarseTimeGrid,
@@ -59,6 +65,7 @@ __all__ = [
     'CoarseTrainBundle',
     'CoarseTrainConfig',
     'GlobalAnchorCoarseDataset',
+    'GlobalAnchorCoarseRawInferDataset',
     'TraceAnchorSelection',
     'TraceSegment',
     'build_coarse_fb_labels_for_anchors',
@@ -73,6 +80,7 @@ __all__ = [
     'build_train_bundle',
     'build_train_dataset',
     'build_train_spec',
+    'collate_input_meta_list',
     'load_coarse_infer_config',
     'load_coarse_train_config',
     'load_train_bundle',
@@ -80,8 +88,10 @@ __all__ = [
     'project_coarse_indices_to_raw_time',
     'project_fb_indices_to_coarse_time',
     'resample_waveform_time_axis',
+    'restore_anchor_predictions_to_full_traces',
     'run_coarse_infer',
     'run_train',
     'select_trace_anchors',
     'split_trace_segments_by_offset_gap',
+    'validate_checkpoint_for_global_anchor_infer',
 ]

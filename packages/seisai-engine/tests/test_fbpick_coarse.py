@@ -12,12 +12,18 @@ from seisai_engine.pipelines.fbpick.coarse import (
     build_fbgate,
     build_labeled_infer_dataset,
     build_plan,
+    build_raw_infer_dataset,
     build_train_dataset,
+    collate_input_meta_list,
     load_coarse_infer_config,
     load_coarse_train_config,
     load_train_bundle,
     run_coarse_infer,
     run_train,
+)
+from seisai_engine.pipelines.fbpick.coarse.infer import (
+    restore_anchor_predictions_to_full_traces,
+    validate_checkpoint_for_global_anchor_infer,
 )
 from seisai_engine.pipelines.fbpick.common import COARSE_REQUIRED_KEYS, load_coarse_npz
 from seisai_engine.train_loop import train_one_epoch
@@ -558,6 +564,121 @@ def test_global_anchor_validation_dataset_is_deterministic(tmp_path: Path) -> No
     assert torch.equal(first['anchor_source_pos'], second['anchor_source_pos'])
 
 
+def test_global_anchor_raw_infer_dataset_returns_fixed_shape_without_target(
+    tmp_path: Path,
+) -> None:
+    n_traces = 128
+    n_samples = 2049
+    traces = np.stack(
+        [
+            np.linspace(-1.0, 1.0, n_samples, dtype=np.float32) + i
+            for i in range(n_traces)
+        ],
+        axis=0,
+    )
+    segy_path = str(tmp_path / 'raw_global_infer.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+
+    ds = build_raw_infer_dataset(
+        segy_files=[segy_path],
+        plan=_make_plan(),
+        trace_len=256,
+        time_len=2048,
+        standardize_eps=1.0e-8,
+        gap_ratio=5.0,
+        min_gap_m=None,
+        primary_keys=('ffid',),
+        waveform_mode='eager',
+        segy_endian='big',
+        use_header_cache=False,
+    )
+
+    try:
+        first = ds[0]
+        second = ds[0]
+    finally:
+        ds.close()
+
+    assert tuple(first['input'].shape) == (3, 256, 2048)
+    assert 'target' not in first
+    assert tuple(first['meta']['raw_trace_indices'].shape) == (n_traces,)
+    assert tuple(first['meta']['anchor_raw_indices'].shape) == (256,)
+    assert tuple(first['meta']['anchor_source_pos'].shape) == (256,)
+    np.testing.assert_array_equal(
+        first['meta']['anchor_source_pos'],
+        second['meta']['anchor_source_pos'],
+    )
+    torch.testing.assert_close(first['input'], second['input'])
+    trace_valid = np.asarray(first['meta']['trace_valid'], dtype=np.bool_)
+    assert np.count_nonzero(trace_valid) == n_traces
+    assert not np.any(trace_valid[n_traces:])
+
+
+def test_global_anchor_raw_infer_loader_stacks_fixed_shape(tmp_path: Path) -> None:
+    n_traces = 256
+    n_samples = 2048
+    traces = np.stack(
+        [
+            np.linspace(-1.0, 1.0, n_samples, dtype=np.float32) + i
+            for i in range(n_traces)
+        ],
+        axis=0,
+    )
+    segy_path = str(tmp_path / 'raw_global_loader.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+
+    ds = build_raw_infer_dataset(
+        segy_files=[segy_path],
+        plan=_make_plan(),
+        trace_len=256,
+        time_len=2048,
+        standardize_eps=1.0e-8,
+        gap_ratio=5.0,
+        min_gap_m=None,
+        primary_keys=('ffid',),
+        waveform_mode='eager',
+        segy_endian='big',
+        use_header_cache=False,
+    )
+
+    try:
+        loader = DataLoader(
+            ds,
+            batch_size=1,
+            shuffle=False,
+            num_workers=0,
+            collate_fn=collate_input_meta_list,
+        )
+        x_bchw, metas = next(iter(loader))
+    finally:
+        ds.close()
+
+    assert tuple(x_bchw.shape) == (1, 3, 256, 2048)
+    assert len(metas) == 1
+    assert 'raw_trace_indices' in metas[0]
+
+
+def test_restore_anchor_predictions_to_full_traces_interpolates_within_segments() -> None:
+    raw_idx, pick_i, pmax = restore_anchor_predictions_to_full_traces(
+        raw_trace_indices=np.arange(20, dtype=np.int64),
+        anchor_source_pos=np.array([0, 9, 10, 19], dtype=np.int64),
+        trace_valid=np.array([True, True, True, True], dtype=np.bool_),
+        segment_id=np.array([0, 0, 1, 1], dtype=np.int64),
+        anchor_bin_start_pos=np.array([0, 5, 10, 15], dtype=np.int64),
+        anchor_bin_stop_pos=np.array([5, 10, 15, 20], dtype=np.int64),
+        anchor_pick_i_raw=np.array([100, 190, 300, 390], dtype=np.int64),
+        anchor_pmax=np.array([0.1, 0.9, 0.2, 0.8], dtype=np.float32),
+        n_samples_orig=512,
+    )
+
+    np.testing.assert_array_equal(raw_idx, np.arange(20, dtype=np.int64))
+    assert pick_i[9] == 190
+    assert pick_i[10] == 300
+    assert pick_i[9] != pick_i[10]
+    assert pmax[9] == pytest.approx(0.9)
+    assert pmax[10] == pytest.approx(0.2)
+
+
 def test_coarse_train_smoke_one_epoch(tmp_path: Path) -> None:
     n_traces = 256
     n_samples = 6200
@@ -637,6 +758,111 @@ def test_coarse_run_train_writes_fbpick_ckpt_metadata(tmp_path: Path) -> None:
     assert ckpt['model_sig']['out_chans'] == 1
 
 
+def _make_global_anchor_ckpt() -> dict:
+    return {
+        'pipeline': 'fbpick',
+        'model_sig': {'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+        'output_ids': ['P'],
+        'softmax_axis': 'time',
+        'coarse_input_mode': 'global_anchor_resize',
+        'coarse_trace_len': 256,
+        'coarse_time_len': 2048,
+        'coarse_in_chans': 3,
+    }
+
+
+def test_validate_checkpoint_for_global_anchor_infer_accepts_contract() -> None:
+    validate_checkpoint_for_global_anchor_infer(
+        _make_global_anchor_ckpt(),
+        model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+    )
+
+
+def test_validate_checkpoint_for_global_anchor_infer_rejects_legacy_metadata() -> None:
+    ckpt = _make_global_anchor_ckpt()
+    for key in (
+        'coarse_input_mode',
+        'coarse_trace_len',
+        'coarse_time_len',
+        'coarse_in_chans',
+    ):
+        ckpt.pop(key)
+
+    with pytest.raises(ValueError) as exc:
+        validate_checkpoint_for_global_anchor_infer(
+            ckpt,
+            model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+        )
+
+    assert "expected coarse_input_mode='global_anchor_resize', got None" in str(
+        exc.value
+    )
+    assert 'legacy tiled coarse pipeline' in str(exc.value)
+
+
+def test_run_coarse_infer_rejects_legacy_ckpt_before_dataset_open(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(
+        tmp_path,
+        segy_path=str(tmp_path / 'missing.sgy'),
+        fb_path='unused.npy',
+    )
+    cfg['paths'].pop('fb_files')
+    cfg['infer'] = {
+        'batch_size': 1,
+        'num_workers': 0,
+        'amp': False,
+        'use_tqdm': False,
+    }
+    ckpt = _make_global_anchor_ckpt()
+    for key in (
+        'coarse_input_mode',
+        'coarse_trace_len',
+        'coarse_time_len',
+        'coarse_in_chans',
+    ):
+        ckpt.pop(key)
+
+    with pytest.raises(ValueError) as exc:
+        run_coarse_infer(
+            model=torch.nn.Conv2d(3, 1, kernel_size=1),
+            cfg=cfg,
+            device=torch.device('cpu'),
+            ckpt=ckpt,
+        )
+
+    assert "expected coarse_input_mode='global_anchor_resize', got None" in str(
+        exc.value
+    )
+
+
+def test_run_coarse_infer_requires_ckpt_before_dataset_open(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(
+        tmp_path,
+        segy_path=str(tmp_path / 'missing.sgy'),
+        fb_path='unused.npy',
+    )
+    cfg['paths'].pop('fb_files')
+    cfg['infer'] = {
+        'batch_size': 1,
+        'num_workers': 0,
+        'amp': False,
+        'use_tqdm': False,
+    }
+
+    with pytest.raises(ValueError) as exc:
+        run_coarse_infer(
+            model=torch.nn.Conv2d(3, 1, kernel_size=1),
+            cfg=cfg,
+            device=torch.device('cpu'),
+        )
+
+    assert 'requires checkpoint metadata validation' in str(exc.value)
+
+
 class _TimeChannelModel(torch.nn.Module):
     out_chans = 1
 
@@ -689,13 +915,8 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
             'offset_ref_m': 2000.0,
         },
         'infer': {
-            'subset_traces': 256,
-            'batch_size': 2,
+            'batch_size': 1,
             'num_workers': 0,
-            'overlap_h': 192,
-            'tile_w': 2048,
-            'overlap_w': 1024,
-            'tiles_per_batch': 4,
             'amp': False,
             'use_tqdm': False,
         },
@@ -711,6 +932,7 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
         model=_TimeChannelModel(),
         cfg=cfg,
         device=torch.device('cpu'),
+        ckpt=_make_global_anchor_ckpt(),
         source_model_id='coarse-smoke',
         iter_id=7,
         repo_root=tmp_path,
@@ -740,3 +962,53 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
     assert lineage['source_model_id'] == 'coarse-smoke'
     assert lineage['cfg_hash']
     assert lineage['git_sha'] is None
+
+
+class _BadShapeModel(torch.nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.zeros(
+            (int(x.shape[0]), 1, 128, int(x.shape[3])),
+            dtype=x.dtype,
+            device=x.device,
+        )
+
+
+def test_coarse_raw_only_infer_rejects_invalid_logits_shape(tmp_path: Path) -> None:
+    n_traces = 256
+    n_samples = 2048
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    segy_path = str(tmp_path / 'coarse_bad_logits.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+
+    cfg = _make_training_config(tmp_path, segy_path=segy_path, fb_path='unused.npy')
+    cfg['paths'].pop('fb_files')
+    cfg['paths']['out_dir'] = str(tmp_path / 'infer_bad_logits_out')
+    cfg['infer'] = {
+        'batch_size': 1,
+        'num_workers': 0,
+        'amp': False,
+        'use_tqdm': False,
+    }
+
+    with pytest.raises(ValueError) as exc:
+        run_coarse_infer(
+            model=_BadShapeModel(),
+            cfg=cfg,
+            device=torch.device('cpu'),
+            ckpt=_make_global_anchor_ckpt(),
+        )
+
+    assert 'global-anchor coarse infer logits must have shape' in str(exc.value)
+
+
+def test_coarse_infer_config_rejects_batch_size_greater_than_one(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
+    cfg['paths'].pop('fb_files')
+    cfg['infer']['batch_size'] = 2
+
+    with pytest.raises(ValueError) as exc:
+        load_coarse_infer_config(cfg)
+
+    assert 'requires infer.batch_size == 1' in str(exc.value)

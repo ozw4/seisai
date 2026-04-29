@@ -84,13 +84,6 @@ def _resolve_ckpt_path(cfg: dict[str, Any]) -> Path:
 
 
 def _validate_checkpoint_for_infer(ckpt: dict[str, Any], *, model_sig: dict[str, Any]) -> None:
-    from seisai_engine.pipelines.fbpick.coarse.config import (
-        COARSE_IN_CHANS,
-        COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE,
-        COARSE_TIME_LEN,
-        COARSE_TRACE_LEN,
-    )
-
     pipeline = ckpt.get('pipeline')
     if pipeline != 'fbpick':
         msg = f'coarse infer checkpoint pipeline must be "fbpick", got {pipeline!r}'
@@ -120,10 +113,10 @@ def _validate_checkpoint_for_infer(ckpt: dict[str, Any], *, model_sig: dict[str,
         raise ValueError(msg)
 
     expected_meta = {
-        'coarse_input_mode': COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE,
-        'coarse_trace_len': COARSE_TRACE_LEN,
-        'coarse_time_len': COARSE_TIME_LEN,
-        'coarse_in_chans': COARSE_IN_CHANS,
+        'coarse_input_mode': 'global_anchor_resize',
+        'coarse_trace_len': 256,
+        'coarse_time_len': 2048,
+        'coarse_in_chans': 3,
     }
     for key, expected in expected_meta.items():
         actual = ckpt.get(key)
@@ -206,6 +199,7 @@ def run_pipeline(config_path: str | Path) -> Path:
             model=model,
             cfg=single_cfg,
             device=device,
+            ckpt=ckpt,
         )
         if out_path != target_out_path:
             out_path = out_path.replace(target_out_path)

@@ -128,13 +128,8 @@ class CoarseTrainInferCfg:
 
 @dataclass(frozen=True)
 class CoarseInferRuntimeCfg:
-    subset_traces: int
     batch_size: int
     num_workers: int
-    overlap_h: int
-    tile_w: int
-    overlap_w: int
-    tiles_per_batch: int
     amp: bool
     use_tqdm: bool
 
@@ -489,10 +484,9 @@ def load_coarse_infer_config(cfg: dict) -> CoarseInferConfig:
         raise TypeError(msg)
 
     infer_cfg = require_dict(cfg, 'infer')
-    subset_traces = int(require_int(infer_cfg, 'subset_traces'))
-    overlap_h = int(optional_int(infer_cfg, 'overlap_h', 96))
-    if overlap_h < 0 or overlap_h >= subset_traces:
-        msg = 'infer.overlap_h must satisfy 0 <= overlap_h < infer.subset_traces'
+    batch_size = int(optional_int(infer_cfg, 'batch_size', 1))
+    if batch_size != 1:
+        msg = 'global-anchor coarse inference currently requires infer.batch_size == 1'
         raise ValueError(msg)
 
     return CoarseInferConfig(
@@ -503,13 +497,8 @@ def load_coarse_infer_config(cfg: dict) -> CoarseInferConfig:
         trace_anchor=_load_trace_anchor_cfg(cfg),
         norm_refs=load_norm_refs_cfg(cfg),
         infer=CoarseInferRuntimeCfg(
-            subset_traces=subset_traces,
-            batch_size=int(optional_int(infer_cfg, 'batch_size', 1)),
+            batch_size=batch_size,
             num_workers=int(optional_int(infer_cfg, 'num_workers', 0)),
-            overlap_h=overlap_h,
-            tile_w=int(optional_int(infer_cfg, 'tile_w', COARSE_TIME_LEN)),
-            overlap_w=int(optional_int(infer_cfg, 'overlap_w', 1024)),
-            tiles_per_batch=int(optional_int(infer_cfg, 'tiles_per_batch', 16)),
             amp=bool(optional_bool(infer_cfg, 'amp', default=False)),
             use_tqdm=bool(optional_bool(infer_cfg, 'use_tqdm', default=False)),
         ),

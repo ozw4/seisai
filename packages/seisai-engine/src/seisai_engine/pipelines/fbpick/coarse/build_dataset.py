@@ -1,22 +1,24 @@
 from __future__ import annotations
 
+import contextlib
 import random
 from collections.abc import Sequence
 
 import numpy as np
+import segyio
 import torch
 from seisai_dataset import (
     BuildPlan,
     FirstBreakGate,
     FirstBreakGateConfig,
-    InferenceGatherWindowsConfig,
-    InferenceGatherWindowsDataset,
     InputOnlyPlan,
     SegyGatherPipelineDataset,
 )
-from seisai_dataset.config import LoaderConfig
+from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
+from seisai_dataset.file_info import build_file_info
 from seisai_dataset.segy_gather_base import SampleTransformer
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
+from seisai_dataset.trace_subset_sampler import TraceSubsetSampler
 from seisai_dataset.transform_flow_utils import (
     add_view_projection_meta,
     apply_transform_2d_with_meta,
@@ -24,6 +26,7 @@ from seisai_dataset.transform_flow_utils import (
 )
 from seisai_transforms.augment import PerTraceStandardize, ViewCompose
 from seisai_utils.fs import validate_files_exist
+from torch.utils.data import Dataset
 
 from .config import COARSE_TIME_LEN, COARSE_TRACE_LEN
 from .time_axis import (
@@ -35,6 +38,7 @@ from .trace_anchor import select_trace_anchors
 
 __all__ = [
     'GlobalAnchorCoarseDataset',
+    'GlobalAnchorCoarseRawInferDataset',
     'PickAwareCropSampleTransformer',
     'build_fbgate',
     'build_infer_transform',
@@ -42,7 +46,22 @@ __all__ = [
     'build_raw_infer_dataset',
     'build_train_dataset',
     'build_train_transform',
+    'collate_input_meta_list',
 ]
+
+
+class _NoRandRNG:
+    def random(self, *args, **kwargs):
+        msg = 'random() is not allowed in global-anchor coarse inference'
+        raise RuntimeError(msg)
+
+    def uniform(self, *args, **kwargs):
+        msg = 'uniform() is not allowed in global-anchor coarse inference'
+        raise RuntimeError(msg)
+
+    def integers(self, *args, **kwargs):
+        msg = 'integers() is not allowed in global-anchor coarse inference'
+        raise RuntimeError(msg)
 
 
 class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
@@ -331,6 +350,276 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
         self._add_mask_bool_output(out, sample_for_plan)
         self._finalize_output(out, sample_for_plan, {}, x_view.shape)
         return out
+
+
+class GlobalAnchorCoarseRawInferDataset(Dataset):
+    def __init__(
+        self,
+        *,
+        segy_files: Sequence[str],
+        plan: BuildPlan | InputOnlyPlan,
+        trace_len: int,
+        time_len: int,
+        standardize_eps: float,
+        gap_ratio: float,
+        min_gap_m: float | None,
+        primary_keys: Sequence[str],
+        waveform_mode: str,
+        segy_endian: str,
+        use_header_cache: bool,
+    ) -> None:
+        trace_len_int = int(trace_len)
+        time_len_int = int(time_len)
+        if trace_len_int != COARSE_TRACE_LEN:
+            msg = f'trace_len must be {COARSE_TRACE_LEN} for global-anchor coarse'
+            raise ValueError(msg)
+        if time_len_int != COARSE_TIME_LEN:
+            msg = f'time_len must be {COARSE_TIME_LEN} for global-anchor coarse'
+            raise ValueError(msg)
+
+        primary_keys_tuple = tuple(str(key) for key in primary_keys)
+        if len(primary_keys_tuple) != 1:
+            msg = 'global-anchor coarse raw inference requires exactly one primary key'
+            raise ValueError(msg)
+
+        if isinstance(plan, BuildPlan):
+            self.plan = InputOnlyPlan.from_build_plan(plan, include_label_ops=False)
+        elif isinstance(plan, InputOnlyPlan):
+            self.plan = plan
+        else:
+            msg = 'plan must be BuildPlan or InputOnlyPlan'
+            raise TypeError(msg)
+
+        self.segy_files = list(segy_files)
+        if not self.segy_files:
+            msg = 'segy_files must be non-empty'
+            raise ValueError(msg)
+        self.trace_len = trace_len_int
+        self.time_len = time_len_int
+        self.gap_ratio = float(gap_ratio)
+        self.min_gap_m = None if min_gap_m is None else float(min_gap_m)
+        self.primary_key = primary_keys_tuple[0]
+        self.transform = build_infer_transform(standardize_eps=float(standardize_eps))
+        self._rng = _NoRandRNG()
+        self._subset_loader = TraceSubsetLoader(
+            LoaderConfig(pad_traces_to=self.trace_len)
+        )
+        self.sampler = TraceSubsetSampler(
+            TraceSubsetSamplerConfig(
+                primary_keys=(self.primary_key,),
+                primary_key_weights=None,
+                use_superwindow=False,
+                sw_halfspan=0,
+                sw_prob=0.0,
+                secondary_key_fixed=True,
+                subset_traces=self.trace_len,
+                trace_decimate_prob=0.0,
+                trace_decimate_stride_range=(1, 1),
+            )
+        )
+
+        self.file_infos: list[dict] = [
+            build_file_info(
+                segy_path,
+                ffid_byte=segyio.TraceField.FieldRecord,
+                chno_byte=segyio.TraceField.TraceNumber,
+                cmp_byte=segyio.TraceField.CDP,
+                header_cache_dir=None,
+                use_header_cache=bool(use_header_cache),
+                include_centroids=False,
+                waveform_mode=str(waveform_mode),
+                segy_endian=str(segy_endian),
+            )
+            for segy_path in self.segy_files
+        ]
+        self.items: list[tuple[int, str, int]] = []
+        self._build_items()
+
+    def _build_items(self) -> None:
+        for file_idx, info in enumerate(self.file_infos):
+            unique_keys = info.get(f'{self.primary_key}_unique_keys')
+            if not unique_keys:
+                msg = f'no {self.primary_key} gathers found in {info["path"]}'
+                raise RuntimeError(msg)
+            for primary_value in sorted(int(value) for value in unique_keys):
+                self.items.append((int(file_idx), self.primary_key, int(primary_value)))
+        if not self.items:
+            msg = 'global-anchor coarse raw inference found no gathers'
+            raise RuntimeError(msg)
+
+    def close(self) -> None:
+        for info in self.file_infos:
+            segy_obj = info.get('segy_obj')
+            if segy_obj is not None:
+                with contextlib.suppress(Exception):
+                    segy_obj.close()
+        self.file_infos.clear()
+        self.items.clear()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def _draw_item_full_gather(
+        self,
+        *,
+        info: dict,
+        key_name: str,
+        primary_value: int,
+    ) -> dict:
+        info_for_sample = dict(info)
+        info_for_sample['sampling_override'] = {
+            'primary_keys': [key_name],
+            'primary_ranges': {key_name: [int(primary_value), int(primary_value)]},
+            'secondary_key_fixed': True,
+        }
+        return self.sampler.draw_full_gather(
+            info_for_sample,
+            py_random=random.Random(0),
+        )
+
+    def __getitem__(self, index: int) -> dict:
+        file_idx, key_name, primary_value = self.items[int(index)]
+        info = self.file_infos[file_idx]
+        sample = self._draw_item_full_gather(
+            info=info,
+            key_name=key_name,
+            primary_value=primary_value,
+        )
+        return self._build_sample(info=info, file_idx=file_idx, sample=sample)
+
+    def _build_sample(self, *, info: dict, file_idx: int, sample: dict) -> dict:
+        raw_trace_indices = np.asarray(sample['indices'], dtype=np.int64)
+        if raw_trace_indices.ndim != 1 or raw_trace_indices.size == 0:
+            msg = 'draw_full_gather returned an empty raw gather'
+            raise RuntimeError(msg)
+
+        offsets_full = np.asarray(info['offsets'][raw_trace_indices], dtype=np.float32)
+        selection = select_trace_anchors(
+            raw_indices=raw_trace_indices,
+            offsets_m=offsets_full,
+            trace_len=self.trace_len,
+            mode='center',
+            gap_ratio=self.gap_ratio,
+            min_gap_m=self.min_gap_m,
+            rng=None,
+        )
+
+        trace_valid = np.asarray(selection.trace_valid, dtype=np.bool_)
+        anchor_raw_indices = np.asarray(selection.anchor_raw_indices, dtype=np.int64)
+        anchor_source_pos = np.asarray(selection.anchor_source_pos, dtype=np.int64)
+        anchor_offsets_m = np.asarray(selection.anchor_offsets_m, dtype=np.float32)
+
+        valid_indices = anchor_raw_indices[trace_valid]
+        x_valid = self._subset_loader.load_traces(info['mmap'], valid_indices)
+        x_resampled_valid = resample_waveform_time_axis(
+            x_valid,
+            out_time_len=self.time_len,
+        )
+        x_view = np.zeros((self.trace_len, self.time_len), dtype=np.float32)
+        x_view[trace_valid] = x_resampled_valid
+        x_view, transform_meta = apply_transform_2d_with_meta(
+            self.transform,
+            x_view,
+            self._rng,
+            msg_bad_out=(
+                'global-anchor raw infer transform must return 2D numpy or (2D, meta)'
+            ),
+            msg_bad_meta=(
+                'global-anchor raw infer transform meta must be dict, got {type}'
+            ),
+            exc_bad_out=ValueError,
+            exc_bad_meta=TypeError,
+        )
+        if x_view.shape != (self.trace_len, self.time_len):
+            msg = (
+                'global-anchor raw infer transform must keep fixed shape '
+                f'{(self.trace_len, self.time_len)}, got {x_view.shape}'
+            )
+            raise ValueError(msg)
+        x_view = np.ascontiguousarray(x_view, dtype=np.float32)
+        x_view[~trace_valid] = 0.0
+
+        grid = build_coarse_time_grid(
+            raw_time_len=int(info['n_samples']),
+            coarse_time_len=self.time_len,
+            dt_sec=float(info['dt_sec']),
+        )
+        meta = {
+            'source_file': str(info['path']),
+            'file_path': str(info['path']),
+            'file_idx': int(file_idx),
+            'key_name': str(sample['key_name']),
+            'primary_value': int(sample['primary_value']),
+            'primary_unique': str(sample['primary_unique']),
+            'secondary_key': str(sample['secondary_key']),
+            'raw_trace_indices': raw_trace_indices,
+            'anchor_raw_indices': anchor_raw_indices,
+            'anchor_source_pos': anchor_source_pos,
+            'anchor_offsets_m': anchor_offsets_m,
+            'trace_valid': trace_valid,
+            'segment_id': np.asarray(selection.segment_id, dtype=np.int64),
+            'anchor_bin_start_pos': np.asarray(
+                selection.anchor_bin_start_pos,
+                dtype=np.int64,
+            ),
+            'anchor_bin_stop_pos': np.asarray(
+                selection.anchor_bin_stop_pos,
+                dtype=np.int64,
+            ),
+            'raw_time_len': int(grid.raw_time_len),
+            'coarse_time_len': int(grid.coarse_time_len),
+            'dt_sec': np.float32(grid.dt_sec),
+            'dt_eff_sec': np.float32(grid.dt_eff_sec),
+            'raw_to_coarse_factor': np.float32(grid.raw_to_coarse_factor),
+            'coarse_to_raw_factor': np.float32(grid.coarse_to_raw_factor),
+            'offsets_view': anchor_offsets_m,
+            'time_view': np.asarray(grid.time_view_sec, dtype=np.float32),
+            'offsets_m': offsets_full,
+            'ffid_values': np.asarray(info['ffid_values'], dtype=np.int32),
+            'chno_values': np.asarray(info['chno_values'], dtype=np.int32),
+            'n_traces': int(info['n_traces']),
+            'n_samples_orig': int(info['n_samples']),
+            'hflip': False,
+            'factor_h': 1.0,
+            'factor': float(grid.raw_to_coarse_factor),
+            'start': 0,
+        }
+        meta.update(transform_meta)
+
+        sample_for_plan = {
+            'x_view': x_view,
+            'meta': meta,
+            'dt_sec': float(grid.dt_eff_sec),
+            'offsets': anchor_offsets_m,
+            'indices': anchor_raw_indices,
+            'key_name': str(sample['key_name']),
+            'secondary_key': str(sample['secondary_key']),
+            'primary_unique': str(sample['primary_unique']),
+            'file_path': str(info['path']),
+            'trace_valid': trace_valid,
+        }
+        self.plan.run(sample_for_plan, rng=self._rng)
+        if 'input' not in sample_for_plan:
+            msg = "plan must populate 'input'"
+            raise KeyError(msg)
+        x_in = sample_for_plan['input']
+        if not isinstance(x_in, torch.Tensor):
+            msg = "sample['input'] must be torch.Tensor"
+            raise TypeError(msg)
+        if tuple(x_in.shape) != (3, self.trace_len, self.time_len):
+            msg = (
+                'global-anchor raw infer input must have shape '
+                f'{(3, self.trace_len, self.time_len)}, got {tuple(x_in.shape)}'
+            )
+            raise ValueError(msg)
+        return {
+            'input': x_in,
+            'meta': meta,
+        }
 
 
 class PickAwareCropSampleTransformer(SampleTransformer):
@@ -790,34 +1079,44 @@ def build_raw_infer_dataset(
     *,
     segy_files: list[str],
     plan: BuildPlan | InputOnlyPlan,
-    subset_traces: int,
-    overlap_h: int,
+    trace_len: int,
     time_len: int,
     standardize_eps: float,
+    gap_ratio: float,
+    min_gap_m: float | None,
+    primary_keys: Sequence[str],
     waveform_mode: str,
     segy_endian: str,
     use_header_cache: bool,
-) -> InferenceGatherWindowsDataset:
-    stride_traces = int(subset_traces) - int(overlap_h)
-    if stride_traces <= 0:
-        msg = 'subset_traces - overlap_h must be positive'
-        raise ValueError(msg)
+) -> GlobalAnchorCoarseRawInferDataset:
     validate_files_exist(list(segy_files))
-    cfg = InferenceGatherWindowsConfig(
-        domains=('shot',),
-        secondary_sort={'shot': 'chno', 'recv': 'ffid', 'cmp': 'offset'},
-        win_size_traces=int(subset_traces),
-        stride_traces=int(stride_traces),
-        pad_last=True,
-        target_len=int(time_len),
-    )
-    return InferenceGatherWindowsDataset(
+    return GlobalAnchorCoarseRawInferDataset(
         segy_files=list(segy_files),
-        fb_files=None,
         plan=plan,
-        cfg=cfg,
-        transform=build_infer_transform(standardize_eps=float(standardize_eps)),
+        trace_len=int(trace_len),
+        time_len=int(time_len),
+        standardize_eps=float(standardize_eps),
+        gap_ratio=float(gap_ratio),
+        min_gap_m=min_gap_m,
+        primary_keys=tuple(primary_keys),
         waveform_mode=str(waveform_mode),
         segy_endian=str(segy_endian),
         use_header_cache=bool(use_header_cache),
     )
+
+
+def collate_input_meta_list(batch: Sequence[dict]) -> tuple[torch.Tensor, list[dict]]:
+    if len(batch) == 0:
+        msg = 'empty batch'
+        raise ValueError(msg)
+    xs = [item['input'] for item in batch]
+    metas = [item['meta'] for item in batch]
+    if not all(isinstance(x, torch.Tensor) for x in xs):
+        msg = "batch['input'] must be torch.Tensor"
+        raise TypeError(msg)
+    x0_shape = tuple(xs[0].shape)
+    for x in xs:
+        if tuple(x.shape) != x0_shape:
+            msg = 'all global-anchor coarse infer inputs must share shape'
+            raise ValueError(msg)
+    return torch.stack(xs, dim=0), metas
