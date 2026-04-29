@@ -1,13 +1,19 @@
-# SeisAI `fbpick` 実装計画（Codex 向け・正本）
+# SeisAI `fbpick` 実装計画（初期 v0 / historical）
 
 Version: v0.3
 Date: 2026-04-03
-Status: authoritative
+Status: historical
 
 ## 0. この文書の扱い
 
-このファイルは、`docs/develop/fbpick_codex_implementation_plan.md` の**唯一の正本**である。
-本書は、2026-04-03 時点の **P 波初動自動読み取り v0 仕様**を SeisAI モノレポ上で実装するための、Codex 向け具体指示書である。
+このファイルは初期 `fbpick` v0 実装計画の履歴である。
+`fbpick-coarse` の local-crop / tiled coarse 前提は現在の仕様ではない。
+coarse stage の正本は `docs/fbpick_coarse_global_anchor.md` であり、固定
+`global_anchor_resize` contract (`3 x 256 x 2048`) を使う。
+
+本書の physics / fine に関する背景メモは参照用として残すが、coarse の設計・
+テスト・example config を変更する場合は `docs/fbpick_coarse_global_anchor.md`
+を優先する。
 
 ---
 

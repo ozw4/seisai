@@ -23,6 +23,7 @@ transform:
 trace_anchor:
   gap_ratio: 5.0
   min_gap_m: null
+  # Required by the shared coarse schema; raw inference uses infer_mode only.
   train_mode: random
   infer_mode: center
 

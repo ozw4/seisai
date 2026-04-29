@@ -17,6 +17,7 @@ from .build_dataset import build_raw_infer_dataset, collate_input_meta_list
 from .build_plan import build_plan
 from .config import (
     COARSE_IN_CHANS,
+    COARSE_INPUT_CHANNELS,
     COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE,
     COARSE_TIME_LEN,
     COARSE_TRACE_LEN,
@@ -105,6 +106,7 @@ def validate_checkpoint_for_global_anchor_infer(
         'coarse_trace_len': COARSE_TRACE_LEN,
         'coarse_time_len': COARSE_TIME_LEN,
         'coarse_in_chans': COARSE_IN_CHANS,
+        'coarse_input_channels': list(COARSE_INPUT_CHANNELS),
     }
     for key, expected in expected_meta.items():
         actual = ckpt.get(key)

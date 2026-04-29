@@ -117,6 +117,7 @@ def _validate_checkpoint_for_infer(ckpt: dict[str, Any], *, model_sig: dict[str,
         'coarse_trace_len': 256,
         'coarse_time_len': 2048,
         'coarse_in_chans': 3,
+        'coarse_input_channels': ['waveform', 'offset_ch', 'time_ch'],
     }
     for key, expected in expected_meta.items():
         actual = ckpt.get(key)

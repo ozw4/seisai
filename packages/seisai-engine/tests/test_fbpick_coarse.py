@@ -460,6 +460,81 @@ def test_build_train_bundle_uses_train_and_infer_endian_for_dataset_builders(
     assert bundle.ds_train_full is not bundle.ds_infer_full
 
 
+def test_global_anchor_labeled_datasets_draw_full_gather_before_anchor_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 300
+    n_samples = 2048
+    traces = np.stack(
+        [
+            np.linspace(-1.0, 1.0, n_samples, dtype=np.float32) + i
+            for i in range(n_traces)
+        ],
+        axis=0,
+    )
+    segy_path = str(tmp_path / 'global_labeled_full_gather.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+    fb = np.full((n_traces,), 1000, dtype=np.int64)
+    fb_path = str(tmp_path / 'global_labeled_full_gather_fb.npy')
+    np.save(fb_path, fb)
+
+    common = {
+        'segy_files': [segy_path],
+        'fb_files': [fb_path],
+        'sampling_overrides': None,
+        'plan': _make_plan(),
+        'fbgate': build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
+        'subset_traces': 256,
+        'trace_len': 256,
+        'time_len': 2048,
+        'standardize_eps': 1.0e-8,
+        'gap_ratio': 5.0,
+        'min_gap_m': None,
+        'primary_keys': ('ffid',),
+        'secondary_key_fixed': False,
+        'verbose': False,
+        'progress': False,
+        'max_trials': 8,
+        'use_header_cache': False,
+        'waveform_mode': 'eager',
+        'segy_endian': 'big',
+    }
+    train_ds = build_train_dataset(
+        **common,
+        anchor_mode='random',
+        trace_decimate_prob=0.0,
+        trace_decimate_stride_range=(1, 1),
+    )
+    infer_ds = build_labeled_infer_dataset(**common, anchor_mode='center')
+
+    try:
+        for ds in (train_ds, infer_ds):
+            seen: list[np.ndarray] = []
+            original = ds.sampler.draw_full_gather
+
+            def wrapped_draw_full_gather(info, *args, **kwargs):
+                sample = original(info, *args, **kwargs)
+                seen.append(np.asarray(sample['indices'], dtype=np.int64).copy())
+                return sample
+
+            monkeypatch.setattr(ds.sampler, 'draw_full_gather', wrapped_draw_full_gather)
+            ds._rng = np.random.default_rng(0)
+            sample = ds[0]
+
+            assert tuple(sample['input'].shape) == (3, 256, 2048)
+            assert tuple(sample['target'].shape) == (1, 256, 2048)
+            assert len(seen) == 1
+            np.testing.assert_array_equal(
+                seen[0],
+                np.arange(n_traces, dtype=np.int64),
+            )
+            assert tuple(sample['anchor_raw_indices'].shape) == (256,)
+    finally:
+        train_ds.close()
+        infer_ds.close()
+
+
 def test_global_anchor_train_dataset_uses_random_anchors(tmp_path: Path) -> None:
     n_traces = 512
     n_samples = 2049
@@ -685,6 +760,32 @@ def test_restore_anchor_predictions_to_full_traces_interpolates_within_segments(
     assert pmax[10] == pytest.approx(0.2)
 
 
+def test_restore_anchor_predictions_to_full_traces_does_not_interpolate_across_gap() -> None:
+    pick_i, pmax = restore_anchor_predictions_to_full_traces(
+        anchor_pick_i_raw=np.array([100, 400, 1000, 1600], dtype=np.int64),
+        anchor_pmax=np.array([0.1, 0.4, 0.8, 0.2], dtype=np.float32),
+        trace_valid=np.array([True, True, True, True], dtype=np.bool_),
+        anchor_source_pos=np.array([0, 3, 4, 6], dtype=np.int64),
+        segment_id=np.array([0, 0, 1, 1], dtype=np.int64),
+        segments=(
+            TraceSegment(segment_id=0, start_pos=0, stop_pos=4, n_traces=4),
+            TraceSegment(segment_id=1, start_pos=4, stop_pos=7, n_traces=3),
+        ),
+        n_traces=7,
+        n_samples_orig=2048,
+    )
+
+    np.testing.assert_array_equal(
+        pick_i,
+        np.asarray([100, 200, 300, 400, 1000, 1300, 1600], dtype=np.int32),
+    )
+    np.testing.assert_allclose(
+        pmax,
+        np.asarray([0.1, 0.2, 0.3, 0.4, 0.8, 0.5, 0.2], dtype=np.float32),
+        atol=1.0e-6,
+    )
+
+
 def test_restore_anchor_predictions_to_full_traces_fills_single_anchor_segment() -> None:
     pick_i, pmax = restore_anchor_predictions_to_full_traces(
         anchor_pick_i_raw=np.array([150, -1, -1, -1], dtype=np.int64),
@@ -862,6 +963,7 @@ def _make_global_anchor_ckpt() -> dict:
         'coarse_trace_len': 256,
         'coarse_time_len': 2048,
         'coarse_in_chans': 3,
+        'coarse_input_channels': ['waveform', 'offset_ch', 'time_ch'],
     }
 
 
@@ -869,6 +971,57 @@ def test_validate_checkpoint_for_global_anchor_infer_accepts_contract() -> None:
     validate_checkpoint_for_global_anchor_infer(
         _make_global_anchor_ckpt(),
         model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+    )
+
+
+@pytest.mark.parametrize(
+    ('key', 'value', 'message'),
+    [
+        (
+            'coarse_input_mode',
+            'legacy_tiled',
+            "expected coarse_input_mode='global_anchor_resize'",
+        ),
+        ('coarse_trace_len', 128, 'expected coarse_trace_len=256'),
+        ('coarse_time_len', 6016, 'expected coarse_time_len=2048'),
+        ('coarse_in_chans', 1, 'expected coarse_in_chans=3'),
+        (
+            'coarse_input_channels',
+            ['waveform', 'time_ch', 'offset_ch'],
+            "expected coarse_input_channels=['waveform', 'offset_ch', 'time_ch']",
+        ),
+    ],
+)
+def test_validate_checkpoint_for_global_anchor_infer_rejects_metadata_mismatch(
+    key: str,
+    value: object,
+    message: str,
+) -> None:
+    ckpt = _make_global_anchor_ckpt()
+    ckpt[key] = value
+
+    with pytest.raises(ValueError) as exc:
+        validate_checkpoint_for_global_anchor_infer(
+            ckpt,
+            model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+        )
+
+    assert message in str(exc.value)
+
+
+def test_validate_checkpoint_for_global_anchor_infer_rejects_missing_input_channels() -> None:
+    ckpt = _make_global_anchor_ckpt()
+    ckpt.pop('coarse_input_channels')
+
+    with pytest.raises(ValueError) as exc:
+        validate_checkpoint_for_global_anchor_infer(
+            ckpt,
+            model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+        )
+
+    assert (
+        "expected coarse_input_channels=['waveform', 'offset_ch', 'time_ch'], got None"
+        in str(exc.value)
     )
 
 
@@ -1065,6 +1218,72 @@ class _BadShapeModel(torch.nn.Module):
             dtype=x.dtype,
             device=x.device,
         )
+
+
+class _CaptureInputShapeModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_shapes: list[tuple[int, ...]] = []
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self.seen_shapes.append(tuple(int(v) for v in x.shape))
+        return torch.zeros(
+            (int(x.shape[0]), 1, int(x.shape[2]), int(x.shape[3])),
+            dtype=x.dtype,
+            device=x.device,
+        )
+
+
+def test_coarse_raw_only_infer_does_not_call_tiled_inference_utilities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import seisai_dataset.infer_window_dataset as infer_window_dataset
+    import seisai_engine.infer.runner as infer_runner
+
+    def fail_if_called(*args, **kwargs):
+        _ = (args, kwargs)
+        raise AssertionError('legacy tiled coarse inference utility was called')
+
+    for name in (
+        'InferenceGatherWindowsDataset',
+        'collate_pad_w_right',
+    ):
+        monkeypatch.setattr(infer_window_dataset, name, fail_if_called)
+    for name in (
+        'TiledWConfig',
+        'infer_batch_tiled_w',
+        'iter_infer_loader_tiled_w',
+        'run_infer_loader_tiled_w',
+    ):
+        monkeypatch.setattr(infer_runner, name, fail_if_called)
+
+    n_traces = 256
+    n_samples = 2048
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    segy_path = str(tmp_path / 'coarse_no_tiled.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+
+    cfg = _make_training_config(tmp_path, segy_path=segy_path, fb_path='unused.npy')
+    cfg['paths'].pop('fb_files')
+    cfg['paths']['out_dir'] = str(tmp_path / 'infer_no_tiled_out')
+    cfg['infer'] = {
+        'batch_size': 1,
+        'num_workers': 0,
+        'amp': False,
+        'use_tqdm': False,
+    }
+    model = _CaptureInputShapeModel()
+
+    out_path = run_coarse_infer(
+        model=model,
+        cfg=cfg,
+        device=torch.device('cpu'),
+        ckpt=_make_global_anchor_ckpt(),
+    )
+
+    assert out_path.is_file()
+    assert model.seen_shapes == [(1, 3, 256, 2048)]
 
 
 def test_coarse_raw_only_infer_rejects_invalid_logits_shape(tmp_path: Path) -> None:
