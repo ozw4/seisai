@@ -562,6 +562,7 @@ class GlobalAnchorCoarseRawInferDataset(Dataset):
             'anchor_offsets_m': anchor_offsets_m,
             'trace_valid': trace_valid,
             'segment_id': np.asarray(selection.segment_id, dtype=np.int64),
+            'segments': selection.segments,
             'anchor_bin_start_pos': np.asarray(
                 selection.anchor_bin_start_pos,
                 dtype=np.int64,

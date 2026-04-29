@@ -27,6 +27,7 @@ from .time_axis import project_coarse_indices_to_raw_time
 __all__ = [
     'restore_anchor_predictions_to_full_traces',
     'run_coarse_infer',
+    'validate_coarse_npz_payload',
     'validate_checkpoint_for_global_anchor_infer',
 ]
 
@@ -123,105 +124,213 @@ def validate_checkpoint_for_global_anchor_infer(
 
 def restore_anchor_predictions_to_full_traces(
     *,
-    raw_trace_indices: np.ndarray,
-    anchor_source_pos: np.ndarray,
-    trace_valid: np.ndarray,
-    segment_id: np.ndarray,
-    anchor_bin_start_pos: np.ndarray,
-    anchor_bin_stop_pos: np.ndarray,
     anchor_pick_i_raw: np.ndarray,
     anchor_pmax: np.ndarray,
+    trace_valid: np.ndarray,
+    anchor_source_pos: np.ndarray,
+    segment_id: np.ndarray,
+    segments,
+    n_traces: int,
     n_samples_orig: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    raw_indices = np.asarray(raw_trace_indices, dtype=np.int64)
-    valid = np.asarray(trace_valid, dtype=np.bool_)
-    anchor_pos = np.asarray(anchor_source_pos, dtype=np.int64)
-    seg_id = np.asarray(segment_id, dtype=np.int64)
-    bin_start = np.asarray(anchor_bin_start_pos, dtype=np.int64)
-    bin_stop = np.asarray(anchor_bin_stop_pos, dtype=np.int64)
-    pick_raw = np.asarray(anchor_pick_i_raw, dtype=np.float32)
-    pmax = np.asarray(anchor_pmax, dtype=np.float32)
+) -> tuple[np.ndarray, np.ndarray]:
+    if segments is None:
+        msg = 'segment metadata is required to restore global-anchor coarse predictions'
+        raise ValueError(msg)
 
-    h = int(valid.shape[0])
-    for name, arr in (
-        ('anchor_source_pos', anchor_pos),
-        ('segment_id', seg_id),
-        ('anchor_bin_start_pos', bin_start),
-        ('anchor_bin_stop_pos', bin_stop),
-        ('anchor_pick_i_raw', pick_raw),
-        ('anchor_pmax', pmax),
-    ):
-        if arr.shape != (h,):
-            msg = f'{name} must have shape ({h},), got {arr.shape}'
-            raise ValueError(msg)
-
+    n_trace = int(n_traces)
     n_samples = int(n_samples_orig)
-    if raw_indices.ndim != 1 or raw_indices.size == 0:
-        msg = 'raw_trace_indices must be a non-empty 1D array'
+    if n_trace <= 0:
+        msg = 'n_traces must be positive'
         raise ValueError(msg)
     if n_samples <= 0:
         msg = 'n_samples_orig must be positive'
         raise ValueError(msg)
 
-    out_raw_indices: list[np.ndarray] = []
-    out_pick_parts: list[np.ndarray] = []
-    out_pmax_parts: list[np.ndarray] = []
+    valid = np.asarray(trace_valid, dtype=np.bool_)
+    anchor_pos = np.asarray(anchor_source_pos, dtype=np.int64)
+    seg_id = np.asarray(segment_id, dtype=np.int64)
+    pick_raw = np.asarray(anchor_pick_i_raw, dtype=np.float32)
+    pmax = np.asarray(anchor_pmax, dtype=np.float32)
 
-    valid_segment_ids = sorted(int(value) for value in np.unique(seg_id[valid]))
-    for sid in valid_segment_ids:
-        mask = valid & (seg_id == sid)
-        if not np.any(mask):
-            continue
-        start = int(np.min(bin_start[mask]))
-        stop = int(np.max(bin_stop[mask]))
-        if start < 0 or stop <= start or stop > int(raw_indices.size):
-            msg = f'invalid anchor bin span for segment {sid}: [{start}, {stop})'
+    if valid.ndim != 1:
+        msg = f'trace_valid must be 1D, got shape {valid.shape}'
+        raise ValueError(msg)
+    h = int(valid.shape[0])
+    for name, arr in (
+        ('anchor_pick_i_raw', pick_raw),
+        ('anchor_pmax', pmax),
+        ('anchor_source_pos', anchor_pos),
+        ('segment_id', seg_id),
+    ):
+        if arr.shape != (h,):
+            msg = f'{name} must have shape ({h},), got {arr.shape}'
             raise ValueError(msg)
 
-        raw_positions = np.arange(start, stop, dtype=np.int64)
+    segment_spans: list[tuple[int, int, int]] = []
+    covered = np.zeros((n_trace,), dtype=np.bool_)
+    seen_segment_ids: set[int] = set()
+    for segment in tuple(segments):
+        try:
+            sid = int(segment.segment_id)
+            start = int(segment.start_pos)
+            stop = int(segment.stop_pos)
+        except AttributeError as exc:
+            msg = 'segment metadata is required to restore global-anchor coarse predictions'
+            raise ValueError(msg) from exc
+        if sid < 0:
+            msg = f'invalid segment_id: {sid}'
+            raise ValueError(msg)
+        if sid in seen_segment_ids:
+            msg = f'duplicate segment_id: {sid}'
+            raise ValueError(msg)
+        seen_segment_ids.add(sid)
+        if start < 0 or stop <= start or stop > n_trace:
+            msg = f'invalid segment span for segment {sid}: [{start}, {stop})'
+            raise ValueError(msg)
+        if np.any(covered[start:stop]):
+            msg = f'overlapping segment span for segment {sid}: [{start}, {stop})'
+            raise ValueError(msg)
+        covered[start:stop] = True
+        segment_spans.append((sid, start, stop))
+
+    if not segment_spans:
+        msg = 'segment metadata is required to restore global-anchor coarse predictions'
+        raise ValueError(msg)
+    if not np.all(covered):
+        msg = 'segment metadata must cover every trace exactly once'
+        raise ValueError(msg)
+
+    valid_anchor_mask = valid
+    if np.any(valid_anchor_mask):
+        if np.any(anchor_pos[valid_anchor_mask] < 0) or np.any(
+            anchor_pos[valid_anchor_mask] >= n_trace
+        ):
+            msg = 'valid anchor_source_pos must lie in [0, n_traces)'
+            raise ValueError(msg)
+        if np.any(seg_id[valid_anchor_mask] < 0):
+            msg = 'valid segment_id must be non-negative'
+            raise ValueError(msg)
+        if not np.all(np.isfinite(pick_raw[valid_anchor_mask])):
+            msg = 'valid anchor_pick_i_raw must be finite'
+            raise ValueError(msg)
+        if np.any(pick_raw[valid_anchor_mask] < 0) or np.any(
+            pick_raw[valid_anchor_mask] > n_samples - 1
+        ):
+            msg = 'valid anchor_pick_i_raw must lie in [0, n_samples_orig)'
+            raise ValueError(msg)
+        if not np.all(np.isfinite(pmax[valid_anchor_mask])):
+            msg = 'valid anchor_pmax must be finite'
+            raise ValueError(msg)
+
+    coarse_pick_f = np.full((n_trace,), np.nan, dtype=np.float64)
+    coarse_pmax = np.full((n_trace,), np.nan, dtype=np.float64)
+
+    for sid, start, stop in segment_spans:
+        mask = valid_anchor_mask & (seg_id == sid)
+        if not np.any(mask):
+            msg = f'no valid anchors for segment {sid}'
+            raise ValueError(msg)
+
         anchor_positions = anchor_pos[mask].astype(np.float64, copy=False)
+        if np.any(anchor_positions < start) or np.any(anchor_positions >= stop):
+            msg = f'anchor_source_pos for segment {sid} lies outside segment span'
+            raise ValueError(msg)
+
         order = np.argsort(anchor_positions, kind='mergesort')
         anchor_positions = anchor_positions[order]
+        if anchor_positions.size > 1 and np.any(np.diff(anchor_positions) <= 0.0):
+            msg = f'anchor_source_pos for segment {sid} must be unique'
+            raise ValueError(msg)
+
         pick_values = pick_raw[mask][order].astype(np.float64, copy=False)
         pmax_values = pmax[mask][order].astype(np.float64, copy=False)
+        raw_positions = np.arange(start, stop, dtype=np.float64)
 
         if anchor_positions.size == 1:
-            pick_interp = np.full(
-                raw_positions.shape,
-                float(pick_values[0]),
-                dtype=np.float64,
-            )
-            pmax_interp = np.full(
-                raw_positions.shape,
-                float(pmax_values[0]),
-                dtype=np.float64,
-            )
+            coarse_pick_f[start:stop] = float(pick_values[0])
+            coarse_pmax[start:stop] = float(pmax_values[0])
         else:
-            pick_interp = np.interp(
-                raw_positions.astype(np.float64),
+            coarse_pick_f[start:stop] = np.interp(
+                raw_positions,
                 anchor_positions,
                 pick_values,
             )
-            pmax_interp = np.interp(
-                raw_positions.astype(np.float64),
+            coarse_pmax[start:stop] = np.interp(
+                raw_positions,
                 anchor_positions,
                 pmax_values,
             )
 
-        out_raw_indices.append(raw_indices[raw_positions])
-        out_pick_parts.append(pick_interp.astype(np.float32, copy=False))
-        out_pmax_parts.append(pmax_interp.astype(np.float32, copy=False))
-
-    if not out_raw_indices:
-        msg = 'no valid anchor predictions to restore'
+    if np.any(~np.isfinite(coarse_pick_f)):
+        msg = 'restored coarse_pick_i contains missing values'
+        raise RuntimeError(msg)
+    if np.any(~np.isfinite(coarse_pmax)):
+        msg = 'restored coarse_pmax contains missing values'
         raise RuntimeError(msg)
 
-    restored_raw_indices = np.concatenate(out_raw_indices).astype(np.int64, copy=False)
-    restored_pick_i = np.rint(np.concatenate(out_pick_parts))
-    restored_pick_i = np.clip(restored_pick_i, 0, n_samples - 1).astype(np.int32)
-    restored_pmax = np.concatenate(out_pmax_parts).astype(np.float32, copy=False)
-    restored_pmax = np.clip(restored_pmax, 0.0, 1.0).astype(np.float32, copy=False)
-    return restored_raw_indices, restored_pick_i, restored_pmax
+    coarse_pick_i = np.rint(coarse_pick_f).clip(0, n_samples - 1).astype(np.int32)
+    return coarse_pick_i, coarse_pmax.astype(np.float32, copy=False)
+
+
+def validate_coarse_npz_payload(
+    *,
+    coarse_pick_i: np.ndarray,
+    coarse_pick_t_sec: np.ndarray,
+    coarse_pmax: np.ndarray,
+    dt_sec: float,
+    n_traces: int,
+    n_samples_orig: int,
+) -> None:
+    n_trace = int(n_traces)
+    n_samples = int(n_samples_orig)
+    if n_trace <= 0:
+        msg = 'n_traces must be positive'
+        raise ValueError(msg)
+    if n_samples <= 0:
+        msg = 'n_samples_orig must be positive'
+        raise ValueError(msg)
+
+    pick_i = np.asarray(coarse_pick_i)
+    pick_t_sec = np.asarray(coarse_pick_t_sec)
+    pmax = np.asarray(coarse_pmax)
+    expected_shape = (n_trace,)
+
+    if pick_i.shape != expected_shape:
+        msg = f'coarse_pick_i shape {pick_i.shape} != {expected_shape}'
+        raise ValueError(msg)
+    if pick_t_sec.shape != expected_shape:
+        msg = f'coarse_pick_t_sec shape {pick_t_sec.shape} != {expected_shape}'
+        raise ValueError(msg)
+    if pmax.shape != expected_shape:
+        msg = f'coarse_pmax shape {pmax.shape} != {expected_shape}'
+        raise ValueError(msg)
+    if not np.issubdtype(pick_i.dtype, np.integer):
+        msg = 'coarse_pick_i dtype must be integer'
+        raise TypeError(msg)
+    if not np.issubdtype(pick_t_sec.dtype, np.floating):
+        msg = 'coarse_pick_t_sec dtype must be float'
+        raise TypeError(msg)
+    if not np.issubdtype(pmax.dtype, np.floating):
+        msg = 'coarse_pmax dtype must be float'
+        raise TypeError(msg)
+    if np.any(pick_i < 0) or np.any(pick_i >= n_samples):
+        msg = 'coarse_pick_i must lie in [0, n_samples_orig)'
+        raise ValueError(msg)
+    if not np.all(np.isfinite(pick_t_sec)):
+        msg = 'coarse_pick_t_sec must be finite'
+        raise ValueError(msg)
+    if not np.all(np.isfinite(pmax)):
+        msg = 'coarse_pmax must be finite'
+        raise ValueError(msg)
+
+    dt = np.float32(dt_sec)
+    if not np.isfinite(dt):
+        msg = 'dt_sec must be finite'
+        raise ValueError(msg)
+    expected_t_sec = pick_i.astype(np.float32) * dt
+    if not np.allclose(pick_t_sec, expected_t_sec, rtol=0.0, atol=1.0e-6):
+        msg = 'coarse_pick_t_sec must match coarse_pick_i * dt_sec'
+        raise ValueError(msg)
 
 
 def run_coarse_infer(
@@ -356,33 +465,30 @@ def run_coarse_infer(
                         coarse_time_len=int(meta['coarse_time_len']),
                         ignore_index=-1,
                     )
-                    restored_raw_idx, restored_pick_i, restored_pmax = (
+                    raw_trace_indices = np.asarray(
+                        meta['raw_trace_indices'],
+                        dtype=np.int64,
+                    )
+                    if raw_trace_indices.ndim != 1 or raw_trace_indices.size == 0:
+                        msg = 'raw_trace_indices must be a non-empty 1D array'
+                        raise ValueError(msg)
+                    restored_pick_i, restored_pmax = (
                         restore_anchor_predictions_to_full_traces(
-                            raw_trace_indices=np.asarray(
-                                meta['raw_trace_indices'],
-                                dtype=np.int64,
-                            ),
+                            anchor_pick_i_raw=anchor_pick_i_raw,
+                            anchor_pmax=anchor_pmax,
+                            trace_valid=trace_valid,
                             anchor_source_pos=np.asarray(
                                 meta['anchor_source_pos'],
                                 dtype=np.int64,
                             ),
-                            trace_valid=trace_valid,
                             segment_id=np.asarray(meta['segment_id'], dtype=np.int64),
-                            anchor_bin_start_pos=np.asarray(
-                                meta['anchor_bin_start_pos'],
-                                dtype=np.int64,
-                            ),
-                            anchor_bin_stop_pos=np.asarray(
-                                meta['anchor_bin_stop_pos'],
-                                dtype=np.int64,
-                            ),
-                            anchor_pick_i_raw=anchor_pick_i_raw,
-                            anchor_pmax=anchor_pmax,
+                            segments=meta.get('segments'),
+                            n_traces=int(raw_trace_indices.size),
                             n_samples_orig=n_samples_orig,
                         )
                     )
                     for raw_idx, pick_i, pmax in zip(
-                        restored_raw_idx,
+                        raw_trace_indices,
                         restored_pick_i,
                         restored_pmax,
                         strict=True,
@@ -410,6 +516,14 @@ def run_coarse_infer(
         )
         dt_sec = float(info['dt_sec'])
         coarse_pick_t_sec = coarse_pick_i.astype(np.float32) * np.float32(dt_sec)
+        validate_coarse_npz_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pick_t_sec=coarse_pick_t_sec,
+            coarse_pmax=coarse_pmax,
+            dt_sec=dt_sec,
+            n_traces=n_traces,
+            n_samples_orig=n_samples_orig,
+        )
 
         out_dir = Path(typed.paths.out_dir).expanduser().resolve()
         stem = Path(typed.paths.segy_files[0]).stem

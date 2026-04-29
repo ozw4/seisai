@@ -62,6 +62,16 @@ def test_project_coarse_indices_to_raw_time_preserves_ignore_and_endpoints() -> 
     )
 
 
+def test_project_coarse_indices_to_raw_time_maps_fbpick_endpoints() -> None:
+    projected = project_coarse_indices_to_raw_time(
+        np.asarray([0, 2047], dtype=np.int64),
+        raw_time_len=6016,
+        coarse_time_len=2048,
+    )
+
+    np.testing.assert_array_equal(projected, np.asarray([0, 6015], dtype=np.int64))
+
+
 def test_project_indices_rejects_non_integer_and_out_of_range_values() -> None:
     with pytest.raises(ValueError, match='integer-valued'):
         project_fb_indices_to_coarse_time(
