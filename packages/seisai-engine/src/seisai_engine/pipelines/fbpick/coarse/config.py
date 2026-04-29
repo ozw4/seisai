@@ -67,6 +67,13 @@ INFER_PAIR_MESSAGE = (
     'paths.infer_segy_files and paths.infer_fb_files must be provided together, '
     'or omit both to reuse the training segy/fb pairs'
 )
+LEGACY_TILED_INFER_KEYS = (
+    'subset_traces',
+    'overlap_h',
+    'tile_w',
+    'overlap_w',
+    'tiles_per_batch',
+)
 
 
 @dataclass(frozen=True)
@@ -418,6 +425,25 @@ def _load_model_sig(cfg: dict) -> dict[str, Any]:
     return build_encdec2d_kwargs(model_cfg, in_chans=in_chans, out_chans=out_chans)
 
 
+def _raise_if_legacy_tiled_infer_keys(infer_cfg: dict) -> None:
+    legacy_keys = [key for key in LEGACY_TILED_INFER_KEYS if key in infer_cfg]
+    if legacy_keys:
+        msg = (
+            'fbpick-coarse global-anchor inference does not use legacy tiled '
+            f'infer keys: {legacy_keys!r}'
+        )
+        raise ValueError(msg)
+
+
+def _validate_raw_infer_primary_keys(dataset: CoarseDatasetCfg) -> None:
+    if len(dataset.primary_keys) != 1:
+        msg = (
+            'global-anchor coarse raw inference requires exactly one '
+            'dataset.primary_keys entry'
+        )
+        raise ValueError(msg)
+
+
 def load_coarse_train_config(cfg: dict) -> CoarseTrainConfig:
     if not isinstance(cfg, dict):
         msg = 'cfg must be dict'
@@ -484,15 +510,20 @@ def load_coarse_infer_config(cfg: dict) -> CoarseInferConfig:
         raise TypeError(msg)
 
     infer_cfg = require_dict(cfg, 'infer')
+    _raise_if_legacy_tiled_infer_keys(infer_cfg)
+
     batch_size = int(optional_int(infer_cfg, 'batch_size', 1))
     if batch_size != 1:
         msg = 'global-anchor coarse inference currently requires infer.batch_size == 1'
         raise ValueError(msg)
 
+    dataset = _load_dataset_cfg(cfg)
+    _validate_raw_infer_primary_keys(dataset)
+
     return CoarseInferConfig(
         coarse=_load_coarse_mode_cfg(cfg),
         paths=_load_paths_cfg(cfg, allow_missing_infer_pairs=True),
-        dataset=_load_dataset_cfg(cfg),
+        dataset=dataset,
         transform=_load_transform_cfg(cfg),
         trace_anchor=_load_trace_anchor_cfg(cfg),
         norm_refs=load_norm_refs_cfg(cfg),

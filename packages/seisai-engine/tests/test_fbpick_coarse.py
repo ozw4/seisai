@@ -144,6 +144,18 @@ def _make_training_config(tmp_path: Path, *, segy_path: str, fb_path: str) -> di
     }
 
 
+def _make_raw_infer_config(tmp_path: Path, *, segy_path: str = 'dummy.sgy') -> dict:
+    cfg = _make_training_config(tmp_path, segy_path=segy_path, fb_path='unused.npy')
+    cfg['paths'].pop('fb_files')
+    cfg['infer'] = {
+        'batch_size': 1,
+        'num_workers': 0,
+        'amp': False,
+        'use_tqdm': False,
+    }
+    return cfg
+
+
 def test_load_coarse_train_config_returns_fixed_contract_values(
     tmp_path: Path,
 ) -> None:
@@ -216,8 +228,7 @@ def test_load_coarse_train_config_uses_explicit_infer_pairs(
 def test_load_coarse_infer_config_returns_global_anchor_contract(
     tmp_path: Path,
 ) -> None:
-    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
-    cfg['paths'].pop('fb_files')
+    cfg = _make_raw_infer_config(tmp_path)
 
     typed = load_coarse_infer_config(cfg)
 
@@ -226,7 +237,44 @@ def test_load_coarse_infer_config_returns_global_anchor_contract(
     assert typed.transform.time_len == 2048
     assert typed.trace_anchor.gap_ratio == pytest.approx(5.0)
     assert typed.trace_anchor.infer_mode == 'center'
+    assert typed.dataset.primary_keys == ('ffid',)
     assert typed.model_sig['in_chans'] == 3
+
+
+@pytest.mark.parametrize(
+    'legacy_key',
+    ['subset_traces', 'overlap_h', 'tile_w', 'overlap_w', 'tiles_per_batch'],
+)
+def test_load_coarse_infer_config_rejects_legacy_tiled_keys(
+    tmp_path: Path,
+    legacy_key: str,
+) -> None:
+    cfg = _make_raw_infer_config(tmp_path)
+    cfg['infer'][legacy_key] = 123
+
+    with pytest.raises(ValueError, match='legacy tiled'):
+        load_coarse_infer_config(cfg)
+
+
+def test_load_coarse_infer_config_rejects_multiple_primary_keys(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_raw_infer_config(tmp_path)
+    cfg['dataset']['primary_keys'] = ['ffid', 'cmp']
+
+    with pytest.raises(ValueError, match='requires exactly one dataset.primary_keys'):
+        load_coarse_infer_config(cfg)
+
+
+def test_load_coarse_train_config_allows_multiple_primary_keys(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
+    cfg['dataset']['primary_keys'] = ['ffid', 'cmp']
+
+    typed = load_coarse_train_config(cfg)
+
+    assert typed.dataset.primary_keys == ('ffid', 'cmp')
 
 
 @pytest.mark.parametrize(
@@ -1098,8 +1146,7 @@ def test_coarse_raw_only_infer_rejects_invalid_logits_shape(tmp_path: Path) -> N
 def test_coarse_infer_config_rejects_batch_size_greater_than_one(
     tmp_path: Path,
 ) -> None:
-    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
-    cfg['paths'].pop('fb_files')
+    cfg = _make_raw_infer_config(tmp_path)
     cfg['infer']['batch_size'] = 2
 
     with pytest.raises(ValueError) as exc:

@@ -10,6 +10,7 @@ dataset:
   use_header_cache: true
   verbose: true
   progress: true
+  # Raw global-anchor coarse inference currently supports exactly one key.
   primary_keys: [ffid]
   waveform_mode: eager
   train_endian: big
