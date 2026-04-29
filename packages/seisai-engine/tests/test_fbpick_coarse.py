@@ -9,6 +9,7 @@ import segyio
 import torch
 from seisai_engine.pipelines.common import load_checkpoint
 from seisai_engine.pipelines.fbpick.coarse import (
+    TraceSegment,
     build_fbgate,
     build_labeled_infer_dataset,
     build_plan,
@@ -23,6 +24,7 @@ from seisai_engine.pipelines.fbpick.coarse import (
 )
 from seisai_engine.pipelines.fbpick.coarse.infer import (
     restore_anchor_predictions_to_full_traces,
+    validate_coarse_npz_payload,
     validate_checkpoint_for_global_anchor_infer,
 )
 from seisai_engine.pipelines.fbpick.common import COARSE_REQUIRED_KEYS, load_coarse_npz
@@ -656,27 +658,119 @@ def test_global_anchor_raw_infer_loader_stacks_fixed_shape(tmp_path: Path) -> No
     assert tuple(x_bchw.shape) == (1, 3, 256, 2048)
     assert len(metas) == 1
     assert 'raw_trace_indices' in metas[0]
+    assert 'segments' in metas[0]
 
 
 def test_restore_anchor_predictions_to_full_traces_interpolates_within_segments() -> None:
-    raw_idx, pick_i, pmax = restore_anchor_predictions_to_full_traces(
-        raw_trace_indices=np.arange(20, dtype=np.int64),
-        anchor_source_pos=np.array([0, 9, 10, 19], dtype=np.int64),
-        trace_valid=np.array([True, True, True, True], dtype=np.bool_),
-        segment_id=np.array([0, 0, 1, 1], dtype=np.int64),
-        anchor_bin_start_pos=np.array([0, 5, 10, 15], dtype=np.int64),
-        anchor_bin_stop_pos=np.array([5, 10, 15, 20], dtype=np.int64),
+    pick_i, pmax = restore_anchor_predictions_to_full_traces(
         anchor_pick_i_raw=np.array([100, 190, 300, 390], dtype=np.int64),
         anchor_pmax=np.array([0.1, 0.9, 0.2, 0.8], dtype=np.float32),
+        trace_valid=np.array([True, True, True, True], dtype=np.bool_),
+        anchor_source_pos=np.array([0, 9, 10, 19], dtype=np.int64),
+        segment_id=np.array([0, 0, 1, 1], dtype=np.int64),
+        segments=(
+            TraceSegment(segment_id=0, start_pos=0, stop_pos=10, n_traces=10),
+            TraceSegment(segment_id=1, start_pos=10, stop_pos=20, n_traces=10),
+        ),
+        n_traces=20,
         n_samples_orig=512,
     )
 
-    np.testing.assert_array_equal(raw_idx, np.arange(20, dtype=np.int64))
+    assert pick_i.shape == (20,)
+    assert pmax.shape == (20,)
     assert pick_i[9] == 190
     assert pick_i[10] == 300
     assert pick_i[9] != pick_i[10]
     assert pmax[9] == pytest.approx(0.9)
     assert pmax[10] == pytest.approx(0.2)
+
+
+def test_restore_anchor_predictions_to_full_traces_fills_single_anchor_segment() -> None:
+    pick_i, pmax = restore_anchor_predictions_to_full_traces(
+        anchor_pick_i_raw=np.array([150, -1, -1, -1], dtype=np.int64),
+        anchor_pmax=np.array([0.75, 0.0, 0.0, 0.0], dtype=np.float32),
+        trace_valid=np.array([True, False, False, False], dtype=np.bool_),
+        anchor_source_pos=np.array([2, -1, -1, -1], dtype=np.int64),
+        segment_id=np.array([0, -1, -1, -1], dtype=np.int64),
+        segments=(TraceSegment(segment_id=0, start_pos=0, stop_pos=5, n_traces=5),),
+        n_traces=5,
+        n_samples_orig=512,
+    )
+
+    np.testing.assert_array_equal(pick_i, np.full((5,), 150, dtype=np.int32))
+    np.testing.assert_allclose(pmax, np.full((5,), 0.75, dtype=np.float32))
+
+
+def test_restore_anchor_predictions_to_full_traces_ignores_pad_rows() -> None:
+    pick_i, _pmax = restore_anchor_predictions_to_full_traces(
+        anchor_pick_i_raw=np.array([100, 200, 999, 999], dtype=np.int64),
+        anchor_pmax=np.array([0.4, 0.8, 1.0, 1.0], dtype=np.float32),
+        trace_valid=np.array([True, True, False, False], dtype=np.bool_),
+        anchor_source_pos=np.array([0, 9, -1, -1], dtype=np.int64),
+        segment_id=np.array([0, 0, -1, -1], dtype=np.int64),
+        segments=(TraceSegment(segment_id=0, start_pos=0, stop_pos=10, n_traces=10),),
+        n_traces=10,
+        n_samples_orig=512,
+    )
+
+    assert np.all(pick_i < 999)
+    assert pick_i[0] == 100
+    assert pick_i[-1] == 200
+
+
+def test_restore_anchor_predictions_to_full_traces_rejects_segment_without_anchor() -> None:
+    with pytest.raises(ValueError, match='no valid anchors for segment 1'):
+        restore_anchor_predictions_to_full_traces(
+            anchor_pick_i_raw=np.array([100, 120], dtype=np.int64),
+            anchor_pmax=np.array([0.5, 0.6], dtype=np.float32),
+            trace_valid=np.array([True, True], dtype=np.bool_),
+            anchor_source_pos=np.array([0, 4], dtype=np.int64),
+            segment_id=np.array([0, 0], dtype=np.int64),
+            segments=(
+                TraceSegment(segment_id=0, start_pos=0, stop_pos=5, n_traces=5),
+                TraceSegment(segment_id=1, start_pos=5, stop_pos=10, n_traces=5),
+            ),
+            n_traces=10,
+            n_samples_orig=512,
+        )
+
+
+def test_restore_anchor_predictions_to_full_traces_requires_complete_segments() -> None:
+    with pytest.raises(ValueError, match='cover every trace'):
+        restore_anchor_predictions_to_full_traces(
+            anchor_pick_i_raw=np.array([100], dtype=np.int64),
+            anchor_pmax=np.array([0.5], dtype=np.float32),
+            trace_valid=np.array([True], dtype=np.bool_),
+            anchor_source_pos=np.array([0], dtype=np.int64),
+            segment_id=np.array([0], dtype=np.int64),
+            segments=(TraceSegment(segment_id=0, start_pos=0, stop_pos=5, n_traces=5),),
+            n_traces=10,
+            n_samples_orig=512,
+        )
+
+
+def test_validate_coarse_npz_payload_recomputes_time_from_integer_pick() -> None:
+    coarse_pick_i = np.array([0, 10, 20], dtype=np.int32)
+    coarse_pick_t_sec = coarse_pick_i.astype(np.float32) * np.float32(0.004)
+
+    validate_coarse_npz_payload(
+        coarse_pick_i=coarse_pick_i,
+        coarse_pick_t_sec=coarse_pick_t_sec,
+        coarse_pmax=np.array([0.9, 0.8, 0.7], dtype=np.float32),
+        dt_sec=0.004,
+        n_traces=3,
+        n_samples_orig=100,
+    )
+
+    with pytest.raises(ValueError, match='coarse_pick_t_sec must match'):
+        validate_coarse_npz_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pick_t_sec=coarse_pick_t_sec + np.float32(0.001),
+            coarse_pmax=np.array([0.9, 0.8, 0.7], dtype=np.float32),
+            dt_sec=0.004,
+            n_traces=3,
+            n_samples_orig=100,
+        )
 
 
 def test_coarse_train_smoke_one_epoch(tmp_path: Path) -> None:

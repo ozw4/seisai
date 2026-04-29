@@ -25,6 +25,7 @@ from .config import (
 from .infer import (
     restore_anchor_predictions_to_full_traces,
     run_coarse_infer,
+    validate_coarse_npz_payload,
     validate_checkpoint_for_global_anchor_infer,
 )
 from .loss import build_criterion
@@ -93,5 +94,6 @@ __all__ = [
     'run_train',
     'select_trace_anchors',
     'split_trace_segments_by_offset_gap',
+    'validate_coarse_npz_payload',
     'validate_checkpoint_for_global_anchor_infer',
 ]
