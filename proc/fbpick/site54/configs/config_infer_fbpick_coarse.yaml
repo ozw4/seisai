@@ -11,9 +11,19 @@ dataset:
   train_endian: big
   infer_endian: big
 
+coarse:
+  input_mode: global_anchor_resize
+
 transform:
-  time_len: 6016
+  trace_len: 256
+  time_len: 2048
   standardize_eps: 1.0e-8
+
+trace_anchor:
+  gap_ratio: 5.0
+  min_gap_m: null
+  train_mode: random
+  infer_mode: center
 
 norm_refs:
   time_ref_sec: 20.0
@@ -22,13 +32,8 @@ norm_refs:
 infer:
   ckpt_path: /workspace/proc/fbpick/site54/fbpick_coarse_train_out/ckpt/best.pt
   device: cuda:1
-  subset_traces: 128
   batch_size: 1
   num_workers: 0
-  overlap_h: 96
-  tile_w: 6016
-  overlap_w: 1024
-  tiles_per_batch: 16
   amp: false
   use_tqdm: false
 

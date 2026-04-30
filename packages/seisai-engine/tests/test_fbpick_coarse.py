@@ -315,6 +315,41 @@ def test_load_coarse_infer_config_rejects_multiple_primary_keys(
     assert 'requires exactly one dataset.primary_keys' in str(exc.value)
 
 
+def test_fbpick_coarse_proc_configs_follow_global_anchor_contract() -> None:
+    import yaml
+
+    repo_root = Path(__file__).resolve().parents[3]
+    paths = [
+        repo_root / 'proc/fbpick/site54/configs/config_train_fbpick_coarse.yaml',
+        repo_root / 'proc/fbpick/site54/configs/config_infer_fbpick_coarse.yaml',
+    ]
+    forbidden_tokens = [
+        'subset_traces:',
+        'overlap_h:',
+        'tile_w:',
+        'overlap_w:',
+        'tiles_per_batch:',
+        'time_len: 6016',
+    ]
+
+    for path in paths:
+        text = path.read_text(encoding='utf-8')
+        for token in forbidden_tokens:
+            assert token not in text
+
+        cfg = yaml.safe_load(text)
+        assert cfg['coarse']['input_mode'] == 'global_anchor_resize'
+        assert cfg['transform']['trace_len'] == 256
+        assert cfg['transform']['time_len'] == 2048
+        assert float(cfg['transform']['standardize_eps']) == pytest.approx(1.0e-8)
+        assert cfg['trace_anchor'] == {
+            'gap_ratio': 5.0,
+            'min_gap_m': None,
+            'train_mode': 'random',
+            'infer_mode': 'center',
+        }
+
+
 @pytest.mark.parametrize(
     ('mutate', 'message'),
     [
