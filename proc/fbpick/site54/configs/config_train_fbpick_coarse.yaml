@@ -18,9 +18,20 @@ dataset:
     apply_on: any
     min_pick_ratio: 0.3
     verbose: false
+
+coarse:
+  input_mode: global_anchor_resize
+
 transform:
-  time_len: 6016
+  trace_len: 256
+  time_len: 2048
   standardize_eps: 1.0e-8
+
+trace_anchor:
+  gap_ratio: 5.0
+  min_gap_m: null
+  train_mode: random
+  infer_mode: center
 
 norm_refs:
   time_ref_sec: 20.0
@@ -36,7 +47,6 @@ train:
   use_amp: true
   lr: 1.0e-4
   weight_decay: 0.0
-  subset_traces: 128
   fb_sigma_ms: 10.0
   device: cuda:1
 
@@ -45,7 +55,6 @@ infer:
   batch_size: 1
   num_workers: 0
   max_batches: 8
-  subset_traces: 128
 
 vis:
   n: 5
