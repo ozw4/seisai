@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from seisai_utils.config import (
@@ -45,6 +46,7 @@ __all__ = [
     'CoarseInferRuntimeCfg',
     'CoarseModeCfg',
     'CoarsePaths',
+    'CoarseQCCfg',
     'CoarseTraceAnchorCfg',
     'CoarseTrainCfg',
     'CoarseTrainConfig',
@@ -135,6 +137,23 @@ class CoarseInferRuntimeCfg:
 
 
 @dataclass(frozen=True)
+class CoarseQCCfg:
+    enabled: bool
+    max_gathers: int
+    out_subdir: str
+    plot_anchor_grid: bool
+    plot_original_gather: bool
+    plot_confidence: bool
+    plot_error_if_labels_available: bool
+    fine_window_half_samples: int
+    max_display_traces: int
+    max_display_samples: int
+    low_confidence_threshold: float | None
+    dpi: int
+    clip_percentile: float
+
+
+@dataclass(frozen=True)
 class CoarseCkptCfg:
     save_best_only: bool
     metric: str
@@ -167,6 +186,7 @@ class CoarseInferConfig:
     trace_anchor: CoarseTraceAnchorCfg
     norm_refs: FBPickNormRefs
     infer: CoarseInferRuntimeCfg
+    qc: CoarseQCCfg
     model_sig: dict[str, Any]
 
 
@@ -417,6 +437,102 @@ def _load_model_sig(cfg: dict) -> dict[str, Any]:
     return build_encdec2d_kwargs(model_cfg, in_chans=in_chans, out_chans=out_chans)
 
 
+def _load_qc_cfg(cfg: dict) -> CoarseQCCfg:
+    raw = cfg.get('qc')
+    if raw is None:
+        qc_cfg: dict = {}
+    else:
+        if not isinstance(raw, dict):
+            msg = 'config.qc must be dict'
+            raise TypeError(msg)
+        qc_cfg = raw
+
+    max_gathers = int(optional_int(qc_cfg, 'max_gathers', 16))
+    if max_gathers < 0:
+        msg = 'qc.max_gathers must be >= 0'
+        raise ValueError(msg)
+
+    fine_window_half_samples = int(
+        optional_int(qc_cfg, 'fine_window_half_samples', 128)
+    )
+    if fine_window_half_samples < 0:
+        msg = 'qc.fine_window_half_samples must be >= 0'
+        raise ValueError(msg)
+
+    max_display_traces = int(optional_int(qc_cfg, 'max_display_traces', 512))
+    if max_display_traces <= 0:
+        msg = 'qc.max_display_traces must be > 0'
+        raise ValueError(msg)
+
+    max_display_samples = int(optional_int(qc_cfg, 'max_display_samples', 4096))
+    if max_display_samples <= 0:
+        msg = 'qc.max_display_samples must be > 0'
+        raise ValueError(msg)
+
+    low_confidence_threshold_raw = qc_cfg.get('low_confidence_threshold')
+    if low_confidence_threshold_raw is None:
+        low_confidence_threshold = None
+    else:
+        if isinstance(low_confidence_threshold_raw, bool) or not isinstance(
+            low_confidence_threshold_raw,
+            (int, float),
+        ):
+            msg = 'config.qc.low_confidence_threshold must be float or null'
+            raise TypeError(msg)
+        low_confidence_threshold = float(low_confidence_threshold_raw)
+        if (
+            not math.isfinite(low_confidence_threshold)
+            or low_confidence_threshold < 0.0
+            or low_confidence_threshold > 1.0
+        ):
+            msg = 'qc.low_confidence_threshold must lie in [0, 1]'
+            raise ValueError(msg)
+
+    dpi = int(optional_int(qc_cfg, 'dpi', 150))
+    if dpi <= 0:
+        msg = 'qc.dpi must be > 0'
+        raise ValueError(msg)
+
+    clip_percentile = float(optional_float(qc_cfg, 'clip_percentile', 99.0))
+    if (
+        not math.isfinite(clip_percentile)
+        or clip_percentile <= 0.0
+        or clip_percentile > 100.0
+    ):
+        msg = 'qc.clip_percentile must lie in (0, 100]'
+        raise ValueError(msg)
+
+    out_subdir = str(optional_str(qc_cfg, 'out_subdir', 'vis/coarse_global_anchor'))
+    if not out_subdir.strip():
+        msg = 'qc.out_subdir must be non-empty'
+        raise ValueError(msg)
+    if Path(out_subdir).is_absolute():
+        msg = 'qc.out_subdir must be relative to paths.out_dir'
+        raise ValueError(msg)
+
+    return CoarseQCCfg(
+        enabled=bool(optional_bool(qc_cfg, 'enabled', default=False)),
+        max_gathers=max_gathers,
+        out_subdir=out_subdir,
+        plot_anchor_grid=bool(
+            optional_bool(qc_cfg, 'plot_anchor_grid', default=True)
+        ),
+        plot_original_gather=bool(
+            optional_bool(qc_cfg, 'plot_original_gather', default=True)
+        ),
+        plot_confidence=bool(optional_bool(qc_cfg, 'plot_confidence', default=True)),
+        plot_error_if_labels_available=bool(
+            optional_bool(qc_cfg, 'plot_error_if_labels_available', default=True)
+        ),
+        fine_window_half_samples=fine_window_half_samples,
+        max_display_traces=max_display_traces,
+        max_display_samples=max_display_samples,
+        low_confidence_threshold=low_confidence_threshold,
+        dpi=dpi,
+        clip_percentile=clip_percentile,
+    )
+
+
 def load_coarse_train_config(cfg: dict) -> CoarseTrainConfig:
     if not isinstance(cfg, dict):
         msg = 'cfg must be dict'
@@ -525,5 +641,6 @@ def load_coarse_infer_config(cfg: dict) -> CoarseInferConfig:
             amp=bool(optional_bool(infer_cfg, 'amp', default=False)),
             use_tqdm=bool(optional_bool(infer_cfg, 'use_tqdm', default=False)),
         ),
+        qc=_load_qc_cfg(cfg),
         model_sig=_load_model_sig(cfg),
     )

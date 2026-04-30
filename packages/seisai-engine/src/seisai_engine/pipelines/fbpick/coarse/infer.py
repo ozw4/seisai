@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 import torch
+from seisai_dataset.config import LoaderConfig
+from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from torch.utils.data import DataLoader
 
 from seisai_dataset import InputOnlyPlan
@@ -19,10 +21,13 @@ from .config import (
     COARSE_IN_CHANS,
     COARSE_INPUT_CHANNELS,
     COARSE_INPUT_MODE_GLOBAL_ANCHOR_RESIZE,
+    CoarseInferConfig,
+    CoarseQCCfg,
     COARSE_TIME_LEN,
     COARSE_TRACE_LEN,
     load_coarse_infer_config,
 )
+from .qc import select_display_indices, write_global_anchor_coarse_qc
 from .time_axis import project_coarse_indices_to_raw_time
 
 __all__ = [
@@ -335,6 +340,63 @@ def validate_coarse_npz_payload(
         raise ValueError(msg)
 
 
+def _make_qc_gather_id(meta: dict[str, Any]) -> str:
+    source = Path(str(meta.get('source_file') or meta.get('file_path') or 'gather'))
+    parent = source.parent.name
+    prefix = f'{parent}__{source.stem}' if parent else source.stem
+    key_name = str(meta.get('key_name', 'key'))
+    primary_value = meta.get('primary_value', meta.get('primary_unique', '0'))
+    return f'{prefix}__{key_name}-{primary_value}'
+
+
+def _load_qc_label_picks(
+    typed: CoarseInferConfig,
+    *,
+    n_traces: int,
+) -> np.ndarray | None:
+    if not typed.qc.enabled or not typed.qc.plot_error_if_labels_available:
+        return None
+    if typed.paths.infer_fb_files is None:
+        return None
+    if len(typed.paths.infer_fb_files) != 1:
+        msg = 'qc labels require exactly one paths.infer_fb_files entry'
+        raise ValueError(msg)
+    labels = np.asarray(np.load(typed.paths.infer_fb_files[0]), dtype=np.int64)
+    if labels.ndim != 1 or int(labels.shape[0]) != int(n_traces):
+        msg = (
+            'qc labels must be a 1D first-break array with length n_traces, '
+            f'got shape={labels.shape}, n_traces={int(n_traces)}'
+        )
+        raise ValueError(msg)
+    return labels
+
+
+def _load_qc_raw_wave_display(
+    *,
+    info: dict[str, Any],
+    raw_trace_indices: np.ndarray,
+    qc: CoarseQCCfg,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    trace_positions = select_display_indices(
+        int(raw_trace_indices.size),
+        int(qc.max_display_traces),
+    )
+    raw_indices_display = np.asarray(raw_trace_indices, dtype=np.int64)[
+        trace_positions
+    ]
+    loader = TraceSubsetLoader(LoaderConfig(pad_traces_to=1))
+    wave = loader.load_traces(info['mmap'], raw_indices_display)
+    sample_indices = select_display_indices(
+        int(wave.shape[1]),
+        int(qc.max_display_samples),
+    )
+    return (
+        np.ascontiguousarray(wave[:, sample_indices], dtype=np.float32),
+        trace_positions.astype(np.int64, copy=False),
+        sample_indices.astype(np.int64, copy=False),
+    )
+
+
 def run_coarse_infer(
     *,
     model: torch.nn.Module,
@@ -392,6 +454,10 @@ def run_coarse_infer(
         collate_fn=collate_input_meta_list,
     )
 
+    out_dir = Path(typed.paths.out_dir).expanduser().resolve()
+    qc_out_dir = out_dir / typed.qc.out_subdir
+    qc_count = 0
+
     try:
         info = dataset.file_infos[0]
         n_traces = int(info['n_traces'])
@@ -399,6 +465,7 @@ def run_coarse_infer(
         coarse_pick_i = np.full((n_traces,), -1, dtype=np.int32)
         coarse_pmax = np.full((n_traces,), np.nan, dtype=np.float32)
         counts = np.zeros((n_traces,), dtype=np.int32)
+        qc_label_pick_i = _load_qc_label_picks(typed, n_traces=n_traces)
 
         non_blocking = bool(device.type == 'cuda')
         amp_enabled = bool(typed.infer.amp and device.type == 'cuda')
@@ -418,6 +485,9 @@ def run_coarse_infer(
                         f'{expected_input_shape}, got {tuple(x_bchw.shape)}'
                     )
                     raise ValueError(msg)
+                qc_input_bchw = None
+                if typed.qc.enabled and qc_count < int(typed.qc.max_gathers):
+                    qc_input_bchw = x_bchw.detach().cpu()
                 x_bchw = x_bchw.to(device=device, non_blocking=non_blocking)
                 with torch.autocast(device_type=device.type, enabled=amp_enabled):
                     logits = model(x_bchw)
@@ -489,6 +559,47 @@ def run_coarse_infer(
                             n_samples_orig=n_samples_orig,
                         )
                     )
+                    if typed.qc.enabled and qc_count < int(typed.qc.max_gathers):
+                        if qc_input_bchw is None:
+                            msg = 'qc input tensor was not captured'
+                            raise RuntimeError(msg)
+                        raw_wave_hw = None
+                        raw_trace_positions = None
+                        raw_sample_indices = None
+                        if typed.qc.plot_original_gather:
+                            file_idx = int(meta.get('file_idx', 0))
+                            raw_wave_hw, raw_trace_positions, raw_sample_indices = (
+                                _load_qc_raw_wave_display(
+                                    info=dataset.file_infos[file_idx],
+                                    raw_trace_indices=raw_trace_indices,
+                                    qc=typed.qc,
+                                )
+                            )
+                        fb_pick_i = None
+                        if qc_label_pick_i is not None:
+                            fb_pick_i = qc_label_pick_i[raw_trace_indices]
+                        write_global_anchor_coarse_qc(
+                            out_dir=qc_out_dir,
+                            gather_id=_make_qc_gather_id(meta),
+                            input_waveform_hw=qc_input_bchw[batch_idx, 0]
+                            .numpy()
+                            .astype(np.float32, copy=False),
+                            anchor_pick_j=anchor_pick_j_validated,
+                            anchor_pmax=anchor_pmax,
+                            trace_valid=trace_valid,
+                            segment_id=np.asarray(meta['segment_id'], dtype=np.int64),
+                            segments=meta.get('segments'),
+                            coarse_pick_i=restored_pick_i,
+                            coarse_pmax=restored_pmax,
+                            raw_wave_hw=raw_wave_hw,
+                            raw_trace_positions=raw_trace_positions,
+                            raw_sample_indices=raw_sample_indices,
+                            fb_pick_i=fb_pick_i,
+                            n_samples_orig=int(meta['n_samples_orig']),
+                            dt_sec=float(meta['dt_sec']),
+                            cfg=typed.qc,
+                        )
+                        qc_count += 1
                     for raw_idx, pick_i, pmax in zip(
                         raw_trace_indices,
                         restored_pick_i,
@@ -527,7 +638,6 @@ def run_coarse_infer(
             n_samples_orig=n_samples_orig,
         )
 
-        out_dir = Path(typed.paths.out_dir).expanduser().resolve()
         stem = Path(typed.paths.segy_files[0]).stem
         out_path = out_dir / f'{stem}.coarse.npz'
         return save_coarse_npz(

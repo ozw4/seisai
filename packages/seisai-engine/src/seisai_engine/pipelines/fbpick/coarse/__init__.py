@@ -17,6 +17,7 @@ from .config import (
     COARSE_TRACE_LEN,
     CoarseInferConfig,
     CoarseModeCfg,
+    CoarseQCCfg,
     CoarseTraceAnchorCfg,
     CoarseTrainConfig,
     load_coarse_infer_config,
@@ -29,6 +30,13 @@ from .infer import (
     validate_checkpoint_for_global_anchor_infer,
 )
 from .loss import build_criterion
+from .qc import (
+    plot_anchor_grid_qc,
+    plot_confidence_qc,
+    plot_error_qc,
+    plot_original_gather_qc,
+    write_global_anchor_coarse_qc,
+)
 from .time_axis import (
     CoarseTimeGrid,
     build_coarse_fb_labels_for_anchors,
@@ -61,6 +69,7 @@ __all__ = [
     'COARSE_TRACE_LEN',
     'CoarseInferConfig',
     'CoarseModeCfg',
+    'CoarseQCCfg',
     'CoarseTimeGrid',
     'CoarseTraceAnchorCfg',
     'CoarseTrainBundle',
@@ -86,6 +95,10 @@ __all__ = [
     'load_coarse_train_config',
     'load_train_bundle',
     'load_train_spec',
+    'plot_anchor_grid_qc',
+    'plot_confidence_qc',
+    'plot_error_qc',
+    'plot_original_gather_qc',
     'project_coarse_indices_to_raw_time',
     'project_fb_indices_to_coarse_time',
     'resample_waveform_time_axis',
@@ -96,4 +109,5 @@ __all__ = [
     'split_trace_segments_by_offset_gap',
     'validate_coarse_npz_payload',
     'validate_checkpoint_for_global_anchor_infer',
+    'write_global_anchor_coarse_qc',
 ]
