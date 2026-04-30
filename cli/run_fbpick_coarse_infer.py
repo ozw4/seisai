@@ -23,7 +23,10 @@ def _load_runtime() -> SimpleNamespace:
     )
     from seisai_engine.pipelines.fbpick.coarse.build_model import build_model
     from seisai_engine.pipelines.fbpick.coarse.config import load_coarse_infer_config
-    from seisai_engine.pipelines.fbpick.coarse.infer import run_coarse_infer
+    from seisai_engine.pipelines.fbpick.coarse.infer import (
+        run_coarse_infer,
+        validate_checkpoint_for_global_anchor_infer,
+    )
 
     return SimpleNamespace(
         expand_cfg_listfiles=expand_cfg_listfiles,
@@ -35,6 +38,9 @@ def _load_runtime() -> SimpleNamespace:
         build_model=build_model,
         load_coarse_infer_config=load_coarse_infer_config,
         run_coarse_infer=run_coarse_infer,
+        validate_checkpoint_for_global_anchor_infer=(
+            validate_checkpoint_for_global_anchor_infer
+        ),
     )
 
 
@@ -81,58 +87,6 @@ def _resolve_ckpt_path(cfg: dict[str, Any]) -> Path:
         msg = f'checkpoint not found: {path}'
         raise FileNotFoundError(msg)
     return path
-
-
-def _validate_checkpoint_for_infer(ckpt: dict[str, Any], *, model_sig: dict[str, Any]) -> None:
-    pipeline = ckpt.get('pipeline')
-    if pipeline != 'fbpick':
-        msg = f'coarse infer checkpoint pipeline must be "fbpick", got {pipeline!r}'
-        raise ValueError(msg)
-
-    ckpt_model_sig = ckpt.get('model_sig')
-    if not isinstance(ckpt_model_sig, dict):
-        msg = 'checkpoint model_sig must be dict'
-        raise TypeError(msg)
-    for key, value in ckpt_model_sig.items():
-        if key in model_sig and model_sig[key] != value:
-            msg = f'checkpoint model_sig mismatch for {key}: {value!r} != {model_sig[key]!r}'
-            raise ValueError(msg)
-
-    output_ids = ckpt.get('output_ids')
-    if output_ids is not None:
-        if not isinstance(output_ids, (list, tuple)):
-            msg = 'checkpoint output_ids must be list[str] or tuple[str, ...]'
-            raise TypeError(msg)
-        if list(output_ids) != ['P']:
-            msg = f'coarse infer checkpoint output_ids must be ["P"], got {output_ids!r}'
-            raise ValueError(msg)
-
-    softmax_axis = ckpt.get('softmax_axis')
-    if softmax_axis is not None and softmax_axis != 'time':
-        msg = f'coarse infer checkpoint softmax_axis must be "time", got {softmax_axis!r}'
-        raise ValueError(msg)
-
-    expected_meta = {
-        'coarse_input_mode': 'global_anchor_resize',
-        'coarse_trace_len': 256,
-        'coarse_time_len': 2048,
-        'coarse_in_chans': 3,
-        'coarse_input_channels': ['waveform', 'offset_ch', 'time_ch'],
-    }
-    for key, expected in expected_meta.items():
-        actual = ckpt.get(key)
-        if actual != expected:
-            legacy_hint = ''
-            if key == 'coarse_input_mode' and actual is None:
-                legacy_hint = (
-                    ' This checkpoint appears to be from the legacy tiled coarse '
-                    'pipeline.'
-                )
-            msg = (
-                f'Invalid fbpick-coarse checkpoint: expected {key}={expected!r}, '
-                f'got {actual!r}.{legacy_hint}'
-            )
-            raise ValueError(msg)
 
 
 def _build_out_path(*, segy_path: str | Path, out_dir: str | Path) -> Path:
@@ -184,7 +138,10 @@ def run_pipeline(config_path: str | Path) -> Path:
     device = _resolve_cli_device(prepared, runtime=runtime)
 
     ckpt = runtime.load_checkpoint(ckpt_path)
-    _validate_checkpoint_for_infer(ckpt, model_sig=typed.model_sig)
+    runtime.validate_checkpoint_for_global_anchor_infer(
+        ckpt,
+        model_sig=typed.model_sig,
+    )
 
     model = runtime.build_model(dict(typed.model_sig))
     state_dict, _ = runtime.select_state_dict(ckpt)
