@@ -48,7 +48,6 @@ __all__ = [
     'CoarseTraceAnchorCfg',
     'CoarseTrainCfg',
     'CoarseTrainConfig',
-    'CoarseTrainInferCfg',
     'CoarseTransformCfg',
     'load_coarse_infer_config',
     'load_coarse_train_config',
@@ -122,15 +121,9 @@ class CoarseTraceAnchorCfg:
 class CoarseTrainCfg:
     lr: float
     weight_decay: float
-    subset_traces: int
     fb_sigma_ms: float
     trace_decimate_prob: float
     trace_decimate_stride_range: tuple[int, int]
-
-
-@dataclass(frozen=True)
-class CoarseTrainInferCfg:
-    subset_traces: int
 
 
 @dataclass(frozen=True)
@@ -161,7 +154,6 @@ class CoarseTrainConfig:
     trace_anchor: CoarseTraceAnchorCfg
     norm_refs: FBPickNormRefs
     train: CoarseTrainCfg
-    infer: CoarseTrainInferCfg
     model_sig: dict[str, Any]
     ckpt: CoarseCkptCfg
 
@@ -434,6 +426,19 @@ def load_coarse_train_config(cfg: dict) -> CoarseTrainConfig:
     train_cfg = require_dict(cfg, 'train')
     infer_cfg = require_dict(cfg, 'infer')
     ckpt_cfg = require_dict(cfg, 'ckpt')
+    if 'subset_traces' in train_cfg:
+        msg = (
+            'fbpick-coarse global-anchor training uses transform.trace_len; '
+            'remove legacy local-crop train.subset_traces'
+        )
+        raise ValueError(msg)
+    legacy_infer_keys = [key for key in LEGACY_TILED_INFER_KEYS if key in infer_cfg]
+    if legacy_infer_keys:
+        msg = (
+            'fbpick-coarse global-anchor training does not use legacy tiled '
+            f'infer keys: {legacy_infer_keys!r}'
+        )
+        raise ValueError(msg)
 
     trace_decimate_prob, trace_decimate_stride_range = _parse_trace_decimation_cfg(
         train_cfg
@@ -454,13 +459,9 @@ def load_coarse_train_config(cfg: dict) -> CoarseTrainConfig:
         train=CoarseTrainCfg(
             lr=float(require_float(train_cfg, 'lr')),
             weight_decay=float(optional_float(train_cfg, 'weight_decay', 0.0)),
-            subset_traces=int(require_int(train_cfg, 'subset_traces')),
             fb_sigma_ms=float(fb_sigma_ms),
             trace_decimate_prob=float(trace_decimate_prob),
             trace_decimate_stride_range=tuple(trace_decimate_stride_range),
-        ),
-        infer=CoarseTrainInferCfg(
-            subset_traces=int(require_int(infer_cfg, 'subset_traces')),
         ),
         model_sig=_load_model_sig(cfg),
         ckpt=CoarseCkptCfg(
