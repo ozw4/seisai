@@ -116,7 +116,6 @@ def _make_training_config(tmp_path: Path, *, segy_path: str, fb_path: str) -> di
             'use_amp': False,
             'lr': 1.0e-3,
             'weight_decay': 0.0,
-            'subset_traces': 256,
             'fb_sigma_ms': 10.0,
         },
         'infer': {
@@ -124,7 +123,6 @@ def _make_training_config(tmp_path: Path, *, segy_path: str, fb_path: str) -> di
             'batch_size': 1,
             'num_workers': 0,
             'max_batches': 1,
-            'subset_traces': 256,
         },
         'vis': {
             'n': 0,
@@ -167,6 +165,8 @@ def test_load_coarse_train_config_returns_fixed_contract_values(
     assert typed.trace_anchor.min_gap_m is None
     assert typed.trace_anchor.train_mode == 'random'
     assert typed.trace_anchor.infer_mode == 'center'
+    assert not hasattr(typed.train, 'subset_traces')
+    assert not hasattr(typed, 'infer')
     assert typed.train.fb_sigma_ms == pytest.approx(10.0)
     assert typed.model_sig['in_chans'] == 3
     assert typed.model_sig['out_chans'] == 1
@@ -220,6 +220,36 @@ def test_load_coarse_train_config_uses_explicit_infer_pairs(
 
     assert typed.paths.infer_segy_files == ('valid.sgy',)
     assert typed.paths.infer_fb_files == ('valid.npy',)
+
+
+def test_load_coarse_train_config_rejects_train_subset_traces(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='train.sgy', fb_path='train.npy')
+    cfg['train']['subset_traces'] = 256
+
+    with pytest.raises(ValueError) as exc:
+        load_coarse_train_config(cfg)
+
+    assert 'legacy local-crop train.subset_traces' in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    'legacy_key',
+    ['subset_traces', 'overlap_h', 'tile_w', 'overlap_w', 'tiles_per_batch'],
+)
+def test_load_coarse_train_config_rejects_legacy_tiled_infer_keys(
+    tmp_path: Path,
+    legacy_key: str,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='train.sgy', fb_path='train.npy')
+    cfg['infer'][legacy_key] = 123
+
+    with pytest.raises(ValueError) as exc:
+        load_coarse_train_config(cfg)
+
+    assert 'legacy tiled infer keys' in str(exc.value)
+    assert legacy_key in str(exc.value)
 
 
 def test_load_coarse_train_config_allows_multiple_primary_keys(
@@ -396,7 +426,6 @@ def test_global_anchor_train_dataset_returns_fixed_shape_and_masks_pad_rows(
         sampling_overrides=None,
         plan=_make_plan(),
         fbgate=build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
-        subset_traces=256,
         trace_len=256,
         time_len=2048,
         standardize_eps=1.0e-8,
@@ -487,10 +516,12 @@ def test_build_train_bundle_uses_train_and_infer_endian_for_dataset_builders(
             return None
 
     def fake_build_train_dataset(**kwargs):
+        assert 'subset_traces' not in kwargs
         seen_endian['train'] = kwargs['segy_endian']
         return StubDataset()
 
     def fake_build_labeled_infer_dataset(**kwargs):
+        assert 'subset_traces' not in kwargs
         seen_endian['infer'] = kwargs['segy_endian']
         return StubDataset()
 
@@ -541,7 +572,6 @@ def test_global_anchor_labeled_datasets_draw_full_gather_before_anchor_selection
         'sampling_overrides': None,
         'plan': _make_plan(),
         'fbgate': build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
-        'subset_traces': 256,
         'trace_len': 256,
         'time_len': 2048,
         'standardize_eps': 1.0e-8,
@@ -613,7 +643,6 @@ def test_global_anchor_train_dataset_uses_random_anchors(tmp_path: Path) -> None
         sampling_overrides=None,
         plan=_make_plan(),
         fbgate=build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
-        subset_traces=256,
         trace_len=256,
         time_len=2048,
         standardize_eps=1.0e-8,
@@ -667,7 +696,6 @@ def test_global_anchor_validation_dataset_is_deterministic(tmp_path: Path) -> No
         sampling_overrides=None,
         plan=_make_plan(),
         fbgate=build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
-        subset_traces=256,
         trace_len=256,
         time_len=2048,
         standardize_eps=1.0e-8,

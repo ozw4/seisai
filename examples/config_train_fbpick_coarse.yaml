@@ -46,9 +46,6 @@ train:
   use_amp: false
   lr: 1.0e-3
   weight_decay: 0.0
-  # Global-anchor coarse is fixed to transform.trace_len (=256).
-  # This is retained for the shared train schema; it is not a local crop size.
-  subset_traces: 256
   fb_sigma_ms: 10.0
 
 infer:
@@ -56,8 +53,6 @@ infer:
   batch_size: 1
   num_workers: 0
   max_batches: 8
-  # Validation uses deterministic center anchors with the same fixed trace_len.
-  subset_traces: 256
 
 vis:
   n: 0
