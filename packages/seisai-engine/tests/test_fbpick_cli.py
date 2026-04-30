@@ -204,6 +204,7 @@ def test_run_fbpick_coarse_infer_accepts_global_anchor_ckpt_metadata(
         'coarse_trace_len': 256,
         'coarse_time_len': 2048,
         'coarse_in_chans': 3,
+        'coarse_input_channels': ['waveform', 'offset_ch', 'time_ch'],
     }
 
     module._validate_checkpoint_for_infer(

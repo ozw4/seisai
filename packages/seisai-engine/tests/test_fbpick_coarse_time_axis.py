@@ -47,6 +47,16 @@ def test_project_fb_indices_to_coarse_time_preserves_ignore_and_endpoints() -> N
     )
 
 
+def test_project_fb_indices_to_coarse_time_maps_fbpick_endpoints() -> None:
+    projected = project_fb_indices_to_coarse_time(
+        np.asarray([0, 6015], dtype=np.int64),
+        raw_time_len=6016,
+        coarse_time_len=2048,
+    )
+
+    np.testing.assert_array_equal(projected, np.asarray([0, 2047], dtype=np.int64))
+
+
 def test_project_coarse_indices_to_raw_time_preserves_ignore_and_endpoints() -> None:
     coarse = np.asarray([0, 3, 5, -1], dtype=np.int64)
 

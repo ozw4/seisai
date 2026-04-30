@@ -315,6 +315,7 @@ pytest -q -m integration
 
 ## ドキュメント
 
+- FBPick coarse global-anchor resize 設計: `docs/fbpick_coarse_global_anchor.md`
 - SegyGatherPipelineDataset 出力契約: `docs/spec/segy_gather_pipeline_dataset_output_contract.md`
 - SegyGatherPipelineDataset 入力前提 (SEG-Y): `docs/spec/segy_gather_pipeline_dataset_input_assumptions.md`
 - Phase pick ファイル仕様: `docs/spec/phase_pick_files_spec.md`
