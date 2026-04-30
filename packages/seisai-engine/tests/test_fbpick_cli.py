@@ -123,10 +123,19 @@ def test_run_fbpick_coarse_infer_cli_is_thin_wrapper(
     out_path = tmp_path / 'coarse_out' / 'synthetic.coarse.npz'
     expected_out_path = tmp_path / 'coarse_out' / 'site54__synthetic.coarse.npz'
     out_path.parent.mkdir()
+    ckpt = {
+        'pipeline': 'fbpick',
+        'model_sig': {'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+    }
+    validated: dict[str, object] = {}
 
     def _fake_run_coarse_infer(*, model, cfg, device, ckpt):
         out_path.touch()
         return out_path
+
+    def _fake_validate_checkpoint(ckpt, *, model_sig) -> None:
+        validated['ckpt'] = ckpt
+        validated['model_sig'] = model_sig
 
     runtime = SimpleNamespace(
         load_cfg_with_base_dir=lambda path: (
@@ -141,76 +150,36 @@ def test_run_fbpick_coarse_infer_cli_is_thin_wrapper(
         load_coarse_infer_config=lambda cfg: SimpleNamespace(
             model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1}
         ),
-        load_checkpoint=lambda path: {
-            'pipeline': 'fbpick',
-            'model_sig': {'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
-        },
+        load_checkpoint=lambda path: ckpt,
         resolve_device=lambda device_raw: 'cpu',
         build_model=lambda model_sig: model,
         select_state_dict=lambda ckpt: ({'weight': 1}, False),
         run_coarse_infer=_fake_run_coarse_infer,
+        validate_checkpoint_for_global_anchor_infer=_fake_validate_checkpoint,
     )
     monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
     monkeypatch.setattr(module, '_resolve_ckpt_path', lambda cfg: tmp_path / 'dummy.pt')
-    monkeypatch.setattr(
-        module,
-        '_validate_checkpoint_for_infer',
-        lambda ckpt, *, model_sig: None,
-    )
 
     result = module.run_pipeline(cfg_path)
 
     assert result == expected_out_path
     assert model.loaded_state_dict == {'weight': 1}
     assert model.device == 'cpu'
+    assert validated == {
+        'ckpt': ckpt,
+        'model_sig': {'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
+    }
     assert not out_path.exists()
     assert expected_out_path.exists()
     assert capsys.readouterr().out.strip() == str(expected_out_path)
 
 
-def test_run_fbpick_coarse_infer_rejects_legacy_ckpt_metadata(
+def test_run_fbpick_coarse_infer_has_no_local_checkpoint_validator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_cli_module('run_fbpick_coarse_infer.py', monkeypatch)
-    ckpt = {
-        'pipeline': 'fbpick',
-        'model_sig': {'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
-        'output_ids': ['P'],
-        'softmax_axis': 'time',
-    }
 
-    with pytest.raises(ValueError) as exc:
-        module._validate_checkpoint_for_infer(
-            ckpt,
-            model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
-        )
-
-    assert "expected coarse_input_mode='global_anchor_resize', got None" in str(
-        exc.value
-    )
-    assert 'legacy tiled coarse pipeline' in str(exc.value)
-
-
-def test_run_fbpick_coarse_infer_accepts_global_anchor_ckpt_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    module = _load_cli_module('run_fbpick_coarse_infer.py', monkeypatch)
-    ckpt = {
-        'pipeline': 'fbpick',
-        'model_sig': {'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
-        'output_ids': ['P'],
-        'softmax_axis': 'time',
-        'coarse_input_mode': 'global_anchor_resize',
-        'coarse_trace_len': 256,
-        'coarse_time_len': 2048,
-        'coarse_in_chans': 3,
-        'coarse_input_channels': ['waveform', 'offset_ch', 'time_ch'],
-    }
-
-    module._validate_checkpoint_for_infer(
-        ckpt,
-        model_sig={'backbone': 'resnet18', 'in_chans': 3, 'out_chans': 1},
-    )
+    assert not hasattr(module, '_validate_checkpoint_for_infer')
 
 
 def test_run_fbpick_physics_cli_is_thin_wrapper(
@@ -428,14 +397,12 @@ def test_run_fbpick_coarse_infer_cli_loops_over_multiple_inputs(
         build_model=lambda model_sig: model,
         select_state_dict=lambda ckpt: ({'weight': 1}, False),
         run_coarse_infer=_fake_run_coarse_infer,
+        validate_checkpoint_for_global_anchor_infer=(
+            lambda ckpt, *, model_sig: None
+        ),
     )
     monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
     monkeypatch.setattr(module, '_resolve_ckpt_path', lambda cfg: tmp_path / 'dummy.pt')
-    monkeypatch.setattr(
-        module,
-        '_validate_checkpoint_for_infer',
-        lambda ckpt, *, model_sig: None,
-    )
 
     result = module.run_pipeline(cfg_path)
 

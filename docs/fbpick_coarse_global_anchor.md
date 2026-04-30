@@ -66,6 +66,10 @@ The flow is:
 Current raw inference requires `infer.batch_size == 1` because metadata is
 restored per full gather item.
 
+Raw global-anchor coarse inference currently requires exactly one
+`dataset.primary_keys` entry. Use `primary_keys: [ffid]` as the recommended
+default unless the input SEG-Y line is keyed by another single trace header.
+
 ## Offset Gap Handling
 
 Offset gaps split traces into independent segments. Anchor bins are allocated
