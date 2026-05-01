@@ -40,6 +40,19 @@ infer:
   amp: false
   use_tqdm: false
 
+qc:
+  enabled: false
+  max_gathers: 16
+  out_subdir: vis/coarse_global_anchor
+  plot_anchor_grid: true
+  plot_original_gather: true
+  plot_confidence: true
+  plot_error_if_labels_available: true
+  fine_window_half_samples: 128
+  max_display_traces: 512
+  max_display_samples: 4096
+  low_confidence_threshold: null
+
 model:
   backbone: resnet18
   pretrained: false

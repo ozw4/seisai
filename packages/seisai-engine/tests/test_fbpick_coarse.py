@@ -32,13 +32,26 @@ from seisai_engine.train_loop import train_one_epoch
 from torch.utils.data import DataLoader, Subset
 
 
-def write_unstructured_segy(path: str, traces: np.ndarray, dt_us: int) -> None:
+def write_unstructured_segy(
+    path: str,
+    traces: np.ndarray,
+    dt_us: int,
+    *,
+    ffid_values: np.ndarray | None = None,
+) -> None:
     arr = np.asarray(traces, dtype=np.float32)
     if arr.ndim != 2:
         msg = 'traces must be 2D (n_traces, n_samples)'
         raise ValueError(msg)
 
     n_traces, n_samples = arr.shape
+    if ffid_values is None:
+        ffids = np.ones((n_traces,), dtype=np.int32)
+    else:
+        ffids = np.asarray(ffid_values, dtype=np.int32)
+        if ffids.ndim != 1 or int(ffids.shape[0]) != n_traces:
+            msg = 'ffid_values must be 1D with length n_traces'
+            raise ValueError(msg)
     spec = segyio.spec()
     spec.iline = 189
     spec.xline = 193
@@ -51,7 +64,7 @@ def write_unstructured_segy(path: str, traces: np.ndarray, dt_us: int) -> None:
         f.bin[segyio.BinField.Interval] = int(dt_us)
         for i in range(n_traces):
             f.header[i] = {
-                segyio.TraceField.FieldRecord: 1,
+                segyio.TraceField.FieldRecord: int(ffids[i]),
                 segyio.TraceField.TraceNumber: int(i + 1),
                 segyio.TraceField.CDP: 1,
                 segyio.TraceField.offset: int((i + 1) * 10),
@@ -279,6 +292,46 @@ def test_load_coarse_infer_config_returns_global_anchor_contract(
     assert typed.trace_anchor.infer_mode == 'center'
     assert typed.dataset.primary_keys == ('ffid',)
     assert typed.model_sig['in_chans'] == 3
+    assert typed.qc.enabled is False
+    assert typed.qc.max_gathers == 16
+    assert typed.qc.out_subdir == 'vis/coarse_global_anchor'
+
+
+def test_load_coarse_infer_config_accepts_qc_block(tmp_path: Path) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
+    cfg['paths'].pop('fb_files')
+    _use_raw_infer_runtime_cfg(cfg)
+    cfg['qc'] = {
+        'enabled': True,
+        'max_gathers': 2,
+        'out_subdir': 'vis/custom_coarse_qc',
+        'plot_anchor_grid': False,
+        'plot_original_gather': True,
+        'plot_confidence': False,
+        'plot_error_if_labels_available': True,
+        'fine_window_half_samples': 64,
+        'max_display_traces': 128,
+        'max_display_samples': 512,
+        'low_confidence_threshold': 0.25,
+        'dpi': 90,
+        'clip_percentile': 98.0,
+    }
+
+    typed = load_coarse_infer_config(cfg)
+
+    assert typed.qc.enabled is True
+    assert typed.qc.max_gathers == 2
+    assert typed.qc.out_subdir == 'vis/custom_coarse_qc'
+    assert typed.qc.plot_anchor_grid is False
+    assert typed.qc.plot_original_gather is True
+    assert typed.qc.plot_confidence is False
+    assert typed.qc.plot_error_if_labels_available is True
+    assert typed.qc.fine_window_half_samples == 64
+    assert typed.qc.max_display_traces == 128
+    assert typed.qc.max_display_samples == 512
+    assert typed.qc.low_confidence_threshold == pytest.approx(0.25)
+    assert typed.qc.dpi == 90
+    assert typed.qc.clip_percentile == pytest.approx(98.0)
 
 
 @pytest.mark.parametrize(
@@ -1328,6 +1381,54 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
     assert lineage['source_model_id'] == 'coarse-smoke'
     assert lineage['cfg_hash']
     assert lineage['git_sha'] is None
+    assert not (tmp_path / 'infer_out' / 'vis' / 'coarse_global_anchor').exists()
+
+
+def test_coarse_raw_only_infer_qc_respects_max_gathers(tmp_path: Path) -> None:
+    n_traces = 512
+    n_samples = 512
+    t = np.linspace(-1.0, 1.0, n_samples, dtype=np.float32)
+    traces = np.stack([t + float(i) for i in range(n_traces)], axis=0)
+    ffids = np.concatenate(
+        [
+            np.ones((256,), dtype=np.int32),
+            np.full((256,), 2, dtype=np.int32),
+        ]
+    )
+    segy_path = str(tmp_path / 'coarse_infer_multi_ffid.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000, ffid_values=ffids)
+
+    cfg = _make_training_config(tmp_path, segy_path=segy_path, fb_path='unused.npy')
+    cfg['paths'].pop('fb_files')
+    cfg['paths']['out_dir'] = str(tmp_path / 'infer_qc_out')
+    cfg['infer'] = {
+        'batch_size': 1,
+        'num_workers': 0,
+        'amp': False,
+        'use_tqdm': False,
+    }
+    cfg['qc'] = {
+        'enabled': True,
+        'max_gathers': 1,
+        'plot_anchor_grid': True,
+        'plot_original_gather': False,
+        'plot_confidence': True,
+        'plot_error_if_labels_available': False,
+        'dpi': 80,
+    }
+
+    out_path = run_coarse_infer(
+        model=_TimeChannelModel(),
+        cfg=cfg,
+        device=torch.device('cpu'),
+        ckpt=_make_global_anchor_ckpt(),
+    )
+
+    assert out_path.is_file()
+    qc_dir = tmp_path / 'infer_qc_out' / 'vis' / 'coarse_global_anchor'
+    assert len(list(qc_dir.glob('*_anchor_grid.png'))) == 1
+    assert len(list(qc_dir.glob('*_confidence.png'))) == 1
+    assert not list(qc_dir.glob('*_original_gather.png'))
 
 
 class _BadShapeModel(torch.nn.Module):
