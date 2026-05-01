@@ -55,6 +55,7 @@ def _load_cli_module(file_name: str, monkeypatch: pytest.MonkeyPatch):
     [
         'run_fbpick_coarse_train.py',
         'run_fbpick_coarse_infer.py',
+        'run_fbpick_coarse_eval.py',
         'run_fbpick_physics.py',
         'run_fbpick_physics_batch.py',
         'run_fbpick_fine_train.py',
@@ -75,6 +76,7 @@ def test_cli_modules_import_without_segyio_or_timm(
     [
         ('run_fbpick_coarse_train.py', 'main'),
         ('run_fbpick_coarse_infer.py', 'main'),
+        ('run_fbpick_coarse_eval.py', 'main'),
         ('run_fbpick_physics.py', 'main'),
         ('run_fbpick_physics_batch.py', 'main'),
         ('run_fbpick_fine_train.py', 'main'),
@@ -180,6 +182,33 @@ def test_run_fbpick_coarse_infer_has_no_local_checkpoint_validator(
     module = _load_cli_module('run_fbpick_coarse_infer.py', monkeypatch)
 
     assert not hasattr(module, '_validate_checkpoint_for_infer')
+
+
+def test_run_fbpick_coarse_eval_cli_is_thin_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_cli_module('run_fbpick_coarse_eval.py', monkeypatch)
+    cfg_path = tmp_path / 'config_eval_fbpick_coarse.yaml'
+    out_path = tmp_path / 'eval' / 'summary.json'
+    captured: dict[str, object] = {}
+
+    def _fake_run_eval_from_config(config_path):
+        captured['config_path'] = config_path
+        return {'summary_json': out_path}
+
+    monkeypatch.setattr(
+        module,
+        '_load_run_eval_from_config',
+        lambda: _fake_run_eval_from_config,
+    )
+
+    result = module.run_pipeline(cfg_path)
+
+    assert result == out_path
+    assert captured['config_path'] == cfg_path
+    assert capsys.readouterr().out.strip() == str(out_path)
 
 
 def test_run_fbpick_physics_cli_is_thin_wrapper(

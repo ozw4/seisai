@@ -1,0 +1,14 @@
+paths:
+  coarse_files: REPLACE_ME_coarse_files.txt
+  fb_files: REPLACE_ME_fb_files.txt
+  out_dir: ./_fbpick_coarse_eval_out
+
+eval:
+  fine_window_half_samples: 128
+  coverage_thresholds_samples: [32, 64, 128, 256]
+  coverage_thresholds_ms: [10, 20, 50, 100]
+  gap_neighborhood_traces: 10
+  gap_ratio: 5.0
+  min_gap_m: null
+  confidence_bins: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+  make_figures: true
