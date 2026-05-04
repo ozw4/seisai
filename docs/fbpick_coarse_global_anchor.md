@@ -186,3 +186,13 @@ abs(coarse_pick_i - fb_i) <= fine_window_half
 
 Use this coverage as the primary coarse-stage regression metric when evaluating
 whether the coarse output is good enough for physics / fine refinement.
+
+The config-driven evaluator is:
+
+```bash
+python cli/run_fbpick_coarse_eval.py \
+  --config examples/config_eval_fbpick_coarse.yaml
+```
+
+See `docs/fbpick_coarse_eval.md` for report columns, confidence-bin metrics,
+gap-neighborhood metrics, and the exact gap-neighborhood inclusion rule.
