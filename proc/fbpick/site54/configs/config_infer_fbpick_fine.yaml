@@ -3,6 +3,8 @@ paths:
     - REPLACE_ME_infer_fine.sgy
   robust_npz_files:
     - REPLACE_ME_infer_fine.robust.npz
+  coarse_npz_files:
+    - REPLACE_ME_infer_fine.coarse.npz
   out_dir: ./_fbpick_fine_infer_out
 
 dataset:

@@ -69,6 +69,7 @@ class FinePaths:
     segy_files: tuple[str, ...]
     fb_files: tuple[str, ...] | None
     robust_npz_files: tuple[str, ...] | None
+    coarse_npz_files: tuple[str, ...] | None
     infer_segy_files: tuple[str, ...] | None
     infer_fb_files: tuple[str, ...] | None
     infer_robust_npz_files: tuple[str, ...] | None
@@ -187,6 +188,7 @@ def _load_paths_cfg(
     segy_files = tuple(require_list_str(paths, 'segy_files'))
     fb_files = _load_optional_str_list(paths, 'fb_files')
     robust_npz_files = _load_optional_str_list(paths, 'robust_npz_files')
+    coarse_npz_files = _load_optional_str_list(paths, 'coarse_npz_files')
 
     if require_fb_files and fb_files is None:
         msg = 'paths.fb_files is required for fbpick fine training'
@@ -198,8 +200,23 @@ def _load_paths_cfg(
     if fb_files is not None and len(fb_files) != len(segy_files):
         msg = 'paths.segy_files and paths.fb_files must have the same length'
         raise ValueError(msg)
-    if robust_npz_files is not None and len(robust_npz_files) != len(segy_files):
+    if robust_npz_files is not None and coarse_npz_files is not None:
+        if (
+            len(segy_files) != len(robust_npz_files)
+            or len(segy_files) != len(coarse_npz_files)
+        ):
+            msg = (
+                'paths.segy_files, paths.robust_npz_files, and '
+                'paths.coarse_npz_files must have the same length'
+            )
+            raise ValueError(msg)
+    elif robust_npz_files is not None and len(robust_npz_files) != len(segy_files):
         msg = 'paths.segy_files and paths.robust_npz_files must have the same length'
+        raise ValueError(msg)
+    elif coarse_npz_files is not None and len(coarse_npz_files) != len(segy_files):
+        msg = (
+            'paths.segy_files and paths.coarse_npz_files must have the same length'
+        )
         raise ValueError(msg)
 
     infer_segy_files = _load_optional_str_list(paths, 'infer_segy_files')
@@ -248,6 +265,7 @@ def _load_paths_cfg(
         segy_files=segy_files,
         fb_files=fb_files,
         robust_npz_files=robust_npz_files,
+        coarse_npz_files=coarse_npz_files,
         infer_segy_files=infer_segy_files,
         infer_fb_files=infer_fb_files,
         infer_robust_npz_files=infer_robust_npz_files,
