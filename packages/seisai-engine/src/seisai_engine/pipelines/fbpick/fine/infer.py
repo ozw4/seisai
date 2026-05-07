@@ -39,7 +39,10 @@ from .build_plan import build_plan
 from .config import FineInferConfig, load_fine_infer_config
 
 __all__ = [
+    'infer_coarse_npz_path_from_robust_npz_path',
     'main',
+    'require_existing_coarse_npz_path',
+    'resolve_fine_coarse_npz_path',
     'run_fine_infer',
     'run_fine_local_infer',
     'run_infer_and_write',
@@ -51,6 +54,7 @@ _SAFE_OVERRIDE_PATHS = frozenset(
     {
         'paths.segy_files',
         'paths.robust_npz_files',
+        'paths.coarse_npz_files',
         'paths.out_dir',
         'dataset.use_header_cache',
         'dataset.verbose',
@@ -82,6 +86,7 @@ def _default_cfg() -> dict[str, Any]:
         'paths': {
             'segy_files': [],
             'robust_npz_files': [],
+            'coarse_npz_files': None,
             'out_dir': './_fbpick_fine_infer_out',
         },
         'dataset': {
@@ -166,6 +171,12 @@ def _validate_fine_infer_inputs(typed: FineInferConfig) -> None:
         raise ValueError(msg)
     if len(typed.paths.robust_npz_files) != 1:
         msg = 'fine infer expects exactly one paths.robust_npz_files entry'
+        raise ValueError(msg)
+    if (
+        typed.paths.coarse_npz_files is not None
+        and len(typed.paths.coarse_npz_files) != 1
+    ):
+        msg = 'fine infer expects exactly one paths.coarse_npz_files entry'
         raise ValueError(msg)
     if typed.dataset.waveform_mode == 'mmap' and typed.infer.num_workers != 0:
         msg = 'dataset.waveform_mode="mmap" requires infer.num_workers=0'
@@ -374,13 +385,50 @@ def run_fine_local_infer(
     return _run_fine_local_infer_impl(model=model, typed=typed, device=device)
 
 
-def _derive_coarse_npz_path_from_robust(robust_npz_path: str | Path) -> Path:
+def infer_coarse_npz_path_from_robust_npz_path(robust_npz_path: str | Path) -> Path:
+    """Infer the legacy same-directory coarse path for a robust NPZ path."""
     path = Path(robust_npz_path).expanduser().resolve()
     if not path.name.endswith('.robust.npz'):
         msg = f'expected *.robust.npz input, got {path.name}'
         raise ValueError(msg)
     stem = path.name[: -len('.robust.npz')]
     return path.with_name(f'{stem}.coarse.npz')
+
+
+def resolve_fine_coarse_npz_path(
+    *,
+    robust_npz_path: str | Path,
+    explicit_coarse_npz_path: str | Path | None,
+) -> Path:
+    """Resolve the coarse path, preferring an explicit fine-infer config path."""
+    if explicit_coarse_npz_path is not None:
+        return Path(explicit_coarse_npz_path).expanduser().resolve()
+    return infer_coarse_npz_path_from_robust_npz_path(robust_npz_path)
+
+
+def require_existing_coarse_npz_path(
+    *,
+    coarse_npz_path: str | Path,
+    robust_npz_path: str | Path,
+    was_explicit: bool,
+) -> Path:
+    """Return an existing coarse path or raise a fine-infer specific error."""
+    path = Path(coarse_npz_path).expanduser().resolve()
+    if path.is_file():
+        return path
+
+    if was_explicit:
+        msg = f'coarse npz file not found: {path}'
+        raise FileNotFoundError(msg)
+
+    robust_path = Path(robust_npz_path).expanduser().resolve()
+    msg = (
+        f'coarse npz file not found: {path}\n'
+        f'inferred from robust npz: {robust_path}\n'
+        'Set paths.coarse_npz_files explicitly if coarse and robust outputs are '
+        'in different directories.'
+    )
+    raise FileNotFoundError(msg)
 
 
 def _derive_final_npz_path(*, segy_path: str | Path, out_dir: str | Path) -> Path:
@@ -408,15 +456,17 @@ def _load_fine_ckpt_cfg_for_merge(
 
 def _prepare_fine_infer_cfg(cfg: dict[str, Any], *, base_dir: Path) -> dict[str, Any]:
     prepared = deepcopy(cfg)
-    expand_cfg_listfiles(prepared, keys=['paths.segy_files', 'paths.robust_npz_files'])
-    path_keys: list[str] = ['paths.segy_files', 'paths.robust_npz_files']
     paths = prepared.get('paths')
     if not isinstance(paths, dict):
         msg = 'paths must be dict'
         raise TypeError(msg)
+    list_path_keys: list[str] = ['paths.segy_files', 'paths.robust_npz_files']
+    if paths.get('coarse_npz_files') is not None:
+        list_path_keys.append('paths.coarse_npz_files')
+    resolve_cfg_paths(prepared, base_dir, keys=list_path_keys)
+    expand_cfg_listfiles(prepared, keys=list_path_keys)
     if paths.get('out_dir') is not None:
-        path_keys.append('paths.out_dir')
-    resolve_cfg_paths(prepared, base_dir, keys=path_keys)
+        resolve_cfg_paths(prepared, base_dir, keys=['paths.out_dir'])
     return prepared
 
 
@@ -571,9 +621,21 @@ def run_fine_infer(
     if robust_payload is None:
         robust_payload = load_robust_npz(typed.paths.robust_npz_files[0])
     if coarse_payload is None:
-        coarse_payload = load_coarse_npz(
-            _derive_coarse_npz_path_from_robust(typed.paths.robust_npz_files[0])
+        explicit_coarse_npz_path = (
+            None
+            if typed.paths.coarse_npz_files is None
+            else typed.paths.coarse_npz_files[0]
         )
+        coarse_npz_path = resolve_fine_coarse_npz_path(
+            robust_npz_path=typed.paths.robust_npz_files[0],
+            explicit_coarse_npz_path=explicit_coarse_npz_path,
+        )
+        coarse_npz_path = require_existing_coarse_npz_path(
+            coarse_npz_path=coarse_npz_path,
+            robust_npz_path=typed.paths.robust_npz_files[0],
+            was_explicit=explicit_coarse_npz_path is not None,
+        )
+        coarse_payload = load_coarse_npz(coarse_npz_path)
 
     final_payload = build_fbpick_final_payload(
         coarse_payload=coarse_payload,

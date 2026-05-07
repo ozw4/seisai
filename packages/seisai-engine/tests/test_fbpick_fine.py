@@ -37,7 +37,12 @@ from seisai_engine.pipelines.fbpick.fine import (
     run_train,
     restore_local_pick_to_raw,
 )
-from seisai_engine.pipelines.fbpick.fine.infer import main as run_fine_infer_main
+from seisai_engine.pipelines.fbpick.fine.infer import (
+    _prepare_fine_infer_cfg,
+    main as run_fine_infer_main,
+    require_existing_coarse_npz_path,
+    resolve_fine_coarse_npz_path,
+)
 from seisai_engine.pipelines.fbpick.fine.init_from_coarse import (
     build_fine_init_state_dict,
     load_fine_init_from_coarse_checkpoint,
@@ -303,13 +308,18 @@ def _make_fine_infer_config(
     *,
     segy_path: str,
     robust_path: str,
+    coarse_path: str | None = None,
 ) -> dict:
+    paths = {
+        'segy_files': [segy_path],
+        'robust_npz_files': [robust_path],
+        'out_dir': str(tmp_path / 'fine_infer_out'),
+    }
+    if coarse_path is not None:
+        paths['coarse_npz_files'] = [coarse_path]
+
     return {
-        'paths': {
-            'segy_files': [segy_path],
-            'robust_npz_files': [robust_path],
-            'out_dir': str(tmp_path / 'fine_infer_out'),
-        },
+        'paths': paths,
         'dataset': {
             'use_header_cache': False,
             'verbose': False,
@@ -488,6 +498,81 @@ def test_load_fine_infer_config_returns_default_high_conf_threshold(
     assert typed.infer.high_conf_threshold == pytest.approx(0.5)
 
 
+def test_load_fine_infer_config_parses_explicit_coarse_npz_files(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+        coarse_path='other_dir/dummy.coarse.npz',
+    )
+
+    typed = load_fine_infer_config(cfg)
+
+    assert typed.paths.coarse_npz_files == ('other_dir/dummy.coarse.npz',)
+
+
+def test_prepare_fine_infer_cfg_expands_coarse_npz_listfile(tmp_path: Path) -> None:
+    data_dir = tmp_path / 'data'
+    physics_dir = tmp_path / 'physics'
+    coarse_dir = tmp_path / 'coarse'
+    list_dir = tmp_path / 'lists'
+    for directory in (data_dir, physics_dir, coarse_dir, list_dir):
+        directory.mkdir()
+
+    segy_path = data_dir / 'sample.sgy'
+    robust_path = physics_dir / 'sample.robust.npz'
+    coarse_path = coarse_dir / 'sample.coarse.npz'
+    for path in (segy_path, robust_path, coarse_path):
+        path.touch()
+
+    segy_list = list_dir / 'segy.txt'
+    robust_list = list_dir / 'robust.txt'
+    coarse_list = list_dir / 'coarse.txt'
+    segy_list.write_text('../data/sample.sgy\n', encoding='utf-8')
+    robust_list.write_text('../physics/sample.robust.npz\n', encoding='utf-8')
+    coarse_list.write_text('../coarse/sample.coarse.npz\n', encoding='utf-8')
+
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='unused.sgy',
+        robust_path='unused.robust.npz',
+    )
+    cfg['paths'] = {
+        'segy_files': 'lists/segy.txt',
+        'robust_npz_files': 'lists/robust.txt',
+        'coarse_npz_files': 'lists/coarse.txt',
+        'out_dir': 'out',
+    }
+
+    prepared = _prepare_fine_infer_cfg(cfg, base_dir=tmp_path)
+    typed = load_fine_infer_config(prepared)
+
+    assert typed.paths.segy_files == (str(segy_path.resolve()),)
+    assert typed.paths.robust_npz_files == (str(robust_path.resolve()),)
+    assert typed.paths.coarse_npz_files == (str(coarse_path.resolve()),)
+
+
+def test_load_fine_infer_config_rejects_explicit_coarse_length_mismatch(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['paths']['coarse_npz_files'] = [
+        'one.coarse.npz',
+        'two.coarse.npz',
+    ]
+
+    with pytest.raises(ValueError) as exc:
+        load_fine_infer_config(cfg)
+
+    assert 'must have the same length' in str(exc.value)
+
+
 def test_load_fine_infer_config_rejects_invalid_overlap(tmp_path: Path) -> None:
     cfg = _make_fine_infer_config(
         tmp_path,
@@ -518,6 +603,66 @@ def test_load_fine_infer_config_rejects_invalid_high_conf_threshold(
         load_fine_infer_config(cfg)
 
     assert 'infer.high_conf_threshold must lie in [0, 1]' in str(exc.value)
+
+
+def test_resolve_fine_coarse_npz_path_prefers_explicit_path(tmp_path: Path) -> None:
+    robust_path = tmp_path / 'physics' / 'sample.robust.npz'
+    explicit_path = tmp_path / 'coarse' / 'sample.coarse.npz'
+
+    resolved = resolve_fine_coarse_npz_path(
+        robust_npz_path=robust_path,
+        explicit_coarse_npz_path=explicit_path,
+    )
+
+    assert resolved == explicit_path.resolve()
+
+
+def test_resolve_fine_coarse_npz_path_infers_from_robust_path(tmp_path: Path) -> None:
+    robust_path = tmp_path / 'same_dir' / 'sample.robust.npz'
+
+    resolved = resolve_fine_coarse_npz_path(
+        robust_npz_path=robust_path,
+        explicit_coarse_npz_path=None,
+    )
+
+    assert resolved == (tmp_path / 'same_dir' / 'sample.coarse.npz').resolve()
+
+
+def test_require_existing_coarse_npz_path_reports_missing_explicit(
+    tmp_path: Path,
+) -> None:
+    coarse_path = tmp_path / 'missing' / 'sample.coarse.npz'
+
+    with pytest.raises(FileNotFoundError) as exc:
+        require_existing_coarse_npz_path(
+            coarse_npz_path=coarse_path,
+            robust_npz_path=tmp_path / 'sample.robust.npz',
+            was_explicit=True,
+        )
+
+    message = str(exc.value)
+    assert 'coarse npz file not found' in message
+    assert str(coarse_path.resolve()) in message
+    assert 'Set paths.coarse_npz_files explicitly' not in message
+
+
+def test_require_existing_coarse_npz_path_suggests_explicit_for_missing_inferred(
+    tmp_path: Path,
+) -> None:
+    robust_path = tmp_path / 'physics' / 'sample.robust.npz'
+    coarse_path = tmp_path / 'physics' / 'sample.coarse.npz'
+
+    with pytest.raises(FileNotFoundError) as exc:
+        require_existing_coarse_npz_path(
+            coarse_npz_path=coarse_path,
+            robust_npz_path=robust_path,
+            was_explicit=False,
+        )
+
+    message = str(exc.value)
+    assert 'coarse npz file not found' in message
+    assert f'inferred from robust npz: {robust_path.resolve()}' in message
+    assert 'Set paths.coarse_npz_files explicitly' in message
 
 
 def test_extract_local_windowed_view_zero_pads_and_restores_indices() -> None:
@@ -1006,6 +1151,55 @@ def test_run_fine_infer_builds_and_saves_final_payload(
 
     saved = load_fbpick_final_npz(tmp_path / 'fine_infer_out' / 'fine_public.fbpick_final.npz')
     np.testing.assert_array_equal(saved['final_pick_i'], final_pick.astype(np.int32))
+
+
+def test_run_fine_infer_uses_explicit_coarse_npz_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 160
+    n_samples = 512
+    dt_sec = 0.002
+    trace_axis = np.arange(n_traces, dtype=np.int32)
+    robust = 220 + ((trace_axis % 7) - 3) * 4
+    final_pick = robust + ((trace_axis % 5) - 2) * 7
+
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    for trace_idx, pick_idx in enumerate(final_pick.tolist()):
+        traces[trace_idx, int(pick_idx)] = 10.0 + 0.01 * float(trace_idx)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'fine_explicit.sgy', traces)
+    coarse_path = _write_coarse_with_n_samples(
+        tmp_path / 'coarse_out' / 'fine_explicit.coarse.npz',
+        coarse_pick_i=robust.astype(np.int32),
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'physics_out' / 'fine_explicit.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+
+    result = run_fine_infer(
+        model=_IdentityFineModel(),
+        cfg=_make_fine_infer_config(
+            tmp_path,
+            segy_path=segy_path,
+            robust_path=robust_path,
+            coarse_path=coarse_path,
+        ),
+        device=torch.device('cpu'),
+    )
+
+    validate_fbpick_final_payload(result, high_conf_threshold=0.5)
+    np.testing.assert_array_equal(result['final_pick_i'], final_pick.astype(np.int32))
 
 
 def test_fine_infer_main_merges_ckpt_cfg_and_writes_final_payload(
