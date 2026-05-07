@@ -73,6 +73,8 @@ _SAFE_OVERRIDE_PATHS = frozenset(
         'infer.source_model_id',
         'infer.iter_id',
         'infer.allow_unsafe_override',
+        'window_center.npz_key',
+        'window_center.fallback_npz_key',
         'viewer.enabled',
         'viewer.save_overview_png',
         'viewer.dpi',
@@ -103,6 +105,10 @@ def _default_cfg() -> dict[str, Any]:
             'time_len': 256,
             'center_index': 128,
             'standardize_eps': 1.0e-8,
+        },
+        'window_center': {
+            'npz_key': 'robust_pick_i',
+            'fallback_npz_key': None,
         },
         'infer': {
             'ckpt_path': '',
@@ -219,6 +225,8 @@ def _run_fine_local_infer_impl(
         waveform_mode=typed.dataset.waveform_mode,
         segy_endian=typed.dataset.infer_endian,
         use_header_cache=typed.dataset.use_header_cache,
+        window_center_npz_key=typed.window_center.npz_key,
+        window_center_fallback_npz_key=typed.window_center.fallback_npz_key,
     )
 
     loader = DataLoader(

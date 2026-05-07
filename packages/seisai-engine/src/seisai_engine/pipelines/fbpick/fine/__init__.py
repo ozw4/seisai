@@ -25,6 +25,7 @@ from .config import (
     FineInferConfig,
     FineTrainConfig,
     FineViewerCfg,
+    FineWindowCenterCfg,
     load_fine_infer_config,
     load_fine_train_config,
 )
@@ -60,6 +61,7 @@ __all__ = [
     'FineTrainBundle',
     'FineTrainConfig',
     'FineViewerCfg',
+    'FineWindowCenterCfg',
     'build_criterion',
     'build_fine_init_state_dict',
     'build_infer_transform',

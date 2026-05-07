@@ -220,6 +220,42 @@ def test_save_and_load_robust_npz_preserve_contract(tmp_path: Path) -> None:
             np.testing.assert_array_equal(loaded[key], value)
 
 
+def test_save_and_load_robust_npz_preserve_optional_center_fields(tmp_path: Path) -> None:
+    center_i = np.array([100, 105, 110], dtype=np.int32)
+    center_t_sec = center_i.astype(np.float32) * np.float32(0.004)
+    payload = {
+        'dt_sec': np.asarray(0.004, dtype=np.float32),
+        'n_samples_orig': np.asarray(512, dtype=np.int32),
+        'n_traces': np.asarray(3, dtype=np.int32),
+        'ffid_values': np.array([1, 1, 1], dtype=np.int32),
+        'chno_values': np.array([1, 2, 3], dtype=np.int32),
+        'offsets_m': np.array([100.0, 200.0, 300.0], dtype=np.float32),
+        'trace_indices': np.array([0, 1, 2], dtype=np.int64),
+        'robust_pick_i': np.array([101, 106, 111], dtype=np.int32),
+        'robust_pick_t_sec': np.array([0.404, 0.424, 0.444], dtype=np.float32),
+        'robust_conf': np.array([0.9, 0.8, 0.7], dtype=np.float32),
+        'robust_source': np.array([0, 2, 0], dtype=np.uint8),
+        'used_theoretical_mask': np.array([False, False, False], dtype=np.bool_),
+        'reason_mask': np.zeros((3,), dtype=np.uint8),
+        'conf_prob1': np.array([0.9, 0.2, 0.8], dtype=np.float32),
+        'conf_trend1': np.array([0.9, 0.6, 0.8], dtype=np.float32),
+        'conf_rs1': np.array([1.0, 1.0, 1.0], dtype=np.float32),
+        'lineage': np.asarray('{"iter_id":"","source_model_id":"x","cfg_hash":"y","git_sha":"z"}'),
+        'trend_center_i': center_i,
+        'trend_center_t_sec': center_t_sec,
+        'fine_center_i': center_i,
+        'fine_center_t_sec': center_t_sec,
+    }
+
+    out_path = save_robust_npz(tmp_path / 'centers.robust.npz', **payload)
+    loaded = load_robust_npz(out_path)
+
+    np.testing.assert_array_equal(loaded['trend_center_i'], center_i)
+    np.testing.assert_array_equal(loaded['trend_center_t_sec'], center_t_sec)
+    np.testing.assert_array_equal(loaded['fine_center_i'], center_i)
+    np.testing.assert_array_equal(loaded['fine_center_t_sec'], center_t_sec)
+
+
 def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     tmp_path: Path,
 ) -> None:
@@ -254,6 +290,24 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     assert out_path.name == 'synthetic.robust.npz'
     assert robust['robust_pick_i'].shape == (n_traces,)
     assert robust['robust_pick_t_sec'].shape == (n_traces,)
+    assert robust['trend_center_i'].shape == (n_traces,)
+    assert robust['trend_center_t_sec'].shape == (n_traces,)
+    assert robust['fine_center_i'].shape == (n_traces,)
+    assert robust['fine_center_t_sec'].shape == (n_traces,)
+    assert robust['trend_center_i'].dtype == np.int32
+    assert robust['trend_center_t_sec'].dtype == np.float32
+    assert robust['fine_center_i'].dtype == np.int32
+    assert robust['fine_center_t_sec'].dtype == np.float32
+    np.testing.assert_array_equal(robust['fine_center_i'], robust['trend_center_i'])
+    np.testing.assert_array_equal(
+        robust['fine_center_t_sec'],
+        robust['trend_center_t_sec'],
+    )
+    np.testing.assert_array_equal(
+        robust['fine_center_t_sec'],
+        robust['fine_center_i'].astype(np.float32)
+        * np.asarray(robust['dt_sec'], dtype=np.float32),
+    )
     assert np.all(robust['robust_pick_i'] >= 0)
     assert np.all(robust['robust_pick_i'] < int(np.asarray(robust['n_samples_orig']).item()))
     assert not bool(np.any(robust['used_theoretical_mask']))
@@ -281,6 +335,15 @@ def test_build_robust_payload_from_coarse_returns_required_keys(tmp_path: Path) 
     assert payload['robust_pick_i'].dtype == np.int32
     assert payload['robust_pick_t_sec'].dtype == np.float32
     assert payload['robust_source'].dtype == np.uint8
+    assert payload['trend_center_i'].dtype == np.int32
+    assert payload['trend_center_t_sec'].dtype == np.float32
+    assert payload['fine_center_i'].dtype == np.int32
+    assert payload['fine_center_t_sec'].dtype == np.float32
+    np.testing.assert_array_equal(payload['fine_center_i'], payload['trend_center_i'])
+    np.testing.assert_array_equal(
+        payload['fine_center_t_sec'],
+        payload['trend_center_t_sec'],
+    )
     assert lineage['source_model_id'] == 'coarse-model'
     assert lineage['git_sha'] is None
 
