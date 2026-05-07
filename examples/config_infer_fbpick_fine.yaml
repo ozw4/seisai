@@ -22,6 +22,10 @@ transform:
   center_index: 128
   standardize_eps: 1.0e-8
 
+window_center:
+  npz_key: fine_center_i
+  fallback_npz_key: robust_pick_i
+
 infer:
   ckpt_path: REPLACE_ME_fine_best.pt
   device: auto

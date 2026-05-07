@@ -49,6 +49,7 @@ __all__ = [
     'FineTrainCfg',
     'FineTrainConfig',
     'FineTransformCfg',
+    'FineWindowCenterCfg',
     'load_fine_infer_config',
     'load_fine_train_config',
 ]
@@ -95,6 +96,12 @@ class FineTransformCfg:
     time_len: int
     center_index: int
     standardize_eps: float
+
+
+@dataclass(frozen=True)
+class FineWindowCenterCfg:
+    npz_key: str
+    fallback_npz_key: str | None
 
 
 @dataclass(frozen=True)
@@ -150,6 +157,7 @@ class FineTrainConfig:
     paths: FinePaths
     dataset: FineDatasetCfg
     transform: FineTransformCfg
+    window_center: FineWindowCenterCfg
     train: FineTrainCfg
     init: FineInitCfg
     model_sig: dict[str, Any]
@@ -161,6 +169,7 @@ class FineInferConfig:
     paths: FinePaths
     dataset: FineDatasetCfg
     transform: FineTransformCfg
+    window_center: FineWindowCenterCfg
     infer: FineInferRuntimeCfg
     viewer: FineViewerCfg
     model_sig: dict[str, Any]
@@ -329,6 +338,37 @@ def _load_transform_cfg(cfg: dict) -> FineTransformCfg:
     )
 
 
+def _load_window_center_cfg(cfg: dict) -> FineWindowCenterCfg:
+    window_cfg = cfg.get('window_center')
+    if window_cfg is None:
+        window_cfg = {}
+    if not isinstance(window_cfg, dict):
+        msg = 'window_center must be dict'
+        raise TypeError(msg)
+
+    npz_key = optional_str(window_cfg, 'npz_key', 'robust_pick_i').strip()
+    if not npz_key:
+        msg = 'window_center.npz_key must be non-empty'
+        raise ValueError(msg)
+
+    fallback_raw = window_cfg.get('fallback_npz_key')
+    if fallback_raw is None:
+        fallback_npz_key = None
+    else:
+        if not isinstance(fallback_raw, str):
+            msg = 'window_center.fallback_npz_key must be str or null'
+            raise TypeError(msg)
+        fallback_npz_key = fallback_raw.strip()
+        if not fallback_npz_key:
+            msg = 'window_center.fallback_npz_key must be non-empty when provided'
+            raise ValueError(msg)
+
+    return FineWindowCenterCfg(
+        npz_key=npz_key,
+        fallback_npz_key=fallback_npz_key,
+    )
+
+
 def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
     viewer_cfg = cfg.get('viewer')
     if viewer_cfg is None:
@@ -452,6 +492,7 @@ def load_fine_train_config(
         ),
         dataset=_load_dataset_cfg(cfg),
         transform=_load_transform_cfg(cfg),
+        window_center=_load_window_center_cfg(cfg),
         train=FineTrainCfg(
             lr=float(require_float(train_cfg, 'lr')),
             weight_decay=float(optional_float(train_cfg, 'weight_decay', 0.0)),
@@ -509,6 +550,7 @@ def load_fine_infer_config(cfg: dict) -> FineInferConfig:
         ),
         dataset=_load_dataset_cfg(cfg),
         transform=transform,
+        window_center=_load_window_center_cfg(cfg),
         infer=FineInferRuntimeCfg(
             batch_size=int(optional_int(infer_cfg, 'batch_size', 1)),
             num_workers=int(optional_int(infer_cfg, 'num_workers', 0)),

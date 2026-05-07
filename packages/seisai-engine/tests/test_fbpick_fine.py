@@ -176,33 +176,40 @@ def _write_robust_with_n_samples(
     robust_pick_i: np.ndarray,
     n_samples_orig: int,
     dt_sec: float,
+    fine_center_i: np.ndarray | None = None,
 ) -> str:
     robust_pick_i_arr = np.asarray(robust_pick_i, dtype=np.int32)
     n_traces = int(robust_pick_i_arr.shape[0])
-    save_robust_npz(
-        path,
-        dt_sec=float(dt_sec),
-        n_samples_orig=int(n_samples_orig),
-        n_traces=n_traces,
-        ffid_values=np.ones(n_traces, dtype=np.int32),
-        chno_values=np.arange(1, n_traces + 1, dtype=np.int32),
-        offsets_m=np.arange(n_traces, dtype=np.float32) * 10.0,
-        trace_indices=np.arange(n_traces, dtype=np.int64),
-        robust_pick_i=robust_pick_i_arr,
-        robust_pick_t_sec=robust_pick_i_arr.astype(np.float32) * np.float32(dt_sec),
-        robust_conf=np.ones(n_traces, dtype=np.float32),
-        robust_source=np.full(
+    payload = {
+        'dt_sec': float(dt_sec),
+        'n_samples_orig': int(n_samples_orig),
+        'n_traces': n_traces,
+        'ffid_values': np.ones(n_traces, dtype=np.int32),
+        'chno_values': np.arange(1, n_traces + 1, dtype=np.int32),
+        'offsets_m': np.arange(n_traces, dtype=np.float32) * 10.0,
+        'trace_indices': np.arange(n_traces, dtype=np.int64),
+        'robust_pick_i': robust_pick_i_arr,
+        'robust_pick_t_sec': robust_pick_i_arr.astype(np.float32) * np.float32(dt_sec),
+        'robust_conf': np.ones(n_traces, dtype=np.float32),
+        'robust_source': np.full(
             n_traces,
             ROBUST_SOURCE_COARSE_OBSERVED,
             dtype=np.uint8,
         ),
-        used_theoretical_mask=np.zeros(n_traces, dtype=np.bool_),
-        reason_mask=np.zeros(n_traces, dtype=np.uint8),
-        conf_prob1=np.ones(n_traces, dtype=np.float32),
-        conf_trend1=np.ones(n_traces, dtype=np.float32),
-        conf_rs1=np.ones(n_traces, dtype=np.float32),
-        lineage=np.asarray('synthetic-lineage'),
-    )
+        'used_theoretical_mask': np.zeros(n_traces, dtype=np.bool_),
+        'reason_mask': np.zeros(n_traces, dtype=np.uint8),
+        'conf_prob1': np.ones(n_traces, dtype=np.float32),
+        'conf_trend1': np.ones(n_traces, dtype=np.float32),
+        'conf_rs1': np.ones(n_traces, dtype=np.float32),
+        'lineage': np.asarray('synthetic-lineage'),
+    }
+    if fine_center_i is not None:
+        fine_center_i_arr = np.asarray(fine_center_i, dtype=np.int32)
+        payload['fine_center_i'] = fine_center_i_arr
+        payload['fine_center_t_sec'] = (
+            fine_center_i_arr.astype(np.float32) * np.float32(dt_sec)
+        )
+    save_robust_npz(path, **payload)
     return str(path.resolve())
 
 
@@ -430,6 +437,8 @@ def test_load_fine_train_config_returns_fixed_contract_values(tmp_path: Path) ->
     assert typed.train.fb_sigma_ms == pytest.approx(3.0)
     assert typed.model_sig['in_chans'] == 1
     assert typed.model_sig['out_chans'] == 1
+    assert typed.window_center.npz_key == 'robust_pick_i'
+    assert typed.window_center.fallback_npz_key is None
     assert typed.ckpt.pipeline == 'fbpick'
     assert typed.ckpt.stage == 'fine'
     assert typed.ckpt.output_ids == ('P',)
@@ -496,6 +505,25 @@ def test_load_fine_infer_config_returns_default_high_conf_threshold(
     )
 
     assert typed.infer.high_conf_threshold == pytest.approx(0.5)
+    assert typed.window_center.npz_key == 'robust_pick_i'
+    assert typed.window_center.fallback_npz_key is None
+
+
+def test_load_fine_infer_config_parses_window_center(tmp_path: Path) -> None:
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['window_center'] = {
+        'npz_key': 'fine_center_i',
+        'fallback_npz_key': 'robust_pick_i',
+    }
+
+    typed = load_fine_infer_config(cfg)
+
+    assert typed.window_center.npz_key == 'fine_center_i'
+    assert typed.window_center.fallback_npz_key == 'robust_pick_i'
 
 
 def test_load_fine_infer_config_parses_explicit_coarse_npz_files(
@@ -817,6 +845,57 @@ def test_fine_infer_dataset_meta_includes_raw_restore_fields(
     assert int(meta['center_raw_i'][0]) == int(robust[0])
 
 
+def test_fine_infer_dataset_uses_configured_fine_center(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 160
+    n_samples = 512
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 80, dtype=np.int32)
+    fine_center = np.linspace(180, 220, n_traces, dtype=np.int32)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'infer_fine_center.sgy', traces)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'infer_fine_center.robust.npz',
+        robust_pick_i=robust,
+        fine_center_i=fine_center,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+
+    ds = build_raw_infer_dataset(
+        segy_files=[segy_path],
+        robust_npz_files=[robust_path],
+        plan=build_plan(sigma_ms=3.0, sigma_samples_min=1.5, sigma_samples_max=12.0),
+        trace_len=128,
+        overlap_h=96,
+        time_len=256,
+        center_index=128,
+        standardize_eps=1.0e-8,
+        waveform_mode='eager',
+        segy_endian='big',
+        use_header_cache=False,
+        window_center_npz_key='fine_center_i',
+        window_center_fallback_npz_key='robust_pick_i',
+    )
+
+    try:
+        sample = ds[0]
+    finally:
+        ds.close()
+
+    meta = sample['meta']
+    np.testing.assert_array_equal(meta['center_raw_i'][:5], fine_center[:5])
+    np.testing.assert_array_equal(meta['window_start_i'][:5], fine_center[:5] - 128)
+
+
 def test_build_fine_init_state_dict_slices_first_conv_waveform_channel() -> None:
     coarse_model = build_coarse_model(_coarse_model_sig())
     fine_model = build_fine_model(_fine_model_sig())
@@ -1092,6 +1171,58 @@ def test_run_fine_local_infer_restores_raw_indices_and_covers_all_traces(
         final_pick.astype(np.float32) * np.float32(dt_sec),
         atol=1.0e-6,
     )
+
+
+def test_run_fine_local_infer_uses_configured_fine_center(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 160
+    n_samples = 512
+    dt_sec = 0.002
+    trace_axis = np.arange(n_traces, dtype=np.int32)
+    robust = np.full((n_traces,), 80, dtype=np.int32)
+    fine_center = 220 + ((trace_axis % 7) - 3) * 4
+    final_pick = fine_center + ((trace_axis % 5) - 2) * 7
+
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    for trace_idx, pick_idx in enumerate(final_pick.tolist()):
+        traces[trace_idx, int(pick_idx)] = 10.0 + 0.01 * float(trace_idx)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'fine_center_infer.sgy', traces)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'fine_center_infer.robust.npz',
+        robust_pick_i=robust,
+        fine_center_i=fine_center,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path=segy_path,
+        robust_path=robust_path,
+    )
+    cfg['window_center'] = {
+        'npz_key': 'fine_center_i',
+        'fallback_npz_key': 'robust_pick_i',
+    }
+    result = run_fine_local_infer(
+        model=_IdentityFineModel(),
+        cfg=cfg,
+        device=torch.device('cpu'),
+    )
+
+    np.testing.assert_array_equal(
+        result['window_start_i'],
+        (fine_center - 128).astype(np.int32),
+    )
+    np.testing.assert_array_equal(result['final_pick_i'], final_pick.astype(np.int32))
 
 
 def test_run_fine_infer_builds_and_saves_final_payload(

@@ -81,6 +81,27 @@ def _validate_unit_interval(name: str, arr: np.ndarray) -> None:
         raise ValueError(msg)
 
 
+def _validate_pick_time_pair(
+    *,
+    pick_key: str,
+    time_key: str,
+    pick_i: np.ndarray,
+    pick_t_sec: np.ndarray,
+    dt_sec: float,
+    n_samples_orig: int,
+) -> None:
+    if np.any(pick_i < 0) or np.any(pick_i >= int(n_samples_orig)):
+        msg = f'{pick_key} must lie in [0, n_samples_orig)'
+        raise ValueError(msg)
+    if not np.all(np.isfinite(pick_t_sec)):
+        msg = f'{time_key} must be finite'
+        raise ValueError(msg)
+    expected_t_sec = pick_i.astype(np.float32) * np.float32(dt_sec)
+    if not np.array_equal(pick_t_sec, expected_t_sec):
+        msg = f'{time_key} must equal {pick_key} * dt_sec'
+        raise ValueError(msg)
+
+
 def _require_exact_dtype(name: str, arr: np.ndarray, *, dtype) -> None:
     if arr.dtype != np.dtype(dtype):
         msg = f'{name} dtype must be {np.dtype(dtype)}, got {arr.dtype}'
@@ -283,6 +304,10 @@ def save_robust_npz(
     conf_trend1,
     conf_rs1,
     lineage,
+    trend_center_i=None,
+    trend_center_t_sec=None,
+    fine_center_i=None,
+    fine_center_t_sec=None,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -384,6 +409,44 @@ def save_robust_npz(
         'lineage': _coerce_lineage(lineage),
     }
 
+    optional_center_values = {
+        'trend_center_i': trend_center_i,
+        'trend_center_t_sec': trend_center_t_sec,
+        'fine_center_i': fine_center_i,
+        'fine_center_t_sec': fine_center_t_sec,
+    }
+    for pick_key, time_key in (
+        ('trend_center_i', 'trend_center_t_sec'),
+        ('fine_center_i', 'fine_center_t_sec'),
+    ):
+        pick_value = optional_center_values[pick_key]
+        time_value = optional_center_values[time_key]
+        if pick_value is None and time_value is None:
+            continue
+        if pick_value is None or time_value is None:
+            msg = f'{pick_key} and {time_key} must be provided together'
+            raise ValueError(msg)
+        arrays[pick_key] = _coerce_vector(
+            pick_key,
+            pick_value,
+            dtype=np.int32,
+            length=n_traces_int,
+        )
+        arrays[time_key] = _coerce_vector(
+            time_key,
+            time_value,
+            dtype=np.float32,
+            length=n_traces_int,
+        )
+        _validate_pick_time_pair(
+            pick_key=pick_key,
+            time_key=time_key,
+            pick_i=arrays[pick_key],
+            pick_t_sec=arrays[time_key],
+            dt_sec=float(arrays['dt_sec'].item()),
+            n_samples_orig=n_samples_orig_int,
+        )
+
     robust_pick_i_arr = arrays['robust_pick_i']
     if np.any(robust_pick_i_arr < 0) or np.any(robust_pick_i_arr >= n_samples_orig_int):
         msg = 'robust_pick_i must lie in [0, n_samples_orig)'
@@ -466,6 +529,34 @@ def load_robust_npz(path: str | Path) -> dict[str, np.ndarray]:
             msg = f'{key} must be 1D with length n_traces'
             raise ValueError(msg)
         _require_exact_dtype(key, arr, dtype=dtype)
+
+    for pick_key, time_key in (
+        ('trend_center_i', 'trend_center_t_sec'),
+        ('fine_center_i', 'fine_center_t_sec'),
+    ):
+        if pick_key not in out and time_key not in out:
+            continue
+        if pick_key not in out or time_key not in out:
+            msg = f'robust npz must contain both {pick_key} and {time_key}'
+            raise KeyError(msg)
+        pick_i = np.asarray(out[pick_key])
+        pick_t_sec = np.asarray(out[time_key])
+        if pick_i.ndim != 1 or int(pick_i.shape[0]) != n_traces:
+            msg = f'{pick_key} must be 1D with length n_traces'
+            raise ValueError(msg)
+        if pick_t_sec.ndim != 1 or int(pick_t_sec.shape[0]) != n_traces:
+            msg = f'{time_key} must be 1D with length n_traces'
+            raise ValueError(msg)
+        _require_exact_dtype(pick_key, pick_i, dtype=np.int32)
+        _require_exact_dtype(time_key, pick_t_sec, dtype=np.float32)
+        _validate_pick_time_pair(
+            pick_key=pick_key,
+            time_key=time_key,
+            pick_i=pick_i,
+            pick_t_sec=pick_t_sec,
+            dt_sec=float(np.asarray(out['dt_sec']).item()),
+            n_samples_orig=n_samples_orig,
+        )
 
     if np.any(np.asarray(out['robust_pick_i']) < 0) or np.any(
         np.asarray(out['robust_pick_i']) >= n_samples_orig

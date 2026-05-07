@@ -67,6 +67,10 @@ def build_robust_payload_from_coarse(
         'conf_prob1': np.asarray(confidence.conf_prob1, dtype=np.float32),
         'conf_trend1': np.asarray(confidence.conf_trend1, dtype=np.float32),
         'conf_rs1': np.asarray(confidence.conf_rs1, dtype=np.float32),
+        'trend_center_i': np.asarray(trend.trend_center_i, dtype=np.int32),
+        'trend_center_t_sec': np.asarray(trend.trend_center_sec, dtype=np.float32),
+        'fine_center_i': np.asarray(trend.trend_center_i, dtype=np.int32),
+        'fine_center_t_sec': np.asarray(trend.trend_center_sec, dtype=np.float32),
         'lineage': build_lineage_payload(
             canonical_cfg,
             repo_root=repo_root,

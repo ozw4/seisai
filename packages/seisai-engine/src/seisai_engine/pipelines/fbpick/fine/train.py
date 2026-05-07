@@ -209,6 +209,8 @@ def build_train_bundle(
         use_header_cache=typed.dataset.use_header_cache,
         waveform_mode=typed.dataset.waveform_mode,
         segy_endian=typed.dataset.train_endian,
+        window_center_npz_key=typed.window_center.npz_key,
+        window_center_fallback_npz_key=typed.window_center.fallback_npz_key,
     )
     ds_infer_full = build_labeled_infer_dataset(
         segy_files=list(typed.paths.infer_segy_files),
@@ -229,6 +231,8 @@ def build_train_bundle(
         use_header_cache=typed.dataset.use_header_cache,
         waveform_mode=typed.dataset.waveform_mode,
         segy_endian=typed.dataset.train_endian,
+        window_center_npz_key=typed.window_center.npz_key,
+        window_center_fallback_npz_key=typed.window_center.fallback_npz_key,
     )
 
     model_sig = dict(typed.model_sig)

@@ -93,7 +93,29 @@ def _validate_local_transform_meta(meta: dict) -> None:
     meta['start'] = 0
 
 
-def _load_robust_centers_for_info(robust_npz_path: str, info) -> np.ndarray:
+def _select_center_vector(
+    robust: dict[str, np.ndarray],
+    *,
+    npz_key: str,
+    fallback_npz_key: str | None,
+) -> tuple[str, np.ndarray]:
+    center_key = str(npz_key)
+    fallback_key = None if fallback_npz_key is None else str(fallback_npz_key)
+    if center_key in robust:
+        return center_key, np.asarray(robust[center_key])
+    if fallback_key is not None and fallback_key in robust:
+        return fallback_key, np.asarray(robust[fallback_key])
+    msg = f'robust npz missing requested fine window center key: {center_key}'
+    raise KeyError(msg)
+
+
+def _load_robust_centers_for_info(
+    robust_npz_path: str,
+    info,
+    *,
+    npz_key: str = 'robust_pick_i',
+    fallback_npz_key: str | None = None,
+) -> np.ndarray:
     robust = load_robust_npz(robust_npz_path)
     n_traces = int(np.asarray(robust['n_traces']).item())
     n_samples_orig = int(np.asarray(robust['n_samples_orig']).item())
@@ -118,9 +140,21 @@ def _load_robust_centers_for_info(robust_npz_path: str, info) -> np.ndarray:
         msg = f'robust dt_sec {dt_sec} != info.dt_sec {float(info["dt_sec"])}'
         raise ValueError(msg)
 
-    centers = np.asarray(robust['robust_pick_i'], dtype=np.int64)
+    selected_key, selected = _select_center_vector(
+        robust,
+        npz_key=npz_key,
+        fallback_npz_key=fallback_npz_key,
+    )
+    if selected.ndim != 1 or int(selected.shape[0]) != n_traces:
+        msg = f'{selected_key} must be 1D with length n_traces'
+        raise ValueError(msg)
+    if not np.issubdtype(selected.dtype, np.integer):
+        msg = f'{selected_key} must be an integer center vector'
+        raise ValueError(msg)
+
+    centers = selected.astype(np.int64, copy=False)
     if np.any(centers < 0) or np.any(centers >= n_samples_orig):
-        msg = 'robust_pick_i must lie in [0, n_samples_orig)'
+        msg = f'{selected_key} must lie in [0, n_samples_orig)'
         raise ValueError(msg)
     return centers
 
@@ -330,16 +364,25 @@ class _FineLocalWindowTrainDataset(SegyGatherPipelineDataset):
         self,
         *,
         robust_npz_files: list[str],
+        window_center_npz_key: str = 'robust_pick_i',
+        window_center_fallback_npz_key: str | None = None,
         **kwargs,
     ) -> None:
         self._robust_npz_files = list(robust_npz_files)
+        self._window_center_npz_key = str(window_center_npz_key)
+        self._window_center_fallback_npz_key = window_center_fallback_npz_key
         super().__init__(**kwargs)
         if len(self._robust_npz_files) != len(self.file_infos):
             msg = 'robust_npz_files length must match indexed training files'
             raise ValueError(msg)
         self._center_pick_by_path: dict[str, np.ndarray] = {}
         for info, robust_npz_path in zip(self.file_infos, self._robust_npz_files, strict=True):
-            centers = _load_robust_centers_for_info(robust_npz_path, info)
+            centers = _load_robust_centers_for_info(
+                robust_npz_path,
+                info,
+                npz_key=self._window_center_npz_key,
+                fallback_npz_key=self._window_center_fallback_npz_key,
+            )
             self._center_pick_by_path[str(info.path)] = centers
 
     def _init_rejection_counters(self) -> dict[str, int]:
@@ -463,17 +506,26 @@ class FineInferenceGatherWindowsDataset(InferenceGatherWindowsDataset):
         *,
         robust_npz_files: Sequence[str],
         center_index: int,
+        window_center_npz_key: str = 'robust_pick_i',
+        window_center_fallback_npz_key: str | None = None,
         **kwargs,
     ) -> None:
         self._robust_npz_files = list(robust_npz_files)
         self._center_index = int(center_index)
+        self._window_center_npz_key = str(window_center_npz_key)
+        self._window_center_fallback_npz_key = window_center_fallback_npz_key
         super().__init__(**kwargs)
         if len(self._robust_npz_files) != len(self.file_infos):
             msg = 'robust_npz_files length must match indexed inference files'
             raise ValueError(msg)
         self._center_pick_by_path: dict[str, np.ndarray] = {}
         for info, robust_npz_path in zip(self.file_infos, self._robust_npz_files, strict=True):
-            centers = _load_robust_centers_for_info(robust_npz_path, info)
+            centers = _load_robust_centers_for_info(
+                robust_npz_path,
+                info,
+                npz_key=self._window_center_npz_key,
+                fallback_npz_key=self._window_center_fallback_npz_key,
+            )
             self._center_pick_by_path[str(info['path'])] = centers
 
     def __getitem__(self, i: int) -> dict:
@@ -625,6 +677,8 @@ def _build_labeled_dataset(
     use_header_cache: bool,
     waveform_mode: str,
     segy_endian: str,
+    window_center_npz_key: str = 'robust_pick_i',
+    window_center_fallback_npz_key: str | None = None,
 ) -> SegyGatherPipelineDataset:
     if sampling_overrides is not None and len(sampling_overrides) != len(segy_files):
         msg = 'sampling_overrides length must match segy_files length'
@@ -649,6 +703,8 @@ def _build_labeled_dataset(
         segy_files=list(segy_files),
         fb_files=list(fb_files),
         robust_npz_files=list(robust_npz_files),
+        window_center_npz_key=str(window_center_npz_key),
+        window_center_fallback_npz_key=window_center_fallback_npz_key,
         sampling_overrides=sampling_overrides,
         transform=transform,
         sample_transformer=sample_transformer,
@@ -690,6 +746,8 @@ def build_train_dataset(
     use_header_cache: bool,
     waveform_mode: str,
     segy_endian: str,
+    window_center_npz_key: str = 'robust_pick_i',
+    window_center_fallback_npz_key: str | None = None,
 ) -> SegyGatherPipelineDataset:
     return _build_labeled_dataset(
         segy_files=segy_files,
@@ -701,6 +759,8 @@ def build_train_dataset(
         trace_len=trace_len,
         time_len=time_len,
         center_index=center_index,
+        window_center_npz_key=window_center_npz_key,
+        window_center_fallback_npz_key=window_center_fallback_npz_key,
         standardize_eps=standardize_eps,
         trace_decimate_prob=trace_decimate_prob,
         trace_decimate_stride_range=trace_decimate_stride_range,
@@ -735,6 +795,8 @@ def build_labeled_infer_dataset(
     use_header_cache: bool,
     waveform_mode: str,
     segy_endian: str,
+    window_center_npz_key: str = 'robust_pick_i',
+    window_center_fallback_npz_key: str | None = None,
 ) -> SegyGatherPipelineDataset:
     return _build_labeled_dataset(
         segy_files=segy_files,
@@ -746,6 +808,8 @@ def build_labeled_infer_dataset(
         trace_len=trace_len,
         time_len=time_len,
         center_index=center_index,
+        window_center_npz_key=window_center_npz_key,
+        window_center_fallback_npz_key=window_center_fallback_npz_key,
         standardize_eps=standardize_eps,
         trace_decimate_prob=0.0,
         trace_decimate_stride_range=(1, 1),
@@ -773,6 +837,8 @@ def build_raw_infer_dataset(
     waveform_mode: str,
     segy_endian: str,
     use_header_cache: bool,
+    window_center_npz_key: str = 'robust_pick_i',
+    window_center_fallback_npz_key: str | None = None,
 ) -> FineInferenceGatherWindowsDataset:
     stride_traces = int(trace_len) - int(overlap_h)
     if stride_traces <= 0:
@@ -796,6 +862,8 @@ def build_raw_infer_dataset(
         fb_files=None,
         robust_npz_files=list(robust_npz_files),
         center_index=int(center_index),
+        window_center_npz_key=str(window_center_npz_key),
+        window_center_fallback_npz_key=window_center_fallback_npz_key,
         plan=plan,
         cfg=cfg,
         transform=build_infer_transform(standardize_eps=float(standardize_eps)),
