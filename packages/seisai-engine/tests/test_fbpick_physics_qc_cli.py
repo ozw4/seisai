@@ -30,12 +30,16 @@ def test_load_vis_cfg_parses_skip_keys_and_max_traces() -> None:
             'vis': {
                 'skip_gather_keys': {'ffid': [0], 'cmp': [-1, 2]},
                 'max_traces_per_gather': 10000,
+                'waveform_norm': 'per_trace',
+                'clip_percentile': 99.0,
             }
         }
     )
 
     assert vis_cfg['skip_gather_keys'] == {'ffid': {0}, 'cmp': {-1, 2}}
     assert vis_cfg['max_traces_per_gather'] == 10000
+    assert vis_cfg['waveform_norm'] == 'per_trace'
+    assert vis_cfg['clip_percentile'] == 99.0
 
 
 def test_load_vis_cfg_allows_null_max_traces() -> None:
@@ -55,6 +59,12 @@ def test_load_vis_cfg_allows_null_max_traces() -> None:
         {'skip_gather_keys': {1: [0]}},
         {'max_traces_per_gather': 0},
         {'max_traces_per_gather': True},
+        {'waveform_norm': 'invalid'},
+        {'waveform_norm': 1},
+        {'clip_percentile': 0.0},
+        {'clip_percentile': 100.1},
+        {'clip_percentile': True},
+        {'clip_percentile': '99.0'},
     ],
 )
 def test_load_vis_cfg_rejects_invalid_new_fields(vis: dict[str, object]) -> None:
@@ -159,3 +169,42 @@ def test_save_vis_pngs_skips_oversized_before_mmap_access(
     assert f'No gather PNGs written for {segy_path}: all candidates were skipped' in (
         captured.out
     )
+
+
+def test_save_vis_pngs_passes_waveform_display_config(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def _save(out_png: Path, **kwargs: object) -> Path:
+        captured.update(kwargs)
+        return out_png
+
+    segy_path = tmp_path / 'line' / 'small.sgy'
+    segy_path.parent.mkdir()
+    info = _ffid_info({1: [0, 1]})
+    info['mmap'] = [
+        np.asarray([0.0, 1.0, -1.0], dtype=np.float32),
+        np.asarray([0.0, 1000.0, -1000.0], dtype=np.float32),
+    ]
+    runtime = SimpleNamespace(save_fbpick_physics_qc_gather_png=_save)
+
+    out_paths = physics_qc_cli._save_vis_pngs(
+        info=info,
+        segy_path=str(segy_path),
+        out_dir=tmp_path / 'out',
+        gt_pick_i=np.asarray([1, 1], dtype=np.int64),
+        coarse_pick_i=np.asarray([1, 1], dtype=np.int64),
+        robust_pick_i=np.asarray([1, 1], dtype=np.int64),
+        dataset_cfg={'primary_keys': ['ffid']},
+        vis_cfg={
+            'max_gathers_per_file': 1,
+            'skip_gather_keys': {},
+            'max_traces_per_gather': None,
+            'waveform_norm': 'per_trace',
+            'clip_percentile': 98.5,
+        },
+        runtime=runtime,
+    )
+
+    assert len(out_paths) == 1
+    assert captured['waveform_norm'] == 'per_trace'
+    assert captured['clip_percentile'] == 98.5

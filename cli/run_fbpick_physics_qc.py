@@ -227,6 +227,29 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		msg = 'vis.save_summary_csv must be bool'
 		raise TypeError(msg)
 
+	waveform_norm = vis.get('waveform_norm', 'global')
+	if not isinstance(waveform_norm, str):
+		msg = 'vis.waveform_norm must be str'
+		raise TypeError(msg)
+	if waveform_norm not in ('global', 'per_trace'):
+		msg = 'vis.waveform_norm must be one of: global, per_trace'
+		raise ValueError(msg)
+
+	clip_percentile_raw = vis.get('clip_percentile', 99.0)
+	if isinstance(clip_percentile_raw, bool) or not isinstance(
+		clip_percentile_raw, (int, float)
+	):
+		msg = 'vis.clip_percentile must be float'
+		raise TypeError(msg)
+	clip_percentile = float(clip_percentile_raw)
+	if (
+		not np.isfinite(clip_percentile)
+		or clip_percentile <= 0.0
+		or clip_percentile > 100.0
+	):
+		msg = 'vis.clip_percentile must lie in (0, 100]'
+		raise ValueError(msg)
+
 	skip_gather_keys_raw = vis.get('skip_gather_keys', {})
 	if not isinstance(skip_gather_keys_raw, dict) or not all(
 		isinstance(key, str) for key in skip_gather_keys_raw
@@ -260,6 +283,8 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		'max_gathers_per_file': int(max_gathers_per_file),
 		'save_cdf': bool(save_cdf),
 		'save_summary_csv': bool(save_summary_csv),
+		'waveform_norm': waveform_norm,
+		'clip_percentile': clip_percentile,
 		'skip_gather_keys': skip_gather_keys,
 		'max_traces_per_gather': max_traces_per_gather,
 	}
@@ -405,6 +430,8 @@ def _save_vis_pngs(
 				coarse_pick_i=coarse_pick_i[trace_indices],
 				robust_pick_i=robust_pick_i[trace_indices],
 				title=title,
+				waveform_norm=str(vis_cfg['waveform_norm']),
+				clip_percentile=float(vis_cfg['clip_percentile']),
 			)
 		)
 	if not out_paths:

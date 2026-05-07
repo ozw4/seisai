@@ -11,6 +11,8 @@ dataset:
   use_header_cache: true
 
 vis:
+  waveform_norm: per_trace
+  clip_percentile: 99.0
   max_gathers_per_file: 8
   save_cdf: true
   save_summary_csv: true
