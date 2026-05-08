@@ -8,6 +8,7 @@ from seisai_engine.viewer.fbpick import (
     _normalize_waveform_for_qc_display,
     _pad_chw_to_min_tile,
     _resolve_channel_index,
+    save_fbpick_fine_qc_gather_png,
     save_fbpick_physics_qc_gather_png,
 )
 
@@ -279,6 +280,44 @@ def test_save_fbpick_physics_qc_gather_png_per_trace_smoke(tmp_path) -> None:
         gt_pick_i=picks,
         coarse_pick_i=picks,
         robust_pick_i=picks,
+        waveform_norm='per_trace',
+        clip_percentile=99.0,
+    )
+
+    assert out_path == out_png.resolve()
+    assert out_path.is_file()
+    assert out_path.stat().st_size > 0
+
+
+def test_save_fbpick_fine_qc_gather_png_per_trace_smoke(tmp_path) -> None:
+    out_png = tmp_path / 'fine_gather.png'
+    wave = np.asarray(
+        [
+            [0.0, 0.5, 1.0, -0.5],
+            [0.0, 500.0, 1000.0, -500.0],
+            [0.0, -1.0, -0.5, 0.25],
+        ],
+        dtype=np.float32,
+    )
+    n_traces = 3
+    picks = np.asarray([1, 2, 1], dtype=np.int32)
+    final_payload = {
+        'n_traces': np.asarray(n_traces, dtype=np.int32),
+        'coarse_pick_i': picks,
+        'robust_pick_i': picks,
+        'window_start_i': np.zeros(n_traces, dtype=np.int32),
+        'window_end_i': np.full(n_traces, 3, dtype=np.int32),
+        'final_pick_i': picks,
+        'high_conf_mask': np.asarray([True, False, True], dtype=np.bool_),
+        'reject_mask': np.asarray([False, True, False], dtype=np.bool_),
+        'final_conf': np.asarray([0.9, 0.4, 0.8], dtype=np.float32),
+    }
+
+    out_path = save_fbpick_fine_qc_gather_png(
+        out_png,
+        raw_wave_hw=wave,
+        final_payload=final_payload,
+        trace_indices=np.arange(n_traces, dtype=np.int64),
         waveform_norm='per_trace',
         clip_percentile=99.0,
     )

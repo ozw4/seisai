@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, Subset
 
 import seisai_dataset.infer_window_dataset as infer_window_dataset
 import seisai_dataset.segy_gather_pipeline_dataset as segy_gather_pipeline_dataset
+import seisai_engine.pipelines.fbpick.fine.infer as fine_infer_module
 from seisai_dataset.file_info import FileInfo
 from seisai_engine.pipelines.common import load_checkpoint
 from seisai_engine.pipelines.fbpick.common import (
@@ -43,6 +44,7 @@ from seisai_engine.pipelines.fbpick.fine import (
 )
 from seisai_engine.pipelines.fbpick.fine.infer import (
     _prepare_fine_infer_cfg,
+    _save_fine_gather_qc_pngs,
     main as run_fine_infer_main,
     require_existing_coarse_npz_path,
     resolve_fine_coarse_npz_path,
@@ -106,6 +108,60 @@ def _make_file_info(path: str, traces: np.ndarray, *, dt_sec: float) -> FileInfo
         ffid_centroids=None,
         chno_centroids=None,
     )
+
+
+def _make_qc_info(
+    *,
+    traces: np.ndarray | object,
+    key_to_indices: dict[int, list[int] | np.ndarray],
+    n_traces: int,
+    n_samples: int,
+    dt_sec: float = 0.002,
+) -> dict[str, object]:
+    return {
+        'path': 'qc.sgy',
+        'mmap': traces,
+        'segy_obj': _DummySegy(),
+        'dt_sec': float(dt_sec),
+        'n_traces': int(n_traces),
+        'n_samples': int(n_samples),
+        'ffid_values': np.ones(n_traces, dtype=np.int32),
+        'chno_values': np.arange(1, n_traces + 1, dtype=np.int32),
+        'cmp_values': None,
+        'ffid_key_to_indices': {
+            key: np.asarray(indices, dtype=np.int64)
+            for key, indices in key_to_indices.items()
+        },
+        'chno_key_to_indices': None,
+        'cmp_key_to_indices': None,
+        'offsets': np.arange(n_traces, dtype=np.float32),
+    }
+
+
+def _make_final_payload_for_qc(
+    *,
+    n_traces: int,
+    n_samples: int,
+    dt_sec: float = 0.002,
+) -> dict[str, np.ndarray]:
+    base = np.arange(n_traces, dtype=np.int32)
+    coarse = np.clip(10 + base, 0, n_samples - 1).astype(np.int32)
+    robust = np.clip(coarse + 1, 0, n_samples - 1).astype(np.int32)
+    final = np.clip(robust + 1, 0, n_samples - 1).astype(np.int32)
+    return {
+        'dt_sec': np.asarray(dt_sec, dtype=np.float32),
+        'n_samples_orig': np.asarray(n_samples, dtype=np.int32),
+        'n_traces': np.asarray(n_traces, dtype=np.int32),
+        'trace_indices': np.arange(n_traces, dtype=np.int64),
+        'coarse_pick_i': coarse,
+        'robust_pick_i': robust,
+        'window_start_i': np.maximum(final - 128, 0).astype(np.int32),
+        'window_end_i': np.minimum(final + 127, n_samples - 1).astype(np.int32),
+        'final_pick_i': final,
+        'high_conf_mask': np.ones(n_traces, dtype=np.bool_),
+        'reject_mask': np.zeros(n_traces, dtype=np.bool_),
+        'final_conf': np.ones(n_traces, dtype=np.float32),
+    }
 
 
 def _patch_synthetic_file_infos(
@@ -664,6 +720,43 @@ def test_load_fine_infer_config_returns_default_high_conf_threshold(
     assert typed.infer.high_conf_threshold == pytest.approx(0.5)
     assert typed.window_center.npz_key == 'robust_pick_i'
     assert typed.window_center.fallback_npz_key is None
+    assert typed.viewer.enabled is False
+    assert typed.viewer.save_overview_png is False
+    assert typed.viewer.save_gather_png is False
+
+
+def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['viewer'] = {
+        'enabled': True,
+        'save_overview_png': False,
+        'save_gather_png': True,
+        'max_gathers_per_file': 3,
+        'skip_gather_keys': {'ffid': [0], 'cmp': [-1]},
+        'max_traces_per_gather': 10000,
+        'waveform_norm': 'per_trace',
+        'dpi': 120,
+        'clip_percentile': 98.5,
+    }
+
+    typed = load_fine_infer_config(cfg)
+
+    assert typed.viewer.enabled is True
+    assert typed.viewer.save_overview_png is False
+    assert typed.viewer.save_gather_png is True
+    assert typed.viewer.max_gathers_per_file == 3
+    assert typed.viewer.skip_gather_keys == {
+        'ffid': frozenset({0}),
+        'cmp': frozenset({-1}),
+    }
+    assert typed.viewer.max_traces_per_gather == 10000
+    assert typed.viewer.waveform_norm == 'per_trace'
+    assert typed.viewer.dpi == 120
+    assert typed.viewer.clip_percentile == pytest.approx(98.5)
 
 
 def test_load_fine_infer_config_parses_window_center(tmp_path: Path) -> None:
@@ -1699,6 +1792,173 @@ def test_run_fine_infer_uses_explicit_coarse_npz_path(
 
     validate_fbpick_final_payload(result, high_conf_threshold=0.5)
     np.testing.assert_array_equal(result['final_pick_i'], final_pick.astype(np.int32))
+
+
+def test_save_fine_gather_qc_pngs_skips_configured_key_and_counts_accepted(
+    tmp_path: Path,
+) -> None:
+    traces = np.arange(3 * 8, dtype=np.float32).reshape(3, 8)
+    info = _make_qc_info(
+        traces=traces,
+        key_to_indices={0: [0], 1: [1], 2: [2]},
+        n_traces=3,
+        n_samples=8,
+    )
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['viewer'] = {
+        'enabled': True,
+        'save_gather_png': True,
+        'max_gathers_per_file': 2,
+        'skip_gather_keys': {'ffid': [0]},
+        'max_traces_per_gather': None,
+        'waveform_norm': 'per_trace',
+    }
+    viewer = load_fine_infer_config(cfg).viewer
+    captured: list[np.ndarray] = []
+
+    def _save(out_png: Path, **kwargs: object) -> Path:
+        captured.append(np.asarray(kwargs['trace_indices'], dtype=np.int64))
+        assert kwargs['waveform_norm'] == 'per_trace'
+        return Path(out_png)
+
+    out_paths = _save_fine_gather_qc_pngs(
+        info=info,
+        segy_path=tmp_path / 'line' / 'small.sgy',
+        out_dir=tmp_path / 'out',
+        final_payload=_make_final_payload_for_qc(n_traces=3, n_samples=8),
+        viewer=viewer,
+        primary_keys=('ffid',),
+        save_png_func=_save,
+    )
+
+    assert len(out_paths) == 2
+    assert [int(indices[0]) for indices in captured] == [1, 2]
+
+
+def test_save_fine_gather_qc_pngs_skips_oversized_before_mmap_access(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FailingMmap:
+        def __getitem__(self, index: int) -> np.ndarray:
+            raise AssertionError(f'mmap should not be read for skipped gather {index}')
+
+    def _unexpected_save(*args, **kwargs) -> Path:
+        raise AssertionError('PNG writer should not be called')
+
+    info = _make_qc_info(
+        traces=FailingMmap(),
+        key_to_indices={1: np.arange(5)},
+        n_traces=5,
+        n_samples=8,
+    )
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['viewer'] = {
+        'enabled': True,
+        'save_gather_png': True,
+        'max_gathers_per_file': 1,
+        'skip_gather_keys': {},
+        'max_traces_per_gather': 3,
+    }
+    viewer = load_fine_infer_config(cfg).viewer
+    segy_path = tmp_path / 'line' / 'huge.sgy'
+
+    out_paths = _save_fine_gather_qc_pngs(
+        info=info,
+        segy_path=segy_path,
+        out_dir=tmp_path / 'out',
+        final_payload=_make_final_payload_for_qc(n_traces=5, n_samples=8),
+        viewer=viewer,
+        primary_keys=('ffid',),
+        save_png_func=_unexpected_save,
+    )
+
+    assert out_paths == []
+    captured = capsys.readouterr()
+    assert 'skip oversized gather:' in captured.out
+    assert f'No fine gather PNGs written for {segy_path}: all candidates were skipped' in (
+        captured.out
+    )
+
+
+def test_run_fine_infer_gather_qc_does_not_materialize_full_waveform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 160
+    n_samples = 512
+    dt_sec = 0.002
+    trace_axis = np.arange(n_traces, dtype=np.int32)
+    robust = 220 + ((trace_axis % 7) - 3) * 4
+    final_pick = robust + ((trace_axis % 5) - 2) * 7
+
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    for trace_idx, pick_idx in enumerate(final_pick.tolist()):
+        traces[trace_idx, int(pick_idx)] = 10.0 + 0.01 * float(trace_idx)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'fine_gather_qc.sgy', traces)
+    _write_coarse_with_n_samples(
+        tmp_path / 'fine_gather_qc.coarse.npz',
+        coarse_pick_i=robust.astype(np.int32),
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'fine_gather_qc.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+
+    def _fail_extract(*args, **kwargs) -> np.ndarray:
+        raise AssertionError('full waveform overview extraction should not run')
+
+    captured: dict[str, object] = {}
+
+    def _fake_build_qc_info(*args, **kwargs) -> dict[str, object]:
+        captured['build_qc_info'] = True
+        return {'segy_obj': _DummySegy()}
+
+    def _fake_save_qc(**kwargs: object) -> list[Path]:
+        captured['save_qc'] = True
+        return []
+
+    monkeypatch.setattr(fine_infer_module, '_extract_raw_wave_hw', _fail_extract)
+    monkeypatch.setattr(fine_infer_module, '_build_fine_qc_info', _fake_build_qc_info)
+    monkeypatch.setattr(fine_infer_module, '_save_fine_gather_qc_pngs', _fake_save_qc)
+
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path=segy_path,
+        robust_path=robust_path,
+    )
+    cfg['viewer'] = {
+        'enabled': True,
+        'save_overview_png': False,
+        'save_gather_png': True,
+    }
+
+    result = run_fine_infer(
+        model=_IdentityFineModel(),
+        cfg=cfg,
+        device=torch.device('cpu'),
+    )
+
+    validate_fbpick_final_payload(result, high_conf_threshold=0.5)
+    assert captured == {'build_qc_info': True, 'save_qc': True}
 
 
 def test_fine_infer_main_merges_ckpt_cfg_and_writes_final_payload(

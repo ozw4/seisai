@@ -146,6 +146,11 @@ class FineInferRuntimeCfg:
 class FineViewerCfg:
     enabled: bool
     save_overview_png: bool
+    save_gather_png: bool
+    max_gathers_per_file: int
+    skip_gather_keys: dict[str, frozenset[int]]
+    max_traces_per_gather: int | None
+    waveform_norm: str
     dpi: int
     clip_percentile: float
 
@@ -507,11 +512,57 @@ def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
         msg = 'viewer.clip_percentile must lie in (0, 100]'
         raise ValueError(msg)
 
+    max_gathers_per_file = int(optional_int(viewer_cfg, 'max_gathers_per_file', 8))
+    if max_gathers_per_file < 0:
+        msg = 'viewer.max_gathers_per_file must be >= 0'
+        raise ValueError(msg)
+
+    skip_gather_keys_raw = viewer_cfg.get('skip_gather_keys', {})
+    if not isinstance(skip_gather_keys_raw, dict) or not all(
+        isinstance(key, str) for key in skip_gather_keys_raw
+    ):
+        msg = 'viewer.skip_gather_keys must be dict[str, list[int]]'
+        raise TypeError(msg)
+    skip_gather_keys: dict[str, frozenset[int]] = {}
+    for primary_key, values in skip_gather_keys_raw.items():
+        if not isinstance(values, list) or not all(
+            isinstance(item, int) and not isinstance(item, bool) for item in values
+        ):
+            msg = 'viewer.skip_gather_keys must be dict[str, list[int]]'
+            raise TypeError(msg)
+        skip_gather_keys[primary_key] = frozenset(int(item) for item in values)
+
+    max_traces_per_gather_raw = viewer_cfg.get('max_traces_per_gather', 10000)
+    if max_traces_per_gather_raw is None:
+        max_traces_per_gather = None
+    elif isinstance(max_traces_per_gather_raw, bool) or not isinstance(
+        max_traces_per_gather_raw, int
+    ):
+        msg = 'viewer.max_traces_per_gather must be int > 0 or null'
+        raise TypeError(msg)
+    elif int(max_traces_per_gather_raw) <= 0:
+        msg = 'viewer.max_traces_per_gather must be int > 0 or null'
+        raise ValueError(msg)
+    else:
+        max_traces_per_gather = int(max_traces_per_gather_raw)
+
+    waveform_norm = optional_str(viewer_cfg, 'waveform_norm', 'global').strip()
+    if waveform_norm not in ('global', 'per_trace'):
+        msg = 'viewer.waveform_norm must be one of: global, per_trace'
+        raise ValueError(msg)
+
     return FineViewerCfg(
         enabled=bool(optional_bool(viewer_cfg, 'enabled', default=False)),
         save_overview_png=bool(
-            optional_bool(viewer_cfg, 'save_overview_png', default=True)
+            optional_bool(viewer_cfg, 'save_overview_png', default=False)
         ),
+        save_gather_png=bool(
+            optional_bool(viewer_cfg, 'save_gather_png', default=False)
+        ),
+        max_gathers_per_file=max_gathers_per_file,
+        skip_gather_keys=skip_gather_keys,
+        max_traces_per_gather=max_traces_per_gather,
+        waveform_norm=waveform_norm,
         dpi=dpi,
         clip_percentile=clip_percentile,
     )

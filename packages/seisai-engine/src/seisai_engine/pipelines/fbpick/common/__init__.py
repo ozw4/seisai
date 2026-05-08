@@ -26,6 +26,7 @@ from .io import (
     validate_fbpick_final_payload,
     validate_fine_result_payload,
 )
+from .qc_gathers import iter_qc_gathers, sort_gather_indices_for_qc
 from .ref_stats import compute_ref_stats, compute_ref_stats_from_records
 
 __all__ = [
@@ -51,9 +52,11 @@ __all__ = [
     'load_robust_npz',
     'load_norm_refs_cfg',
     'read_git_sha',
+    'iter_qc_gathers',
     'save_coarse_npz',
     'save_fbpick_final_npz',
     'save_robust_npz',
+    'sort_gather_indices_for_qc',
     'validate_fbpick_final_payload',
     'validate_fine_result_payload',
 ]

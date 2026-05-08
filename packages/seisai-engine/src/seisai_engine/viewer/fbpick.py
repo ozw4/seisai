@@ -16,6 +16,7 @@ __all__ = [
 	'infer_prob_hw',
 	'render_fbpick_overview',
 	'save_fbpick_debug_png',
+	'save_fbpick_fine_qc_gather_png',
 	'save_fbpick_overview_png',
 	'save_fbpick_physics_qc_cdf_png',
 	'save_fbpick_physics_qc_gather_png',
@@ -1008,6 +1009,224 @@ def save_fbpick_physics_qc_gather_png(
 	axes[2].set_xlabel('Trace Index')
 	axes[2].set_yticks([0])
 	axes[2].set_yticklabels(['mask'])
+
+	if title is not None:
+		fig.suptitle(str(title))
+		fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.93))
+	else:
+		fig.tight_layout()
+
+	out_path = Path(out_png).expanduser().resolve()
+	out_path.parent.mkdir(parents=True, exist_ok=True)
+	fig.savefig(out_path, dpi=dpi_int)
+	plt.close(fig)
+	return out_path
+
+
+def save_fbpick_fine_qc_gather_png(
+	out_png: str | Path,
+	*,
+	raw_wave_hw: np.ndarray,
+	final_payload: Mapping[str, np.ndarray],
+	trace_indices: np.ndarray,
+	title: str | None = None,
+	dpi: int = 150,
+	clip_percentile: float = 99.0,
+	waveform_norm: str = 'global',
+) -> Path:
+	import matplotlib.pyplot as plt
+
+	wave = np.ascontiguousarray(np.asarray(raw_wave_hw, dtype=np.float32))
+	if wave.ndim != 2:
+		msg = f'raw_wave_hw must be 2D, got {wave.shape}'
+		raise ValueError(msg)
+
+	n_traces, n_samples = wave.shape
+	if n_traces <= 0 or n_samples <= 0:
+		msg = 'raw_wave_hw must be non-empty'
+		raise ValueError(msg)
+
+	trace_idx = np.asarray(trace_indices, dtype=np.int64)
+	if trace_idx.ndim != 1 or int(trace_idx.shape[0]) != n_traces:
+		msg = f'trace_indices must be 1D with length {n_traces}'
+		raise ValueError(msg)
+
+	dpi_int = int(dpi)
+	if dpi_int <= 0:
+		msg = 'dpi must be > 0'
+		raise ValueError(msg)
+
+	if 'n_traces' not in final_payload:
+		msg = 'final payload missing key: n_traces'
+		raise KeyError(msg)
+	n_total = int(np.asarray(final_payload['n_traces']).item())
+	if np.any(trace_idx < 0) or np.any(trace_idx >= n_total):
+		msg = 'trace_indices contains out-of-range values for final payload'
+		raise ValueError(msg)
+
+	coarse_pick_i = _require_overview_vector(
+		final_payload, 'coarse_pick_i', length=n_total
+	)[trace_idx].astype(np.int64, copy=False)
+	robust_pick_i = _require_overview_vector(
+		final_payload, 'robust_pick_i', length=n_total
+	)[trace_idx].astype(np.int64, copy=False)
+	window_start_i = _require_overview_vector(
+		final_payload, 'window_start_i', length=n_total
+	)[trace_idx].astype(np.int64, copy=False)
+	window_end_i = _require_overview_vector(
+		final_payload, 'window_end_i', length=n_total
+	)[trace_idx].astype(np.int64, copy=False)
+	final_pick_i = _require_overview_vector(
+		final_payload, 'final_pick_i', length=n_total
+	)[trace_idx].astype(np.int64, copy=False)
+	high_conf_mask = np.asarray(
+		_require_overview_vector(final_payload, 'high_conf_mask', length=n_total)[
+			trace_idx
+		],
+		dtype=np.bool_,
+	)
+	reject_mask = np.asarray(
+		_require_overview_vector(final_payload, 'reject_mask', length=n_total)[
+			trace_idx
+		],
+		dtype=np.bool_,
+	)
+	final_conf = _require_overview_vector(
+		final_payload, 'final_conf', length=n_total
+	)[trace_idx].astype(np.float32, copy=False)
+
+	x = np.arange(n_traces, dtype=np.float32)
+	norm_mode = str(waveform_norm)
+	wave_display = _normalize_waveform_for_qc_display(
+		wave,
+		mode=norm_mode,
+		clip_percentile=clip_percentile,
+	)
+	if norm_mode == 'global':
+		display_vmin = -_resolve_overview_clip(wave, clip_percentile=clip_percentile)
+		display_vmax = -display_vmin
+	else:
+		display_vmin = -1.0
+		display_vmax = 1.0
+
+	fig_width = min(max(12.0, float(n_traces) / 100.0), 24.0)
+	fig, axes = plt.subplots(
+		1,
+		3,
+		figsize=(fig_width, 6.0),
+		gridspec_kw={'width_ratios': [2.4, 1.3, 0.8]},
+	)
+
+	axes[0].imshow(
+		wave_display.T,
+		cmap='gray',
+		aspect='auto',
+		interpolation='nearest',
+		origin='upper',
+		vmin=display_vmin,
+		vmax=display_vmax,
+	)
+	axes[0].plot(
+		x,
+		coarse_pick_i.astype(np.float32),
+		color='#7fd3ff',
+		lw=1.0,
+		alpha=0.9,
+		label='coarse_pick_i',
+	)
+	axes[0].plot(
+		x,
+		robust_pick_i.astype(np.float32),
+		color='yellow',
+		lw=1.0,
+		alpha=0.9,
+		label='robust_pick_i',
+	)
+	axes[0].plot(
+		x,
+		np.clip(window_start_i, 0, n_samples - 1).astype(np.float32),
+		color='yellow',
+		lw=0.8,
+		ls='--',
+		alpha=0.75,
+		label='window_start_i',
+	)
+	axes[0].plot(
+		x,
+		np.clip(window_end_i, 0, n_samples - 1).astype(np.float32),
+		color='yellow',
+		lw=0.8,
+		ls=':',
+		alpha=0.75,
+		label='window_end_i',
+	)
+	axes[0].plot(
+		x,
+		final_pick_i.astype(np.float32),
+		color='red',
+		lw=1.2,
+		alpha=0.95,
+		label='final_pick_i',
+	)
+	axes[0].scatter(
+		x[high_conf_mask],
+		final_pick_i.astype(np.float32)[high_conf_mask],
+		color='lime',
+		s=14.0,
+		alpha=0.95,
+		label='high_conf_final_pick',
+		zorder=5,
+	)
+	axes[0].set_title(
+		f'waveform and picks (norm={norm_mode}, p{float(clip_percentile):g})'
+	)
+	axes[0].set_xlabel('Trace Index')
+	axes[0].set_ylabel('Sample Index')
+	axes[0].legend(loc='upper right', fontsize=8)
+
+	final_minus_robust = final_pick_i.astype(np.float32) - robust_pick_i.astype(
+		np.float32
+	)
+	axes[1].plot(
+		x,
+		final_minus_robust,
+		color='red',
+		lw=1.0,
+		label='final - robust',
+	)
+	for y in (0, 32, -32, 64, -64, 127, -127):
+		if y == 0:
+			axes[1].axhline(y, color='black', lw=0.9, alpha=0.8)
+		elif abs(y) == 127:
+			axes[1].axhline(y, color='red', lw=0.8, ls='--', alpha=0.65)
+		else:
+			axes[1].axhline(y, color='gray', lw=0.8, ls='--', alpha=0.55)
+	axes[1].set_title('final offset')
+	axes[1].set_xlabel('Trace Index')
+	axes[1].set_ylabel('Sample Offset')
+	axes[1].legend(loc='upper right', fontsize=8)
+
+	mask_values = np.stack(
+		[
+			high_conf_mask.astype(np.float32),
+			(~reject_mask).astype(np.float32),
+			np.clip(final_conf, 0.0, 1.0).astype(np.float32),
+		],
+		axis=0,
+	)
+	axes[2].imshow(
+		mask_values,
+		cmap='viridis',
+		aspect='auto',
+		interpolation='nearest',
+		origin='upper',
+		vmin=0.0,
+		vmax=1.0,
+	)
+	axes[2].set_title('confidence masks')
+	axes[2].set_xlabel('Trace Index')
+	axes[2].set_yticks([0, 1, 2])
+	axes[2].set_yticklabels(['high', 'accepted', 'conf'])
 
 	if title is not None:
 		fig.suptitle(str(title))

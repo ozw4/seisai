@@ -49,3 +49,30 @@ physics output:
 
 In that layout, the inferred same-directory coarse path is wrong, so fine
 inference should point to both upstream outputs explicitly.
+
+## Viewer QC
+
+Fine inference can write gather-based QC PNGs without materializing the full
+SEG-Y waveform:
+
+```yaml
+viewer:
+  enabled: true
+  save_overview_png: false
+  save_gather_png: true
+  max_gathers_per_file: 8
+  skip_gather_keys:
+    ffid: [0]
+  max_traces_per_gather: 10000
+  waveform_norm: per_trace
+  dpi: 150
+  clip_percentile: 99.0
+```
+
+Gather QC uses `dataset.primary_keys` such as `ffid`, skips configured keys and
+oversized gathers before reading waveform traces, and writes a limited set of
+per-gather PNGs under `<out_dir>/<parent>__<stem>.fine_qc/`.
+
+The legacy `save_overview_png` path draws all traces from the full SEG-Y file.
+For large production datasets, keep `save_overview_png: false` and use
+gather-based QC.
