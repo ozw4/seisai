@@ -461,6 +461,46 @@ def _resolve_overview_clip(raw_wave_hw: np.ndarray, *, clip_percentile: float) -
 	return 1.0
 
 
+def _normalize_waveform_for_qc_display(
+	wave: np.ndarray,
+	*,
+	mode: str,
+	clip_percentile: float,
+	eps: float = 1.0e-6,
+) -> np.ndarray:
+	wave_f32 = np.ascontiguousarray(np.asarray(wave, dtype=np.float32))
+	if wave_f32.ndim != 2:
+		msg = f'wave must be 2D, got {wave_f32.shape}'
+		raise ValueError(msg)
+
+	if mode == 'global':
+		_resolve_overview_clip(wave_f32, clip_percentile=clip_percentile)
+		return wave_f32
+	if mode == 'per_trace':
+		percentile = float(clip_percentile)
+		if percentile <= 0.0 or percentile > 100.0:
+			msg = 'clip_percentile must lie in (0, 100]'
+			raise ValueError(msg)
+		eps_f = float(eps)
+		if not np.isfinite(eps_f) or eps_f <= 0.0:
+			msg = 'eps must be finite and > 0'
+			raise ValueError(msg)
+
+		scale = np.nanpercentile(np.abs(wave_f32), percentile, axis=1).astype(
+			np.float32,
+			copy=False,
+		)
+		scale = np.where(np.isfinite(scale) & (scale >= eps_f), scale, 1.0).astype(
+			np.float32,
+			copy=False,
+		)
+		display = wave_f32 / scale[:, None]
+		return np.clip(display, -1.0, 1.0).astype(np.float32, copy=False)
+
+	msg = f'unsupported waveform normalization mode: {mode!r}'
+	raise ValueError(msg)
+
+
 def _extract_batch_scalar(value: object, *, b: int) -> object:
 	if torch.is_tensor(value):
 		if value.ndim == 0:
@@ -817,6 +857,7 @@ def save_fbpick_physics_qc_gather_png(
 	title: str | None = None,
 	dpi: int = 150,
 	clip_percentile: float = 99.0,
+	waveform_norm: str = 'global',
 ) -> Path:
 	import matplotlib.pyplot as plt
 
@@ -859,7 +900,18 @@ def save_fbpick_physics_qc_gather_png(
 	robust_err[~valid_gt] = np.nan
 
 	x = np.arange(n_traces, dtype=np.float32)
-	clip_value = _resolve_overview_clip(wave, clip_percentile=clip_percentile)
+	norm_mode = str(waveform_norm)
+	wave_display = _normalize_waveform_for_qc_display(
+		wave,
+		mode=norm_mode,
+		clip_percentile=clip_percentile,
+	)
+	if norm_mode == 'global':
+		display_vmin = -_resolve_overview_clip(wave, clip_percentile=clip_percentile)
+		display_vmax = -display_vmin
+	else:
+		display_vmin = -1.0
+		display_vmax = 1.0
 	fig_width = max(14.0, float(n_traces) / 12.0)
 	fig, axes = plt.subplots(
 		1,
@@ -869,13 +921,13 @@ def save_fbpick_physics_qc_gather_png(
 	)
 
 	axes[0].imshow(
-		wave.T,
+		wave_display.T,
 		cmap='gray',
 		aspect='auto',
 		interpolation='nearest',
 		origin='upper',
-		vmin=-clip_value,
-		vmax=clip_value,
+		vmin=display_vmin,
+		vmax=display_vmax,
 	)
 	axes[0].plot(
 		x[valid_gt],
@@ -919,7 +971,9 @@ def save_fbpick_physics_qc_gather_png(
 		alpha=0.75,
 		label='robust window end',
 	)
-	axes[0].set_title('waveform and picks')
+	axes[0].set_title(
+		f'waveform and picks (norm={norm_mode}, p{float(clip_percentile):g})'
+	)
 	axes[0].set_xlabel('Trace Index')
 	axes[0].set_ylabel('Sample Index')
 	axes[0].legend(loc='upper right', fontsize=8)

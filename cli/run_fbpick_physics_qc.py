@@ -227,10 +227,66 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		msg = 'vis.save_summary_csv must be bool'
 		raise TypeError(msg)
 
+	waveform_norm = vis.get('waveform_norm', 'global')
+	if not isinstance(waveform_norm, str):
+		msg = 'vis.waveform_norm must be str'
+		raise TypeError(msg)
+	if waveform_norm not in ('global', 'per_trace'):
+		msg = 'vis.waveform_norm must be one of: global, per_trace'
+		raise ValueError(msg)
+
+	clip_percentile_raw = vis.get('clip_percentile', 99.0)
+	if isinstance(clip_percentile_raw, bool) or not isinstance(
+		clip_percentile_raw, (int, float)
+	):
+		msg = 'vis.clip_percentile must be float'
+		raise TypeError(msg)
+	clip_percentile = float(clip_percentile_raw)
+	if (
+		not np.isfinite(clip_percentile)
+		or clip_percentile <= 0.0
+		or clip_percentile > 100.0
+	):
+		msg = 'vis.clip_percentile must lie in (0, 100]'
+		raise ValueError(msg)
+
+	skip_gather_keys_raw = vis.get('skip_gather_keys', {})
+	if not isinstance(skip_gather_keys_raw, dict) or not all(
+		isinstance(key, str) for key in skip_gather_keys_raw
+	):
+		msg = 'vis.skip_gather_keys must be dict[str, list[int]]'
+		raise TypeError(msg)
+	skip_gather_keys: dict[str, set[int]] = {}
+	for primary_key, values in skip_gather_keys_raw.items():
+		if not isinstance(values, list) or not all(
+			isinstance(item, int) and not isinstance(item, bool) for item in values
+		):
+			msg = 'vis.skip_gather_keys must be dict[str, list[int]]'
+			raise TypeError(msg)
+		skip_gather_keys[primary_key] = {int(item) for item in values}
+
+	max_traces_per_gather_raw = vis.get('max_traces_per_gather', 10000)
+	if max_traces_per_gather_raw is None:
+		max_traces_per_gather = None
+	elif isinstance(max_traces_per_gather_raw, bool) or not isinstance(
+		max_traces_per_gather_raw, int
+	):
+		msg = 'vis.max_traces_per_gather must be int > 0 or null'
+		raise TypeError(msg)
+	elif int(max_traces_per_gather_raw) <= 0:
+		msg = 'vis.max_traces_per_gather must be int > 0 or null'
+		raise ValueError(msg)
+	else:
+		max_traces_per_gather = int(max_traces_per_gather_raw)
+
 	return {
 		'max_gathers_per_file': int(max_gathers_per_file),
 		'save_cdf': bool(save_cdf),
 		'save_summary_csv': bool(save_summary_csv),
+		'waveform_norm': waveform_norm,
+		'clip_percentile': clip_percentile,
+		'skip_gather_keys': skip_gather_keys,
+		'max_traces_per_gather': max_traces_per_gather,
 	}
 
 
@@ -261,6 +317,9 @@ def _iter_vis_gathers(
 	*,
 	primary_keys: list[str],
 	max_gathers: int,
+	skip_gather_keys: dict[str, set[int]],
+	max_traces_per_gather: int | None,
+	segy_path: str | Path | None = None,
 ):
 	yielded = 0
 	for primary_key in primary_keys:
@@ -270,17 +329,38 @@ def _iter_vis_gathers(
 		key_to_indices = info.get(f'{primary_key}_key_to_indices')
 		if key_to_indices is None:
 			continue
+		skip_for_primary = skip_gather_keys.get(primary_key, set())
 		for gather_key in sorted(key_to_indices):
 			if yielded >= int(max_gathers):
 				return
+			gather_key_i = int(gather_key)
+			raw_indices = key_to_indices[gather_key]
+			n_traces = int(len(raw_indices))
+			if gather_key_i in skip_for_primary:
+				print(
+					f'skip gather by key: file={segy_path} '
+					f'primary={primary_key} key={gather_key_i} traces={n_traces}'
+				)
+				continue
+			if (
+				max_traces_per_gather is not None
+				and n_traces > int(max_traces_per_gather)
+			):
+				print(
+					f'skip oversized gather: file={segy_path} '
+					f'primary={primary_key} key={gather_key_i} '
+					f'traces={n_traces} limit={int(max_traces_per_gather)}'
+				)
+				continue
+			indices = np.asarray(raw_indices, dtype=np.int64)
 			trace_indices = _sort_gather_indices(
 				info,
 				primary_key=primary_key,
-				indices=np.asarray(key_to_indices[gather_key], dtype=np.int64),
+				indices=indices,
 			)
 			if int(trace_indices.size) <= 0:
 				continue
-			yield primary_key, int(gather_key), trace_indices
+			yield primary_key, gather_key_i, trace_indices
 			yielded += 1
 
 
@@ -331,6 +411,9 @@ def _save_vis_pngs(
 			info,
 			primary_keys=list(dataset_cfg['primary_keys']),
 			max_gathers=max_gathers,
+			skip_gather_keys=dict(vis_cfg['skip_gather_keys']),
+			max_traces_per_gather=vis_cfg['max_traces_per_gather'],
+			segy_path=segy_path,
 		)
 	):
 		x_hw = np.stack(
@@ -347,8 +430,12 @@ def _save_vis_pngs(
 				coarse_pick_i=coarse_pick_i[trace_indices],
 				robust_pick_i=robust_pick_i[trace_indices],
 				title=title,
+				waveform_norm=str(vis_cfg['waveform_norm']),
+				clip_percentile=float(vis_cfg['clip_percentile']),
 			)
 		)
+	if not out_paths:
+		print(f'No gather PNGs written for {segy_path}: all candidates were skipped')
 	return out_paths
 
 

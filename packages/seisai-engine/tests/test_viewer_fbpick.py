@@ -5,8 +5,10 @@ from seisai_engine.infer.ckpt_meta import resolve_output_ids, resolve_softmax_ax
 from seisai_engine.viewer.fbpick import (
     _apply_softmax,
     _crop_logits_chw,
+    _normalize_waveform_for_qc_display,
     _pad_chw_to_min_tile,
     _resolve_channel_index,
+    save_fbpick_physics_qc_gather_png,
 )
 
 
@@ -201,3 +203,86 @@ def test_resolve_channel_index_accepts_supported_forms() -> None:
         _resolve_channel_index('p', output_ids=output_ids)
     with pytest.raises(ValueError):
         _resolve_channel_index('ch7', output_ids=output_ids)
+
+
+def test_qc_display_per_trace_normalization_preserves_each_trace_scale() -> None:
+    wave = np.asarray(
+        [
+            [0.0, 1.0, -2.0, 4.0],
+            [0.0, 250.0, -500.0, 1000.0],
+        ],
+        dtype=np.float32,
+    )
+
+    out = _normalize_waveform_for_qc_display(
+        wave,
+        mode='per_trace',
+        clip_percentile=100.0,
+    )
+
+    assert out.shape == wave.shape
+    assert out.dtype == np.float32
+    assert np.max(np.abs(out)) <= 1.0
+    assert np.max(np.abs(out[0])) > 0.99
+    assert np.max(np.abs(out[1])) > 0.99
+
+
+def test_qc_display_per_trace_normalization_handles_zero_traces() -> None:
+    wave = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0e-8, -1.0e-8, 0.0],
+            [1.0, -2.0, 3.0],
+        ],
+        dtype=np.float32,
+    )
+
+    out = _normalize_waveform_for_qc_display(
+        wave,
+        mode='per_trace',
+        clip_percentile=99.0,
+    )
+
+    assert out.shape == wave.shape
+    assert out.dtype == np.float32
+    assert np.all(np.isfinite(out))
+    assert np.array_equal(out[0], np.zeros_like(out[0]))
+    assert np.max(np.abs(out)) <= 1.0
+
+
+def test_qc_display_normalization_rejects_invalid_mode() -> None:
+    wave = np.ones((2, 3), dtype=np.float32)
+
+    with pytest.raises(ValueError):
+        _normalize_waveform_for_qc_display(
+            wave,
+            mode='invalid',
+            clip_percentile=99.0,
+        )
+
+
+def test_save_fbpick_physics_qc_gather_png_per_trace_smoke(tmp_path) -> None:
+    out_png = tmp_path / 'gather.png'
+    wave = np.asarray(
+        [
+            [0.0, 0.5, 1.0, -0.5],
+            [0.0, 500.0, 1000.0, -500.0],
+            [0.0, -1.0, -0.5, 0.25],
+        ],
+        dtype=np.float32,
+    )
+    picks = np.asarray([1, 2, 1], dtype=np.int64)
+
+    out_path = save_fbpick_physics_qc_gather_png(
+        out_png,
+        raw_wave_hw=wave,
+        gt_pick_i=picks,
+        coarse_pick_i=picks,
+        robust_pick_i=picks,
+        waveform_norm='per_trace',
+        clip_percentile=99.0,
+    )
+
+    assert out_path == out_png.resolve()
+    assert out_path.is_file()
+    assert out_path.stat().st_size > 0
