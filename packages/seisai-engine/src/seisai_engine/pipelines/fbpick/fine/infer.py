@@ -27,6 +27,7 @@ from seisai_engine.pipelines.common import (
 from seisai_engine.pipelines.fbpick.common import (
     build_fbpick_final_payload,
     build_lineage_payload,
+    iter_qc_gathers,
     load_coarse_npz,
     load_robust_npz,
     save_fbpick_final_npz,
@@ -36,7 +37,7 @@ from seisai_engine.pipelines.fbpick.common import (
 from .build_dataset import build_raw_infer_dataset, collate_input_meta_list
 from .build_model import build_model
 from .build_plan import build_plan
-from .config import FineInferConfig, load_fine_infer_config
+from .config import FineInferConfig, FineViewerCfg, load_fine_infer_config
 
 __all__ = [
     'infer_coarse_npz_path_from_robust_npz_path',
@@ -77,6 +78,11 @@ _SAFE_OVERRIDE_PATHS = frozenset(
         'window_center.fallback_npz_key',
         'viewer.enabled',
         'viewer.save_overview_png',
+        'viewer.save_gather_png',
+        'viewer.max_gathers_per_file',
+        'viewer.skip_gather_keys',
+        'viewer.max_traces_per_gather',
+        'viewer.waveform_norm',
         'viewer.dpi',
         'viewer.clip_percentile',
     }
@@ -125,7 +131,12 @@ def _default_cfg() -> dict[str, Any]:
         },
         'viewer': {
             'enabled': False,
-            'save_overview_png': True,
+            'save_overview_png': False,
+            'save_gather_png': False,
+            'max_gathers_per_file': 8,
+            'skip_gather_keys': {},
+            'max_traces_per_gather': 10000,
+            'waveform_norm': 'global',
             'dpi': 150,
             'clip_percentile': 99.0,
         },
@@ -447,6 +458,128 @@ def _derive_overview_png_path(*, segy_path: str | Path, out_dir: str | Path) -> 
     return Path(out_dir).expanduser().resolve() / f'{Path(segy_path).stem}.overview.png'
 
 
+def _derive_qc_tag(segy_path: str | Path) -> str:
+    segy = Path(segy_path)
+    parent_name = segy.parent.name
+    if parent_name:
+        return parent_name + '__' + segy.stem
+    return segy.stem
+
+
+def _derive_fine_qc_dir(*, segy_path: str | Path, out_dir: str | Path) -> Path:
+    return (
+        Path(out_dir).expanduser().resolve()
+        / f'{_derive_qc_tag(segy_path)}.fine_qc'
+    )
+
+
+def _build_fine_qc_info(
+    *, segy_path: str | Path, typed: FineInferConfig
+) -> dict[str, Any]:
+    import segyio
+    from seisai_dataset.file_info import build_file_info
+
+    return build_file_info(
+        str(segy_path),
+        ffid_byte=segyio.TraceField.FieldRecord,
+        chno_byte=segyio.TraceField.TraceNumber,
+        cmp_byte=segyio.TraceField.CDP,
+        use_header_cache=bool(typed.dataset.use_header_cache),
+        include_centroids=False,
+        waveform_mode='mmap',
+        segy_endian=str(typed.dataset.infer_endian),
+    )
+
+
+def _close_info(info: dict[str, Any]) -> None:
+    segy_obj = info.get('segy_obj')
+    if segy_obj is not None:
+        segy_obj.close()
+
+
+def _validate_fine_qc_info_against_payload(
+    info: dict[str, Any],
+    *,
+    final_payload: dict[str, np.ndarray],
+) -> None:
+    n_traces = int(np.asarray(final_payload['n_traces']).item())
+    n_samples_orig = int(np.asarray(final_payload['n_samples_orig']).item())
+    dt_sec = float(np.asarray(final_payload['dt_sec']).item())
+    if int(info['n_traces']) != n_traces:
+        msg = f'QC info n_traces {int(info["n_traces"])} != final n_traces {n_traces}'
+        raise ValueError(msg)
+    if int(info['n_samples']) != n_samples_orig:
+        msg = (
+            f'QC info n_samples {int(info["n_samples"])} != '
+            f'final n_samples_orig {n_samples_orig}'
+        )
+        raise ValueError(msg)
+    if not np.isclose(float(info['dt_sec']), dt_sec, rtol=0.0, atol=1e-9):
+        msg = f'QC info dt_sec {float(info["dt_sec"])} != final dt_sec {dt_sec}'
+        raise ValueError(msg)
+
+
+def _save_fine_gather_qc_pngs(
+    *,
+    info: dict[str, Any],
+    segy_path: str | Path,
+    out_dir: str | Path,
+    final_payload: dict[str, np.ndarray],
+    viewer: FineViewerCfg,
+    primary_keys: tuple[str, ...],
+    save_png_func=None,
+) -> list[Path]:
+    max_gathers = int(viewer.max_gathers_per_file)
+    if max_gathers <= 0:
+        return []
+
+    if save_png_func is None:
+        from seisai_engine.viewer.fbpick import save_fbpick_fine_qc_gather_png
+
+        save_png_func = save_fbpick_fine_qc_gather_png
+
+    _validate_fine_qc_info_against_payload(info, final_payload=final_payload)
+    out_subdir = _derive_fine_qc_dir(segy_path=segy_path, out_dir=out_dir)
+    out_paths: list[Path] = []
+    for gather_idx, (primary_key, gather_key, trace_indices) in enumerate(
+        iter_qc_gathers(
+            info,
+            primary_keys=primary_keys,
+            max_gathers=max_gathers,
+            skip_gather_keys=viewer.skip_gather_keys,
+            max_traces_per_gather=viewer.max_traces_per_gather,
+            segy_path=segy_path,
+        )
+    ):
+        x_hw = np.stack(
+            [
+                np.asarray(info['mmap'][int(i)], dtype=np.float32)
+                for i in trace_indices
+            ],
+            axis=0,
+        )
+        out_png = out_subdir / f'gather_{gather_idx:04d}.png'
+        title = f'{Path(segy_path).name} {primary_key}={gather_key}'
+        out_paths.append(
+            save_png_func(
+                out_png,
+                raw_wave_hw=x_hw,
+                final_payload=final_payload,
+                trace_indices=trace_indices,
+                title=title,
+                dpi=viewer.dpi,
+                clip_percentile=viewer.clip_percentile,
+                waveform_norm=viewer.waveform_norm,
+            )
+        )
+    if not out_paths:
+        print(
+            f'No fine gather PNGs written for {segy_path}: '
+            'all candidates were skipped'
+        )
+    return out_paths
+
+
 def _load_fine_ckpt_cfg_for_merge(
     *,
     infer_cfg_for_ckpt: dict[str, Any],
@@ -609,8 +742,14 @@ def run_fine_infer(
     save_overview = bool(
         save_output and typed.viewer.enabled and typed.viewer.save_overview_png
     )
+    save_gather_png = bool(
+        save_output and typed.viewer.enabled and typed.viewer.save_gather_png
+    )
     if save_overview and typed.paths.out_dir is None:
         msg = 'viewer overview export requires paths.out_dir'
+        raise ValueError(msg)
+    if save_gather_png and typed.paths.out_dir is None:
+        msg = 'viewer gather QC export requires paths.out_dir'
         raise ValueError(msg)
 
     raw_wave_hw_out: dict[str, np.ndarray] | None
@@ -684,6 +823,22 @@ def run_fine_infer(
             dpi=typed.viewer.dpi,
             clip_percentile=typed.viewer.clip_percentile,
         )
+    if save_gather_png:
+        info = _build_fine_qc_info(
+            segy_path=typed.paths.segy_files[0],
+            typed=typed,
+        )
+        try:
+            _save_fine_gather_qc_pngs(
+                info=info,
+                segy_path=typed.paths.segy_files[0],
+                out_dir=typed.paths.out_dir,
+                final_payload=final_payload,
+                viewer=typed.viewer,
+                primary_keys=typed.dataset.primary_keys,
+            )
+        finally:
+            _close_info(info)
     return final_payload
 
 

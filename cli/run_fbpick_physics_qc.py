@@ -9,6 +9,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+from seisai_engine.pipelines.fbpick.common.qc_gathers import (
+	iter_qc_gathers,
+	sort_gather_indices_for_qc,
+)
 
 __all__ = ['main', 'run_pipeline']
 
@@ -296,20 +300,11 @@ def _sort_gather_indices(
 	primary_key: str,
 	indices: np.ndarray,
 ) -> np.ndarray:
-	idx = np.asarray(indices, dtype=np.int64)
-	if idx.size == 0:
-		return idx
-	if primary_key == 'ffid':
-		secondary = np.asarray(info['chno_values'], dtype=np.int64)[idx]
-	elif primary_key == 'chno':
-		secondary = np.asarray(info['ffid_values'], dtype=np.int64)[idx]
-	elif primary_key == 'cmp':
-		secondary = np.asarray(info['offsets'], dtype=np.float32)[idx]
-	else:
-		msg = f'unsupported dataset.primary_keys value: {primary_key}'
-		raise ValueError(msg)
-	order = np.argsort(secondary, kind='mergesort')
-	return idx[order]
+	return sort_gather_indices_for_qc(
+		info,
+		primary_key=primary_key,
+		indices=indices,
+	)
 
 
 def _iter_vis_gathers(
@@ -321,47 +316,14 @@ def _iter_vis_gathers(
 	max_traces_per_gather: int | None,
 	segy_path: str | Path | None = None,
 ):
-	yielded = 0
-	for primary_key in primary_keys:
-		if primary_key not in ('ffid', 'chno', 'cmp'):
-			msg = f'unsupported dataset.primary_keys value: {primary_key}'
-			raise ValueError(msg)
-		key_to_indices = info.get(f'{primary_key}_key_to_indices')
-		if key_to_indices is None:
-			continue
-		skip_for_primary = skip_gather_keys.get(primary_key, set())
-		for gather_key in sorted(key_to_indices):
-			if yielded >= int(max_gathers):
-				return
-			gather_key_i = int(gather_key)
-			raw_indices = key_to_indices[gather_key]
-			n_traces = int(len(raw_indices))
-			if gather_key_i in skip_for_primary:
-				print(
-					f'skip gather by key: file={segy_path} '
-					f'primary={primary_key} key={gather_key_i} traces={n_traces}'
-				)
-				continue
-			if (
-				max_traces_per_gather is not None
-				and n_traces > int(max_traces_per_gather)
-			):
-				print(
-					f'skip oversized gather: file={segy_path} '
-					f'primary={primary_key} key={gather_key_i} '
-					f'traces={n_traces} limit={int(max_traces_per_gather)}'
-				)
-				continue
-			indices = np.asarray(raw_indices, dtype=np.int64)
-			trace_indices = _sort_gather_indices(
-				info,
-				primary_key=primary_key,
-				indices=indices,
-			)
-			if int(trace_indices.size) <= 0:
-				continue
-			yield primary_key, gather_key_i, trace_indices
-			yielded += 1
+	yield from iter_qc_gathers(
+		info,
+		primary_keys=primary_keys,
+		max_gathers=max_gathers,
+		skip_gather_keys=skip_gather_keys,
+		max_traces_per_gather=max_traces_per_gather,
+		segy_path=segy_path,
+	)
 
 
 def _write_per_file_outputs(

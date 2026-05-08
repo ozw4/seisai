@@ -7,6 +7,7 @@ __all__ = [
     'infer_denoise_hw',
     'infer_prob_hw',
     'render_fbpick_overview',
+    'save_fbpick_fine_qc_gather_png',
     'save_fbpick_overview_png',
 ]
 
@@ -15,6 +16,10 @@ _EXPORTS = {
     'infer_denoise_hw': ('.denoise', 'infer_denoise_hw'),
     'infer_prob_hw': ('.fbpick', 'infer_prob_hw'),
     'render_fbpick_overview': ('.fbpick', 'render_fbpick_overview'),
+    'save_fbpick_fine_qc_gather_png': (
+        '.fbpick',
+        'save_fbpick_fine_qc_gather_png',
+    ),
     'save_fbpick_overview_png': ('.fbpick', 'save_fbpick_overview_png'),
 }
 
