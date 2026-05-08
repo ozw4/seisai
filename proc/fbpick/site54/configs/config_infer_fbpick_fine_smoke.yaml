@@ -33,10 +33,10 @@ infer:
   use_tqdm: false
   high_conf_threshold: 0.5
 viewer:
-  enabled: false
+  enabled: true
   save_overview_png: false
-  save_gather_png: false
-  max_gathers_per_file: 8
+  save_gather_png: true
+  max_gathers_per_file: 4
   skip_gather_keys:
     ffid:
     - 0
