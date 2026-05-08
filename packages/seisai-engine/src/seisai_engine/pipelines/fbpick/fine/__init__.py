@@ -9,6 +9,7 @@ from .build_dataset import (
     collate_input_meta_list,
     extract_local_windowed_view,
     restore_local_pick_to_raw,
+    sample_center_jitter,
 )
 from .build_model import build_model
 from .build_plan import build_plan
@@ -22,8 +23,10 @@ from .config import (
     FINE_OUT_CHANS,
     FINE_TIME_LEN,
     FINE_TRACE_LEN,
+    FineCenterAugmentCfg,
     FineInferConfig,
     FineTrainConfig,
+    FineUniformJitterCfg,
     FineViewerCfg,
     FineWindowCenterCfg,
     load_fine_infer_config,
@@ -55,11 +58,13 @@ __all__ = [
     'FINE_OUT_CHANS',
     'FINE_TIME_LEN',
     'FINE_TRACE_LEN',
+    'FineCenterAugmentCfg',
     'FineInferenceGatherWindowsDataset',
     'FineInferConfig',
     'FineLocalWindowSampleTransformer',
     'FineTrainBundle',
     'FineTrainConfig',
+    'FineUniformJitterCfg',
     'FineViewerCfg',
     'FineWindowCenterCfg',
     'build_criterion',
@@ -84,5 +89,6 @@ __all__ = [
     'run_fine_infer',
     'run_fine_local_infer',
     'run_train',
+    'sample_center_jitter',
     'validate_coarse_checkpoint_for_fine',
 ]

@@ -1,17 +1,19 @@
 paths:
-  segy_files:
-    - REPLACE_ME_train_fine.sgy
-  fb_files:
-    - REPLACE_ME_train_fine_fb.npy
-  robust_npz_files:
-    - REPLACE_ME_train_fine.robust.npz
-  out_dir: ./_fbpick_fine_train_out
+  segy_files: /workspace/proc/fbpick/site54/oof/lists/oof_train_sgy_all.txt
+  fb_files: /workspace/proc/fbpick/site54/oof/lists/oof_train_fb_all.txt
+  robust_npz_files: /workspace/proc/fbpick/site54/oof/lists/oof_train_robust_all.txt
+  infer_segy_files: /workspace/proc/fbpick/site54/oof/lists/oof_train_sgy_all.txt
+  infer_fb_files: /workspace/proc/fbpick/site54/oof/lists/oof_train_fb_all.txt
+  infer_robust_npz_files: /workspace/proc/fbpick/site54/oof/lists/oof_train_robust_all.txt
+  out_dir: /workspace/proc/fbpick/site54/fbpick_fine_train_oof_out
 
 dataset:
+  max_trials: 2048
   use_header_cache: true
   verbose: true
   progress: true
   primary_keys: [ffid]
+  secondary_key_fixed: false
   waveform_mode: eager
   train_endian: big
   infer_endian: big
@@ -39,13 +41,13 @@ center_augment:
 
 train:
   seed: 0
-  epochs: 10
-  samples_per_epoch: 128
-  batch_size: 4
+  epochs: 30
+  samples_per_epoch: 512
+  batch_size: 8
   num_workers: 0
   max_norm: 1.0
-  use_amp: false
-  lr: 1.0e-3
+  use_amp: true
+  lr: 1.0e-4
   weight_decay: 0.0
   fb_sigma_ms: 3.0
   sigma_samples_min: 1.5
@@ -53,12 +55,12 @@ train:
 
 infer:
   seed: 0
-  batch_size: 1
+  batch_size: 8
   num_workers: 0
-  max_batches: 8
+  max_batches: 16
 
 vis:
-  n: 0
+  n: 8
   out_subdir: vis
 
 ckpt:
@@ -73,7 +75,7 @@ model:
   out_chans: 1
 
 init:
-  coarse_ckpt_path: REPLACE_ME_coarse_init.pt
-  use_coarse_init: true
+  coarse_ckpt_path: null
+  use_coarse_init: false
   reset_seg_head: true
   reset_first_bn_stats: true

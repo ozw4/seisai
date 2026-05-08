@@ -39,6 +39,7 @@ __all__ = [
     'FINE_OUT_CHANS',
     'FINE_TIME_LEN',
     'FINE_TRACE_LEN',
+    'FineCenterAugmentCfg',
     'FineCkptCfg',
     'FineDatasetCfg',
     'FineInferConfig',
@@ -49,6 +50,7 @@ __all__ = [
     'FineTrainCfg',
     'FineTrainConfig',
     'FineTransformCfg',
+    'FineUniformJitterCfg',
     'FineWindowCenterCfg',
     'load_fine_infer_config',
     'load_fine_train_config',
@@ -105,6 +107,23 @@ class FineWindowCenterCfg:
 
 
 @dataclass(frozen=True)
+class FineUniformJitterCfg:
+    prob: float
+    lo: int
+    hi: int
+
+
+@dataclass(frozen=True)
+class FineCenterAugmentCfg:
+    enabled: bool
+    train_only: bool
+    p_no_jitter: float
+    uniform_jitter_samples: tuple[FineUniformJitterCfg, ...]
+    clip_to_record: bool
+    require_fb_inside: bool
+
+
+@dataclass(frozen=True)
 class FineTrainCfg:
     lr: float
     weight_decay: float
@@ -158,6 +177,7 @@ class FineTrainConfig:
     dataset: FineDatasetCfg
     transform: FineTransformCfg
     window_center: FineWindowCenterCfg
+    center_augment: FineCenterAugmentCfg
     train: FineTrainCfg
     init: FineInitCfg
     model_sig: dict[str, Any]
@@ -369,6 +389,106 @@ def _load_window_center_cfg(cfg: dict) -> FineWindowCenterCfg:
     )
 
 
+def _optional_plain_float(
+    cfg: dict,
+    key: str,
+    default: float,
+    *,
+    key_path: str,
+) -> float:
+    if key not in cfg:
+        return float(default)
+    value = cfg[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f'{key_path} must be float'
+        raise TypeError(msg)
+    return float(value)
+
+
+def _require_plain_float(cfg: dict, key: str, *, key_path: str) -> float:
+    if key not in cfg:
+        msg = f'missing config key: {key_path}'
+        raise ValueError(msg)
+    value = cfg[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f'{key_path} must be float'
+        raise TypeError(msg)
+    return float(value)
+
+
+def _require_plain_int(cfg: dict, key: str, *, key_path: str) -> int:
+    if key not in cfg:
+        msg = f'missing config key: {key_path}'
+        raise ValueError(msg)
+    value = cfg[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f'{key_path} must be int'
+        raise TypeError(msg)
+    return int(value)
+
+
+def _load_center_augment_cfg(cfg: dict) -> FineCenterAugmentCfg:
+    augment_cfg = cfg.get('center_augment')
+    if augment_cfg is None:
+        augment_cfg = {}
+    if not isinstance(augment_cfg, dict):
+        msg = 'center_augment must be dict'
+        raise TypeError(msg)
+
+    p_no_jitter = _optional_plain_float(
+        augment_cfg,
+        'p_no_jitter',
+        1.0,
+        key_path='center_augment.p_no_jitter',
+    )
+    if p_no_jitter < 0.0 or p_no_jitter > 1.0:
+        msg = 'center_augment.p_no_jitter must lie in [0, 1]'
+        raise ValueError(msg)
+
+    raw_components = augment_cfg.get('uniform_jitter_samples', [])
+    if not isinstance(raw_components, list):
+        msg = 'center_augment.uniform_jitter_samples must be list'
+        raise TypeError(msg)
+
+    components: list[FineUniformJitterCfg] = []
+    for idx, item in enumerate(raw_components):
+        if not isinstance(item, dict):
+            msg = 'center_augment.uniform_jitter_samples entries must be dict'
+            raise TypeError(msg)
+        prefix = f'center_augment.uniform_jitter_samples[{idx}]'
+        prob = _require_plain_float(item, 'prob', key_path=f'{prefix}.prob')
+        if prob < 0.0:
+            msg = f'{prefix}.prob must be >= 0'
+            raise ValueError(msg)
+        lo = _require_plain_int(item, 'lo', key_path=f'{prefix}.lo')
+        hi = _require_plain_int(item, 'hi', key_path=f'{prefix}.hi')
+        if lo > hi:
+            msg = f'{prefix}.lo must be <= hi'
+            raise ValueError(msg)
+        components.append(FineUniformJitterCfg(prob=prob, lo=lo, hi=hi))
+
+    prob_sum = p_no_jitter + sum(component.prob for component in components)
+    if prob_sum <= 0.0:
+        msg = 'center_augment probabilities must sum to > 0'
+        raise ValueError(msg)
+
+    require_fb_inside = bool(
+        optional_bool(augment_cfg, 'require_fb_inside', default=True)
+    )
+    if not require_fb_inside:
+        msg = 'center_augment.require_fb_inside must be true'
+        raise ValueError(msg)
+
+    return FineCenterAugmentCfg(
+        enabled=bool(optional_bool(augment_cfg, 'enabled', default=False)),
+        train_only=bool(optional_bool(augment_cfg, 'train_only', default=True)),
+        p_no_jitter=p_no_jitter,
+        uniform_jitter_samples=tuple(components),
+        clip_to_record=bool(optional_bool(augment_cfg, 'clip_to_record', default=True)),
+        require_fb_inside=require_fb_inside,
+    )
+
+
 def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
     viewer_cfg = cfg.get('viewer')
     if viewer_cfg is None:
@@ -493,6 +613,7 @@ def load_fine_train_config(
         dataset=_load_dataset_cfg(cfg),
         transform=_load_transform_cfg(cfg),
         window_center=_load_window_center_cfg(cfg),
+        center_augment=_load_center_augment_cfg(cfg),
         train=FineTrainCfg(
             lr=float(require_float(train_cfg, 'lr')),
             weight_decay=float(optional_float(train_cfg, 'weight_decay', 0.0)),
