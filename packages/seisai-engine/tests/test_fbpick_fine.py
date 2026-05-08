@@ -24,6 +24,9 @@ from seisai_engine.pipelines.fbpick.common import (
 )
 from seisai_engine.pipelines.fbpick.coarse import build_fbgate, build_model as build_coarse_model
 from seisai_engine.pipelines.fbpick.fine import (
+    FineCenterAugmentCfg,
+    FineUniformJitterCfg,
+    build_labeled_infer_dataset,
     build_model as build_fine_model,
     build_plan,
     build_raw_infer_dataset,
@@ -36,6 +39,7 @@ from seisai_engine.pipelines.fbpick.fine import (
     run_fine_local_infer,
     run_train,
     restore_local_pick_to_raw,
+    sample_center_jitter,
 )
 from seisai_engine.pipelines.fbpick.fine.infer import (
     _prepare_fine_infer_cfg,
@@ -353,6 +357,68 @@ def _make_fine_infer_config(
     }
 
 
+def _build_test_fine_train_dataset(
+    *,
+    segy_path: str,
+    fb_path: str,
+    robust_path: str,
+    center_augment: FineCenterAugmentCfg | None = None,
+    max_trials: int = 8,
+):
+    return build_train_dataset(
+        segy_files=[segy_path],
+        fb_files=[fb_path],
+        robust_npz_files=[robust_path],
+        sampling_overrides=None,
+        plan=build_plan(sigma_ms=3.0, sigma_samples_min=1.5, sigma_samples_max=12.0),
+        fbgate=build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
+        trace_len=128,
+        time_len=256,
+        center_index=128,
+        standardize_eps=1.0e-8,
+        trace_decimate_prob=0.0,
+        trace_decimate_stride_range=(1, 1),
+        primary_keys=('ffid',),
+        secondary_key_fixed=False,
+        verbose=False,
+        progress=False,
+        max_trials=max_trials,
+        use_header_cache=False,
+        waveform_mode='eager',
+        segy_endian='big',
+        center_augment=center_augment,
+    )
+
+
+def _build_test_fine_labeled_infer_dataset(
+    *,
+    segy_path: str,
+    fb_path: str,
+    robust_path: str,
+    max_trials: int = 8,
+):
+    return build_labeled_infer_dataset(
+        segy_files=[segy_path],
+        fb_files=[fb_path],
+        robust_npz_files=[robust_path],
+        sampling_overrides=None,
+        plan=build_plan(sigma_ms=3.0, sigma_samples_min=1.5, sigma_samples_max=12.0),
+        fbgate=build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=False),
+        trace_len=128,
+        time_len=256,
+        center_index=128,
+        standardize_eps=1.0e-8,
+        primary_keys=('ffid',),
+        secondary_key_fixed=False,
+        verbose=False,
+        progress=False,
+        max_trials=max_trials,
+        use_header_cache=False,
+        waveform_mode='eager',
+        segy_endian='big',
+    )
+
+
 def _write_coarse_ckpt(tmp_path: Path) -> str:
     path = tmp_path / 'coarse_init.pt'
     model = build_coarse_model(_coarse_model_sig())
@@ -439,10 +505,101 @@ def test_load_fine_train_config_returns_fixed_contract_values(tmp_path: Path) ->
     assert typed.model_sig['out_chans'] == 1
     assert typed.window_center.npz_key == 'robust_pick_i'
     assert typed.window_center.fallback_npz_key is None
+    assert typed.center_augment.enabled is False
+    assert typed.center_augment.train_only is True
+    assert typed.center_augment.p_no_jitter == pytest.approx(1.0)
+    assert typed.center_augment.uniform_jitter_samples == ()
+    assert typed.center_augment.clip_to_record is True
+    assert typed.center_augment.require_fb_inside is True
     assert typed.ckpt.pipeline == 'fbpick'
     assert typed.ckpt.stage == 'fine'
     assert typed.ckpt.output_ids == ('P',)
     assert typed.ckpt.softmax_axis == 'time'
+
+
+def test_load_fine_train_config_parses_center_augment(tmp_path: Path) -> None:
+    cfg = _make_fine_train_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        fb_path='dummy.npy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['center_augment'] = {
+        'enabled': True,
+        'train_only': True,
+        'p_no_jitter': 0.7,
+        'uniform_jitter_samples': [
+            {'prob': 0.2, 'lo': -32, 'hi': 32},
+            {'prob': 0.1, 'lo': -64, 'hi': 64},
+        ],
+        'clip_to_record': True,
+        'require_fb_inside': True,
+    }
+
+    typed = load_fine_train_config(cfg, base_dir=tmp_path)
+
+    assert typed.center_augment.enabled is True
+    assert typed.center_augment.train_only is True
+    assert typed.center_augment.p_no_jitter == pytest.approx(0.7)
+    assert typed.center_augment.clip_to_record is True
+    assert typed.center_augment.require_fb_inside is True
+    assert typed.center_augment.uniform_jitter_samples == (
+        FineUniformJitterCfg(prob=0.2, lo=-32, hi=32),
+        FineUniformJitterCfg(prob=0.1, lo=-64, hi=64),
+    )
+
+
+@pytest.mark.parametrize(
+    ('center_augment', 'error_type', 'message'),
+    [
+        (
+            {'enabled': True, 'p_no_jitter': -0.1},
+            ValueError,
+            'center_augment.p_no_jitter must lie in [0, 1]',
+        ),
+        (
+            {'enabled': True, 'p_no_jitter': 0.0, 'uniform_jitter_samples': []},
+            ValueError,
+            'center_augment probabilities must sum to > 0',
+        ),
+        (
+            {
+                'enabled': True,
+                'uniform_jitter_samples': [{'prob': 1.0, 'lo': 4, 'hi': 3}],
+            },
+            ValueError,
+            'center_augment.uniform_jitter_samples[0].lo must be <= hi',
+        ),
+        (
+            {'enabled': True, 'require_fb_inside': False},
+            ValueError,
+            'center_augment.require_fb_inside must be true',
+        ),
+        (
+            {'enabled': True, 'uniform_jitter_samples': [{'prob': True, 'lo': 0, 'hi': 0}]},
+            TypeError,
+            'center_augment.uniform_jitter_samples[0].prob must be float',
+        ),
+    ],
+)
+def test_load_fine_train_config_rejects_invalid_center_augment(
+    tmp_path: Path,
+    center_augment: dict,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    cfg = _make_fine_train_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        fb_path='dummy.npy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['center_augment'] = center_augment
+
+    with pytest.raises(error_type) as exc:
+        load_fine_train_config(cfg, base_dir=tmp_path)
+
+    assert message in str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -539,6 +696,27 @@ def test_load_fine_infer_config_parses_explicit_coarse_npz_files(
     typed = load_fine_infer_config(cfg)
 
     assert typed.paths.coarse_npz_files == ('other_dir/dummy.coarse.npz',)
+
+
+def test_sample_center_jitter_is_reproducible_and_uses_weight_mixture() -> None:
+    cfg = FineCenterAugmentCfg(
+        enabled=True,
+        train_only=True,
+        p_no_jitter=0.5,
+        uniform_jitter_samples=(FineUniformJitterCfg(prob=0.5, lo=10, hi=10),),
+        clip_to_record=True,
+        require_fb_inside=True,
+    )
+
+    first = sample_center_jitter(size=64, cfg=cfg, rng=np.random.default_rng(123))
+    second = sample_center_jitter(size=64, cfg=cfg, rng=np.random.default_rng(123))
+
+    np.testing.assert_array_equal(first, second)
+    assert first.dtype == np.int64
+    assert first.shape == (64,)
+    assert set(first.tolist()).issubset({0, 10})
+    assert 0 in first
+    assert 10 in first
 
 
 def test_prepare_fine_infer_cfg_expands_coarse_npz_listfile(tmp_path: Path) -> None:
@@ -785,6 +963,196 @@ def test_fine_train_dataset_rejects_when_gt_pick_is_outside_local_window(
     try:
         ds._rng = np.random.default_rng(0)
         with pytest.raises(RuntimeError, match='local_window=1'):
+            _ = ds[0]
+    finally:
+        ds.close()
+
+
+def test_fine_train_center_augment_constant_jitter_shifts_center(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 128
+    n_samples = 512
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 100, dtype=np.int32)
+    fb = np.full((n_traces,), 110, dtype=np.int64)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'jitter_shift.sgy', traces)
+    fb_path = _write_fb(tmp_path / 'jitter_shift_fb.npy', fb)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'jitter_shift.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+    center_augment = FineCenterAugmentCfg(
+        enabled=True,
+        train_only=True,
+        p_no_jitter=0.0,
+        uniform_jitter_samples=(FineUniformJitterCfg(prob=1.0, lo=10, hi=10),),
+        clip_to_record=True,
+        require_fb_inside=True,
+    )
+    ds = _build_test_fine_train_dataset(
+        segy_path=segy_path,
+        fb_path=fb_path,
+        robust_path=robust_path,
+        center_augment=center_augment,
+    )
+
+    try:
+        ds._rng = np.random.default_rng(0)
+        sample = ds[0]
+    finally:
+        ds.close()
+
+    meta = sample['meta']
+    np.testing.assert_array_equal(meta['center_raw_i'], np.full((128,), 110, dtype=np.int32))
+    np.testing.assert_array_equal(meta['window_start_i'], np.full((128,), -18, dtype=np.int32))
+
+
+def test_fine_labeled_infer_dataset_does_not_apply_center_jitter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 128
+    n_samples = 512
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 100, dtype=np.int32)
+    fb = np.full((n_traces,), 110, dtype=np.int64)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'jitter_valid.sgy', traces)
+    fb_path = _write_fb(tmp_path / 'jitter_valid_fb.npy', fb)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'jitter_valid.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+    ds = _build_test_fine_labeled_infer_dataset(
+        segy_path=segy_path,
+        fb_path=fb_path,
+        robust_path=robust_path,
+    )
+
+    try:
+        ds._rng = np.random.default_rng(0)
+        sample = ds[0]
+    finally:
+        ds.close()
+
+    meta = sample['meta']
+    np.testing.assert_array_equal(meta['center_raw_i'], robust)
+    np.testing.assert_array_equal(meta['window_start_i'], robust.astype(np.int32) - 128)
+
+
+def test_fine_train_center_augment_clips_to_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 128
+    n_samples = 512
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 5, dtype=np.int32)
+    fb = np.full((n_traces,), 5, dtype=np.int64)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'jitter_clip.sgy', traces)
+    fb_path = _write_fb(tmp_path / 'jitter_clip_fb.npy', fb)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'jitter_clip.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+    center_augment = FineCenterAugmentCfg(
+        enabled=True,
+        train_only=True,
+        p_no_jitter=0.0,
+        uniform_jitter_samples=(FineUniformJitterCfg(prob=1.0, lo=-100, hi=-100),),
+        clip_to_record=True,
+        require_fb_inside=True,
+    )
+    ds = _build_test_fine_train_dataset(
+        segy_path=segy_path,
+        fb_path=fb_path,
+        robust_path=robust_path,
+        center_augment=center_augment,
+    )
+
+    try:
+        ds._rng = np.random.default_rng(0)
+        sample = ds[0]
+    finally:
+        ds.close()
+
+    np.testing.assert_array_equal(
+        sample['meta']['center_raw_i'],
+        np.zeros((128,), dtype=np.int32),
+    )
+
+
+def test_fine_train_center_augment_rejects_out_of_window_jitter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 128
+    n_samples = 1000
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 500, dtype=np.int32)
+    fb = np.full((n_traces,), 500, dtype=np.int64)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'jitter_reject.sgy', traces)
+    fb_path = _write_fb(tmp_path / 'jitter_reject_fb.npy', fb)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'jitter_reject.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+    center_augment = FineCenterAugmentCfg(
+        enabled=True,
+        train_only=True,
+        p_no_jitter=0.0,
+        uniform_jitter_samples=(FineUniformJitterCfg(prob=1.0, lo=300, hi=300),),
+        clip_to_record=True,
+        require_fb_inside=True,
+    )
+    ds = _build_test_fine_train_dataset(
+        segy_path=segy_path,
+        fb_path=fb_path,
+        robust_path=robust_path,
+        center_augment=center_augment,
+        max_trials=1,
+    )
+
+    try:
+        ds._rng = np.random.default_rng(0)
+        with pytest.raises(RuntimeError, match='center_jitter=1'):
             _ = ds[0]
     finally:
         ds.close()

@@ -23,6 +23,7 @@ from seisai_transforms.augment import PerTraceStandardize, ViewCompose
 from seisai_utils.fs import validate_files_exist
 
 from seisai_engine.pipelines.fbpick.common import load_robust_npz
+from seisai_engine.pipelines.fbpick.fine.config import FineCenterAugmentCfg
 
 __all__ = [
     'FineInferenceGatherWindowsDataset',
@@ -36,6 +37,7 @@ __all__ = [
     'collate_input_meta_list',
     'extract_local_windowed_view',
     'restore_local_pick_to_raw',
+    'sample_center_jitter',
 ]
 
 
@@ -157,6 +159,50 @@ def _load_robust_centers_for_info(
         msg = f'{selected_key} must lie in [0, n_samples_orig)'
         raise ValueError(msg)
     return centers
+
+
+def sample_center_jitter(
+    *,
+    size: int,
+    cfg: FineCenterAugmentCfg,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Sample integer center offsets; configured weights are normalized internally."""
+    n = int(size)
+    if n < 0:
+        msg = 'size must be non-negative'
+        raise ValueError(msg)
+    out = np.zeros((n,), dtype=np.int64)
+    if n == 0 or not bool(cfg.enabled):
+        return out
+
+    weights = np.asarray(
+        [float(cfg.p_no_jitter)]
+        + [float(component.prob) for component in cfg.uniform_jitter_samples],
+        dtype=np.float64,
+    )
+    if np.any(weights < 0.0):
+        msg = 'center jitter probabilities must be non-negative'
+        raise ValueError(msg)
+    total = float(weights.sum())
+    if total <= 0.0:
+        msg = 'center jitter probabilities must sum to > 0'
+        raise ValueError(msg)
+    weights = weights / total
+
+    choices = rng.choice(int(weights.shape[0]), size=n, p=weights)
+    for component_idx, component in enumerate(cfg.uniform_jitter_samples, start=1):
+        mask = choices == component_idx
+        count = int(np.count_nonzero(mask))
+        if count == 0:
+            continue
+        out[mask] = rng.integers(
+            int(component.lo),
+            int(component.hi) + 1,
+            size=count,
+            dtype=np.int64,
+        )
+    return out
 
 
 def extract_local_windowed_view(
@@ -366,11 +412,13 @@ class _FineLocalWindowTrainDataset(SegyGatherPipelineDataset):
         robust_npz_files: list[str],
         window_center_npz_key: str = 'robust_pick_i',
         window_center_fallback_npz_key: str | None = None,
+        center_augment: FineCenterAugmentCfg | None = None,
         **kwargs,
     ) -> None:
         self._robust_npz_files = list(robust_npz_files)
         self._window_center_npz_key = str(window_center_npz_key)
         self._window_center_fallback_npz_key = window_center_fallback_npz_key
+        self._center_augment = center_augment
         super().__init__(**kwargs)
         if len(self._robust_npz_files) != len(self.file_infos):
             msg = 'robust_npz_files length must match indexed training files'
@@ -388,11 +436,12 @@ class _FineLocalWindowTrainDataset(SegyGatherPipelineDataset):
     def _init_rejection_counters(self) -> dict[str, int]:
         counters = super()._init_rejection_counters()
         counters['local_window'] = 0
+        counters['center_jitter'] = 0
         return counters
 
     def _format_max_trials_error(self, counters: dict[str, int]) -> str:
         parts = []
-        for key in ('empty', 'min_pick', 'fblc', 'local_window'):
+        for key in ('empty', 'min_pick', 'fblc', 'local_window', 'center_jitter'):
             if key in counters:
                 parts.append(f'{key}={counters[key]}')
         rej = ', '.join(parts)
@@ -415,9 +464,25 @@ class _FineLocalWindowTrainDataset(SegyGatherPipelineDataset):
         fb_subset = np.asarray(info.fb[indices], dtype=np.int64)
         centers = self._center_pick_by_path[str(info.path)]
         center_subset = np.asarray(centers[indices], dtype=np.int64)
+        center_jitter_nonzero = False
+        if self._center_augment is not None and bool(self._center_augment.enabled):
+            jitter = sample_center_jitter(
+                size=int(center_subset.shape[0]),
+                cfg=self._center_augment,
+                rng=self._rng,
+            )
+            center_jitter_nonzero = bool(np.any(jitter != 0))
+            center_subset = center_subset + jitter
+            if bool(self._center_augment.clip_to_record):
+                center_subset = np.clip(
+                    center_subset,
+                    0,
+                    int(info.n_samples) - 1,
+                ).astype(np.int64, copy=False)
         return fb_subset, {
             'apply_fb_gates': False,
             'center_subset': center_subset,
+            'center_jitter_nonzero': center_jitter_nonzero,
         }
 
     def _try_build_sample(self, info, counters: dict[str, int]) -> dict | None:
@@ -442,7 +507,10 @@ class _FineLocalWindowTrainDataset(SegyGatherPipelineDataset):
             self._rng,
         )
         if transformed is None:
-            self._count_rejection(counters, 'local_window')
+            if bool(label_state.get('center_jitter_nonzero', False)):
+                self._count_rejection(counters, 'center_jitter')
+            else:
+                self._count_rejection(counters, 'local_window')
             return None
         x_view, meta, offsets, fb_subset_pad, indices_pad, trace_valid = transformed
         view_shape = self._get_view_shape(x_view, label_state)
@@ -679,6 +747,7 @@ def _build_labeled_dataset(
     segy_endian: str,
     window_center_npz_key: str = 'robust_pick_i',
     window_center_fallback_npz_key: str | None = None,
+    center_augment: FineCenterAugmentCfg | None = None,
 ) -> SegyGatherPipelineDataset:
     if sampling_overrides is not None and len(sampling_overrides) != len(segy_files):
         msg = 'sampling_overrides length must match segy_files length'
@@ -705,6 +774,7 @@ def _build_labeled_dataset(
         robust_npz_files=list(robust_npz_files),
         window_center_npz_key=str(window_center_npz_key),
         window_center_fallback_npz_key=window_center_fallback_npz_key,
+        center_augment=center_augment,
         sampling_overrides=sampling_overrides,
         transform=transform,
         sample_transformer=sample_transformer,
@@ -748,6 +818,7 @@ def build_train_dataset(
     segy_endian: str,
     window_center_npz_key: str = 'robust_pick_i',
     window_center_fallback_npz_key: str | None = None,
+    center_augment: FineCenterAugmentCfg | None = None,
 ) -> SegyGatherPipelineDataset:
     return _build_labeled_dataset(
         segy_files=segy_files,
@@ -761,6 +832,7 @@ def build_train_dataset(
         center_index=center_index,
         window_center_npz_key=window_center_npz_key,
         window_center_fallback_npz_key=window_center_fallback_npz_key,
+        center_augment=center_augment,
         standardize_eps=standardize_eps,
         trace_decimate_prob=trace_decimate_prob,
         trace_decimate_stride_range=trace_decimate_stride_range,
