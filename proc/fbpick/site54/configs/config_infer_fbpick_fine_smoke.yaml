@@ -1,0 +1,44 @@
+paths:
+  segy_files:
+  - /home/dcuser/data/ActiveSeisField/2017_JCCS_noshiro_V-1/profiled-shot_2017V-1.sgy
+  robust_npz_files:
+  - /workspace/proc/fbpick/site54/oof/robust_oof/fold05/2017_JCCS_noshiro_V-1__profiled-shot_2017V-1.robust.npz
+  coarse_npz_files:
+  - /workspace/proc/fbpick/site54/oof/coarse_oof/fold05/2017_JCCS_noshiro_V-1__profiled-shot_2017V-1.coarse.npz
+  out_dir: /workspace/proc/fbpick/site54/fbpick_fine_infer_smoke_out
+dataset:
+  use_header_cache: true
+  verbose: true
+  progress: true
+  primary_keys:
+  - ffid
+  waveform_mode: eager
+  train_endian: big
+  infer_endian: big
+transform:
+  trace_len: 128
+  time_len: 256
+  center_index: 128
+  standardize_eps: 1.0e-08
+window_center:
+  npz_key: robust_pick_i
+  fallback_npz_key: null
+infer:
+  ckpt_path: /workspace/proc/fbpick/site54/fbpick_fine_train_oof_out/ckpt/best.pt
+  device: auto
+  batch_size: 1
+  num_workers: 0
+  overlap_h: 96
+  amp: false
+  use_tqdm: false
+  high_conf_threshold: 0.5
+viewer:
+  enabled: false
+  save_overview_png: false
+  dpi: 150
+  clip_percentile: 99.0
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 1
+  out_chans: 1
