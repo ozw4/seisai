@@ -36,6 +36,8 @@ from seisai_engine.pipelines.fbpick.physics.pick_table import (
     normalize_coarse_pick_table,
 )
 from seisai_engine.pipelines.fbpick.physics.physical_center import (
+    PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+    PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
@@ -708,6 +710,7 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
         'fine_center_i': center_i,
         'fine_center_t_sec': center_t_sec,
         'physical_model_status': np.array([0, 1, 2], dtype=np.uint8),
+        'physical_model_failure_reason': np.array([0, 2, 3], dtype=np.uint8),
         'physical_model_break_offset_m': np.array(
             [500.0, np.nan, 600.0],
             dtype=np.float32,
@@ -826,6 +829,7 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     assert robust['fine_center_i'].shape == (n_traces,)
     assert robust['fine_center_t_sec'].shape == (n_traces,)
     assert robust['physical_model_status'].shape == (n_traces,)
+    assert robust['physical_model_failure_reason'].shape == (n_traces,)
     assert robust['trend_center_i'].dtype == np.int32
     assert robust['trend_center_t_sec'].dtype == np.float32
     assert robust['physical_center_i'].dtype == np.int32
@@ -833,6 +837,7 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     assert robust['fine_center_i'].dtype == np.int32
     assert robust['fine_center_t_sec'].dtype == np.float32
     assert robust['physical_model_status'].dtype == np.uint8
+    assert robust['physical_model_failure_reason'].dtype == np.uint8
     np.testing.assert_array_equal(robust['physical_center_i'], robust['trend_center_i'])
     np.testing.assert_array_equal(
         robust['physical_center_t_sec'],
@@ -846,6 +851,10 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     assert np.all(
         robust['physical_model_status']
         == np.uint8(PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED)
+    )
+    assert np.all(
+        robust['physical_model_failure_reason']
+        == np.uint8(PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED)
     )
     np.testing.assert_array_equal(
         robust['fine_center_t_sec'],
@@ -886,6 +895,7 @@ def test_build_robust_payload_from_coarse_returns_required_keys(tmp_path: Path) 
     assert payload['fine_center_i'].dtype == np.int32
     assert payload['fine_center_t_sec'].dtype == np.float32
     assert payload['physical_model_status'].dtype == np.uint8
+    assert payload['physical_model_failure_reason'].dtype == np.uint8
     np.testing.assert_array_equal(
         payload['physical_center_i'],
         payload['trend_center_i'],
@@ -902,6 +912,10 @@ def test_build_robust_payload_from_coarse_returns_required_keys(tmp_path: Path) 
     assert np.all(
         payload['physical_model_status']
         == np.uint8(PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED)
+    )
+    assert np.all(
+        payload['physical_model_failure_reason']
+        == np.uint8(PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED)
     )
     assert lineage['source_model_id'] == 'coarse-model'
     assert lineage['git_sha'] is None
@@ -987,6 +1001,10 @@ def test_run_physics_lite_with_enabled_physical_and_no_geometry_saves_fallback_s
     assert np.all(
         robust['physical_model_status']
         == np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND)
+    )
+    assert np.all(
+        robust['physical_model_failure_reason']
+        == np.uint8(PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID)
     )
     np.testing.assert_array_equal(robust['fine_center_i'], robust['trend_center_i'])
 

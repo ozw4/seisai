@@ -34,7 +34,7 @@ PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED = 8
 
 PHYSICAL_MODEL_STATUS_LABELS = {
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK: 'two_piece_ok',
-    PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT: 'fallback_relaxed_segment',
+    PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT: 'relaxed_segment_ok',
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND: 'fallback_existing_trend',
     PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP: 'fallback_feasible_clip',
     PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST: 'fallback_robust',
@@ -44,7 +44,30 @@ PHYSICAL_MODEL_STATUS_LABELS = {
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED: 'physical_disabled',
 }
 
+PHYSICAL_MODEL_FAILURE_NONE = 0
+PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED = 1
+PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID = 2
+PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS = 3
+PHYSICAL_MODEL_FAILURE_FIT_FAILED = 4
+PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID = 5
+
+PHYSICAL_MODEL_FAILURE_LABELS = {
+    PHYSICAL_MODEL_FAILURE_NONE: 'none',
+    PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED: 'physical_disabled',
+    PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID: 'geometry_invalid',
+    PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS: 'insufficient_observations',
+    PHYSICAL_MODEL_FAILURE_FIT_FAILED: 'fit_failed',
+    PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID: 'prediction_invalid',
+}
+
 __all__ = [
+    'PHYSICAL_MODEL_FAILURE_FIT_FAILED',
+    'PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID',
+    'PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS',
+    'PHYSICAL_MODEL_FAILURE_LABELS',
+    'PHYSICAL_MODEL_FAILURE_NONE',
+    'PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED',
+    'PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID',
     'PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND',
     'PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP',
     'PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT',
@@ -67,6 +90,7 @@ class PhysicalCenterResult:
     fine_center_i: np.ndarray
     fine_center_t_sec: np.ndarray
     physical_model_status: np.ndarray
+    physical_model_failure_reason: np.ndarray
     physical_model_break_offset_m: np.ndarray
     physical_model_slope_near_s_per_m: np.ndarray
     physical_model_slope_far_s_per_m: np.ndarray
@@ -175,6 +199,7 @@ def _allocate_result_arrays(table: CoarsePickTable) -> dict[str, np.ndarray]:
         'fine_center_i': np.zeros((n,), dtype=np.int32),
         'fine_center_t_sec': np.zeros((n,), dtype=np.float32),
         'physical_model_status': np.zeros((n,), dtype=np.uint8),
+        'physical_model_failure_reason': np.zeros((n,), dtype=np.uint8),
         'physical_model_break_offset_m': np.full((n,), np.nan, dtype=np.float32),
         'physical_model_slope_near_s_per_m': np.full((n,), np.nan, dtype=np.float32),
         'physical_model_slope_far_s_per_m': np.full((n,), np.nan, dtype=np.float32),
@@ -199,6 +224,7 @@ def _assign_fallback(
     arrays: dict[str, np.ndarray],
     trace_idx: int,
     *,
+    failure_reason: int,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
@@ -214,10 +240,12 @@ def _assign_fallback(
     arrays['physical_center_i'][trace_idx] = np.int32(center_i)
     arrays['physical_center_t_sec'][trace_idx] = np.float32(center_t)
     arrays['physical_model_status'][trace_idx] = np.uint8(fallback_status)
+    arrays['physical_model_failure_reason'][trace_idx] = np.uint8(failure_reason)
 
 
 def _assign_fallback_all(
     *,
+    failure_reason: int,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
@@ -228,6 +256,7 @@ def _assign_fallback_all(
         _assign_fallback(
             arrays,
             trace_idx,
+            failure_reason=failure_reason,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -257,6 +286,9 @@ def _build_disabled_result(
     arrays['physical_center_t_sec'][:] = center_t
     arrays['physical_model_status'][:] = np.uint8(
         PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED
+    )
+    arrays['physical_model_failure_reason'][:] = np.uint8(
+        PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED
     )
     return _finalize_result(arrays)
 
@@ -668,6 +700,7 @@ def build_geometry_two_piece_physical_center(
         geometry = None
     if geometry is None or not bool(cfg.physical_trend.use_geometry_offset):
         return _assign_fallback_all(
+            failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -680,6 +713,7 @@ def build_geometry_two_piece_physical_center(
     )
     if len(groups) == 0:
         return _assign_fallback_all(
+            failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -730,6 +764,7 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -750,6 +785,7 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -770,6 +806,7 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -792,6 +829,7 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=PHYSICAL_MODEL_FAILURE_FIT_FAILED,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -811,6 +849,7 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
                 table=table,
                 feasible=feasible,
                 trend=trend,

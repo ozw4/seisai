@@ -13,6 +13,10 @@ from seisai_engine.pipelines.fbpick.common.qc_gathers import (
 	iter_qc_gathers,
 	sort_gather_indices_for_qc,
 )
+from seisai_engine.pipelines.fbpick.physics.physical_center import (
+	PHYSICAL_MODEL_FAILURE_LABELS,
+	PHYSICAL_MODEL_STATUS_LABELS,
+)
 
 __all__ = ['main', 'run_pipeline']
 
@@ -42,6 +46,8 @@ PER_FILE_COLUMNS = [
 	'robust_abs_err_p95',
 	'delta_p90',
 	'delta_p95',
+	'physical_model_status_counts',
+	'physical_model_failure_reason_counts',
 ]
 
 GLOBAL_COLUMNS = [
@@ -62,6 +68,8 @@ GLOBAL_COLUMNS = [
 	'robust_abs_err_p95',
 	'delta_p90',
 	'delta_p95',
+	'physical_model_status_counts',
+	'physical_model_failure_reason_counts',
 ]
 
 
@@ -577,6 +585,43 @@ def _format_value(value: object) -> object:
 	return value
 
 
+def _optional_uint8_vector(
+	name: str,
+	value: np.ndarray | None,
+	*,
+	length: int,
+) -> np.ndarray | None:
+	if value is None:
+		return None
+	arr = np.asarray(value, dtype=np.uint8)
+	if arr.ndim != 1 or int(arr.shape[0]) != int(length):
+		msg = f'{name} must be 1D with length {int(length)}'
+		raise ValueError(msg)
+	return arr
+
+
+def _format_uint8_counts(
+	values: np.ndarray | None,
+	*,
+	labels: dict[int, str],
+) -> str:
+	if values is None:
+		return ''
+	arr = np.asarray(values, dtype=np.uint8)
+	if arr.ndim != 1:
+		msg = 'values must be 1D'
+		raise ValueError(msg)
+	if int(arr.shape[0]) == 0:
+		return ''
+	unique_values, counts = np.unique(arr.astype(np.int64), return_counts=True)
+	parts: list[str] = []
+	for value, count in zip(unique_values, counts, strict=True):
+		value_int = int(value)
+		label = labels.get(value_int, f'unknown_{value_int}')
+		parts.append(f'{label}={int(count)}')
+	return '; '.join(parts)
+
+
 def _summarize_errors(
 	*,
 	coarse_pick_i: np.ndarray,
@@ -663,6 +708,8 @@ def run_pipeline(config_path: str | Path) -> Path:
 	all_coarse_abs_err: list[np.ndarray] = []
 	all_robust_abs_err: list[np.ndarray] = []
 	all_r127: list[np.ndarray] = []
+	all_physical_model_status: list[np.ndarray] = []
+	all_physical_model_failure_reason: list[np.ndarray] = []
 	total_traces = 0
 	total_valid_gt = 0
 	total_invalid_gt = 0
@@ -689,6 +736,16 @@ def run_pipeline(config_path: str | Path) -> Path:
 
 			n_traces = _require_scalar_int(robust, 'n_traces')
 			n_samples_orig = _require_scalar_int(robust, 'n_samples_orig')
+			physical_model_status = _optional_uint8_vector(
+				'physical_model_status',
+				robust.get('physical_model_status'),
+				length=n_traces,
+			)
+			physical_model_failure_reason = _optional_uint8_vector(
+				'physical_model_failure_reason',
+				robust.get('physical_model_failure_reason'),
+				length=n_traces,
+			)
 			gt_pick_i = _load_gt_fb(fb_path, n_traces=n_traces)
 			coarse_pick_i = np.asarray(coarse['coarse_pick_i'], dtype=np.int64)
 			robust_pick_i = np.asarray(robust['robust_pick_i'], dtype=np.int64)
@@ -715,7 +772,7 @@ def run_pipeline(config_path: str | Path) -> Path:
 				trend_center_i=robust.get('trend_center_i'),
 				physical_center_i=robust.get('physical_center_i'),
 				fine_center_i=robust.get('fine_center_i'),
-				physical_model_status=robust.get('physical_model_status'),
+				physical_model_status=physical_model_status,
 				dataset_cfg=dataset_cfg,
 				vis_cfg=vis_cfg,
 				runtime=runtime,
@@ -732,6 +789,14 @@ def run_pipeline(config_path: str | Path) -> Path:
 			'n_samples_orig': n_samples_orig,
 			'dt_sec': _require_scalar_float(robust, 'dt_sec'),
 			**metrics,
+			'physical_model_status_counts': _format_uint8_counts(
+				physical_model_status,
+				labels=PHYSICAL_MODEL_STATUS_LABELS,
+			),
+			'physical_model_failure_reason_counts': _format_uint8_counts(
+				physical_model_failure_reason,
+				labels=PHYSICAL_MODEL_FAILURE_LABELS,
+			),
 		}
 		per_file_rows.append(row)
 		_write_per_file_outputs(
@@ -746,6 +811,10 @@ def run_pipeline(config_path: str | Path) -> Path:
 		all_coarse_abs_err.append(coarse_abs_err)
 		all_robust_abs_err.append(robust_abs_err)
 		all_r127.append(r127)
+		if physical_model_status is not None:
+			all_physical_model_status.append(physical_model_status)
+		if physical_model_failure_reason is not None:
+			all_physical_model_failure_reason.append(physical_model_failure_reason)
 		total_traces += int(metrics['n_traces'])
 		total_valid_gt += int(metrics['n_valid_gt'])
 		total_invalid_gt += int(metrics['n_invalid_gt'])
@@ -757,6 +826,16 @@ def run_pipeline(config_path: str | Path) -> Path:
 	global_coarse_p95 = _percentile(global_coarse_abs_err, 95.0)
 	global_robust_p90 = _percentile(global_robust_abs_err, 90.0)
 	global_robust_p95 = _percentile(global_robust_abs_err, 95.0)
+	global_physical_model_status = (
+		np.concatenate(all_physical_model_status, axis=0)
+		if all_physical_model_status
+		else None
+	)
+	global_physical_model_failure_reason = (
+		np.concatenate(all_physical_model_failure_reason, axis=0)
+		if all_physical_model_failure_reason
+		else None
+	)
 	global_row = {
 		'scope': 'global',
 		'fine_ready': bool(total_valid_gt > 0 and np.all(global_r127)),
@@ -775,6 +854,14 @@ def run_pipeline(config_path: str | Path) -> Path:
 		'robust_abs_err_p95': global_robust_p95,
 		'delta_p90': global_robust_p90 - global_coarse_p90,
 		'delta_p95': global_robust_p95 - global_coarse_p95,
+		'physical_model_status_counts': _format_uint8_counts(
+			global_physical_model_status,
+			labels=PHYSICAL_MODEL_STATUS_LABELS,
+		),
+		'physical_model_failure_reason_counts': _format_uint8_counts(
+			global_physical_model_failure_reason,
+			labels=PHYSICAL_MODEL_FAILURE_LABELS,
+		),
 	}
 
 	summary_per_file_path = out_dir / 'summary_per_file.csv'

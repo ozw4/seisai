@@ -270,3 +270,19 @@ def test_save_vis_pngs_passes_optional_physical_overlay_arrays(
         captured['physical_model_status'],
         np.asarray([0, 2], dtype=np.uint8),
     )
+
+
+def test_qc_summary_columns_include_physical_failure_reason_counts() -> None:
+    assert 'physical_model_status_counts' in physics_qc_cli.PER_FILE_COLUMNS
+    assert 'physical_model_failure_reason_counts' in physics_qc_cli.PER_FILE_COLUMNS
+    assert 'physical_model_status_counts' in physics_qc_cli.GLOBAL_COLUMNS
+    assert 'physical_model_failure_reason_counts' in physics_qc_cli.GLOBAL_COLUMNS
+
+
+def test_format_uint8_counts_uses_physical_failure_labels() -> None:
+    summary = physics_qc_cli._format_uint8_counts(
+        np.asarray([0, 2, 2, 5], dtype=np.uint8),
+        labels=physics_qc_cli.PHYSICAL_MODEL_FAILURE_LABELS,
+    )
+
+    assert summary == 'none=1; geometry_invalid=2; prediction_invalid=1'
