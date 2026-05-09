@@ -11,6 +11,7 @@ from seisai_engine.pipelines.fbpick.common import (
     REASON_MASK_FILLED_FROM_TREND,
     REASON_MASK_INFEASIBLE,
     REASON_MASK_LOW_SCORE,
+    ROBUST_PHYSICAL_OPTIONAL_KEYS,
     ROBUST_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
     ROBUST_SOURCE_TREND_FILL,
@@ -33,6 +34,11 @@ from seisai_engine.pipelines.fbpick.physics.feasible import (
 from seisai_engine.pipelines.fbpick.physics.merge import apply_keep_reject_fill
 from seisai_engine.pipelines.fbpick.physics.pick_table import (
     normalize_coarse_pick_table,
+)
+from seisai_engine.pipelines.fbpick.physics.physical_center import (
+    PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
+    PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
+    PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
 )
 from seisai_engine.pipelines.fbpick.physics.run import (
     build_robust_payload_from_coarse,
@@ -80,6 +86,50 @@ def _make_coarse_payload(
         'coarse_pmax': pmax,
         'coarse_prob_summary': pmax.copy(),
         'lineage': np.asarray('{"stage":"coarse-test"}'),
+    }
+
+
+def _make_physical_geometry(offsets_m: np.ndarray) -> dict[str, np.ndarray]:
+    offsets = np.asarray(offsets_m, dtype=np.float32)
+    n_traces = int(offsets.shape[0])
+    return {
+        'source_x_m': np.zeros((n_traces,), dtype=np.float32),
+        'source_y_m': np.zeros((n_traces,), dtype=np.float32),
+        'receiver_x_m': offsets.astype(np.float32, copy=True),
+        'receiver_y_m': np.zeros((n_traces,), dtype=np.float32),
+        'offset_abs_geom_m': np.abs(offsets).astype(np.float32, copy=False),
+        'geometry_valid_mask': np.ones((n_traces,), dtype=np.bool_),
+    }
+
+
+def _make_robust_payload() -> dict[str, np.ndarray]:
+    return {
+        'dt_sec': np.asarray(0.004, dtype=np.float32),
+        'n_samples_orig': np.asarray(512, dtype=np.int32),
+        'n_traces': np.asarray(3, dtype=np.int32),
+        'ffid_values': np.array([1, 1, 1], dtype=np.int32),
+        'chno_values': np.array([1, 2, 3], dtype=np.int32),
+        'offsets_m': np.array([100.0, 200.0, 300.0], dtype=np.float32),
+        'trace_indices': np.array([0, 1, 2], dtype=np.int64),
+        'robust_pick_i': np.array([100, 101, 102], dtype=np.int32),
+        'robust_pick_t_sec': np.array([0.4, 0.404, 0.408], dtype=np.float32),
+        'robust_conf': np.array([0.9, 0.8, 0.7], dtype=np.float32),
+        'robust_source': np.array([0, 2, 0], dtype=np.uint8),
+        'used_theoretical_mask': np.array([False, False, False], dtype=np.bool_),
+        'reason_mask': np.array(
+            [
+                0,
+                REASON_MASK_INFEASIBLE | REASON_MASK_FILLED_FROM_TREND,
+                0,
+            ],
+            dtype=np.uint8,
+        ),
+        'conf_prob1': np.array([0.9, 0.2, 0.8], dtype=np.float32),
+        'conf_trend1': np.array([0.9, 0.6, 0.8], dtype=np.float32),
+        'conf_rs1': np.array([1.0, 1.0, 1.0], dtype=np.float32),
+        'lineage': np.asarray(
+            '{"iter_id":"","source_model_id":"x","cfg_hash":"y","git_sha":"z"}'
+        ),
     }
 
 
@@ -646,6 +696,95 @@ def test_save_and_load_robust_npz_preserve_optional_center_fields(tmp_path: Path
     np.testing.assert_array_equal(loaded['fine_center_t_sec'], center_t_sec)
 
 
+def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
+    tmp_path: Path,
+) -> None:
+    center_i = np.array([100, 105, 110], dtype=np.int32)
+    center_t_sec = center_i.astype(np.float32) * np.float32(0.004)
+    payload = {
+        **_make_robust_payload(),
+        'physical_center_i': center_i,
+        'physical_center_t_sec': center_t_sec,
+        'fine_center_i': center_i,
+        'fine_center_t_sec': center_t_sec,
+        'physical_model_status': np.array([0, 1, 2], dtype=np.uint8),
+        'physical_model_break_offset_m': np.array(
+            [500.0, np.nan, 600.0],
+            dtype=np.float32,
+        ),
+        'physical_model_slope_near_s_per_m': np.array(
+            [0.001, np.nan, 0.0012],
+            dtype=np.float32,
+        ),
+        'physical_model_slope_far_s_per_m': np.array(
+            [0.0004, np.nan, 0.0005],
+            dtype=np.float32,
+        ),
+        'physical_model_velocity_near_m_s': np.array(
+            [1000.0, np.nan, 833.0],
+            dtype=np.float32,
+        ),
+        'physical_model_velocity_far_m_s': np.array(
+            [2500.0, np.nan, 2000.0],
+            dtype=np.float32,
+        ),
+        'physical_model_neighbor_count': np.array([3, 3, 3], dtype=np.int32),
+        'physical_prefilter_valid_count': np.array([8, 8, 8], dtype=np.int32),
+        'physical_model_segment_id': np.array([0, -1, 0], dtype=np.int32),
+        'physical_model_side': np.array([1, 0, 1], dtype=np.int8),
+        'physical_model_resid_p50_ms': np.array([1.0, np.nan, 2.0], dtype=np.float32),
+        'physical_model_resid_p90_ms': np.array([3.0, np.nan, 4.0], dtype=np.float32),
+    }
+
+    out_path = save_robust_npz(tmp_path / 'physical.robust.npz', **payload)
+    loaded = load_robust_npz(out_path)
+
+    assert set(ROBUST_PHYSICAL_OPTIONAL_KEYS).issubset(loaded.keys())
+    for key in ROBUST_PHYSICAL_OPTIONAL_KEYS:
+        np.testing.assert_array_equal(loaded[key], payload[key])
+
+
+def test_load_robust_npz_rejects_bad_physical_diagnostic_dtype_and_shape(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        **_make_robust_payload(),
+        'physical_model_status': np.array([0, 1, 2], dtype=np.uint8),
+        'physical_model_neighbor_count': np.array([3, 3, 3], dtype=np.int32),
+    }
+
+    bad_dtype_path = tmp_path / 'bad_dtype.robust.npz'
+    np.savez_compressed(
+        bad_dtype_path,
+        **{
+            **payload,
+            'physical_model_status': np.array([0, 1, 2], dtype=np.int32),
+        },
+    )
+    with pytest.raises(ValueError, match='physical_model_status dtype'):
+        load_robust_npz(bad_dtype_path)
+
+    bad_shape_path = tmp_path / 'bad_shape.robust.npz'
+    np.savez_compressed(
+        bad_shape_path,
+        **{
+            **payload,
+            'physical_model_neighbor_count': np.array([3, 3], dtype=np.int32),
+        },
+    )
+    with pytest.raises(ValueError, match='physical_model_neighbor_count must be 1D'):
+        load_robust_npz(bad_shape_path)
+
+
+def test_save_robust_npz_rejects_bad_physical_diagnostic_shape(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match='physical_model_status length'):
+        save_robust_npz(
+            tmp_path / 'bad_physical_shape.robust.npz',
+            **_make_robust_payload(),
+            physical_model_status=np.array([0, 1], dtype=np.uint8),
+        )
+
+
 def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     tmp_path: Path,
 ) -> None:
@@ -682,16 +821,31 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     assert robust['robust_pick_t_sec'].shape == (n_traces,)
     assert robust['trend_center_i'].shape == (n_traces,)
     assert robust['trend_center_t_sec'].shape == (n_traces,)
+    assert robust['physical_center_i'].shape == (n_traces,)
+    assert robust['physical_center_t_sec'].shape == (n_traces,)
     assert robust['fine_center_i'].shape == (n_traces,)
     assert robust['fine_center_t_sec'].shape == (n_traces,)
+    assert robust['physical_model_status'].shape == (n_traces,)
     assert robust['trend_center_i'].dtype == np.int32
     assert robust['trend_center_t_sec'].dtype == np.float32
+    assert robust['physical_center_i'].dtype == np.int32
+    assert robust['physical_center_t_sec'].dtype == np.float32
     assert robust['fine_center_i'].dtype == np.int32
     assert robust['fine_center_t_sec'].dtype == np.float32
+    assert robust['physical_model_status'].dtype == np.uint8
+    np.testing.assert_array_equal(robust['physical_center_i'], robust['trend_center_i'])
+    np.testing.assert_array_equal(
+        robust['physical_center_t_sec'],
+        robust['trend_center_t_sec'],
+    )
     np.testing.assert_array_equal(robust['fine_center_i'], robust['trend_center_i'])
     np.testing.assert_array_equal(
         robust['fine_center_t_sec'],
         robust['trend_center_t_sec'],
+    )
+    assert np.all(
+        robust['physical_model_status']
+        == np.uint8(PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED)
     )
     np.testing.assert_array_equal(
         robust['fine_center_t_sec'],
@@ -727,15 +881,114 @@ def test_build_robust_payload_from_coarse_returns_required_keys(tmp_path: Path) 
     assert payload['robust_source'].dtype == np.uint8
     assert payload['trend_center_i'].dtype == np.int32
     assert payload['trend_center_t_sec'].dtype == np.float32
+    assert payload['physical_center_i'].dtype == np.int32
+    assert payload['physical_center_t_sec'].dtype == np.float32
     assert payload['fine_center_i'].dtype == np.int32
     assert payload['fine_center_t_sec'].dtype == np.float32
+    assert payload['physical_model_status'].dtype == np.uint8
+    np.testing.assert_array_equal(
+        payload['physical_center_i'],
+        payload['trend_center_i'],
+    )
+    np.testing.assert_array_equal(
+        payload['physical_center_t_sec'],
+        payload['trend_center_t_sec'],
+    )
     np.testing.assert_array_equal(payload['fine_center_i'], payload['trend_center_i'])
     np.testing.assert_array_equal(
         payload['fine_center_t_sec'],
         payload['trend_center_t_sec'],
     )
+    assert np.all(
+        payload['physical_model_status']
+        == np.uint8(PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED)
+    )
     assert lineage['source_model_id'] == 'coarse-model'
     assert lineage['git_sha'] is None
+
+
+def test_build_robust_payload_from_coarse_uses_physical_center_with_geometry(
+    tmp_path: Path,
+) -> None:
+    offsets_m = np.linspace(50.0, 1200.0, 24, dtype=np.float32)
+    pick_t_sec = np.float32(0.02) + offsets_m / np.float32(3000.0)
+    coarse_pick_i = np.rint(pick_t_sec / np.float32(0.004)).astype(np.int32)
+    coarse_npz = {
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full((24,), 0.95, dtype=np.float32),
+            offsets_m=offsets_m,
+        ),
+        **_make_physical_geometry(offsets_m),
+    }
+
+    payload = build_robust_payload_from_coarse(
+        coarse_npz,
+        cfg={
+            'physical_trend': {
+                'enabled': True,
+                'segment_by_offset_sign': False,
+                'split_by_offset_gap': False,
+            },
+            'neighbor_context': {'enabled': False},
+            'physical_prefilter': {'enabled': False},
+            'two_piece_ransac': {'min_pts': 3, 'seed': 7},
+        },
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+
+    assert set(ROBUST_PHYSICAL_OPTIONAL_KEYS).issubset(payload.keys())
+    assert np.any(
+        payload['physical_model_status']
+        == np.uint8(PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+    )
+    np.testing.assert_array_equal(
+        payload['fine_center_i'],
+        payload['physical_center_i'],
+    )
+    np.testing.assert_array_equal(
+        payload['fine_center_t_sec'],
+        payload['physical_center_t_sec'],
+    )
+
+
+def test_run_physics_lite_with_enabled_physical_and_no_geometry_saves_fallback_status(
+    tmp_path: Path,
+) -> None:
+    n_traces = 16
+    offsets_m = np.linspace(50.0, 800.0, n_traces, dtype=np.float32)
+    coarse_pick_i = np.rint(
+        (np.float32(0.02) + offsets_m / np.float32(3000.0)) / np.float32(0.004)
+    ).astype(np.int32)
+    coarse_path = save_coarse_npz(
+        tmp_path / 'legacy_geometry.coarse.npz',
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full((n_traces,), 0.95, dtype=np.float32),
+            offsets_m=offsets_m,
+        ),
+    )
+
+    out_path = run_physics_lite(
+        coarse_path,
+        cfg={
+            'physical_trend': {'enabled': True},
+            'two_piece_ransac': {'min_pts': 3},
+        },
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+    robust = load_robust_npz(out_path)
+
+    assert set(ROBUST_PHYSICAL_OPTIONAL_KEYS).issubset(robust.keys())
+    assert np.all(
+        robust['physical_model_status']
+        == np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND)
+    )
+    np.testing.assert_array_equal(robust['fine_center_i'], robust['trend_center_i'])
 
 
 def test_build_lineage_payload_reads_git_sha_from_ancestor_repo_root(tmp_path: Path) -> None:

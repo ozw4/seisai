@@ -16,6 +16,7 @@ from .config import load_physics_lite_config, physics_lite_config_to_dict
 from .feasible import compute_feasible_band
 from .merge import apply_keep_reject_fill
 from .pick_table import normalize_coarse_pick_table
+from .physical_center import build_geometry_two_piece_physical_center
 from .trend import build_trend_result
 
 __all__ = ['build_robust_payload_from_coarse', 'derive_robust_npz_path', 'run_physics_lite']
@@ -46,6 +47,14 @@ def build_robust_payload_from_coarse(
     trend = build_trend_result(table, feasible, typed_cfg)
     confidence = compute_confidence_terms(table, feasible, trend, typed_cfg)
     merged = apply_keep_reject_fill(table, feasible, trend, confidence, typed_cfg)
+    physical = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=typed_cfg,
+    )
 
     return {
         'dt_sec': np.asarray(table.dt_scalar_sec, dtype=np.float32),
@@ -69,8 +78,58 @@ def build_robust_payload_from_coarse(
         'conf_rs1': np.asarray(confidence.conf_rs1, dtype=np.float32),
         'trend_center_i': np.asarray(trend.trend_center_i, dtype=np.int32),
         'trend_center_t_sec': np.asarray(trend.trend_center_sec, dtype=np.float32),
-        'fine_center_i': np.asarray(trend.trend_center_i, dtype=np.int32),
-        'fine_center_t_sec': np.asarray(trend.trend_center_sec, dtype=np.float32),
+        'physical_center_i': np.asarray(physical.physical_center_i, dtype=np.int32),
+        'physical_center_t_sec': np.asarray(
+            physical.physical_center_t_sec,
+            dtype=np.float32,
+        ),
+        'fine_center_i': np.asarray(physical.fine_center_i, dtype=np.int32),
+        'fine_center_t_sec': np.asarray(physical.fine_center_t_sec, dtype=np.float32),
+        'physical_model_status': np.asarray(
+            physical.physical_model_status,
+            dtype=np.uint8,
+        ),
+        'physical_model_break_offset_m': np.asarray(
+            physical.physical_model_break_offset_m,
+            dtype=np.float32,
+        ),
+        'physical_model_slope_near_s_per_m': np.asarray(
+            physical.physical_model_slope_near_s_per_m,
+            dtype=np.float32,
+        ),
+        'physical_model_slope_far_s_per_m': np.asarray(
+            physical.physical_model_slope_far_s_per_m,
+            dtype=np.float32,
+        ),
+        'physical_model_velocity_near_m_s': np.asarray(
+            physical.physical_model_velocity_near_m_s,
+            dtype=np.float32,
+        ),
+        'physical_model_velocity_far_m_s': np.asarray(
+            physical.physical_model_velocity_far_m_s,
+            dtype=np.float32,
+        ),
+        'physical_model_neighbor_count': np.asarray(
+            physical.physical_model_neighbor_count,
+            dtype=np.int32,
+        ),
+        'physical_prefilter_valid_count': np.asarray(
+            physical.physical_prefilter_valid_count,
+            dtype=np.int32,
+        ),
+        'physical_model_segment_id': np.asarray(
+            physical.physical_model_segment_id,
+            dtype=np.int32,
+        ),
+        'physical_model_side': np.asarray(physical.physical_model_side, dtype=np.int8),
+        'physical_model_resid_p50_ms': np.asarray(
+            physical.physical_model_resid_p50_ms,
+            dtype=np.float32,
+        ),
+        'physical_model_resid_p90_ms': np.asarray(
+            physical.physical_model_resid_p90_ms,
+            dtype=np.float32,
+        ),
         'lineage': build_lineage_payload(
             canonical_cfg,
             repo_root=repo_root,

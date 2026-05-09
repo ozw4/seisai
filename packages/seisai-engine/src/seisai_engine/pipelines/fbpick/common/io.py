@@ -9,6 +9,7 @@ from .artifacts import (
     COARSE_REQUIRED_KEYS,
     FINAL_REQUIRED_KEYS,
     FINE_RESULT_REQUIRED_KEYS,
+    ROBUST_PHYSICAL_OPTIONAL_KEYS,
     ROBUST_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
     ROBUST_SOURCE_THEORETICAL,
@@ -20,6 +21,7 @@ __all__ = [
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
     'FINE_RESULT_REQUIRED_KEYS',
+    'ROBUST_PHYSICAL_OPTIONAL_KEYS',
     'ROBUST_REQUIRED_KEYS',
     'build_fbpick_final_payload',
     'load_coarse_npz',
@@ -174,6 +176,12 @@ def _validate_unit_interval(name: str, arr: np.ndarray) -> None:
         raise ValueError(msg)
 
 
+def _validate_finite_or_nan(name: str, arr: np.ndarray) -> None:
+    if np.any(np.isinf(arr)):
+        msg = f'{name} must not contain inf'
+        raise ValueError(msg)
+
+
 def _validate_pick_time_pair(
     *,
     pick_key: str,
@@ -229,6 +237,22 @@ def _require_payload_vector(
         raise ValueError(msg)
     _require_exact_dtype(name, arr, dtype=dtype)
     return arr
+
+
+_ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = (
+    ('physical_model_status', np.uint8),
+    ('physical_model_break_offset_m', np.float32),
+    ('physical_model_slope_near_s_per_m', np.float32),
+    ('physical_model_slope_far_s_per_m', np.float32),
+    ('physical_model_velocity_near_m_s', np.float32),
+    ('physical_model_velocity_far_m_s', np.float32),
+    ('physical_model_neighbor_count', np.int32),
+    ('physical_prefilter_valid_count', np.int32),
+    ('physical_model_segment_id', np.int32),
+    ('physical_model_side', np.int8),
+    ('physical_model_resid_p50_ms', np.float32),
+    ('physical_model_resid_p90_ms', np.float32),
+)
 
 
 def _validate_high_conf_threshold(value: float) -> np.float32:
@@ -417,8 +441,22 @@ def save_robust_npz(
     lineage,
     trend_center_i=None,
     trend_center_t_sec=None,
+    physical_center_i=None,
+    physical_center_t_sec=None,
     fine_center_i=None,
     fine_center_t_sec=None,
+    physical_model_status=None,
+    physical_model_break_offset_m=None,
+    physical_model_slope_near_s_per_m=None,
+    physical_model_slope_far_s_per_m=None,
+    physical_model_velocity_near_m_s=None,
+    physical_model_velocity_far_m_s=None,
+    physical_model_neighbor_count=None,
+    physical_prefilter_valid_count=None,
+    physical_model_segment_id=None,
+    physical_model_side=None,
+    physical_model_resid_p50_ms=None,
+    physical_model_resid_p90_ms=None,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -523,11 +561,14 @@ def save_robust_npz(
     optional_center_values = {
         'trend_center_i': trend_center_i,
         'trend_center_t_sec': trend_center_t_sec,
+        'physical_center_i': physical_center_i,
+        'physical_center_t_sec': physical_center_t_sec,
         'fine_center_i': fine_center_i,
         'fine_center_t_sec': fine_center_t_sec,
     }
     for pick_key, time_key in (
         ('trend_center_i', 'trend_center_t_sec'),
+        ('physical_center_i', 'physical_center_t_sec'),
         ('fine_center_i', 'fine_center_t_sec'),
     ):
         pick_value = optional_center_values[pick_key]
@@ -557,6 +598,33 @@ def save_robust_npz(
             dt_sec=float(arrays['dt_sec'].item()),
             n_samples_orig=n_samples_orig_int,
         )
+
+    physical_diagnostic_values = {
+        'physical_model_status': physical_model_status,
+        'physical_model_break_offset_m': physical_model_break_offset_m,
+        'physical_model_slope_near_s_per_m': physical_model_slope_near_s_per_m,
+        'physical_model_slope_far_s_per_m': physical_model_slope_far_s_per_m,
+        'physical_model_velocity_near_m_s': physical_model_velocity_near_m_s,
+        'physical_model_velocity_far_m_s': physical_model_velocity_far_m_s,
+        'physical_model_neighbor_count': physical_model_neighbor_count,
+        'physical_prefilter_valid_count': physical_prefilter_valid_count,
+        'physical_model_segment_id': physical_model_segment_id,
+        'physical_model_side': physical_model_side,
+        'physical_model_resid_p50_ms': physical_model_resid_p50_ms,
+        'physical_model_resid_p90_ms': physical_model_resid_p90_ms,
+    }
+    for key, dtype in _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS:
+        value = physical_diagnostic_values[key]
+        if value is None:
+            continue
+        arrays[key] = _coerce_vector(
+            key,
+            value,
+            dtype=dtype,
+            length=n_traces_int,
+        )
+        if np.dtype(dtype) == np.dtype(np.float32):
+            _validate_finite_or_nan(key, arrays[key])
 
     robust_pick_i_arr = arrays['robust_pick_i']
     if np.any(robust_pick_i_arr < 0) or np.any(robust_pick_i_arr >= n_samples_orig_int):
@@ -643,6 +711,7 @@ def load_robust_npz(path: str | Path) -> dict[str, np.ndarray]:
 
     for pick_key, time_key in (
         ('trend_center_i', 'trend_center_t_sec'),
+        ('physical_center_i', 'physical_center_t_sec'),
         ('fine_center_i', 'fine_center_t_sec'),
     ):
         if pick_key not in out and time_key not in out:
@@ -668,6 +737,17 @@ def load_robust_npz(path: str | Path) -> dict[str, np.ndarray]:
             dt_sec=float(np.asarray(out['dt_sec']).item()),
             n_samples_orig=n_samples_orig,
         )
+
+    for key, dtype in _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS:
+        if key not in out:
+            continue
+        arr = np.asarray(out[key])
+        if arr.ndim != 1 or int(arr.shape[0]) != n_traces:
+            msg = f'{key} must be 1D with length n_traces'
+            raise ValueError(msg)
+        _require_exact_dtype(key, arr, dtype=dtype)
+        if np.dtype(dtype) == np.dtype(np.float32):
+            _validate_finite_or_nan(key, arr)
 
     if np.any(np.asarray(out['robust_pick_i']) < 0) or np.any(
         np.asarray(out['robust_pick_i']) >= n_samples_orig

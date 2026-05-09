@@ -56,6 +56,23 @@ ROBUST_REQUIRED_KEYS = (
     'lineage',
 )
 
+ROBUST_PHYSICAL_OPTIONAL_KEYS = (
+    'physical_center_i',
+    'physical_center_t_sec',
+    'physical_model_status',
+    'physical_model_break_offset_m',
+    'physical_model_slope_near_s_per_m',
+    'physical_model_slope_far_s_per_m',
+    'physical_model_velocity_near_m_s',
+    'physical_model_velocity_far_m_s',
+    'physical_model_neighbor_count',
+    'physical_prefilter_valid_count',
+    'physical_model_segment_id',
+    'physical_model_side',
+    'physical_model_resid_p50_ms',
+    'physical_model_resid_p90_ms',
+)
+
 FINE_RESULT_REQUIRED_KEYS = (
     'dt_sec',
     'n_samples_orig',
@@ -127,6 +144,7 @@ __all__ = [
     'REASON_MASK_LABELS',
     'REASON_MASK_LOW_SCORE',
     'ROBUST_REQUIRED_KEYS',
+    'ROBUST_PHYSICAL_OPTIONAL_KEYS',
     'ROBUST_SOURCE_COARSE_OBSERVED',
     'ROBUST_SOURCE_LABELS',
     'ROBUST_SOURCE_THEORETICAL',
