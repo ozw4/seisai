@@ -114,6 +114,14 @@ class _ObservationPlan:
     relaxed: bool
 
 
+@dataclass(frozen=True)
+class _FitCacheEntry:
+    model: object | None
+    diagnostics: tuple[float, float, float, float, float, float, float] | None
+    fit_failed: bool
+    diagnostics_computed: bool = False
+
+
 def _validate_table(table: CoarsePickTable) -> None:
     if int(table.n_traces) <= 0:
         msg = 'table.n_traces must be positive'
@@ -578,6 +586,79 @@ def _model_diagnostics(
     )
 
 
+def _fit_cache_key(plan: _ObservationPlan) -> tuple[int, ...]:
+    return tuple(np.asarray(plan.obs_indices, dtype=np.int64).tolist())
+
+
+def _fit_model_for_plan(
+    *,
+    strategy: TwoPieceRansacAutoBreakStrategy,
+    plan: _ObservationPlan,
+    x_obs: np.ndarray,
+    y_obs: np.ndarray,
+    cache: dict[tuple[int, ...], _FitCacheEntry],
+) -> tuple[
+    object | None,
+    tuple[float, float, float, float, float, float, float] | None,
+    int | None,
+]:
+    cache_key = _fit_cache_key(plan)
+    entry = cache.get(cache_key)
+    if entry is None:
+        try:
+            trend_model = strategy.fit(
+                torch.as_tensor(x_obs, dtype=torch.float32),
+                torch.as_tensor(y_obs, dtype=torch.float32),
+            )
+        except (TypeError, ValueError, RuntimeError):
+            trend_model = None
+
+        if trend_model is None:
+            entry = _FitCacheEntry(model=None, diagnostics=None, fit_failed=True)
+        else:
+            entry = _FitCacheEntry(
+                model=trend_model,
+                diagnostics=None,
+                fit_failed=False,
+            )
+        cache[cache_key] = entry
+
+    if bool(entry.fit_failed):
+        return None, None, PHYSICAL_MODEL_FAILURE_FIT_FAILED
+    return entry.model, entry.diagnostics, None
+
+
+def _diagnostics_for_plan(
+    *,
+    plan: _ObservationPlan,
+    x_obs: np.ndarray,
+    y_obs: np.ndarray,
+    cache: dict[tuple[int, ...], _FitCacheEntry],
+) -> tuple[float, float, float, float, float, float, float] | None:
+    cache_key = _fit_cache_key(plan)
+    entry = cache[cache_key]
+    if bool(entry.fit_failed) or entry.model is None:
+        return None
+    if bool(entry.diagnostics_computed):
+        return entry.diagnostics
+
+    try:
+        diagnostics = _model_diagnostics(
+            entry.model,
+            obs_offsets_m=x_obs,
+            obs_times_sec=y_obs,
+        )
+    except (TypeError, ValueError, RuntimeError):
+        diagnostics = None
+    cache[cache_key] = _FitCacheEntry(
+        model=entry.model,
+        diagnostics=diagnostics,
+        fit_failed=False,
+        diagnostics_computed=True,
+    )
+    return diagnostics
+
+
 def _compute_physical_prefilter_mask(
     *,
     geometry: CoarseGeometry,
@@ -753,6 +834,7 @@ def build_geometry_two_piece_physical_center(
 
     arrays = _allocate_result_arrays(table)
     strategy = _fit_strategy(cfg)
+    fit_cache: dict[tuple[int, ...], _FitCacheEntry] = {}
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
 
     for trace_idx in range(n):
@@ -817,19 +899,19 @@ def build_geometry_two_piece_physical_center(
         obs_indices = np.asarray(plan.obs_indices, dtype=np.int64)
         x_obs = np.asarray(offset_abs_geom_m[obs_indices], dtype=np.float32)
         y_obs = np.asarray(pick_t_sec[obs_indices], dtype=np.float32)
-        try:
-            trend_model = strategy.fit(
-                torch.as_tensor(x_obs, dtype=torch.float32),
-                torch.as_tensor(y_obs, dtype=torch.float32),
-            )
-        except (TypeError, ValueError, RuntimeError):
-            trend_model = None
+        trend_model, diagnostics, fit_failure_reason = _fit_model_for_plan(
+            strategy=strategy,
+            plan=plan,
+            x_obs=x_obs,
+            y_obs=y_obs,
+            cache=fit_cache,
+        )
 
-        if trend_model is None:
+        if fit_failure_reason is not None:
             _assign_fallback(
                 arrays,
                 trace_idx,
-                failure_reason=PHYSICAL_MODEL_FAILURE_FIT_FAILED,
+                failure_reason=fit_failure_reason,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -867,7 +949,14 @@ def build_geometry_two_piece_physical_center(
             else PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
         )
 
-        try:
+        if diagnostics is None:
+            diagnostics = _diagnostics_for_plan(
+                plan=plan,
+                x_obs=x_obs,
+                y_obs=y_obs,
+                cache=fit_cache,
+            )
+        if diagnostics is not None:
             (
                 break_offset,
                 slope_near,
@@ -876,11 +965,7 @@ def build_geometry_two_piece_physical_center(
                 velocity_far,
                 resid_p50,
                 resid_p90,
-            ) = _model_diagnostics(
-                trend_model,
-                obs_offsets_m=x_obs,
-                obs_times_sec=y_obs,
-            )
+            ) = diagnostics
             arrays['physical_model_break_offset_m'][trace_idx] = np.float32(
                 break_offset
             )
@@ -898,7 +983,5 @@ def build_geometry_two_piece_physical_center(
             )
             arrays['physical_model_resid_p50_ms'][trace_idx] = np.float32(resid_p50)
             arrays['physical_model_resid_p90_ms'][trace_idx] = np.float32(resid_p90)
-        except (TypeError, ValueError, RuntimeError):
-            pass
 
     return _finalize_result(arrays)

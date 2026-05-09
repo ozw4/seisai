@@ -211,9 +211,22 @@ def test_physical_disabled_returns_existing_trend_center() -> None:
 def test_physical_center_calls_existing_two_piece_ransac(monkeypatch) -> None:
     calls: list[np.ndarray] = []
 
+    class CountingModel:
+        def __init__(self) -> None:
+            self._model = _fake_piecewise_model()
+            self.edges = self._model.edges
+            self.coef = self._model.coef
+            self.predict_call_sizes: list[int] = []
+
+        def predict(self, x_abs: torch.Tensor) -> torch.Tensor:
+            self.predict_call_sizes.append(int(x_abs.numel()))
+            return self._model.predict(x_abs)
+
+    model = CountingModel()
+
     def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
         calls.append(x_abs.detach().cpu().numpy().copy())
-        return _fake_piecewise_model()
+        return model
 
     monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
     inputs = _make_inputs(offsets_m=np.linspace(50.0, 1600.0, 12, dtype=np.float32))
@@ -228,8 +241,55 @@ def test_physical_center_calls_existing_two_piece_ransac(monkeypatch) -> None:
         cfg=_physical_cfg({'two_piece_ransac': {'min_pts': 3}}),
     )
 
-    assert calls
+    assert len(calls) == 1
+    assert model.predict_call_sizes.count(1) == int(table.n_traces)
+    assert model.predict_call_sizes.count(int(table.n_traces)) == 1
     assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+
+
+def test_physical_center_fits_once_per_unique_observation_segment(monkeypatch) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    offsets = np.asarray(
+        [
+            10.0,
+            20.0,
+            30.0,
+            40.0,
+            50.0,
+            60.0,
+            1000.0,
+            1010.0,
+            1020.0,
+            1030.0,
+            1040.0,
+            1050.0,
+        ],
+        dtype=np.float32,
+    )
+    pick_i = np.rint((0.02 + offsets / 2000.0) / 0.001).astype(np.int32)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+    )
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg({'two_piece_ransac': {'min_pts': 3}}),
+    )
+
+    assert len(calls) == 2
+    assert sorted(int(call.size) for call in calls) == [6, 6]
+    assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
 
 
 def test_synthetic_two_piece_trend_predicts_physical_centers() -> None:
@@ -446,7 +506,10 @@ def test_insufficient_observations_falls_back_inside_sample_range() -> None:
 
 
 def test_fit_failed_failure_reason_preserves_fallback_status(monkeypatch) -> None:
+    calls: list[np.ndarray] = []
+
     def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
         return None
 
     monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
@@ -471,6 +534,7 @@ def test_fit_failed_failure_reason_preserves_fallback_status(monkeypatch) -> Non
         result.physical_model_failure_reason
         == np.uint8(PHYSICAL_MODEL_FAILURE_FIT_FAILED)
     )
+    assert len(calls) == 1
 
 
 def test_prediction_invalid_failure_reason_preserves_fallback_status(monkeypatch) -> None:
