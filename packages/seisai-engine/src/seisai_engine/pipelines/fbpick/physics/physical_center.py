@@ -199,13 +199,12 @@ def _assign_fallback(
     arrays: dict[str, np.ndarray],
     trace_idx: int,
     *,
-    status: int,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
     merged: MergeResult,
 ) -> None:
-    center_i, center_t, _ = _fallback_center_for_trace(
+    center_i, center_t, fallback_status = _fallback_center_for_trace(
         trace_idx,
         table=table,
         feasible=feasible,
@@ -214,12 +213,11 @@ def _assign_fallback(
     )
     arrays['physical_center_i'][trace_idx] = np.int32(center_i)
     arrays['physical_center_t_sec'][trace_idx] = np.float32(center_t)
-    arrays['physical_model_status'][trace_idx] = np.uint8(status)
+    arrays['physical_model_status'][trace_idx] = np.uint8(fallback_status)
 
 
 def _assign_fallback_all(
     *,
-    status: int,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
@@ -230,7 +228,6 @@ def _assign_fallback_all(
         _assign_fallback(
             arrays,
             trace_idx,
-            status=status,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -671,7 +668,6 @@ def build_geometry_two_piece_physical_center(
         geometry = None
     if geometry is None or not bool(cfg.physical_trend.use_geometry_offset):
         return _assign_fallback_all(
-            status=PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -684,7 +680,6 @@ def build_geometry_two_piece_physical_center(
     )
     if len(groups) == 0:
         return _assign_fallback_all(
-            status=PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -735,7 +730,6 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
-                status=PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -756,7 +750,6 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
-                status=PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -777,7 +770,6 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
-                status=PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -800,7 +792,6 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
-                status=PHYSICAL_MODEL_STATUS_FIT_FAILED,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -820,7 +811,6 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
-                status=PHYSICAL_MODEL_STATUS_FIT_FAILED,
                 table=table,
                 feasible=feasible,
                 trend=trend,
