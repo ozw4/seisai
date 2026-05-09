@@ -16,6 +16,7 @@ from seisai_dataset import (
 )
 from seisai_dataset.config import LoaderConfig, TraceSubsetSamplerConfig
 from seisai_dataset.file_info import build_file_info
+from seisai_dataset.geometry_headers import validate_coord_unit_scale_to_m
 from seisai_dataset.trace_subset_preproc import TraceSubsetLoader
 from seisai_dataset.trace_subset_sampler import TraceSubsetSampler
 from seisai_dataset.transform_flow_utils import (
@@ -363,6 +364,7 @@ class GlobalAnchorCoarseRawInferDataset(Dataset):
         waveform_mode: str,
         segy_endian: str,
         use_header_cache: bool,
+        coord_unit_scale_to_m: float = 1.0,
     ) -> None:
         trace_len_int = int(trace_len)
         time_len_int = int(time_len)
@@ -395,6 +397,9 @@ class GlobalAnchorCoarseRawInferDataset(Dataset):
         self.gap_ratio = float(gap_ratio)
         self.min_gap_m = None if min_gap_m is None else float(min_gap_m)
         self.primary_key = primary_keys_tuple[0]
+        self.coord_unit_scale_to_m = validate_coord_unit_scale_to_m(
+            coord_unit_scale_to_m
+        )
         self.transform = build_infer_transform(standardize_eps=float(standardize_eps))
         self._rng = _NoRandRNG()
         self._subset_loader = TraceSubsetLoader(
@@ -424,7 +429,7 @@ class GlobalAnchorCoarseRawInferDataset(Dataset):
                 use_header_cache=bool(use_header_cache),
                 include_centroids=False,
                 include_geometry_arrays=True,
-                coord_unit_scale_to_m=1.0,
+                coord_unit_scale_to_m=self.coord_unit_scale_to_m,
                 waveform_mode=str(waveform_mode),
                 segy_endian=str(segy_endian),
             )
@@ -769,6 +774,7 @@ def build_raw_infer_dataset(
     waveform_mode: str,
     segy_endian: str,
     use_header_cache: bool,
+    coord_unit_scale_to_m: float = 1.0,
 ) -> GlobalAnchorCoarseRawInferDataset:
     validate_files_exist(list(segy_files))
     return GlobalAnchorCoarseRawInferDataset(
@@ -783,6 +789,7 @@ def build_raw_infer_dataset(
         waveform_mode=str(waveform_mode),
         segy_endian=str(segy_endian),
         use_header_cache=bool(use_header_cache),
+        coord_unit_scale_to_m=coord_unit_scale_to_m,
     )
 
 

@@ -60,7 +60,21 @@ PHYSICAL_MODEL_FAILURE_LABELS = {
     PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID: 'prediction_invalid',
 }
 
+PHYSICAL_OFFSET_SOURCE_NONE = 0
+PHYSICAL_OFFSET_SOURCE_GEOMETRY = 1
+PHYSICAL_OFFSET_SOURCE_HEADER = 2
+
+PHYSICAL_OFFSET_SOURCE_LABELS = {
+    PHYSICAL_OFFSET_SOURCE_NONE: 'none',
+    PHYSICAL_OFFSET_SOURCE_GEOMETRY: 'geometry_offset',
+    PHYSICAL_OFFSET_SOURCE_HEADER: 'header_offset',
+}
+
 __all__ = [
+    'PHYSICAL_OFFSET_SOURCE_GEOMETRY',
+    'PHYSICAL_OFFSET_SOURCE_HEADER',
+    'PHYSICAL_OFFSET_SOURCE_LABELS',
+    'PHYSICAL_OFFSET_SOURCE_NONE',
     'PHYSICAL_MODEL_FAILURE_FIT_FAILED',
     'PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID',
     'PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS',
@@ -91,6 +105,7 @@ class PhysicalCenterResult:
     fine_center_t_sec: np.ndarray
     physical_model_status: np.ndarray
     physical_model_failure_reason: np.ndarray
+    physical_offset_source: np.ndarray
     physical_model_break_offset_m: np.ndarray
     physical_model_slope_near_s_per_m: np.ndarray
     physical_model_slope_far_s_per_m: np.ndarray
@@ -208,6 +223,7 @@ def _allocate_result_arrays(table: CoarsePickTable) -> dict[str, np.ndarray]:
         'fine_center_t_sec': np.zeros((n,), dtype=np.float32),
         'physical_model_status': np.zeros((n,), dtype=np.uint8),
         'physical_model_failure_reason': np.zeros((n,), dtype=np.uint8),
+        'physical_offset_source': np.zeros((n,), dtype=np.uint8),
         'physical_model_break_offset_m': np.full((n,), np.nan, dtype=np.float32),
         'physical_model_slope_near_s_per_m': np.full((n,), np.nan, dtype=np.float32),
         'physical_model_slope_far_s_per_m': np.full((n,), np.nan, dtype=np.float32),
@@ -353,8 +369,9 @@ def _select_group_ids(
     groups: tuple[SourceGroup, ...],
     target_group_id: int,
     cfg: PhysicsLiteConfig,
+    use_neighbor_context: bool,
 ) -> np.ndarray:
-    if not bool(cfg.neighbor_context.enabled):
+    if not bool(use_neighbor_context) or not bool(cfg.neighbor_context.enabled):
         return np.asarray([int(target_group_id)], dtype=np.int64)
     return select_nearest_source_groups(
         groups,
@@ -389,16 +406,57 @@ def _obs_with_target_side(
     )
 
 
+def _obs_with_target_signed_offset_side(
+    *,
+    trace_idx: int,
+    obs_indices: np.ndarray,
+    signed_offset_m: np.ndarray,
+    zero_tol_m: float = 1.0e-6,
+) -> tuple[np.ndarray, int, bool]:
+    context_indices = _append_index(obs_indices, trace_idx)
+    signed = np.asarray(signed_offset_m, dtype=np.float32)[context_indices]
+    finite = np.isfinite(signed)
+    if int(np.count_nonzero(finite)) < 2:
+        return np.asarray(obs_indices, dtype=np.int64), 0, False
+
+    zero_tol = float(zero_tol_m)
+    if zero_tol < 0.0 or not np.isfinite(zero_tol):
+        msg = 'zero_tol_m must be finite and >= 0'
+        raise ValueError(msg)
+
+    side = np.zeros((context_indices.size,), dtype=np.int8)
+    signed_valid = np.asarray(signed[finite], dtype=np.float64)
+    if not np.any(np.abs(signed_valid) > zero_tol):
+        return np.asarray(obs_indices, dtype=np.int64), 0, False
+
+    side[finite] = np.where(
+        np.abs(signed_valid) <= zero_tol,
+        0,
+        np.where(signed_valid < 0.0, -1, 1),
+    ).astype(np.int8)
+    pos = _trace_position_map(context_indices)
+    target_side = int(side[pos[int(trace_idx)]])
+    obs_side = np.asarray(
+        [int(side[pos[int(obs_idx)]]) for obs_idx in obs_indices.tolist()],
+        dtype=np.int8,
+    )
+    return (
+        np.asarray(obs_indices, dtype=np.int64)[obs_side == target_side],
+        target_side,
+        True,
+    )
+
+
 def _obs_with_target_gap_segment(
     *,
     trace_idx: int,
     obs_indices: np.ndarray,
-    offset_abs_geom_m: np.ndarray,
+    offset_abs_m: np.ndarray,
     cfg: PhysicsLiteConfig,
 ) -> tuple[np.ndarray, int]:
     context_indices = _append_index(obs_indices, trace_idx)
     segment_id = split_offset_gap_segments(
-        np.asarray(offset_abs_geom_m, dtype=np.float32)[context_indices],
+        np.asarray(offset_abs_m, dtype=np.float32)[context_indices],
         split_by_offset_gap=bool(cfg.physical_trend.split_by_offset_gap),
         gap_ratio=float(cfg.physical_trend.gap_ratio),
         min_gap_m=cfg.physical_trend.min_gap_m,
@@ -421,14 +479,18 @@ def _build_observation_plan(
     target_group_id: int,
     groups: tuple[SourceGroup, ...],
     groups_by_id: Mapping[int, SourceGroup],
-    geometry: CoarseGeometry,
+    geometry: CoarseGeometry | None,
+    offset_abs_m: np.ndarray,
+    offset_signed_m: np.ndarray | None,
     valid_for_fit: np.ndarray,
     cfg: PhysicsLiteConfig,
+    use_neighbor_context: bool,
 ) -> _ObservationPlan | None:
     group_ids = _select_group_ids(
         groups=groups,
         target_group_id=target_group_id,
         cfg=cfg,
+        use_neighbor_context=use_neighbor_context,
     )
     neighbor_indices = _concat_group_traces(group_ids, groups_by_id=groups_by_id)
     valid_obs = neighbor_indices[
@@ -451,11 +513,18 @@ def _build_observation_plan(
     side = 0
     side_reliable = False
     if bool(cfg.physical_trend.segment_by_offset_sign):
-        side_obs, side, side_reliable = _obs_with_target_side(
-            trace_idx=trace_idx,
-            obs_indices=valid_obs,
-            geometry=geometry,
-        )
+        if offset_signed_m is not None:
+            side_obs, side, side_reliable = _obs_with_target_signed_offset_side(
+                trace_idx=trace_idx,
+                obs_indices=valid_obs,
+                signed_offset_m=offset_signed_m,
+            )
+        elif geometry is not None:
+            side_obs, side, side_reliable = _obs_with_target_side(
+                trace_idx=trace_idx,
+                obs_indices=valid_obs,
+                geometry=geometry,
+            )
 
     segment_obs = side_obs
     segment_id = 0
@@ -463,7 +532,7 @@ def _build_observation_plan(
         segment_obs, segment_id = _obs_with_target_gap_segment(
             trace_idx=trace_idx,
             obs_indices=side_obs,
-            offset_abs_geom_m=geometry.offset_abs_geom_m,
+            offset_abs_m=offset_abs_m,
             cfg=cfg,
         )
 
@@ -661,20 +730,15 @@ def _diagnostics_for_plan(
 
 def _compute_physical_prefilter_mask(
     *,
-    geometry: CoarseGeometry,
+    offset_abs_m: np.ndarray,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     cfg: PhysicsLiteConfig,
 ) -> np.ndarray:
     n = int(table.n_traces)
-    geometry_valid = _as_bool_vector(
-        'geometry.geometry_valid_mask',
-        geometry.geometry_valid_mask,
-        n_traces=n,
-    )
-    offset_abs_m = _as_vector(
-        'geometry.offset_abs_geom_m',
-        geometry.offset_abs_geom_m,
+    offset_abs_arr = _as_vector(
+        'offset_abs_m',
+        offset_abs_m,
         n_traces=n,
         dtype=np.float32,
     )
@@ -684,14 +748,14 @@ def _compute_physical_prefilter_mask(
         n_traces=n,
         dtype=np.float32,
     )
-    finite_mask = geometry_valid & np.isfinite(offset_abs_m) & np.isfinite(pick_t_sec)
+    finite_mask = np.isfinite(offset_abs_arr) & np.isfinite(pick_t_sec)
 
     physical_mask = np.zeros((n,), dtype=np.bool_)
     if bool(cfg.physical_prefilter.enabled):
         finite_indices = np.flatnonzero(finite_mask)
         if finite_indices.size > 0:
             physical_feasible = compute_velocity_t0_band_from_arrays(
-                offset_m=offset_abs_m[finite_indices],
+                offset_m=offset_abs_arr[finite_indices],
                 pick_t_sec=pick_t_sec[finite_indices],
                 vmin_m_s=float(cfg.physical_prefilter.vmin_m_s),
                 vmax_m_s=float(cfg.physical_prefilter.vmax_m_s),
@@ -712,8 +776,7 @@ def _compute_physical_prefilter_mask(
         dtype=np.float32,
     )
     valid = (
-        geometry_valid
-        & physical_mask
+        physical_mask
         & np.isfinite(pick_t_sec)
         & np.isfinite(pmax)
         & (pmax >= np.float32(cfg.physical_prefilter.pmax_min))
@@ -725,6 +788,100 @@ def _compute_physical_prefilter_mask(
             n_traces=n,
         )
     return valid.astype(np.bool_, copy=False)
+
+
+def _table_offset_abs_m(table: CoarsePickTable, *, n_traces: int) -> np.ndarray:
+    offset_m = _as_vector(
+        'table.offset_m',
+        table.offset_m,
+        n_traces=n_traces,
+        dtype=np.float32,
+    )
+    return np.abs(offset_m).astype(np.float32, copy=False)
+
+
+def _build_table_source_groups(
+    table: CoarsePickTable,
+    *,
+    n_traces: int,
+) -> tuple[SourceGroup, ...]:
+    shot_id = _as_vector(
+        'table.shot_id',
+        table.shot_id,
+        n_traces=n_traces,
+        dtype=np.int32,
+    )
+    groups: list[SourceGroup] = []
+    seen: set[int] = set()
+    for shot in shot_id.tolist():
+        shot_int = int(shot)
+        if shot_int in seen:
+            continue
+        seen.add(shot_int)
+        trace_indices = np.flatnonzero(shot_id == np.int32(shot_int)).astype(
+            np.int64,
+            copy=False,
+        )
+        group_id = len(groups)
+        groups.append(
+            SourceGroup(
+                group_id=group_id,
+                source_key_x=shot_int,
+                source_key_y=0,
+                source_x_m=float(group_id),
+                source_y_m=0.0,
+                trace_indices=trace_indices,
+            )
+        )
+    return tuple(groups)
+
+
+def _load_source_group_geometry_from_npz(
+    coarse_npz: Mapping[str, np.ndarray],
+    *,
+    n_traces: int,
+) -> CoarseGeometry | None:
+    if 'source_x_m' not in coarse_npz or 'source_y_m' not in coarse_npz:
+        return None
+    try:
+        source_x_m = _as_vector(
+            'source_x_m',
+            coarse_npz['source_x_m'],
+            n_traces=n_traces,
+            dtype=np.float32,
+        )
+        source_y_m = _as_vector(
+            'source_y_m',
+            coarse_npz['source_y_m'],
+            n_traces=n_traces,
+            dtype=np.float32,
+        )
+        if 'geometry_valid_mask' in coarse_npz:
+            geometry_valid_mask = _as_bool_vector(
+                'geometry_valid_mask',
+                coarse_npz['geometry_valid_mask'],
+                n_traces=n_traces,
+            )
+        else:
+            geometry_valid_mask = np.ones((n_traces,), dtype=np.bool_)
+    except (TypeError, ValueError):
+        return None
+
+    geometry_valid_mask = (
+        geometry_valid_mask
+        & np.isfinite(source_x_m)
+        & np.isfinite(source_y_m)
+    ).astype(np.bool_, copy=False)
+    zeros = np.zeros((n_traces,), dtype=np.float32)
+    return CoarseGeometry(
+        source_x_m=source_x_m,
+        source_y_m=source_y_m,
+        receiver_x_m=zeros,
+        receiver_y_m=zeros.copy(),
+        offset_abs_geom_m=zeros.copy(),
+        geometry_valid_mask=geometry_valid_mask,
+        offset_signed_geom_m=None,
+    )
 
 
 def build_geometry_two_piece_physical_center(
@@ -779,7 +936,9 @@ def build_geometry_two_piece_physical_center(
         geometry = load_coarse_geometry_from_npz(coarse_npz, n_traces=n)
     except (KeyError, TypeError, ValueError):
         geometry = None
-    if geometry is None or not bool(cfg.physical_trend.use_geometry_offset):
+
+    use_geometry_offset = bool(cfg.physical_trend.use_geometry_offset)
+    if use_geometry_offset and geometry is None:
         return _assign_fallback_all(
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
             table=table,
@@ -788,10 +947,42 @@ def build_geometry_two_piece_physical_center(
             merged=merged,
         )
 
-    groups = build_source_groups(
-        geometry,
-        coord_group_tol_m=float(cfg.physical_trend.coord_group_tol_m),
-    )
+    if use_geometry_offset:
+        offset_abs_m = _as_vector(
+            'geometry.offset_abs_geom_m',
+            geometry.offset_abs_geom_m,
+            n_traces=n,
+            dtype=np.float32,
+        )
+        offset_signed_m = None
+        offset_source = PHYSICAL_OFFSET_SOURCE_GEOMETRY
+    else:
+        offset_abs_m = _table_offset_abs_m(table, n_traces=n)
+        offset_signed_m = _as_vector(
+            'table.offset_m',
+            table.offset_m,
+            n_traces=n,
+            dtype=np.float32,
+        )
+        offset_source = PHYSICAL_OFFSET_SOURCE_HEADER
+
+    source_groups_from_geometry = False
+    groups: tuple[SourceGroup, ...] = ()
+    source_group_geometry = geometry
+    if source_group_geometry is None and not use_geometry_offset:
+        source_group_geometry = _load_source_group_geometry_from_npz(
+            coarse_npz,
+            n_traces=n,
+        )
+    if source_group_geometry is not None:
+        groups = build_source_groups(
+            source_group_geometry,
+            coord_group_tol_m=float(cfg.physical_trend.coord_group_tol_m),
+        )
+        source_groups_from_geometry = len(groups) > 0
+    if len(groups) == 0 and not use_geometry_offset:
+        groups = _build_table_source_groups(table, n_traces=n)
+
     if len(groups) == 0:
         return _assign_fallback_all(
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
@@ -808,17 +999,6 @@ def build_geometry_two_piece_physical_center(
             group.group_id
         )
 
-    geometry_valid = _as_bool_vector(
-        'geometry.geometry_valid_mask',
-        geometry.geometry_valid_mask,
-        n_traces=n,
-    )
-    offset_abs_geom_m = _as_vector(
-        'geometry.offset_abs_geom_m',
-        geometry.offset_abs_geom_m,
-        n_traces=n,
-        dtype=np.float32,
-    )
     pick_t_sec = _as_vector(
         'table.coarse_pick_t_sec',
         table.coarse_pick_t_sec,
@@ -826,7 +1006,7 @@ def build_geometry_two_piece_physical_center(
         dtype=np.float32,
     )
     valid_for_fit = _compute_physical_prefilter_mask(
-        geometry=geometry,
+        offset_abs_m=offset_abs_m,
         table=table,
         feasible=feasible,
         cfg=cfg,
@@ -838,9 +1018,9 @@ def build_geometry_two_piece_physical_center(
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
 
     for trace_idx in range(n):
+        arrays['physical_offset_source'][trace_idx] = np.uint8(offset_source)
         if (
-            not bool(geometry_valid[trace_idx])
-            or not np.isfinite(offset_abs_geom_m[trace_idx])
+            not np.isfinite(offset_abs_m[trace_idx])
             or int(group_id_by_trace[trace_idx]) < 0
         ):
             _assign_fallback(
@@ -860,8 +1040,11 @@ def build_geometry_two_piece_physical_center(
             groups=groups,
             groups_by_id=groups_by_id,
             geometry=geometry,
+            offset_abs_m=offset_abs_m,
+            offset_signed_m=offset_signed_m,
             valid_for_fit=valid_for_fit,
             cfg=cfg,
+            use_neighbor_context=source_groups_from_geometry,
         )
         if plan is None:
             _assign_fallback(
@@ -897,7 +1080,7 @@ def build_geometry_two_piece_physical_center(
             continue
 
         obs_indices = np.asarray(plan.obs_indices, dtype=np.int64)
-        x_obs = np.asarray(offset_abs_geom_m[obs_indices], dtype=np.float32)
+        x_obs = np.asarray(offset_abs_m[obs_indices], dtype=np.float32)
         y_obs = np.asarray(pick_t_sec[obs_indices], dtype=np.float32)
         trend_model, diagnostics, fit_failure_reason = _fit_model_for_plan(
             strategy=strategy,
@@ -922,7 +1105,7 @@ def build_geometry_two_piece_physical_center(
         try:
             physical_t_sec = _predict_model_sec(
                 trend_model,
-                float(offset_abs_geom_m[trace_idx]),
+                float(offset_abs_m[trace_idx]),
             )
         except (TypeError, ValueError, RuntimeError):
             physical_t_sec = np.nan

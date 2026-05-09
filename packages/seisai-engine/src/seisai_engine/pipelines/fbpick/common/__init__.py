@@ -1,6 +1,7 @@
 from .artifacts import (
     COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS,
     COARSE_GEOMETRY_OPTIONAL_KEYS,
+    COARSE_GEOMETRY_SCALE_KEY,
     COARSE_REQUIRED_KEYS,
     FINAL_REQUIRED_KEYS,
     FINE_RESULT_REQUIRED_KEYS,
@@ -38,6 +39,7 @@ from .ref_stats import compute_ref_stats, compute_ref_stats_from_records
 __all__ = [
     'COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS',
     'COARSE_GEOMETRY_OPTIONAL_KEYS',
+    'COARSE_GEOMETRY_SCALE_KEY',
     'COARSE_REQUIRED_KEYS',
     'FBPickNormRefs',
     'FINAL_REQUIRED_KEYS',

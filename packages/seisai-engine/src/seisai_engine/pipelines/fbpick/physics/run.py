@@ -93,6 +93,10 @@ def build_robust_payload_from_coarse(
             physical.physical_model_failure_reason,
             dtype=np.uint8,
         ),
+        'physical_offset_source': np.asarray(
+            physical.physical_offset_source,
+            dtype=np.uint8,
+        ),
         'physical_model_break_offset_m': np.asarray(
             physical.physical_model_break_offset_m,
             dtype=np.float32,

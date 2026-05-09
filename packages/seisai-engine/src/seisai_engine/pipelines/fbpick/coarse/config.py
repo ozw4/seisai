@@ -97,6 +97,7 @@ class CoarseDatasetCfg:
     waveform_mode: str
     train_endian: str
     infer_endian: str
+    coord_unit_scale_to_m: float
 
 
 @dataclass(frozen=True)
@@ -289,6 +290,17 @@ def _load_paths_cfg(cfg: dict, *, allow_missing_infer_pairs: bool) -> CoarsePath
 def _load_dataset_cfg(cfg: dict) -> CoarseDatasetCfg:
     ds_cfg = require_dict(cfg, 'dataset')
     primary_keys = validate_primary_keys(ds_cfg.get('primary_keys', ['ffid']))
+    coord_unit_scale_raw = ds_cfg.get('coord_unit_scale_to_m', 1.0)
+    if isinstance(coord_unit_scale_raw, bool) or not isinstance(
+        coord_unit_scale_raw,
+        (int, float),
+    ):
+        msg = 'config.dataset.coord_unit_scale_to_m must be float'
+        raise TypeError(msg)
+    coord_unit_scale_to_m = float(coord_unit_scale_raw)
+    if (not math.isfinite(coord_unit_scale_to_m)) or coord_unit_scale_to_m <= 0.0:
+        msg = 'dataset.coord_unit_scale_to_m must be finite and > 0'
+        raise ValueError(msg)
     train_endian = normalize_endian(
         value=optional_str(ds_cfg, 'train_endian', 'big'),
         key_name='dataset.train_endian',
@@ -313,6 +325,7 @@ def _load_dataset_cfg(cfg: dict) -> CoarseDatasetCfg:
         waveform_mode=str(waveform_mode),
         train_endian=str(train_endian),
         infer_endian=str(infer_endian),
+        coord_unit_scale_to_m=coord_unit_scale_to_m,
     )
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from seisai_engine.pipelines.fbpick.physics.feasible import (
 )
 from seisai_engine.pipelines.fbpick.physics.merge import apply_keep_reject_fill
 from seisai_engine.pipelines.fbpick.physics.physical_center import (
+    PHYSICAL_OFFSET_SOURCE_HEADER,
     PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
     PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
@@ -152,6 +154,7 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
         'fine_center_t_sec': center_t_sec,
         'physical_model_status': np.array([0, 1, 2], dtype=np.uint8),
         'physical_model_failure_reason': np.array([0, 2, 3], dtype=np.uint8),
+        'physical_offset_source': np.array([1, 2, 0], dtype=np.uint8),
         'physical_model_break_offset_m': np.array(
             [500.0, np.nan, 600.0],
             dtype=np.float32,
@@ -279,6 +282,14 @@ def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
             'physical_prefilter.vmax_m_s',
         ),
         (
+            {'physical_prefilter': {'vmin_m_s': math.nan}},
+            'physical_prefilter.vmin_m_s',
+        ),
+        (
+            {'physical_prefilter': {'vmax_m_s': math.inf}},
+            'physical_prefilter.vmax_m_s',
+        ),
+        (
             {'two_piece_ransac': {'q_lo': 0.8, 'q_hi': 0.2}},
             'q_lo < q_hi',
         ),
@@ -287,8 +298,24 @@ def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
             'neighbor_context.k_neighbors',
         ),
         (
+            {'neighbor_context': {'max_source_distance_m': math.nan}},
+            'neighbor_context.max_source_distance_m',
+        ),
+        (
             {'physical_trend': {'fit_kind': 'linear'}},
             'physical_trend.fit_kind',
+        ),
+        (
+            {'physical_trend': {'coord_group_tol_m': math.nan}},
+            'physical_trend.coord_group_tol_m',
+        ),
+        (
+            {'physical_trend': {'gap_ratio': math.inf}},
+            'physical_trend.gap_ratio',
+        ),
+        (
+            {'physical_trend': {'min_gap_m': math.inf}},
+            'physical_trend.min_gap_m',
         ),
         (
             {'physical_projection': {'mode': 'observed'}},
@@ -849,6 +876,7 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
         'fine_center_t_sec': center_t_sec,
         'physical_model_status': np.array([0, 1, 2], dtype=np.uint8),
         'physical_model_failure_reason': np.array([0, 2, 3], dtype=np.uint8),
+        'physical_offset_source': np.array([1, 2, 0], dtype=np.uint8),
         'physical_model_break_offset_m': np.array(
             [500.0, np.nan, 600.0],
             dtype=np.float32,
@@ -1145,6 +1173,53 @@ def test_run_physics_lite_with_enabled_physical_and_no_geometry_saves_fallback_s
         == np.uint8(PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID)
     )
     np.testing.assert_array_equal(robust['fine_center_i'], robust['trend_center_i'])
+
+
+def test_run_physics_lite_uses_header_offsets_when_geometry_offset_disabled(
+    tmp_path: Path,
+) -> None:
+    n_traces = 24
+    offsets_m = np.linspace(50.0, 1200.0, n_traces, dtype=np.float32)
+    coarse_pick_i = np.rint(
+        (np.float32(0.02) + offsets_m / np.float32(3000.0)) / np.float32(0.004)
+    ).astype(np.int32)
+    coarse_path = save_coarse_npz(
+        tmp_path / 'header_offset.coarse.npz',
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full((n_traces,), 0.95, dtype=np.float32),
+            offsets_m=offsets_m,
+        ),
+    )
+
+    out_path = run_physics_lite(
+        coarse_path,
+        cfg={
+            'physical_trend': {
+                'enabled': True,
+                'use_geometry_offset': False,
+                'segment_by_offset_sign': False,
+                'split_by_offset_gap': False,
+            },
+            'physical_prefilter': {'enabled': False},
+            'two_piece_ransac': {'min_pts': 3, 'seed': 7},
+        },
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+    robust = load_robust_npz(out_path)
+
+    assert np.any(
+        robust['physical_model_status'] == np.uint8(PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+    )
+    assert not np.all(
+        robust['physical_model_failure_reason']
+        == np.uint8(PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID)
+    )
+    assert np.all(
+        robust['physical_offset_source'] == np.uint8(PHYSICAL_OFFSET_SOURCE_HEADER)
+    )
 
 
 def test_build_lineage_payload_reads_git_sha_from_ancestor_repo_root(tmp_path: Path) -> None:

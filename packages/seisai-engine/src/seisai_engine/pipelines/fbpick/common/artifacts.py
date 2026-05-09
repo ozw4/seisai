@@ -40,6 +40,8 @@ COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS = (
     'offset_signed_geom_m',
 )
 
+COARSE_GEOMETRY_SCALE_KEY = 'geometry_coord_unit_scale_to_m'
+
 ROBUST_REQUIRED_KEYS = (
     'dt_sec',
     'n_samples_orig',
@@ -72,6 +74,7 @@ ROBUST_CENTER_OPTIONAL_KEYS = (
 ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS = (
     'physical_model_status',
     'physical_model_failure_reason',
+    'physical_offset_source',
     'physical_model_break_offset_m',
     'physical_model_slope_near_s_per_m',
     'physical_model_slope_far_s_per_m',
@@ -156,6 +159,7 @@ REASON_MASK_LABELS = {
 __all__ = [
     'COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS',
     'COARSE_GEOMETRY_OPTIONAL_KEYS',
+    'COARSE_GEOMETRY_SCALE_KEY',
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
     'FINE_RESULT_REQUIRED_KEYS',
