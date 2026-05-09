@@ -1,4 +1,5 @@
 from .artifacts import (
+    COARSE_GEOMETRY_OPTIONAL_KEYS,
     COARSE_REQUIRED_KEYS,
     FINAL_REQUIRED_KEYS,
     FINE_RESULT_REQUIRED_KEYS,
@@ -30,6 +31,7 @@ from .qc_gathers import iter_qc_gathers, sort_gather_indices_for_qc
 from .ref_stats import compute_ref_stats, compute_ref_stats_from_records
 
 __all__ = [
+    'COARSE_GEOMETRY_OPTIONAL_KEYS',
     'COARSE_REQUIRED_KEYS',
     'FBPickNormRefs',
     'FINAL_REQUIRED_KEYS',

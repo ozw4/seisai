@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
 import numpy as np
-
+import pytest
 from seisai_engine.pipelines.fbpick.common import (
-    build_lineage_payload,
+    COARSE_GEOMETRY_OPTIONAL_KEYS,
     REASON_MASK_FILLED_FROM_TREND,
     REASON_MASK_INFEASIBLE,
     REASON_MASK_LOW_SCORE,
     ROBUST_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
     ROBUST_SOURCE_TREND_FILL,
+    build_lineage_payload,
     load_coarse_npz,
     load_robust_npz,
     read_git_sha,
@@ -20,10 +22,18 @@ from seisai_engine.pipelines.fbpick.common import (
     save_robust_npz,
 )
 from seisai_engine.pipelines.fbpick.physics.confidence import compute_confidence_terms
-from seisai_engine.pipelines.fbpick.physics.config import load_physics_lite_config
-from seisai_engine.pipelines.fbpick.physics.feasible import compute_feasible_band
+from seisai_engine.pipelines.fbpick.physics.config import (
+    load_physics_lite_config,
+    physics_lite_config_to_dict,
+)
+from seisai_engine.pipelines.fbpick.physics.feasible import (
+    compute_feasible_band,
+    compute_velocity_t0_band_from_arrays,
+)
 from seisai_engine.pipelines.fbpick.physics.merge import apply_keep_reject_fill
-from seisai_engine.pipelines.fbpick.physics.pick_table import normalize_coarse_pick_table
+from seisai_engine.pipelines.fbpick.physics.pick_table import (
+    normalize_coarse_pick_table,
+)
 from seisai_engine.pipelines.fbpick.physics.run import (
     build_robust_payload_from_coarse,
     run_physics_lite,
@@ -80,6 +90,134 @@ def _write_git_repo(repo_root: Path, *, sha: str) -> None:
     ref_path.write_text(f'{sha}\n', encoding='utf-8')
 
 
+def _physical_trend_blocks() -> dict[str, object]:
+    return {
+        'physical_trend': {
+            'enabled': True,
+            'fit_kind': 'two_piece_ransac_autobreak',
+            'use_geometry_offset': True,
+            'coord_group_tol_m': 2.0,
+            'segment_by_offset_sign': False,
+            'split_by_offset_gap': True,
+            'gap_ratio': 6.0,
+            'min_gap_m': 25.0,
+        },
+        'neighbor_context': {
+            'enabled': True,
+            'mode': 'nearest_source_xy',
+            'k_neighbors': 7,
+            'max_source_distance_m': 1000.0,
+            'include_self': False,
+        },
+        'physical_prefilter': {
+            'enabled': True,
+            'vmin_m_s': 400.0,
+            'vmax_m_s': 5500.0,
+            't0_lo_ms': -10.0,
+            't0_hi_ms': 180.0,
+            'pmax_min': 0.25,
+            'use_existing_feasible_mask': True,
+        },
+        'two_piece_ransac': {
+            'n_iter': 300,
+            'inlier_th_ms': 30.0,
+            'min_pts': 10,
+            'n_break_cand': 32,
+            'q_lo': 0.2,
+            'q_hi': 0.8,
+            'seed': 11,
+            'slope_eps': 1.0e-5,
+            'sort_offsets': False,
+        },
+        'physical_projection': {
+            'mode': 'model',
+        },
+    }
+
+
+def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> None:
+    cfg = load_physics_lite_config({})
+
+    assert cfg.physical_trend.enabled is False
+    assert cfg.physical_trend.fit_kind == 'two_piece_ransac_autobreak'
+    assert cfg.physical_trend.min_gap_m is None
+    assert cfg.neighbor_context.mode == 'nearest_source_xy'
+    assert cfg.neighbor_context.k_neighbors == 5
+    assert cfg.neighbor_context.max_source_distance_m is None
+    assert cfg.physical_prefilter.vmin_m_s == 300.0
+    assert cfg.physical_prefilter.vmax_m_s == 6000.0
+    assert cfg.two_piece_ransac.q_lo == 0.15
+    assert cfg.two_piece_ransac.q_hi == 0.85
+    assert cfg.physical_projection.mode == 'model'
+
+
+def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
+    cfg = load_physics_lite_config(_physical_trend_blocks())
+
+    assert cfg.physical_trend.enabled is True
+    assert cfg.physical_trend.coord_group_tol_m == 2.0
+    assert cfg.physical_trend.segment_by_offset_sign is False
+    assert cfg.physical_trend.min_gap_m == 25.0
+    assert cfg.neighbor_context.k_neighbors == 7
+    assert cfg.neighbor_context.max_source_distance_m == 1000.0
+    assert cfg.neighbor_context.include_self is False
+    assert cfg.physical_prefilter.pmax_min == 0.25
+    assert cfg.physical_prefilter.use_existing_feasible_mask is True
+    assert cfg.two_piece_ransac.n_iter == 300
+    assert cfg.two_piece_ransac.sort_offsets is False
+
+
+@pytest.mark.parametrize(
+    ('cfg', 'match'),
+    [
+        (
+            {'physical_prefilter': {'vmin_m_s': 6000.0, 'vmax_m_s': 300.0}},
+            'physical_prefilter.vmax_m_s',
+        ),
+        (
+            {'two_piece_ransac': {'q_lo': 0.8, 'q_hi': 0.2}},
+            'q_lo < q_hi',
+        ),
+        (
+            {'neighbor_context': {'k_neighbors': 0}},
+            'neighbor_context.k_neighbors',
+        ),
+        (
+            {'physical_trend': {'fit_kind': 'linear'}},
+            'physical_trend.fit_kind',
+        ),
+        (
+            {'physical_projection': {'mode': 'observed'}},
+            'physical_projection.mode',
+        ),
+    ],
+)
+def test_load_physics_lite_config_rejects_invalid_physical_trend_blocks(
+    cfg: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        load_physics_lite_config(cfg)
+
+
+def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
+    cfg = load_physics_lite_config(_physical_trend_blocks())
+    out = physics_lite_config_to_dict(cfg)
+
+    assert set(out).issuperset(
+        {
+            'physical_trend',
+            'neighbor_context',
+            'physical_prefilter',
+            'two_piece_ransac',
+            'physical_projection',
+        }
+    )
+    assert out['physical_trend']['enabled'] is True
+    assert out['neighbor_context']['max_source_distance_m'] == 1000.0
+    assert out['physical_projection']['mode'] == 'model'
+
+
 def test_normalize_coarse_pick_table_preserves_contract(tmp_path: Path) -> None:
     coarse = _make_coarse_payload(
         coarse_pick_i=np.array([10, 20, 30, 40], dtype=np.int32),
@@ -108,6 +246,242 @@ def test_normalize_coarse_pick_table_preserves_contract(tmp_path: Path) -> None:
     np.testing.assert_array_equal(table.trace_id, coarse['trace_indices'])
 
 
+def test_save_and_load_coarse_npz_preserve_optional_geometry(tmp_path: Path) -> None:
+    n_traces = 3
+    geometry = {
+        'source_x_m': np.array([10.0, 10.0, np.nan], dtype=np.float32),
+        'source_y_m': np.array([20.0, 20.0, np.nan], dtype=np.float32),
+        'receiver_x_m': np.array([13.0, 16.0, np.nan], dtype=np.float32),
+        'receiver_y_m': np.array([24.0, 28.0, np.nan], dtype=np.float32),
+        'offset_abs_geom_m': np.array([5.0, 10.0, np.nan], dtype=np.float32),
+        'geometry_valid_mask': np.array([True, True, False], dtype=np.bool_),
+    }
+    payload = _make_coarse_payload(
+        coarse_pick_i=np.array([10, 20, 30], dtype=np.int32),
+        coarse_pmax=np.array([0.9, 0.8, 0.7], dtype=np.float32),
+        offsets_m=np.array([100.0, 200.0, 300.0], dtype=np.float32),
+    )
+    assert int(np.asarray(payload['n_traces']).item()) == n_traces
+
+    out_path = save_coarse_npz(
+        tmp_path / 'geometry.coarse.npz',
+        **payload,
+        **geometry,
+    )
+    loaded = load_coarse_npz(out_path)
+
+    assert set(COARSE_GEOMETRY_OPTIONAL_KEYS).issubset(loaded.keys())
+    for key in COARSE_GEOMETRY_OPTIONAL_KEYS:
+        assert loaded[key].shape == (n_traces,)
+        expected_dtype = np.bool_ if key == 'geometry_valid_mask' else np.float32
+        assert loaded[key].dtype == np.dtype(expected_dtype)
+        np.testing.assert_array_equal(loaded[key], geometry[key])
+
+
+def test_save_coarse_npz_rejects_partial_geometry(tmp_path: Path) -> None:
+    payload = _make_coarse_payload(
+        coarse_pick_i=np.array([10, 20], dtype=np.int32),
+        coarse_pmax=np.array([0.9, 0.8], dtype=np.float32),
+        offsets_m=np.array([100.0, 200.0], dtype=np.float32),
+    )
+
+    with pytest.raises(ValueError, match='provided together'):
+        save_coarse_npz(
+            tmp_path / 'partial_geometry.coarse.npz',
+            **payload,
+            source_x_m=np.array([10.0, 20.0], dtype=np.float32),
+        )
+
+
+def test_save_coarse_npz_rejects_nan_geometry_on_valid_trace(tmp_path: Path) -> None:
+    payload = _make_coarse_payload(
+        coarse_pick_i=np.array([10, 20], dtype=np.int32),
+        coarse_pmax=np.array([0.9, 0.8], dtype=np.float32),
+        offsets_m=np.array([100.0, 200.0], dtype=np.float32),
+    )
+    geometry = {
+        'source_x_m': np.array([10.0, np.nan], dtype=np.float32),
+        'source_y_m': np.array([20.0, 20.0], dtype=np.float32),
+        'receiver_x_m': np.array([13.0, 16.0], dtype=np.float32),
+        'receiver_y_m': np.array([24.0, 28.0], dtype=np.float32),
+        'offset_abs_geom_m': np.array([5.0, 10.0], dtype=np.float32),
+        'geometry_valid_mask': np.array([True, True], dtype=np.bool_),
+    }
+
+    with pytest.raises(ValueError, match='source_x_m must be finite'):
+        save_coarse_npz(tmp_path / 'bad_geometry.coarse.npz', **payload, **geometry)
+
+
+def test_load_coarse_npz_accepts_legacy_payload_without_geometry(tmp_path: Path) -> None:
+    payload = _make_coarse_payload(
+        coarse_pick_i=np.array([10, 20], dtype=np.int32),
+        coarse_pmax=np.array([0.9, 0.8], dtype=np.float32),
+        offsets_m=np.array([100.0, 200.0], dtype=np.float32),
+    )
+
+    out_path = save_coarse_npz(tmp_path / 'legacy.coarse.npz', **payload)
+    loaded = load_coarse_npz(out_path)
+
+    for key in COARSE_GEOMETRY_OPTIONAL_KEYS:
+        assert key not in loaded
+
+
+def test_velocity_t0_band_from_arrays_accepts_synthetic_trend_in_range() -> None:
+    offset_m = np.array([0.0, 100.0, 200.0], dtype=np.float32)
+    pick_t_sec = np.float32(0.02) + offset_m / np.float32(1000.0)
+
+    feasible = compute_velocity_t0_band_from_arrays(
+        offset_m=offset_m,
+        pick_t_sec=pick_t_sec,
+        vmin_m_s=800.0,
+        vmax_m_s=1200.0,
+        t0_lo_ms=10.0,
+        t0_hi_ms=30.0,
+    )
+
+    assert feasible.feasible_mask.tolist() == [True, True, True]
+    assert feasible.feasible_lo_sec.dtype == np.float32
+    assert feasible.feasible_hi_sec.dtype == np.float32
+
+
+def test_velocity_t0_band_from_arrays_rejects_t0_outside_range() -> None:
+    feasible = compute_velocity_t0_band_from_arrays(
+        offset_m=np.array([0.0, 0.0], dtype=np.float32),
+        pick_t_sec=np.array([-0.02, 0.06], dtype=np.float32),
+        vmin_m_s=800.0,
+        vmax_m_s=1200.0,
+        t0_lo_ms=0.0,
+        t0_hi_ms=50.0,
+    )
+
+    assert feasible.feasible_mask.tolist() == [False, False]
+
+
+def test_velocity_t0_band_from_arrays_rejects_velocity_outside_range() -> None:
+    offset_m = np.array([1000.0, 1000.0], dtype=np.float32)
+    pick_t_sec = np.array(
+        [
+            1000.0 / 6000.0,
+            1000.0 / 500.0,
+        ],
+        dtype=np.float32,
+    )
+
+    feasible = compute_velocity_t0_band_from_arrays(
+        offset_m=offset_m,
+        pick_t_sec=pick_t_sec,
+        vmin_m_s=1000.0,
+        vmax_m_s=5000.0,
+        t0_lo_ms=0.0,
+        t0_hi_ms=0.0,
+    )
+
+    assert feasible.feasible_mask.tolist() == [False, False]
+
+
+def test_velocity_t0_band_from_arrays_uses_abs_for_negative_offsets() -> None:
+    feasible = compute_velocity_t0_band_from_arrays(
+        offset_m=np.array([-100.0, 100.0], dtype=np.float32),
+        pick_t_sec=np.array([0.12, 0.12], dtype=np.float32),
+        vmin_m_s=800.0,
+        vmax_m_s=1200.0,
+        t0_lo_ms=10.0,
+        t0_hi_ms=30.0,
+    )
+
+    assert feasible.feasible_mask.tolist() == [True, True]
+    np.testing.assert_array_equal(
+        feasible.feasible_lo_sec,
+        np.array(
+            [100.0 / 1200.0 + 0.01, 100.0 / 1200.0 + 0.01],
+            dtype=np.float32,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ('kwargs', 'match'),
+    [
+        (
+            {
+                'offset_m': np.array([0.0, 1.0], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+            },
+            'same shape',
+        ),
+        (
+            {
+                'offset_m': np.array([[0.0]], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+            },
+            'offset_m must be a 1D array',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([[0.0]], dtype=np.float32),
+            },
+            'pick_t_sec must be a 1D array',
+        ),
+        (
+            {
+                'offset_m': np.array([np.nan], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+            },
+            'offset_m must be finite',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([np.nan], dtype=np.float32),
+            },
+            'pick_t_sec must be finite',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+                'vmin_m_s': 0.0,
+            },
+            'vmin_m_s',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+                'vmax_m_s': 500.0,
+            },
+            'vmax_m_s',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+                't0_lo_ms': 10.0,
+                't0_hi_ms': 0.0,
+            },
+            't0_lo_ms',
+        ),
+    ],
+)
+def test_velocity_t0_band_from_arrays_rejects_invalid_inputs(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    params: dict[str, object] = {
+        'offset_m': np.array([0.0], dtype=np.float32),
+        'pick_t_sec': np.array([0.0], dtype=np.float32),
+        'vmin_m_s': 1000.0,
+        'vmax_m_s': 5000.0,
+        't0_lo_ms': 0.0,
+        't0_hi_ms': 100.0,
+    }
+    params.update(kwargs)
+
+    with pytest.raises(ValueError, match=match):
+        compute_velocity_t0_band_from_arrays(**params)
+
+
 def test_feasible_band_rejects_early_and_late_picks() -> None:
     coarse = _make_coarse_payload(
         coarse_pick_i=np.array([0, 125, 300], dtype=np.int32),
@@ -123,6 +497,22 @@ def test_feasible_band_rejects_early_and_late_picks() -> None:
     assert feasible.feasible_mask.tolist() == [False, True, False]
     assert feasible.feasible_lo_sec.dtype == np.float32
     assert feasible.feasible_hi_sec.dtype == np.float32
+
+
+def test_feasible_band_preserves_table_n_traces_validation() -> None:
+    coarse = _make_coarse_payload(
+        coarse_pick_i=np.array([10], dtype=np.int32),
+        coarse_pmax=np.array([0.9], dtype=np.float32),
+        offsets_m=np.array([100.0], dtype=np.float32),
+    )
+    table = normalize_coarse_pick_table(coarse)
+    cfg = load_physics_lite_config({}).feasible_band
+
+    with pytest.raises(ValueError, match='table.n_traces must be positive'):
+        compute_feasible_band(replace(table, n_traces=0), cfg)
+
+    with pytest.raises(ValueError, match='coarse_pick_t_sec must have shape'):
+        compute_feasible_band(replace(table, n_traces=2), cfg)
 
 
 def test_conf_trend1_drops_with_trend_deviation() -> None:

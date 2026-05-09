@@ -659,6 +659,15 @@ def run_coarse_infer(
                 source_model_id=source_model_id,
                 iter_id=iter_id,
             ),
+            source_x_m=np.asarray(info['source_x_m'], dtype=np.float32),
+            source_y_m=np.asarray(info['source_y_m'], dtype=np.float32),
+            receiver_x_m=np.asarray(info['receiver_x_m'], dtype=np.float32),
+            receiver_y_m=np.asarray(info['receiver_y_m'], dtype=np.float32),
+            offset_abs_geom_m=np.asarray(info['offset_abs_geom_m'], dtype=np.float32),
+            geometry_valid_mask=np.asarray(
+                info['geometry_valid_mask'],
+                dtype=np.bool_,
+            ),
         )
     finally:
         dataset.close()

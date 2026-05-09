@@ -7,3 +7,45 @@ trend: {}
 residual_statics: {}
 keep_reject: {}
 robust_center: {}
+
+# Physical fine-window center config. Enable physical_trend when the
+# geometry-based center estimator is available in the pipeline.
+physical_trend:
+  enabled: false
+  fit_kind: two_piece_ransac_autobreak
+  use_geometry_offset: true
+  coord_group_tol_m: 1.0
+  segment_by_offset_sign: true
+  split_by_offset_gap: true
+  gap_ratio: 5.0
+  min_gap_m: null
+
+neighbor_context:
+  enabled: true
+  mode: nearest_source_xy
+  k_neighbors: 5
+  max_source_distance_m: null
+  include_self: true
+
+physical_prefilter:
+  enabled: true
+  vmin_m_s: 300.0
+  vmax_m_s: 6000.0
+  t0_lo_ms: -20.0
+  t0_hi_ms: 200.0
+  pmax_min: 0.0
+  use_existing_feasible_mask: false
+
+two_piece_ransac:
+  n_iter: 200
+  inlier_th_ms: 40.0
+  min_pts: 8
+  n_break_cand: 64
+  q_lo: 0.15
+  q_hi: 0.85
+  seed: 0
+  slope_eps: 1.0e-6
+  sort_offsets: true
+
+physical_projection:
+  mode: model

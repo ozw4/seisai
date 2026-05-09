@@ -3,16 +3,26 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from seisai_utils.config import optional_bool, optional_float, optional_int, optional_str
+from seisai_utils.config import (
+    optional_bool,
+    optional_float,
+    optional_int,
+    optional_str,
+)
 
 __all__ = [
     'DEFAULT_PHYSICS_LITE_CONFIG',
+    'NeighborContextCfg',
+    'PhysicalPrefilterCfg',
+    'PhysicalProjectionCfg',
+    'PhysicalTrendCfg',
     'PhysicsFeasibleBandCfg',
     'PhysicsKeepRejectCfg',
     'PhysicsLiteConfig',
     'PhysicsResidualStaticsCfg',
     'PhysicsRobustCenterCfg',
     'PhysicsTrendCfg',
+    'TwoPieceRansacCfg',
     'load_physics_lite_config',
     'physics_lite_config_to_dict',
 ]
@@ -75,12 +85,67 @@ class PhysicsRobustCenterCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalTrendCfg:
+    enabled: bool = False
+    fit_kind: str = 'two_piece_ransac_autobreak'
+    use_geometry_offset: bool = True
+    coord_group_tol_m: float = 1.0
+    segment_by_offset_sign: bool = True
+    split_by_offset_gap: bool = True
+    gap_ratio: float = 5.0
+    min_gap_m: float | None = None
+
+
+@dataclass(frozen=True)
+class NeighborContextCfg:
+    enabled: bool = True
+    mode: str = 'nearest_source_xy'
+    k_neighbors: int = 5
+    max_source_distance_m: float | None = None
+    include_self: bool = True
+
+
+@dataclass(frozen=True)
+class PhysicalPrefilterCfg:
+    enabled: bool = True
+    vmin_m_s: float = 300.0
+    vmax_m_s: float = 6000.0
+    t0_lo_ms: float = -20.0
+    t0_hi_ms: float = 200.0
+    pmax_min: float = 0.0
+    use_existing_feasible_mask: bool = False
+
+
+@dataclass(frozen=True)
+class TwoPieceRansacCfg:
+    n_iter: int = 200
+    inlier_th_ms: float = 40.0
+    min_pts: int = 8
+    n_break_cand: int = 64
+    q_lo: float = 0.15
+    q_hi: float = 0.85
+    seed: int = 0
+    slope_eps: float = 1.0e-6
+    sort_offsets: bool = True
+
+
+@dataclass(frozen=True)
+class PhysicalProjectionCfg:
+    mode: str = 'model'
+
+
+@dataclass(frozen=True)
 class PhysicsLiteConfig:
     feasible_band: PhysicsFeasibleBandCfg = PhysicsFeasibleBandCfg()
     trend: PhysicsTrendCfg = PhysicsTrendCfg()
     residual_statics: PhysicsResidualStaticsCfg = PhysicsResidualStaticsCfg()
     keep_reject: PhysicsKeepRejectCfg = PhysicsKeepRejectCfg()
     robust_center: PhysicsRobustCenterCfg = PhysicsRobustCenterCfg()
+    physical_trend: PhysicalTrendCfg = PhysicalTrendCfg()
+    neighbor_context: NeighborContextCfg = NeighborContextCfg()
+    physical_prefilter: PhysicalPrefilterCfg = PhysicalPrefilterCfg()
+    two_piece_ransac: TwoPieceRansacCfg = TwoPieceRansacCfg()
+    physical_projection: PhysicalProjectionCfg = PhysicalProjectionCfg()
 
 
 DEFAULT_PHYSICS_LITE_CONFIG = PhysicsLiteConfig()
@@ -134,6 +199,22 @@ def _validate_nonnegative_int(name: str, value: int) -> int:
     return out
 
 
+def _optional_float_or_none(
+    cfg: dict[str, Any],
+    key: str,
+    default: float | None,
+) -> float | None:
+    if key not in cfg:
+        return default
+    value = cfg[key]
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)):
+        msg = f'config.{key} must be float or null'
+        raise TypeError(msg)
+    return float(value)
+
+
 def _load_feasible_band_cfg(cfg: dict[str, Any]) -> PhysicsFeasibleBandCfg:
     return PhysicsFeasibleBandCfg(
         vmin_mask=float(optional_float(cfg, 'vmin_mask', 100.0)),
@@ -154,7 +235,9 @@ def _load_trend_cfg(cfg: dict[str, Any]) -> PhysicsTrendCfg:
         trend_local_vmax_mps=float(optional_float(cfg, 'trend_local_vmax_mps', 8000.0)),
         trend_sigma_ms=float(optional_float(cfg, 'trend_sigma_ms', 6.0)),
         trend_min_pts=int(optional_int(cfg, 'trend_min_pts', 12)),
-        trend_var_half_win_traces=int(optional_int(cfg, 'trend_var_half_win_traces', 8)),
+        trend_var_half_win_traces=int(
+            optional_int(cfg, 'trend_var_half_win_traces', 8)
+        ),
         trend_var_sigma_std_ms=float(
             optional_float(cfg, 'trend_var_sigma_std_ms', 6.0)
         ),
@@ -169,7 +252,9 @@ def _load_residual_statics_cfg(cfg: dict[str, Any]) -> PhysicsResidualStaticsCfg
         msg = 'snap mode fields must not be null'
         raise TypeError(msg)
     return PhysicsResidualStaticsCfg(
-        use_residual_statics=bool(optional_bool(cfg, 'use_residual_statics', default=True)),
+        use_residual_statics=bool(
+            optional_bool(cfg, 'use_residual_statics', default=True)
+        ),
         rs_pre_snap_mode=str(rs_pre_snap_mode),
         rs_pre_samples=int(optional_int(cfg, 'rs_pre_samples', 20)),
         rs_post_samples=int(optional_int(cfg, 'rs_post_samples', 20)),
@@ -210,6 +295,180 @@ def _load_robust_center_cfg(cfg: dict[str, Any]) -> PhysicsRobustCenterCfg:
     )
 
 
+def _load_physical_trend_cfg(cfg: dict[str, Any]) -> PhysicalTrendCfg:
+    fit_kind = optional_str(cfg, 'fit_kind', 'two_piece_ransac_autobreak')
+    if fit_kind is None:
+        msg = 'physical_trend.fit_kind must not be null'
+        raise TypeError(msg)
+    return PhysicalTrendCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=False)),
+        fit_kind=str(fit_kind),
+        use_geometry_offset=bool(
+            optional_bool(cfg, 'use_geometry_offset', default=True)
+        ),
+        coord_group_tol_m=float(optional_float(cfg, 'coord_group_tol_m', 1.0)),
+        segment_by_offset_sign=bool(
+            optional_bool(cfg, 'segment_by_offset_sign', default=True)
+        ),
+        split_by_offset_gap=bool(
+            optional_bool(cfg, 'split_by_offset_gap', default=True)
+        ),
+        gap_ratio=float(optional_float(cfg, 'gap_ratio', 5.0)),
+        min_gap_m=_optional_float_or_none(cfg, 'min_gap_m', None),
+    )
+
+
+def _load_neighbor_context_cfg(cfg: dict[str, Any]) -> NeighborContextCfg:
+    mode = optional_str(cfg, 'mode', 'nearest_source_xy')
+    if mode is None:
+        msg = 'neighbor_context.mode must not be null'
+        raise TypeError(msg)
+    return NeighborContextCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=True)),
+        mode=str(mode),
+        k_neighbors=int(optional_int(cfg, 'k_neighbors', 5)),
+        max_source_distance_m=_optional_float_or_none(
+            cfg,
+            'max_source_distance_m',
+            None,
+        ),
+        include_self=bool(optional_bool(cfg, 'include_self', default=True)),
+    )
+
+
+def _load_physical_prefilter_cfg(cfg: dict[str, Any]) -> PhysicalPrefilterCfg:
+    return PhysicalPrefilterCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=True)),
+        vmin_m_s=float(optional_float(cfg, 'vmin_m_s', 300.0)),
+        vmax_m_s=float(optional_float(cfg, 'vmax_m_s', 6000.0)),
+        t0_lo_ms=float(optional_float(cfg, 't0_lo_ms', -20.0)),
+        t0_hi_ms=float(optional_float(cfg, 't0_hi_ms', 200.0)),
+        pmax_min=float(optional_float(cfg, 'pmax_min', 0.0)),
+        use_existing_feasible_mask=bool(
+            optional_bool(cfg, 'use_existing_feasible_mask', default=False)
+        ),
+    )
+
+
+def _load_two_piece_ransac_cfg(cfg: dict[str, Any]) -> TwoPieceRansacCfg:
+    return TwoPieceRansacCfg(
+        n_iter=int(optional_int(cfg, 'n_iter', 200)),
+        inlier_th_ms=float(optional_float(cfg, 'inlier_th_ms', 40.0)),
+        min_pts=int(optional_int(cfg, 'min_pts', 8)),
+        n_break_cand=int(optional_int(cfg, 'n_break_cand', 64)),
+        q_lo=float(optional_float(cfg, 'q_lo', 0.15)),
+        q_hi=float(optional_float(cfg, 'q_hi', 0.85)),
+        seed=int(optional_int(cfg, 'seed', 0)),
+        slope_eps=float(optional_float(cfg, 'slope_eps', 1.0e-6)),
+        sort_offsets=bool(optional_bool(cfg, 'sort_offsets', default=True)),
+    )
+
+
+def _load_physical_projection_cfg(cfg: dict[str, Any]) -> PhysicalProjectionCfg:
+    mode = optional_str(cfg, 'mode', 'model')
+    if mode is None:
+        msg = 'physical_projection.mode must not be null'
+        raise TypeError(msg)
+    return PhysicalProjectionCfg(mode=str(mode))
+
+
+def _validate_physical_trend_cfg(cfg: PhysicalTrendCfg) -> None:
+    if cfg.fit_kind != 'two_piece_ransac_autobreak':
+        msg = (
+            "physical_trend.fit_kind must be 'two_piece_ransac_autobreak', "
+            f'got {cfg.fit_kind!r}'
+        )
+        raise ValueError(msg)
+    _validate_positive_float(
+        'physical_trend.coord_group_tol_m',
+        cfg.coord_group_tol_m,
+    )
+    if float(cfg.gap_ratio) <= 1.0:
+        msg = 'physical_trend.gap_ratio must be > 1.0'
+        raise ValueError(msg)
+    if cfg.min_gap_m is not None:
+        _validate_positive_float('physical_trend.min_gap_m', cfg.min_gap_m)
+
+
+def _validate_neighbor_context_cfg(cfg: NeighborContextCfg) -> None:
+    if cfg.mode != 'nearest_source_xy':
+        msg = f"neighbor_context.mode must be 'nearest_source_xy', got {cfg.mode!r}"
+        raise ValueError(msg)
+    _validate_positive_int('neighbor_context.k_neighbors', cfg.k_neighbors)
+    if cfg.max_source_distance_m is not None:
+        _validate_nonnegative_float(
+            'neighbor_context.max_source_distance_m',
+            cfg.max_source_distance_m,
+        )
+
+
+def _validate_physical_prefilter_cfg(cfg: PhysicalPrefilterCfg) -> None:
+    _validate_positive_float('physical_prefilter.vmin_m_s', cfg.vmin_m_s)
+    _validate_positive_float('physical_prefilter.vmax_m_s', cfg.vmax_m_s)
+    if float(cfg.vmax_m_s) < float(cfg.vmin_m_s):
+        msg = 'physical_prefilter.vmax_m_s must be >= physical_prefilter.vmin_m_s'
+        raise ValueError(msg)
+    if float(cfg.t0_lo_ms) > float(cfg.t0_hi_ms):
+        msg = 'physical_prefilter.t0_lo_ms must be <= physical_prefilter.t0_hi_ms'
+        raise ValueError(msg)
+    if not 0.0 <= float(cfg.pmax_min) <= 1.0:
+        msg = 'physical_prefilter.pmax_min must lie in [0, 1]'
+        raise ValueError(msg)
+
+
+def _validate_two_piece_ransac_cfg(cfg: TwoPieceRansacCfg) -> None:
+    _validate_positive_int('two_piece_ransac.n_iter', cfg.n_iter)
+    _validate_positive_float('two_piece_ransac.inlier_th_ms', cfg.inlier_th_ms)
+    if int(cfg.min_pts) < 2:
+        msg = 'two_piece_ransac.min_pts must be >= 2'
+        raise ValueError(msg)
+    _validate_positive_int('two_piece_ransac.n_break_cand', cfg.n_break_cand)
+    if not 0.0 <= float(cfg.q_lo) < float(cfg.q_hi) <= 1.0:
+        msg = 'two_piece_ransac requires 0 <= q_lo < q_hi <= 1'
+        raise ValueError(msg)
+    _validate_nonnegative_float('two_piece_ransac.slope_eps', cfg.slope_eps)
+
+
+def _validate_physical_projection_cfg(cfg: PhysicalProjectionCfg) -> None:
+    if cfg.mode != 'model':
+        msg = f"physical_projection.mode must be 'model', got {cfg.mode!r}"
+        raise ValueError(msg)
+
+
+def _validate_robust_center_cfg(cfg: PhysicsRobustCenterCfg) -> None:
+    _validate_positive_int('robust_center.half_win', cfg.half_win)
+    _validate_nonnegative_int(
+        'robust_center.local_global_diff_th_samples',
+        cfg.local_global_diff_th_samples,
+    )
+    _validate_nonnegative_int(
+        'robust_center.local_discard_radius_traces',
+        cfg.local_discard_radius_traces,
+    )
+    _validate_nonnegative_float(
+        'robust_center.local_inv_drop_th_samples',
+        cfg.local_inv_drop_th_samples,
+    )
+    _validate_positive_int(
+        'robust_center.local_inv_min_consec_steps',
+        cfg.local_inv_min_consec_steps,
+    )
+    _validate_positive_float('robust_center.global_vmin_m_s', cfg.global_vmin_m_s)
+    _validate_positive_float('robust_center.global_vmax_m_s', cfg.global_vmax_m_s)
+    if float(cfg.global_vmax_m_s) < float(cfg.global_vmin_m_s):
+        msg = 'robust_center.global_vmax_m_s must be >= robust_center.global_vmin_m_s'
+        raise ValueError(msg)
+    _validate_positive_int('robust_center.global_side_min_pts', cfg.global_side_min_pts)
+
+
+def _validate_physical_cfg(cfg: PhysicsLiteConfig) -> None:
+    _validate_physical_trend_cfg(cfg.physical_trend)
+    _validate_neighbor_context_cfg(cfg.neighbor_context)
+    _validate_physical_prefilter_cfg(cfg.physical_prefilter)
+    _validate_two_piece_ransac_cfg(cfg.two_piece_ransac)
+    _validate_physical_projection_cfg(cfg.physical_projection)
+
+
 def _validate_physics_lite_config(cfg: PhysicsLiteConfig) -> PhysicsLiteConfig:
     feasible = cfg.feasible_band
     _validate_positive_float('feasible_band.vmin_mask', feasible.vmin_mask)
@@ -220,7 +479,10 @@ def _validate_physics_lite_config(cfg: PhysicsLiteConfig) -> PhysicsLiteConfig:
     _validate_nonnegative_float('feasible_band.taper_ms', feasible.taper_ms)
 
     trend = cfg.trend
-    _validate_positive_int('trend.trend_local_section_len', trend.trend_local_section_len)
+    _validate_positive_int(
+        'trend.trend_local_section_len',
+        trend.trend_local_section_len,
+    )
     _validate_positive_int('trend.trend_local_stride', trend.trend_local_stride)
     _validate_positive_float('trend.trend_local_huber_c', trend.trend_local_huber_c)
     _validate_positive_int('trend.trend_local_iters', trend.trend_local_iters)
@@ -259,30 +521,8 @@ def _validate_physics_lite_config(cfg: PhysicsLiteConfig) -> PhysicsLiteConfig:
         msg = 'keep_reject.drop_low_frac must lie in [0, 1)'
         raise ValueError(msg)
 
-    robust = cfg.robust_center
-    _validate_positive_int('robust_center.half_win', robust.half_win)
-    _validate_nonnegative_int(
-        'robust_center.local_global_diff_th_samples',
-        robust.local_global_diff_th_samples,
-    )
-    _validate_nonnegative_int(
-        'robust_center.local_discard_radius_traces',
-        robust.local_discard_radius_traces,
-    )
-    _validate_nonnegative_float(
-        'robust_center.local_inv_drop_th_samples',
-        robust.local_inv_drop_th_samples,
-    )
-    _validate_positive_int(
-        'robust_center.local_inv_min_consec_steps',
-        robust.local_inv_min_consec_steps,
-    )
-    _validate_positive_float('robust_center.global_vmin_m_s', robust.global_vmin_m_s)
-    _validate_positive_float('robust_center.global_vmax_m_s', robust.global_vmax_m_s)
-    if float(robust.global_vmax_m_s) < float(robust.global_vmin_m_s):
-        msg = 'robust_center.global_vmax_m_s must be >= robust_center.global_vmin_m_s'
-        raise ValueError(msg)
-    _validate_positive_int('robust_center.global_side_min_pts', robust.global_side_min_pts)
+    _validate_robust_center_cfg(cfg.robust_center)
+    _validate_physical_cfg(cfg)
     return cfg
 
 
@@ -304,6 +544,21 @@ def load_physics_lite_config(cfg: dict[str, Any] | None) -> PhysicsLiteConfig:
         ),
         robust_center=_load_robust_center_cfg(
             _require_dict(raw.get('robust_center'), key='robust_center')
+        ),
+        physical_trend=_load_physical_trend_cfg(
+            _require_dict(raw.get('physical_trend'), key='physical_trend')
+        ),
+        neighbor_context=_load_neighbor_context_cfg(
+            _require_dict(raw.get('neighbor_context'), key='neighbor_context')
+        ),
+        physical_prefilter=_load_physical_prefilter_cfg(
+            _require_dict(raw.get('physical_prefilter'), key='physical_prefilter')
+        ),
+        two_piece_ransac=_load_two_piece_ransac_cfg(
+            _require_dict(raw.get('two_piece_ransac'), key='two_piece_ransac')
+        ),
+        physical_projection=_load_physical_projection_cfg(
+            _require_dict(raw.get('physical_projection'), key='physical_projection')
         ),
     )
     return _validate_physics_lite_config(typed)
