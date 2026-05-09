@@ -640,6 +640,17 @@ def run_coarse_infer(
 
         stem = Path(typed.paths.segy_files[0]).stem
         out_path = out_dir / f'{stem}.coarse.npz'
+        geometry_valid_mask = np.asarray(info['geometry_valid_mask'], dtype=np.bool_)
+        offset_signed_geom_m = None
+        if info.get('offset_signed_geom_m') is not None:
+            candidate_signed = np.asarray(
+                info['offset_signed_geom_m'],
+                dtype=np.float32,
+            )
+            if candidate_signed.shape == (n_traces,) and np.all(
+                np.isfinite(candidate_signed[geometry_valid_mask])
+            ):
+                offset_signed_geom_m = candidate_signed
         return save_coarse_npz(
             out_path,
             dt_sec=dt_sec,
@@ -664,10 +675,8 @@ def run_coarse_infer(
             receiver_x_m=np.asarray(info['receiver_x_m'], dtype=np.float32),
             receiver_y_m=np.asarray(info['receiver_y_m'], dtype=np.float32),
             offset_abs_geom_m=np.asarray(info['offset_abs_geom_m'], dtype=np.float32),
-            geometry_valid_mask=np.asarray(
-                info['geometry_valid_mask'],
-                dtype=np.bool_,
-            ),
+            geometry_valid_mask=geometry_valid_mask,
+            offset_signed_geom_m=offset_signed_geom_m,
         )
     finally:
         dataset.close()

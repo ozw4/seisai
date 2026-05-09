@@ -10,6 +10,7 @@ GEOMETRY_ARRAY_KEYS = (
     'receiver_y_m',
     'offset_abs_geom_m',
     'geometry_valid_mask',
+    'offset_signed_geom_m',
 )
 GEOMETRY_CACHE_SCALE_KEY = 'geometry_coord_unit_scale_to_m'
 
@@ -46,7 +47,61 @@ def invalid_geometry_arrays(n_traces: int) -> dict[str, np.ndarray]:
         'receiver_y_m': np.full((n,), np.nan, dtype=np.float32),
         'offset_abs_geom_m': np.full((n,), np.nan, dtype=np.float32),
         'geometry_valid_mask': np.zeros((n,), dtype=np.bool_),
+        'offset_signed_geom_m': np.full((n,), np.nan, dtype=np.float32),
     }
+
+
+def _orient_principal_direction(u: np.ndarray) -> np.ndarray:
+    out = np.asarray(u, dtype=np.float64).copy()
+    dominant = int(np.argmax(np.abs(out)))
+    if out[dominant] < 0.0:
+        out *= -1.0
+    return out
+
+
+def estimate_signed_geometry_offset_m(
+    *,
+    source_x_m: np.ndarray,
+    source_y_m: np.ndarray,
+    receiver_x_m: np.ndarray,
+    receiver_y_m: np.ndarray,
+    geometry_valid_mask: np.ndarray,
+    min_receiver_spread_m: float = 1.0e-3,
+) -> np.ndarray:
+    valid = np.asarray(geometry_valid_mask, dtype=np.bool_)
+    n_traces = int(valid.shape[0])
+    signed = np.full((n_traces,), np.nan, dtype=np.float32)
+    if int(np.count_nonzero(valid)) < 2:
+        return signed
+
+    receiver_xy = np.stack(
+        [
+            np.asarray(receiver_x_m, dtype=np.float64)[valid],
+            np.asarray(receiver_y_m, dtype=np.float64)[valid],
+        ],
+        axis=1,
+    )
+    centered_receiver_xy = receiver_xy - np.mean(receiver_xy, axis=0, keepdims=True)
+    _, singular_values, vh = np.linalg.svd(centered_receiver_xy, full_matrices=False)
+    if singular_values.size == 0 or float(singular_values[0]) <= 0.0:
+        return signed
+
+    u = _orient_principal_direction(vh[0])
+    receiver_projection = centered_receiver_xy @ u
+    if float(np.ptp(receiver_projection)) <= float(min_receiver_spread_m):
+        return signed
+
+    source_xy = np.stack(
+        [
+            np.asarray(source_x_m, dtype=np.float64)[valid],
+            np.asarray(source_y_m, dtype=np.float64)[valid],
+        ],
+        axis=1,
+    )
+    signed[valid] = np.sum((receiver_xy - source_xy) * u[None, :], axis=1).astype(
+        np.float32
+    )
+    return signed
 
 
 def _read_1d_header(
@@ -126,6 +181,13 @@ def read_geometry_arrays_from_segy(
         & np.isfinite(offset_abs_f)
         & (offset_abs_f >= 0.0)
     )
+    offset_signed_f = estimate_signed_geometry_offset_m(
+        source_x_m=source_x_f,
+        source_y_m=source_y_f,
+        receiver_x_m=receiver_x_f,
+        receiver_y_m=receiver_y_f,
+        geometry_valid_mask=geometry_valid_mask,
+    )
 
     return {
         'source_x_m': source_x_f,
@@ -134,4 +196,5 @@ def read_geometry_arrays_from_segy(
         'receiver_y_m': receiver_y_f,
         'offset_abs_geom_m': offset_abs_f,
         'geometry_valid_mask': geometry_valid_mask.astype(np.bool_),
+        'offset_signed_geom_m': offset_signed_f,
     }

@@ -5,10 +5,14 @@ from pathlib import Path
 import numpy as np
 
 from .artifacts import (
+    COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS,
     COARSE_GEOMETRY_OPTIONAL_KEYS,
     COARSE_REQUIRED_KEYS,
     FINAL_REQUIRED_KEYS,
     FINE_RESULT_REQUIRED_KEYS,
+    ROBUST_CENTER_OPTIONAL_KEYS,
+    ROBUST_OPTIONAL_KEYS,
+    ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
     ROBUST_PHYSICAL_OPTIONAL_KEYS,
     ROBUST_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
@@ -17,10 +21,14 @@ from .artifacts import (
 )
 
 __all__ = [
+    'COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS',
     'COARSE_GEOMETRY_OPTIONAL_KEYS',
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
     'FINE_RESULT_REQUIRED_KEYS',
+    'ROBUST_CENTER_OPTIONAL_KEYS',
+    'ROBUST_OPTIONAL_KEYS',
+    'ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS',
     'ROBUST_PHYSICAL_OPTIONAL_KEYS',
     'ROBUST_REQUIRED_KEYS',
     'build_fbpick_final_payload',
@@ -78,17 +86,29 @@ def _validate_coarse_geometry_arrays(
             raise ValueError(msg)
         expected_dtype = np.bool_ if key == 'geometry_valid_mask' else np.float32
         _require_exact_dtype(key, arr, dtype=expected_dtype)
+    for key in COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS:
+        if key not in arrays:
+            continue
+        arr = np.asarray(arrays[key])
+        if arr.ndim != 1 or int(arr.shape[0]) != n_traces_int:
+            msg = f'{key} must be 1D with length n_traces'
+            raise ValueError(msg)
+        _require_exact_dtype(key, arr, dtype=np.float32)
 
     valid = np.asarray(arrays['geometry_valid_mask'], dtype=np.bool_)
     if not np.any(valid):
         return
-    for key in (
+    finite_keys = [
         'source_x_m',
         'source_y_m',
         'receiver_x_m',
         'receiver_y_m',
         'offset_abs_geom_m',
-    ):
+    ]
+    finite_keys.extend(
+        key for key in COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS if key in arrays
+    )
+    for key in finite_keys:
         arr = np.asarray(arrays[key])
         if not np.all(np.isfinite(arr[valid])):
             msg = f'{key} must be finite where geometry_valid_mask is True'
@@ -104,6 +124,7 @@ def _coerce_optional_coarse_geometry(
     receiver_y_m,
     offset_abs_geom_m,
     geometry_valid_mask,
+    offset_signed_geom_m,
 ) -> dict[str, np.ndarray]:
     values = {
         'source_x_m': source_x_m,
@@ -113,8 +134,12 @@ def _coerce_optional_coarse_geometry(
         'offset_abs_geom_m': offset_abs_geom_m,
         'geometry_valid_mask': geometry_valid_mask,
     }
+    extra_values = {
+        'offset_signed_geom_m': offset_signed_geom_m,
+    }
     provided = [key for key, value in values.items() if value is not None]
-    if not provided:
+    provided_extra = [key for key, value in extra_values.items() if value is not None]
+    if not provided and not provided_extra:
         return {}
     missing = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if values[key] is None]
     if missing:
@@ -137,6 +162,13 @@ def _coerce_optional_coarse_geometry(
         values['geometry_valid_mask'],
         length=n_traces_int,
     )
+    if offset_signed_geom_m is not None:
+        arrays['offset_signed_geom_m'] = _coerce_vector(
+            'offset_signed_geom_m',
+            offset_signed_geom_m,
+            dtype=np.float32,
+            length=n_traces_int,
+        )
     _validate_coarse_geometry_arrays(arrays, n_traces=n_traces_int)
     return arrays
 
@@ -148,6 +180,13 @@ def _validate_optional_coarse_geometry(
 ) -> None:
     present = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key in out]
     if not present:
+        extra_present = [
+            key for key in COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS if key in out
+        ]
+        if extra_present:
+            missing = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key not in out]
+            msg = f'coarse npz missing optional geometry keys: {missing}'
+            raise KeyError(msg)
         return
     missing = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key not in out]
     if missing:
@@ -239,19 +278,29 @@ def _require_payload_vector(
     return arr
 
 
-_ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = (
-    ('physical_model_status', np.uint8),
-    ('physical_model_break_offset_m', np.float32),
-    ('physical_model_slope_near_s_per_m', np.float32),
-    ('physical_model_slope_far_s_per_m', np.float32),
-    ('physical_model_velocity_near_m_s', np.float32),
-    ('physical_model_velocity_far_m_s', np.float32),
-    ('physical_model_neighbor_count', np.int32),
-    ('physical_prefilter_valid_count', np.int32),
-    ('physical_model_segment_id', np.int32),
-    ('physical_model_side', np.int8),
-    ('physical_model_resid_p50_ms', np.float32),
-    ('physical_model_resid_p90_ms', np.float32),
+_ROBUST_CENTER_OPTIONAL_KEY_PAIRS = tuple(
+    zip(ROBUST_CENTER_OPTIONAL_KEYS[0::2], ROBUST_CENTER_OPTIONAL_KEYS[1::2])
+)
+
+_ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
+    'physical_model_status': np.uint8,
+    'physical_model_failure_reason': np.uint8,
+    'physical_model_break_offset_m': np.float32,
+    'physical_model_slope_near_s_per_m': np.float32,
+    'physical_model_slope_far_s_per_m': np.float32,
+    'physical_model_velocity_near_m_s': np.float32,
+    'physical_model_velocity_far_m_s': np.float32,
+    'physical_model_neighbor_count': np.int32,
+    'physical_prefilter_valid_count': np.int32,
+    'physical_model_segment_id': np.int32,
+    'physical_model_side': np.int8,
+    'physical_model_resid_p50_ms': np.float32,
+    'physical_model_resid_p90_ms': np.float32,
+}
+
+_ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = tuple(
+    (key, _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES[key])
+    for key in ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS
 )
 
 
@@ -284,6 +333,7 @@ def save_coarse_npz(
     receiver_y_m=None,
     offset_abs_geom_m=None,
     geometry_valid_mask=None,
+    offset_signed_geom_m=None,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -364,6 +414,7 @@ def save_coarse_npz(
             receiver_y_m=receiver_y_m,
             offset_abs_geom_m=offset_abs_geom_m,
             geometry_valid_mask=geometry_valid_mask,
+            offset_signed_geom_m=offset_signed_geom_m,
         )
     )
 
@@ -446,6 +497,7 @@ def save_robust_npz(
     fine_center_i=None,
     fine_center_t_sec=None,
     physical_model_status=None,
+    physical_model_failure_reason=None,
     physical_model_break_offset_m=None,
     physical_model_slope_near_s_per_m=None,
     physical_model_slope_far_s_per_m=None,
@@ -566,11 +618,7 @@ def save_robust_npz(
         'fine_center_i': fine_center_i,
         'fine_center_t_sec': fine_center_t_sec,
     }
-    for pick_key, time_key in (
-        ('trend_center_i', 'trend_center_t_sec'),
-        ('physical_center_i', 'physical_center_t_sec'),
-        ('fine_center_i', 'fine_center_t_sec'),
-    ):
+    for pick_key, time_key in _ROBUST_CENTER_OPTIONAL_KEY_PAIRS:
         pick_value = optional_center_values[pick_key]
         time_value = optional_center_values[time_key]
         if pick_value is None and time_value is None:
@@ -601,6 +649,7 @@ def save_robust_npz(
 
     physical_diagnostic_values = {
         'physical_model_status': physical_model_status,
+        'physical_model_failure_reason': physical_model_failure_reason,
         'physical_model_break_offset_m': physical_model_break_offset_m,
         'physical_model_slope_near_s_per_m': physical_model_slope_near_s_per_m,
         'physical_model_slope_far_s_per_m': physical_model_slope_far_s_per_m,
@@ -709,11 +758,7 @@ def load_robust_npz(path: str | Path) -> dict[str, np.ndarray]:
             raise ValueError(msg)
         _require_exact_dtype(key, arr, dtype=dtype)
 
-    for pick_key, time_key in (
-        ('trend_center_i', 'trend_center_t_sec'),
-        ('physical_center_i', 'physical_center_t_sec'),
-        ('fine_center_i', 'fine_center_t_sec'),
-    ):
+    for pick_key, time_key in _ROBUST_CENTER_OPTIONAL_KEY_PAIRS:
         if pick_key not in out and time_key not in out:
             continue
         if pick_key not in out or time_key not in out:

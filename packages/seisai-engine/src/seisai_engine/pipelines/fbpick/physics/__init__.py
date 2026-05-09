@@ -22,9 +22,17 @@ from .geometry import (
     estimate_signed_offset_side,
     load_coarse_geometry_from_npz,
     select_nearest_source_groups,
+    signed_offset_side_from_geometry,
     split_offset_gap_segments,
 )
 from .physical_center import (
+    PHYSICAL_MODEL_FAILURE_FIT_FAILED,
+    PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+    PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
+    PHYSICAL_MODEL_FAILURE_LABELS,
+    PHYSICAL_MODEL_FAILURE_NONE,
+    PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED,
+    PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
     PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP,
     PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT,
@@ -47,6 +55,13 @@ from .run import (
 
 __all__ = [
     'DEFAULT_PHYSICS_LITE_CONFIG',
+    'PHYSICAL_MODEL_FAILURE_FIT_FAILED',
+    'PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID',
+    'PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS',
+    'PHYSICAL_MODEL_FAILURE_LABELS',
+    'PHYSICAL_MODEL_FAILURE_NONE',
+    'PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED',
+    'PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID',
     'PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND',
     'PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP',
     'PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT',
@@ -84,5 +99,6 @@ __all__ = [
     'physics_lite_config_to_dict',
     'run_physics_lite',
     'select_nearest_source_groups',
+    'signed_offset_side_from_geometry',
     'split_offset_gap_segments',
 ]

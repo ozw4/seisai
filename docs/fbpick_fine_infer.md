@@ -24,6 +24,19 @@ window_center:
 Physics output writes `fine_center_i` even when physical trend centering is not
 used, so new robust artifacts should provide the fine-stage center explicitly.
 
+## Robust NPZ Optional Fields
+
+Robust artifacts may include these optional center pairs:
+
+- `trend_center_i` / `trend_center_t_sec`
+- `physical_center_i` / `physical_center_t_sec`
+- `fine_center_i` / `fine_center_t_sec`
+
+Physical trend output may also include physical diagnostics such as
+`physical_model_status`, `physical_model_failure_reason`,
+`physical_model_break_offset_m`, velocity and slope fields, neighbor counts,
+segment side fields, and residual summary fields.
+
 ## Coarse NPZ Input
 
 Set `paths.coarse_npz_files` when the coarse and physics outputs live in

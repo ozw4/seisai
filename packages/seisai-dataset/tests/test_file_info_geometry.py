@@ -9,6 +9,7 @@ from seisai_dataset.file_info import build_file_info, build_file_info_dataclass
 from seisai_dataset.geometry_headers import (
     GEOMETRY_ARRAY_KEYS,
     apply_source_group_scalar,
+    estimate_signed_geometry_offset_m,
 )
 
 
@@ -115,10 +116,52 @@ def test_build_file_info_includes_geometry_arrays_and_preserves_header_offsets(
             info['geometry_valid_mask'],
             np.asarray([True, True, True], dtype=np.bool_),
         )
+        assert info['offset_signed_geom_m'].dtype == np.float32
         assert info['source_x_m'].dtype == np.float32
         assert info['geometry_valid_mask'].dtype == np.bool_
     finally:
         close_info(info)
+
+
+def test_build_file_info_computes_signed_geometry_offset(tmp_path: Path) -> None:
+    segy_path = str(tmp_path / 'signed_geometry.sgy')
+    write_geometry_segy(
+        segy_path,
+        source_x=np.asarray([0, 0, 0], dtype=np.int32),
+        source_y=np.asarray([0, 0, 0], dtype=np.int32),
+        receiver_x=np.asarray([-10, 0, 10], dtype=np.int32),
+        receiver_y=np.asarray([0, 0, 0], dtype=np.int32),
+        scalar=np.asarray([1, 1, 1], dtype=np.int32),
+        offsets=np.asarray([10, 0, 10], dtype=np.int32),
+    )
+
+    info = build_file_info(
+        segy_path,
+        ffid_byte=segyio.TraceField.FieldRecord,
+        chno_byte=segyio.TraceField.TraceNumber,
+        cmp_byte=segyio.TraceField.CDP,
+        use_header_cache=False,
+        include_geometry_arrays=True,
+    )
+    try:
+        np.testing.assert_allclose(
+            info['offset_signed_geom_m'],
+            np.asarray([-10.0, 0.0, 10.0], dtype=np.float32),
+        )
+    finally:
+        close_info(info)
+
+
+def test_estimate_signed_geometry_offset_returns_nan_when_pca_degenerate() -> None:
+    signed = estimate_signed_geometry_offset_m(
+        source_x_m=np.zeros((3,), dtype=np.float32),
+        source_y_m=np.zeros((3,), dtype=np.float32),
+        receiver_x_m=np.ones((3,), dtype=np.float32),
+        receiver_y_m=np.ones((3,), dtype=np.float32),
+        geometry_valid_mask=np.ones((3,), dtype=np.bool_),
+    )
+
+    assert np.all(np.isnan(signed))
 
 
 def test_build_file_info_dataclass_geometry_fields_default_to_none(
@@ -146,6 +189,7 @@ def test_build_file_info_dataclass_geometry_fields_default_to_none(
         assert info.source_x_m is None
         assert info.offset_abs_geom_m is None
         assert info.geometry_valid_mask is None
+        assert info.offset_signed_geom_m is None
     finally:
         if info.segy_obj is not None:
             info.segy_obj.close()

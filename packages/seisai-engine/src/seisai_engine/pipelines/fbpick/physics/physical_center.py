@@ -13,9 +13,9 @@ from .geometry import (
     CoarseGeometry,
     SourceGroup,
     build_source_groups,
-    estimate_signed_offset_side,
     load_coarse_geometry_from_npz,
     select_nearest_source_groups,
+    signed_offset_side_from_geometry,
     split_offset_gap_segments,
 )
 from .merge import MergeResult
@@ -34,7 +34,7 @@ PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED = 8
 
 PHYSICAL_MODEL_STATUS_LABELS = {
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK: 'two_piece_ok',
-    PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT: 'fallback_relaxed_segment',
+    PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT: 'relaxed_segment_ok',
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND: 'fallback_existing_trend',
     PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP: 'fallback_feasible_clip',
     PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST: 'fallback_robust',
@@ -44,7 +44,30 @@ PHYSICAL_MODEL_STATUS_LABELS = {
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED: 'physical_disabled',
 }
 
+PHYSICAL_MODEL_FAILURE_NONE = 0
+PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED = 1
+PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID = 2
+PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS = 3
+PHYSICAL_MODEL_FAILURE_FIT_FAILED = 4
+PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID = 5
+
+PHYSICAL_MODEL_FAILURE_LABELS = {
+    PHYSICAL_MODEL_FAILURE_NONE: 'none',
+    PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED: 'physical_disabled',
+    PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID: 'geometry_invalid',
+    PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS: 'insufficient_observations',
+    PHYSICAL_MODEL_FAILURE_FIT_FAILED: 'fit_failed',
+    PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID: 'prediction_invalid',
+}
+
 __all__ = [
+    'PHYSICAL_MODEL_FAILURE_FIT_FAILED',
+    'PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID',
+    'PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS',
+    'PHYSICAL_MODEL_FAILURE_LABELS',
+    'PHYSICAL_MODEL_FAILURE_NONE',
+    'PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED',
+    'PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID',
     'PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND',
     'PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP',
     'PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT',
@@ -67,6 +90,7 @@ class PhysicalCenterResult:
     fine_center_i: np.ndarray
     fine_center_t_sec: np.ndarray
     physical_model_status: np.ndarray
+    physical_model_failure_reason: np.ndarray
     physical_model_break_offset_m: np.ndarray
     physical_model_slope_near_s_per_m: np.ndarray
     physical_model_slope_far_s_per_m: np.ndarray
@@ -88,6 +112,14 @@ class _ObservationPlan:
     segment_id: int
     side: int
     relaxed: bool
+
+
+@dataclass(frozen=True)
+class _FitCacheEntry:
+    model: object | None
+    diagnostics: tuple[float, float, float, float, float, float, float] | None
+    fit_failed: bool
+    diagnostics_computed: bool = False
 
 
 def _validate_table(table: CoarsePickTable) -> None:
@@ -175,6 +207,7 @@ def _allocate_result_arrays(table: CoarsePickTable) -> dict[str, np.ndarray]:
         'fine_center_i': np.zeros((n,), dtype=np.int32),
         'fine_center_t_sec': np.zeros((n,), dtype=np.float32),
         'physical_model_status': np.zeros((n,), dtype=np.uint8),
+        'physical_model_failure_reason': np.zeros((n,), dtype=np.uint8),
         'physical_model_break_offset_m': np.full((n,), np.nan, dtype=np.float32),
         'physical_model_slope_near_s_per_m': np.full((n,), np.nan, dtype=np.float32),
         'physical_model_slope_far_s_per_m': np.full((n,), np.nan, dtype=np.float32),
@@ -199,6 +232,7 @@ def _assign_fallback(
     arrays: dict[str, np.ndarray],
     trace_idx: int,
     *,
+    failure_reason: int,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
@@ -214,10 +248,12 @@ def _assign_fallback(
     arrays['physical_center_i'][trace_idx] = np.int32(center_i)
     arrays['physical_center_t_sec'][trace_idx] = np.float32(center_t)
     arrays['physical_model_status'][trace_idx] = np.uint8(fallback_status)
+    arrays['physical_model_failure_reason'][trace_idx] = np.uint8(failure_reason)
 
 
 def _assign_fallback_all(
     *,
+    failure_reason: int,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
@@ -228,6 +264,7 @@ def _assign_fallback_all(
         _assign_fallback(
             arrays,
             trace_idx,
+            failure_reason=failure_reason,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -257,6 +294,9 @@ def _build_disabled_result(
     arrays['physical_center_t_sec'][:] = center_t
     arrays['physical_model_status'][:] = np.uint8(
         PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED
+    )
+    arrays['physical_model_failure_reason'][:] = np.uint8(
+        PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED
     )
     return _finalize_result(arrays)
 
@@ -332,7 +372,7 @@ def _obs_with_target_side(
     geometry: CoarseGeometry,
 ) -> tuple[np.ndarray, int, bool]:
     context_indices = _append_index(obs_indices, trace_idx)
-    signed = estimate_signed_offset_side(geometry, context_indices)
+    signed = signed_offset_side_from_geometry(geometry, context_indices)
     if not bool(signed.reliable):
         return np.asarray(obs_indices, dtype=np.int64), 0, False
 
@@ -546,6 +586,79 @@ def _model_diagnostics(
     )
 
 
+def _fit_cache_key(plan: _ObservationPlan) -> tuple[int, ...]:
+    return tuple(np.asarray(plan.obs_indices, dtype=np.int64).tolist())
+
+
+def _fit_model_for_plan(
+    *,
+    strategy: TwoPieceRansacAutoBreakStrategy,
+    plan: _ObservationPlan,
+    x_obs: np.ndarray,
+    y_obs: np.ndarray,
+    cache: dict[tuple[int, ...], _FitCacheEntry],
+) -> tuple[
+    object | None,
+    tuple[float, float, float, float, float, float, float] | None,
+    int | None,
+]:
+    cache_key = _fit_cache_key(plan)
+    entry = cache.get(cache_key)
+    if entry is None:
+        try:
+            trend_model = strategy.fit(
+                torch.as_tensor(x_obs, dtype=torch.float32),
+                torch.as_tensor(y_obs, dtype=torch.float32),
+            )
+        except (TypeError, ValueError, RuntimeError):
+            trend_model = None
+
+        if trend_model is None:
+            entry = _FitCacheEntry(model=None, diagnostics=None, fit_failed=True)
+        else:
+            entry = _FitCacheEntry(
+                model=trend_model,
+                diagnostics=None,
+                fit_failed=False,
+            )
+        cache[cache_key] = entry
+
+    if bool(entry.fit_failed):
+        return None, None, PHYSICAL_MODEL_FAILURE_FIT_FAILED
+    return entry.model, entry.diagnostics, None
+
+
+def _diagnostics_for_plan(
+    *,
+    plan: _ObservationPlan,
+    x_obs: np.ndarray,
+    y_obs: np.ndarray,
+    cache: dict[tuple[int, ...], _FitCacheEntry],
+) -> tuple[float, float, float, float, float, float, float] | None:
+    cache_key = _fit_cache_key(plan)
+    entry = cache[cache_key]
+    if bool(entry.fit_failed) or entry.model is None:
+        return None
+    if bool(entry.diagnostics_computed):
+        return entry.diagnostics
+
+    try:
+        diagnostics = _model_diagnostics(
+            entry.model,
+            obs_offsets_m=x_obs,
+            obs_times_sec=y_obs,
+        )
+    except (TypeError, ValueError, RuntimeError):
+        diagnostics = None
+    cache[cache_key] = _FitCacheEntry(
+        model=entry.model,
+        diagnostics=diagnostics,
+        fit_failed=False,
+        diagnostics_computed=True,
+    )
+    return diagnostics
+
+
 def _compute_physical_prefilter_mask(
     *,
     geometry: CoarseGeometry,
@@ -668,6 +781,7 @@ def build_geometry_two_piece_physical_center(
         geometry = None
     if geometry is None or not bool(cfg.physical_trend.use_geometry_offset):
         return _assign_fallback_all(
+            failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -680,6 +794,7 @@ def build_geometry_two_piece_physical_center(
     )
     if len(groups) == 0:
         return _assign_fallback_all(
+            failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -719,6 +834,7 @@ def build_geometry_two_piece_physical_center(
 
     arrays = _allocate_result_arrays(table)
     strategy = _fit_strategy(cfg)
+    fit_cache: dict[tuple[int, ...], _FitCacheEntry] = {}
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
 
     for trace_idx in range(n):
@@ -730,6 +846,7 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -750,6 +867,7 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -770,6 +888,7 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -780,18 +899,19 @@ def build_geometry_two_piece_physical_center(
         obs_indices = np.asarray(plan.obs_indices, dtype=np.int64)
         x_obs = np.asarray(offset_abs_geom_m[obs_indices], dtype=np.float32)
         y_obs = np.asarray(pick_t_sec[obs_indices], dtype=np.float32)
-        try:
-            trend_model = strategy.fit(
-                torch.as_tensor(x_obs, dtype=torch.float32),
-                torch.as_tensor(y_obs, dtype=torch.float32),
-            )
-        except (TypeError, ValueError, RuntimeError):
-            trend_model = None
+        trend_model, diagnostics, fit_failure_reason = _fit_model_for_plan(
+            strategy=strategy,
+            plan=plan,
+            x_obs=x_obs,
+            y_obs=y_obs,
+            cache=fit_cache,
+        )
 
-        if trend_model is None:
+        if fit_failure_reason is not None:
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=fit_failure_reason,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -811,6 +931,7 @@ def build_geometry_two_piece_physical_center(
             _assign_fallback(
                 arrays,
                 trace_idx,
+                failure_reason=PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
                 table=table,
                 feasible=feasible,
                 trend=trend,
@@ -828,7 +949,14 @@ def build_geometry_two_piece_physical_center(
             else PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
         )
 
-        try:
+        if diagnostics is None:
+            diagnostics = _diagnostics_for_plan(
+                plan=plan,
+                x_obs=x_obs,
+                y_obs=y_obs,
+                cache=fit_cache,
+            )
+        if diagnostics is not None:
             (
                 break_offset,
                 slope_near,
@@ -837,11 +965,7 @@ def build_geometry_two_piece_physical_center(
                 velocity_far,
                 resid_p50,
                 resid_p90,
-            ) = _model_diagnostics(
-                trend_model,
-                obs_offsets_m=x_obs,
-                obs_times_sec=y_obs,
-            )
+            ) = diagnostics
             arrays['physical_model_break_offset_m'][trace_idx] = np.float32(
                 break_offset
             )
@@ -859,7 +983,5 @@ def build_geometry_two_piece_physical_center(
             )
             arrays['physical_model_resid_p50_ms'][trace_idx] = np.float32(resid_p50)
             arrays['physical_model_resid_p90_ms'][trace_idx] = np.float32(resid_p90)
-        except (TypeError, ValueError, RuntimeError):
-            pass
 
     return _finalize_result(arrays)

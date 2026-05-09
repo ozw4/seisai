@@ -24,8 +24,8 @@ from seisai_engine.pipelines.fbpick.coarse import (
 )
 from seisai_engine.pipelines.fbpick.coarse.infer import (
     restore_anchor_predictions_to_full_traces,
-    validate_coarse_npz_payload,
     validate_checkpoint_for_global_anchor_infer,
+    validate_coarse_npz_payload,
 )
 from seisai_engine.pipelines.fbpick.common import (
     COARSE_GEOMETRY_OPTIONAL_KEYS,
@@ -1445,6 +1445,10 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
         np.asarray(900 + np.arange(n_traces) * 10, dtype=np.float32),
     )
     np.testing.assert_array_equal(
+        data['offset_signed_geom_m'],
+        np.asarray(900 + np.arange(n_traces) * 10, dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
         data['coarse_pick_i'],
         np.full((n_traces,), n_samples - 1, dtype=np.int32),
     )
@@ -1536,8 +1540,8 @@ def test_coarse_raw_only_infer_does_not_call_tiled_inference_utilities(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import seisai_dataset.infer_window_dataset as infer_window_dataset
     import seisai_engine.infer.runner as infer_runner
+    from seisai_dataset import infer_window_dataset
 
     def fail_if_called(*args, **kwargs):
         _ = (args, kwargs)

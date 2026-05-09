@@ -6,7 +6,10 @@ import math
 
 import numpy as np
 
-from seisai_engine.pipelines.fbpick.common import COARSE_GEOMETRY_OPTIONAL_KEYS
+from seisai_engine.pipelines.fbpick.common import (
+    COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS,
+    COARSE_GEOMETRY_OPTIONAL_KEYS,
+)
 
 __all__ = [
     "CoarseGeometry",
@@ -16,6 +19,7 @@ __all__ = [
     "estimate_signed_offset_side",
     "load_coarse_geometry_from_npz",
     "select_nearest_source_groups",
+    "signed_offset_side_from_geometry",
     "split_offset_gap_segments",
 ]
 
@@ -28,6 +32,7 @@ class CoarseGeometry:
     receiver_y_m: np.ndarray
     offset_abs_geom_m: np.ndarray
     geometry_valid_mask: np.ndarray
+    offset_signed_geom_m: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -109,13 +114,16 @@ def _validate_geometry_finite_where_valid(geometry: CoarseGeometry) -> None:
     valid = np.asarray(geometry.geometry_valid_mask, dtype=np.bool_)
     if not np.any(valid):
         return
-    for key in (
+    finite_keys = [
         "source_x_m",
         "source_y_m",
         "receiver_x_m",
         "receiver_y_m",
         "offset_abs_geom_m",
-    ):
+    ]
+    if geometry.offset_signed_geom_m is not None:
+        finite_keys.append("offset_signed_geom_m")
+    for key in finite_keys:
         arr = np.asarray(getattr(geometry, key))
         if not np.all(np.isfinite(arr[valid])):
             msg = f"{key} must be finite where geometry_valid_mask is True"
@@ -130,11 +138,29 @@ def load_coarse_geometry_from_npz(
     n = _coerce_n_traces(n_traces)
     present = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key in coarse_npz]
     if not present:
+        extra_present = [
+            key for key in COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS if key in coarse_npz
+        ]
+        if extra_present:
+            missing = [
+                key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key not in coarse_npz
+            ]
+            msg = f"coarse npz missing optional geometry keys: {missing}"
+            raise KeyError(msg)
         return None
     missing = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key not in coarse_npz]
     if missing:
         msg = f"coarse npz missing optional geometry keys: {missing}"
         raise KeyError(msg)
+    offset_signed_geom_m = (
+        _coerce_float32_vector(
+            "offset_signed_geom_m",
+            coarse_npz["offset_signed_geom_m"],
+            n_traces=n,
+        )
+        if "offset_signed_geom_m" in coarse_npz
+        else None
+    )
 
     geometry = CoarseGeometry(
         source_x_m=_coerce_float32_vector(
@@ -167,6 +193,7 @@ def load_coarse_geometry_from_npz(
             coarse_npz["geometry_valid_mask"],
             n_traces=n,
         ),
+        offset_signed_geom_m=offset_signed_geom_m,
     )
     _validate_geometry_finite_where_valid(geometry)
     return geometry
@@ -373,6 +400,60 @@ def estimate_signed_offset_side(
         np.where(signed_valid < 0.0, -1, 1),
     ).astype(np.int8)
     return SignedOffsetResult(signed_offset_m=signed, side=side, reliable=True)
+
+
+def _signed_offset_side_from_saved(
+    geometry: CoarseGeometry,
+    trace_indices: np.ndarray,
+    *,
+    zero_tol_m: float,
+) -> SignedOffsetResult:
+    n_traces = int(np.asarray(geometry.geometry_valid_mask).shape[0])
+    indices = _coerce_trace_indices(trace_indices, n_traces=n_traces)
+    zero_tol = _validate_nonnegative_finite("zero_tol_m", zero_tol_m)
+
+    signed = np.zeros((indices.size,), dtype=np.float32)
+    side = np.zeros((indices.size,), dtype=np.int8)
+    if indices.size == 0:
+        return SignedOffsetResult(signed_offset_m=signed, side=side, reliable=False)
+
+    saved = np.asarray(geometry.offset_signed_geom_m, dtype=np.float32)
+    valid = (
+        np.asarray(geometry.geometry_valid_mask[indices], dtype=np.bool_)
+        & np.isfinite(saved[indices])
+    )
+    signed[valid] = saved[indices][valid].astype(np.float32, copy=False)
+    signed_valid = np.asarray(signed[valid], dtype=np.float64)
+    if signed_valid.size == 0 or not np.any(np.abs(signed_valid) > zero_tol):
+        return SignedOffsetResult(signed_offset_m=signed, side=side, reliable=False)
+
+    side[valid] = np.where(
+        np.abs(signed_valid) <= zero_tol,
+        0,
+        np.where(signed_valid < 0.0, -1, 1),
+    ).astype(np.int8)
+    return SignedOffsetResult(signed_offset_m=signed, side=side, reliable=True)
+
+
+def signed_offset_side_from_geometry(
+    geometry: CoarseGeometry,
+    trace_indices: np.ndarray,
+    *,
+    min_receiver_spread_m: float = 1.0e-3,
+    zero_tol_m: float = 1.0e-6,
+) -> SignedOffsetResult:
+    if geometry.offset_signed_geom_m is not None:
+        return _signed_offset_side_from_saved(
+            geometry,
+            trace_indices,
+            zero_tol_m=zero_tol_m,
+        )
+    return estimate_signed_offset_side(
+        geometry,
+        trace_indices,
+        min_receiver_spread_m=min_receiver_spread_m,
+        zero_tol_m=zero_tol_m,
+    )
 
 
 def split_offset_gap_segments(

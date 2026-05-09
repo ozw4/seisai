@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from seisai_engine.pipelines.fbpick.physics import (
     CoarseGeometry,
     SourceGroup,
@@ -10,6 +9,7 @@ from seisai_engine.pipelines.fbpick.physics import (
     estimate_signed_offset_side,
     load_coarse_geometry_from_npz,
     select_nearest_source_groups,
+    signed_offset_side_from_geometry,
     split_offset_gap_segments,
 )
 
@@ -22,6 +22,7 @@ def _geometry(
     receiver_y_m: np.ndarray | None = None,
     offset_abs_geom_m: np.ndarray | None = None,
     geometry_valid_mask: np.ndarray | None = None,
+    offset_signed_geom_m: np.ndarray | None = None,
 ) -> CoarseGeometry:
     n_traces = int(source_x_m.shape[0])
     if receiver_x_m is None:
@@ -39,6 +40,11 @@ def _geometry(
         receiver_y_m=np.asarray(receiver_y_m, dtype=np.float32),
         offset_abs_geom_m=np.asarray(offset_abs_geom_m, dtype=np.float32),
         geometry_valid_mask=np.asarray(geometry_valid_mask, dtype=np.bool_),
+        offset_signed_geom_m=(
+            None
+            if offset_signed_geom_m is None
+            else np.asarray(offset_signed_geom_m, dtype=np.float32)
+        ),
     )
 
 
@@ -50,6 +56,7 @@ def test_load_coarse_geometry_from_npz_normalizes_arrays() -> None:
         "receiver_y_m": np.array([25.0, 26.0], dtype=np.float64),
         "offset_abs_geom_m": np.array([7.0, 8.0], dtype=np.float64),
         "geometry_valid_mask": np.array([1, 0], dtype=np.int32),
+        "offset_signed_geom_m": np.array([-7.0, np.nan], dtype=np.float64),
     }
 
     geometry = load_coarse_geometry_from_npz(coarse, n_traces=2)
@@ -61,6 +68,8 @@ def test_load_coarse_geometry_from_npz_normalizes_arrays() -> None:
         geometry.geometry_valid_mask,
         np.array([True, False], dtype=np.bool_),
     )
+    assert geometry.offset_signed_geom_m is not None
+    assert geometry.offset_signed_geom_m.dtype == np.float32
 
 
 def test_load_coarse_geometry_from_npz_returns_none_without_geometry() -> None:
@@ -182,6 +191,23 @@ def test_estimate_signed_offset_side_marks_degenerate_receiver_pca_unreliable() 
 
     assert result.reliable is False
     np.testing.assert_array_equal(result.side, np.zeros((3,), dtype=np.int8))
+
+
+def test_signed_offset_side_from_geometry_prefers_saved_signed_offset() -> None:
+    geometry = _geometry(
+        source_x_m=np.zeros((4,), dtype=np.float32),
+        source_y_m=np.zeros((4,), dtype=np.float32),
+        receiver_x_m=np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32),
+        receiver_y_m=np.zeros((4,), dtype=np.float32),
+        offset_signed_geom_m=np.array([-10.0, -20.0, 30.0, 40.0], dtype=np.float32),
+    )
+
+    result = signed_offset_side_from_geometry(geometry, np.arange(4, dtype=np.int64))
+
+    assert result.reliable is True
+    np.testing.assert_array_equal(
+        result.side, np.array([-1, -1, 1, 1], dtype=np.int8)
+    )
 
 
 def test_split_offset_gap_segments_sorts_offsets_and_maps_segments_back() -> None:
