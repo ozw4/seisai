@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -460,6 +461,56 @@ def test_run_pipeline_final_npz_dir_passes_actual_arrays_to_vis(
     np.testing.assert_array_equal(captured['final_pick_i'], final['final_pick_i'])
 
 
+def test_run_pipeline_summary_csv_includes_fine_physical_and_final_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fb_path = tmp_path / 'fb.npy'
+    segy_path = tmp_path / 'line' / 'survey.sgy'
+    _write_fb(fb_path)
+    robust = _qc_robust_payload()
+    robust['fine_center_i'] = np.asarray([100, 101, 102], dtype=np.int32)
+    robust['physical_center_i'] = np.asarray([100, 101, 102], dtype=np.int32)
+    final = _qc_final_payload()
+    cfg = {
+        'paths': {
+            'segy_files': [str(segy_path)],
+            'fb_files': [str(fb_path)],
+            'coarse_npz_dir': str(tmp_path / 'coarse'),
+            'robust_npz_dir': str(tmp_path / 'robust'),
+            'final_npz_files': [str(tmp_path / 'final.npz')],
+            'out_dir': str(tmp_path / 'out'),
+        },
+        'dataset': {'primary_keys': ['ffid']},
+        'vis': {'save_summary_csv': True, 'max_gathers_per_file': 0},
+    }
+
+    monkeypatch.setattr(
+        physics_qc_cli,
+        '_load_runtime',
+        lambda: _physics_qc_runtime(
+            cfg=cfg,
+            base_dir=tmp_path,
+            robust=robust,
+            final=final,
+        ),
+    )
+
+    physics_qc_cli.run_pipeline(tmp_path / 'config.yaml')
+
+    with (tmp_path / 'out' / 'summary_per_file.csv').open(
+        newline='',
+        encoding='utf-8',
+    ) as f:
+        rows = list(csv.DictReader(f))
+
+    assert rows[0]['fine_center_R32'] == '1'
+    assert rows[0]['fine_center_delta_p90_vs_robust'] == '-1'
+    assert rows[0]['physical_center_R127'] == '1'
+    assert rows[0]['gt_in_actual_window_rate'] == '1'
+    assert rows[0]['final_pick_R127'] == '1'
+
+
 def test_run_pipeline_final_npz_files_take_priority_over_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -580,3 +631,121 @@ def test_format_uint8_counts_uses_physical_failure_labels() -> None:
     )
 
     assert summary == 'none=1; geometry_invalid=2; prediction_invalid=1'
+
+
+def test_summarize_errors_reports_fine_center_improvement() -> None:
+    gt_pick_i = np.asarray([100, 200, 300, 400], dtype=np.int64)
+
+    metrics, *_ = physics_qc_cli._summarize_errors(
+        coarse_pick_i=gt_pick_i + 40,
+        robust_pick_i=gt_pick_i + 20,
+        fine_center_i=gt_pick_i + 2,
+        gt_pick_i=gt_pick_i,
+        n_traces=4,
+        n_samples_orig=1000,
+    )
+
+    assert metrics['fine_center_delta_p90_vs_robust'] < 0.0
+    assert metrics['fine_center_delta_p95_vs_robust'] < 0.0
+
+
+def test_summarize_errors_reports_fine_center_regression() -> None:
+    gt_pick_i = np.asarray([100, 200, 300, 400], dtype=np.int64)
+
+    metrics, *_ = physics_qc_cli._summarize_errors(
+        coarse_pick_i=gt_pick_i + 40,
+        robust_pick_i=gt_pick_i + 2,
+        fine_center_i=gt_pick_i + 20,
+        gt_pick_i=gt_pick_i,
+        n_traces=4,
+        n_samples_orig=1000,
+    )
+
+    assert metrics['fine_center_delta_p90_vs_robust'] > 0.0
+    assert metrics['fine_center_delta_p95_vs_robust'] > 0.0
+
+
+def test_summarize_errors_reports_physical_and_final_artifact_metrics() -> None:
+    gt_pick_i = np.asarray([100, 200, 0, 300], dtype=np.int64)
+
+    metrics, *_ = physics_qc_cli._summarize_errors(
+        coarse_pick_i=np.asarray([150, 250, 50, 350], dtype=np.int64),
+        robust_pick_i=np.asarray([110, 210, 20, 310], dtype=np.int64),
+        physical_center_i=np.asarray([100, 500, 20, 600], dtype=np.int32),
+        fine_center_i=np.asarray([100, 200, 20, 300], dtype=np.int32),
+        window_start_i=np.asarray([90, 250, 0, 280], dtype=np.int32),
+        window_end_i=np.asarray([110, 350, 10, 290], dtype=np.int32),
+        final_pick_i=np.asarray([100, 80, 20, 500], dtype=np.int32),
+        gt_pick_i=gt_pick_i,
+        n_traces=4,
+        n_samples_orig=1000,
+    )
+
+    assert metrics['gt_in_actual_window_rate'] == pytest.approx(1.0 / 3.0)
+    assert metrics['final_pick_R127'] == pytest.approx(2.0 / 3.0)
+    assert metrics['physical_center_R127'] == pytest.approx(1.0 / 3.0)
+
+
+def test_summarize_errors_absent_final_artifact_keeps_stable_columns() -> None:
+    gt_pick_i = np.asarray([100, 200, 300], dtype=np.int64)
+
+    metrics, *_ = physics_qc_cli._summarize_errors(
+        coarse_pick_i=gt_pick_i + 10,
+        robust_pick_i=gt_pick_i,
+        gt_pick_i=gt_pick_i,
+        n_traces=3,
+        n_samples_orig=1000,
+    )
+
+    for column in (
+        'gt_in_actual_window_rate',
+        'final_pick_valid_rate',
+        'final_pick_R32',
+        'final_pick_R64',
+        'final_pick_R127',
+        'final_pick_abs_err_median',
+        'final_pick_abs_err_p90',
+        'final_pick_abs_err_p95',
+    ):
+        assert column in metrics
+        assert np.isnan(metrics[column])
+        assert column in physics_qc_cli.PER_FILE_COLUMNS
+        assert column in physics_qc_cli.GLOBAL_COLUMNS
+
+
+@pytest.mark.parametrize(
+    'kwargs, match',
+    [
+        (
+            {'fine_center_i': np.asarray([100, 200], dtype=np.int32)},
+            'fine_center_i',
+        ),
+        (
+            {'physical_center_i': np.asarray([100, 200], dtype=np.int32)},
+            'physical_center_i',
+        ),
+        (
+            {
+                'window_start_i': np.asarray([0, 0], dtype=np.int32),
+                'window_end_i': np.asarray([255, 255, 255], dtype=np.int32),
+                'final_pick_i': np.asarray([100, 200, 300], dtype=np.int32),
+            },
+            'window_start_i',
+        ),
+    ],
+)
+def test_summarize_errors_optional_shape_mismatch_fails(
+    kwargs: dict[str, np.ndarray],
+    match: str,
+) -> None:
+    gt_pick_i = np.asarray([100, 200, 300], dtype=np.int64)
+
+    with pytest.raises(ValueError, match=match):
+        physics_qc_cli._summarize_errors(
+            coarse_pick_i=gt_pick_i,
+            robust_pick_i=gt_pick_i,
+            gt_pick_i=gt_pick_i,
+            n_traces=3,
+            n_samples_orig=1000,
+            **kwargs,
+        )

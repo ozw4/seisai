@@ -23,6 +23,29 @@ __all__ = ['main', 'run_pipeline']
 DT_SEC_ATOL = 1e-9
 
 
+OPTIONAL_SUMMARY_METRIC_COLUMNS = [
+	'fine_center_R32',
+	'fine_center_R64',
+	'fine_center_R127',
+	'fine_center_abs_err_median',
+	'fine_center_abs_err_p90',
+	'fine_center_abs_err_p95',
+	'fine_center_delta_p90_vs_robust',
+	'fine_center_delta_p95_vs_robust',
+	'physical_center_R127',
+	'physical_center_abs_err_p90',
+	'physical_center_abs_err_p95',
+	'gt_in_actual_window_rate',
+	'final_pick_valid_rate',
+	'final_pick_R32',
+	'final_pick_R64',
+	'final_pick_R127',
+	'final_pick_abs_err_median',
+	'final_pick_abs_err_p90',
+	'final_pick_abs_err_p95',
+]
+
+
 PER_FILE_COLUMNS = [
 	'scope',
 	'segy_path',
@@ -46,6 +69,7 @@ PER_FILE_COLUMNS = [
 	'robust_abs_err_p95',
 	'delta_p90',
 	'delta_p95',
+	*OPTIONAL_SUMMARY_METRIC_COLUMNS,
 	'physical_model_status_counts',
 	'physical_model_failure_reason_counts',
 ]
@@ -68,6 +92,7 @@ GLOBAL_COLUMNS = [
 	'robust_abs_err_p95',
 	'delta_p90',
 	'delta_p95',
+	*OPTIONAL_SUMMARY_METRIC_COLUMNS,
 	'physical_model_status_counts',
 	'physical_model_failure_reason_counts',
 ]
@@ -691,6 +716,59 @@ def _percentile(values: np.ndarray, q: float) -> float:
 	return float(np.percentile(values.astype(np.float64), float(q)))
 
 
+def _require_int_trace_vector(
+	name: str,
+	value: np.ndarray,
+	*,
+	length: int,
+) -> np.ndarray:
+	arr = np.asarray(value, dtype=np.int64)
+	if arr.ndim != 1 or int(arr.shape[0]) != int(length):
+		msg = f'{name} must be 1D with length {int(length)}'
+		raise ValueError(msg)
+	return arr
+
+
+def _optional_int_trace_vector(
+	name: str,
+	value: np.ndarray | None,
+	*,
+	length: int,
+) -> np.ndarray | None:
+	if value is None:
+		return None
+	return _require_int_trace_vector(name, value, length=length)
+
+
+def _center_r127_mask(center_i: np.ndarray, gt_pick_i: np.ndarray) -> np.ndarray:
+	center = np.asarray(center_i, dtype=np.int64)
+	gt = np.asarray(gt_pick_i, dtype=np.int64)
+	return (gt >= center - 128) & (gt <= center + 127)
+
+
+def _empty_optional_summary_arrays() -> dict[str, np.ndarray | None]:
+	return {
+		'fine_center_abs_err': None,
+		'fine_center_robust_abs_err': None,
+		'fine_center_r127': None,
+		'physical_center_abs_err': None,
+		'physical_center_r127': None,
+		'gt_in_actual_window': None,
+		'final_pick_valid': None,
+		'final_pick_abs_err': None,
+	}
+
+
+def _empty_optional_metrics() -> dict[str, float]:
+	return {key: float('nan') for key in OPTIONAL_SUMMARY_METRIC_COLUMNS}
+
+
+def _concat_optional_arrays(arrays: list[np.ndarray]) -> np.ndarray | None:
+	if not arrays:
+		return None
+	return np.concatenate(arrays, axis=0)
+
+
 def _format_value(value: object) -> object:
 	if isinstance(value, float):
 		if np.isnan(value):
@@ -743,17 +821,70 @@ def _summarize_errors(
 	gt_pick_i: np.ndarray,
 	n_traces: int,
 	n_samples_orig: int,
-) -> tuple[dict[str, Any], np.ndarray, np.ndarray, np.ndarray]:
-	valid = (gt_pick_i > 0) & (gt_pick_i < int(n_samples_orig))
-	coarse_abs_err = np.abs(coarse_pick_i[valid].astype(np.int64) - gt_pick_i[valid])
-	robust_abs_err = np.abs(robust_pick_i[valid].astype(np.int64) - gt_pick_i[valid])
-	r127 = (gt_pick_i[valid] >= robust_pick_i[valid].astype(np.int64) - 128) & (
-		gt_pick_i[valid] <= robust_pick_i[valid].astype(np.int64) + 127
+	physical_center_i: np.ndarray | None = None,
+	fine_center_i: np.ndarray | None = None,
+	window_start_i: np.ndarray | None = None,
+	window_end_i: np.ndarray | None = None,
+	final_pick_i: np.ndarray | None = None,
+) -> tuple[
+	dict[str, Any],
+	np.ndarray,
+	np.ndarray,
+	np.ndarray,
+	dict[str, np.ndarray | None],
+]:
+	coarse_pick = _require_int_trace_vector(
+		'coarse_pick_i',
+		coarse_pick_i,
+		length=n_traces,
 	)
+	robust_pick = _require_int_trace_vector(
+		'robust_pick_i',
+		robust_pick_i,
+		length=n_traces,
+	)
+	gt_pick = _require_int_trace_vector('gt_pick_i', gt_pick_i, length=n_traces)
+	physical_center = _optional_int_trace_vector(
+		'physical_center_i',
+		physical_center_i,
+		length=n_traces,
+	)
+	fine_center = _optional_int_trace_vector(
+		'fine_center_i',
+		fine_center_i,
+		length=n_traces,
+	)
+	final_values = (window_start_i, window_end_i, final_pick_i)
+	if any(value is not None for value in final_values) and not all(
+		value is not None for value in final_values
+	):
+		msg = 'window_start_i, window_end_i, and final_pick_i must be provided together'
+		raise ValueError(msg)
+	window_start = _optional_int_trace_vector(
+		'window_start_i',
+		window_start_i,
+		length=n_traces,
+	)
+	window_end = _optional_int_trace_vector(
+		'window_end_i',
+		window_end_i,
+		length=n_traces,
+	)
+	final_pick = _optional_int_trace_vector(
+		'final_pick_i',
+		final_pick_i,
+		length=n_traces,
+	)
+	valid = (gt_pick > 0) & (gt_pick < int(n_samples_orig))
+	valid_gt = gt_pick[valid]
+	coarse_abs_err = np.abs(coarse_pick[valid] - valid_gt)
+	robust_abs_err = np.abs(robust_pick[valid] - valid_gt)
+	r127 = _center_r127_mask(robust_pick[valid], valid_gt)
 	coarse_p90 = _percentile(coarse_abs_err, 90.0)
 	coarse_p95 = _percentile(coarse_abs_err, 95.0)
 	robust_p90 = _percentile(robust_abs_err, 90.0)
 	robust_p95 = _percentile(robust_abs_err, 95.0)
+	summary_arrays = _empty_optional_summary_arrays()
 	metrics = {
 		'fine_ready': bool(int(valid.sum()) > 0 and np.all(r127)),
 		'n_traces': int(n_traces),
@@ -770,8 +901,68 @@ def _summarize_errors(
 		'robust_abs_err_p95': robust_p95,
 		'delta_p90': robust_p90 - coarse_p90,
 		'delta_p95': robust_p95 - coarse_p95,
+		**_empty_optional_metrics(),
 	}
-	return metrics, coarse_abs_err, robust_abs_err, r127
+	if fine_center is not None:
+		fine_abs_err = np.abs(fine_center[valid] - valid_gt)
+		fine_r127 = _center_r127_mask(fine_center[valid], valid_gt)
+		fine_p90 = _percentile(fine_abs_err, 90.0)
+		fine_p95 = _percentile(fine_abs_err, 95.0)
+		metrics.update(
+			{
+				'fine_center_R32': _rate(fine_abs_err <= 32),
+				'fine_center_R64': _rate(fine_abs_err <= 64),
+				'fine_center_R127': _rate(fine_r127),
+				'fine_center_abs_err_median': _percentile(fine_abs_err, 50.0),
+				'fine_center_abs_err_p90': fine_p90,
+				'fine_center_abs_err_p95': fine_p95,
+				'fine_center_delta_p90_vs_robust': fine_p90 - robust_p90,
+				'fine_center_delta_p95_vs_robust': fine_p95 - robust_p95,
+			}
+		)
+		summary_arrays['fine_center_abs_err'] = fine_abs_err
+		summary_arrays['fine_center_robust_abs_err'] = robust_abs_err
+		summary_arrays['fine_center_r127'] = fine_r127
+	if physical_center is not None:
+		physical_abs_err = np.abs(physical_center[valid] - valid_gt)
+		physical_r127 = _center_r127_mask(physical_center[valid], valid_gt)
+		metrics.update(
+			{
+				'physical_center_R127': _rate(physical_r127),
+				'physical_center_abs_err_p90': _percentile(
+					physical_abs_err,
+					90.0,
+				),
+				'physical_center_abs_err_p95': _percentile(
+					physical_abs_err,
+					95.0,
+				),
+			}
+		)
+		summary_arrays['physical_center_abs_err'] = physical_abs_err
+		summary_arrays['physical_center_r127'] = physical_r127
+	if window_start is not None and window_end is not None and final_pick is not None:
+		gt_in_actual_window = (window_start[valid] <= valid_gt) & (
+			valid_gt <= window_end[valid]
+		)
+		final_pick_valid = (final_pick > 0) & (final_pick < int(n_samples_orig))
+		final_abs_err = np.abs(final_pick[valid] - valid_gt)
+		metrics.update(
+			{
+				'gt_in_actual_window_rate': _rate(gt_in_actual_window),
+				'final_pick_valid_rate': _rate(final_pick_valid),
+				'final_pick_R32': _rate(final_abs_err <= 32),
+				'final_pick_R64': _rate(final_abs_err <= 64),
+				'final_pick_R127': _rate(final_abs_err <= 127),
+				'final_pick_abs_err_median': _percentile(final_abs_err, 50.0),
+				'final_pick_abs_err_p90': _percentile(final_abs_err, 90.0),
+				'final_pick_abs_err_p95': _percentile(final_abs_err, 95.0),
+			}
+		)
+		summary_arrays['gt_in_actual_window'] = gt_in_actual_window
+		summary_arrays['final_pick_valid'] = final_pick_valid
+		summary_arrays['final_pick_abs_err'] = final_abs_err
+	return metrics, coarse_abs_err, robust_abs_err, r127, summary_arrays
 
 
 def _build_info(
@@ -828,6 +1019,14 @@ def run_pipeline(config_path: str | Path) -> Path:
 	all_coarse_abs_err: list[np.ndarray] = []
 	all_robust_abs_err: list[np.ndarray] = []
 	all_r127: list[np.ndarray] = []
+	all_fine_center_abs_err: list[np.ndarray] = []
+	all_fine_center_robust_abs_err: list[np.ndarray] = []
+	all_fine_center_r127: list[np.ndarray] = []
+	all_physical_center_abs_err: list[np.ndarray] = []
+	all_physical_center_r127: list[np.ndarray] = []
+	all_gt_in_actual_window: list[np.ndarray] = []
+	all_final_pick_valid: list[np.ndarray] = []
+	all_final_pick_abs_err: list[np.ndarray] = []
 	all_physical_model_status: list[np.ndarray] = []
 	all_physical_model_failure_reason: list[np.ndarray] = []
 	total_traces = 0
@@ -887,12 +1086,23 @@ def run_pipeline(config_path: str | Path) -> Path:
 				if 'coarse_pmax' in coarse
 				else None
 			)
-			metrics, coarse_abs_err, robust_abs_err, r127 = _summarize_errors(
+			(
+				metrics,
+				coarse_abs_err,
+				robust_abs_err,
+				r127,
+				optional_summary_arrays,
+			) = _summarize_errors(
 				coarse_pick_i=coarse_pick_i,
 				robust_pick_i=robust_pick_i,
 				gt_pick_i=gt_pick_i,
 				n_traces=n_traces,
 				n_samples_orig=n_samples_orig,
+				physical_center_i=robust.get('physical_center_i'),
+				fine_center_i=robust.get('fine_center_i'),
+				window_start_i=None if final is None else final.get('window_start_i'),
+				window_end_i=None if final is None else final.get('window_end_i'),
+				final_pick_i=None if final is None else final.get('final_pick_i'),
 			)
 			_save_vis_pngs(
 				info=info,
@@ -947,6 +1157,34 @@ def run_pipeline(config_path: str | Path) -> Path:
 		all_coarse_abs_err.append(coarse_abs_err)
 		all_robust_abs_err.append(robust_abs_err)
 		all_r127.append(r127)
+		if optional_summary_arrays['fine_center_abs_err'] is not None:
+			all_fine_center_abs_err.append(
+				optional_summary_arrays['fine_center_abs_err']
+			)
+		if optional_summary_arrays['fine_center_robust_abs_err'] is not None:
+			all_fine_center_robust_abs_err.append(
+				optional_summary_arrays['fine_center_robust_abs_err']
+			)
+		if optional_summary_arrays['fine_center_r127'] is not None:
+			all_fine_center_r127.append(optional_summary_arrays['fine_center_r127'])
+		if optional_summary_arrays['physical_center_abs_err'] is not None:
+			all_physical_center_abs_err.append(
+				optional_summary_arrays['physical_center_abs_err']
+			)
+		if optional_summary_arrays['physical_center_r127'] is not None:
+			all_physical_center_r127.append(
+				optional_summary_arrays['physical_center_r127']
+			)
+		if optional_summary_arrays['gt_in_actual_window'] is not None:
+			all_gt_in_actual_window.append(
+				optional_summary_arrays['gt_in_actual_window']
+			)
+		if optional_summary_arrays['final_pick_valid'] is not None:
+			all_final_pick_valid.append(optional_summary_arrays['final_pick_valid'])
+		if optional_summary_arrays['final_pick_abs_err'] is not None:
+			all_final_pick_abs_err.append(
+				optional_summary_arrays['final_pick_abs_err']
+			)
 		if physical_model_status is not None:
 			all_physical_model_status.append(physical_model_status)
 		if physical_model_failure_reason is not None:
@@ -962,6 +1200,18 @@ def run_pipeline(config_path: str | Path) -> Path:
 	global_coarse_p95 = _percentile(global_coarse_abs_err, 95.0)
 	global_robust_p90 = _percentile(global_robust_abs_err, 90.0)
 	global_robust_p95 = _percentile(global_robust_abs_err, 95.0)
+	global_fine_center_abs_err = _concat_optional_arrays(all_fine_center_abs_err)
+	global_fine_center_robust_abs_err = _concat_optional_arrays(
+		all_fine_center_robust_abs_err
+	)
+	global_fine_center_r127 = _concat_optional_arrays(all_fine_center_r127)
+	global_physical_center_abs_err = _concat_optional_arrays(
+		all_physical_center_abs_err
+	)
+	global_physical_center_r127 = _concat_optional_arrays(all_physical_center_r127)
+	global_gt_in_actual_window = _concat_optional_arrays(all_gt_in_actual_window)
+	global_final_pick_valid = _concat_optional_arrays(all_final_pick_valid)
+	global_final_pick_abs_err = _concat_optional_arrays(all_final_pick_abs_err)
 	global_physical_model_status = (
 		np.concatenate(all_physical_model_status, axis=0)
 		if all_physical_model_status
@@ -990,6 +1240,7 @@ def run_pipeline(config_path: str | Path) -> Path:
 		'robust_abs_err_p95': global_robust_p95,
 		'delta_p90': global_robust_p90 - global_coarse_p90,
 		'delta_p95': global_robust_p95 - global_coarse_p95,
+		**_empty_optional_metrics(),
 		'physical_model_status_counts': _format_uint8_counts(
 			global_physical_model_status,
 			labels=PHYSICAL_MODEL_STATUS_LABELS,
@@ -999,6 +1250,83 @@ def run_pipeline(config_path: str | Path) -> Path:
 			labels=PHYSICAL_MODEL_FAILURE_LABELS,
 		),
 	}
+	if (
+		global_fine_center_abs_err is not None
+		and global_fine_center_robust_abs_err is not None
+		and global_fine_center_r127 is not None
+	):
+		global_fine_p90 = _percentile(global_fine_center_abs_err, 90.0)
+		global_fine_p95 = _percentile(global_fine_center_abs_err, 95.0)
+		global_fine_robust_p90 = _percentile(
+			global_fine_center_robust_abs_err,
+			90.0,
+		)
+		global_fine_robust_p95 = _percentile(
+			global_fine_center_robust_abs_err,
+			95.0,
+		)
+		global_row.update(
+			{
+				'fine_center_R32': _rate(global_fine_center_abs_err <= 32),
+				'fine_center_R64': _rate(global_fine_center_abs_err <= 64),
+				'fine_center_R127': _rate(global_fine_center_r127),
+				'fine_center_abs_err_median': _percentile(
+					global_fine_center_abs_err,
+					50.0,
+				),
+				'fine_center_abs_err_p90': global_fine_p90,
+				'fine_center_abs_err_p95': global_fine_p95,
+				'fine_center_delta_p90_vs_robust': (
+					global_fine_p90 - global_fine_robust_p90
+				),
+				'fine_center_delta_p95_vs_robust': (
+					global_fine_p95 - global_fine_robust_p95
+				),
+			}
+		)
+	if (
+		global_physical_center_abs_err is not None
+		and global_physical_center_r127 is not None
+	):
+		global_row.update(
+			{
+				'physical_center_R127': _rate(global_physical_center_r127),
+				'physical_center_abs_err_p90': _percentile(
+					global_physical_center_abs_err,
+					90.0,
+				),
+				'physical_center_abs_err_p95': _percentile(
+					global_physical_center_abs_err,
+					95.0,
+				),
+			}
+		)
+	if (
+		global_gt_in_actual_window is not None
+		and global_final_pick_valid is not None
+		and global_final_pick_abs_err is not None
+	):
+		global_row.update(
+			{
+				'gt_in_actual_window_rate': _rate(global_gt_in_actual_window),
+				'final_pick_valid_rate': _rate(global_final_pick_valid),
+				'final_pick_R32': _rate(global_final_pick_abs_err <= 32),
+				'final_pick_R64': _rate(global_final_pick_abs_err <= 64),
+				'final_pick_R127': _rate(global_final_pick_abs_err <= 127),
+				'final_pick_abs_err_median': _percentile(
+					global_final_pick_abs_err,
+					50.0,
+				),
+				'final_pick_abs_err_p90': _percentile(
+					global_final_pick_abs_err,
+					90.0,
+				),
+				'final_pick_abs_err_p95': _percentile(
+					global_final_pick_abs_err,
+					95.0,
+				),
+			}
+		)
 
 	summary_per_file_path = out_dir / 'summary_per_file.csv'
 	summary_global_path = out_dir / 'summary_global.csv'
