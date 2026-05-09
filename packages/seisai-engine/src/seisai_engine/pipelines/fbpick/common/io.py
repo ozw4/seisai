@@ -10,6 +10,9 @@ from .artifacts import (
     COARSE_REQUIRED_KEYS,
     FINAL_REQUIRED_KEYS,
     FINE_RESULT_REQUIRED_KEYS,
+    ROBUST_CENTER_OPTIONAL_KEYS,
+    ROBUST_OPTIONAL_KEYS,
+    ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
     ROBUST_PHYSICAL_OPTIONAL_KEYS,
     ROBUST_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
@@ -23,6 +26,9 @@ __all__ = [
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
     'FINE_RESULT_REQUIRED_KEYS',
+    'ROBUST_CENTER_OPTIONAL_KEYS',
+    'ROBUST_OPTIONAL_KEYS',
+    'ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS',
     'ROBUST_PHYSICAL_OPTIONAL_KEYS',
     'ROBUST_REQUIRED_KEYS',
     'build_fbpick_final_payload',
@@ -272,20 +278,29 @@ def _require_payload_vector(
     return arr
 
 
-_ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = (
-    ('physical_model_status', np.uint8),
-    ('physical_model_failure_reason', np.uint8),
-    ('physical_model_break_offset_m', np.float32),
-    ('physical_model_slope_near_s_per_m', np.float32),
-    ('physical_model_slope_far_s_per_m', np.float32),
-    ('physical_model_velocity_near_m_s', np.float32),
-    ('physical_model_velocity_far_m_s', np.float32),
-    ('physical_model_neighbor_count', np.int32),
-    ('physical_prefilter_valid_count', np.int32),
-    ('physical_model_segment_id', np.int32),
-    ('physical_model_side', np.int8),
-    ('physical_model_resid_p50_ms', np.float32),
-    ('physical_model_resid_p90_ms', np.float32),
+_ROBUST_CENTER_OPTIONAL_KEY_PAIRS = tuple(
+    zip(ROBUST_CENTER_OPTIONAL_KEYS[0::2], ROBUST_CENTER_OPTIONAL_KEYS[1::2])
+)
+
+_ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
+    'physical_model_status': np.uint8,
+    'physical_model_failure_reason': np.uint8,
+    'physical_model_break_offset_m': np.float32,
+    'physical_model_slope_near_s_per_m': np.float32,
+    'physical_model_slope_far_s_per_m': np.float32,
+    'physical_model_velocity_near_m_s': np.float32,
+    'physical_model_velocity_far_m_s': np.float32,
+    'physical_model_neighbor_count': np.int32,
+    'physical_prefilter_valid_count': np.int32,
+    'physical_model_segment_id': np.int32,
+    'physical_model_side': np.int8,
+    'physical_model_resid_p50_ms': np.float32,
+    'physical_model_resid_p90_ms': np.float32,
+}
+
+_ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = tuple(
+    (key, _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES[key])
+    for key in ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS
 )
 
 
@@ -603,11 +618,7 @@ def save_robust_npz(
         'fine_center_i': fine_center_i,
         'fine_center_t_sec': fine_center_t_sec,
     }
-    for pick_key, time_key in (
-        ('trend_center_i', 'trend_center_t_sec'),
-        ('physical_center_i', 'physical_center_t_sec'),
-        ('fine_center_i', 'fine_center_t_sec'),
-    ):
+    for pick_key, time_key in _ROBUST_CENTER_OPTIONAL_KEY_PAIRS:
         pick_value = optional_center_values[pick_key]
         time_value = optional_center_values[time_key]
         if pick_value is None and time_value is None:
@@ -747,11 +758,7 @@ def load_robust_npz(path: str | Path) -> dict[str, np.ndarray]:
             raise ValueError(msg)
         _require_exact_dtype(key, arr, dtype=dtype)
 
-    for pick_key, time_key in (
-        ('trend_center_i', 'trend_center_t_sec'),
-        ('physical_center_i', 'physical_center_t_sec'),
-        ('fine_center_i', 'fine_center_t_sec'),
-    ):
+    for pick_key, time_key in _ROBUST_CENTER_OPTIONAL_KEY_PAIRS:
         if pick_key not in out and time_key not in out:
             continue
         if pick_key not in out or time_key not in out:

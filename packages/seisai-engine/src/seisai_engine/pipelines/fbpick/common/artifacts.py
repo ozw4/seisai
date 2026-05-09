@@ -60,9 +60,16 @@ ROBUST_REQUIRED_KEYS = (
     'lineage',
 )
 
-ROBUST_PHYSICAL_OPTIONAL_KEYS = (
+ROBUST_CENTER_OPTIONAL_KEYS = (
+    'trend_center_i',
+    'trend_center_t_sec',
     'physical_center_i',
     'physical_center_t_sec',
+    'fine_center_i',
+    'fine_center_t_sec',
+)
+
+ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS = (
     'physical_model_status',
     'physical_model_failure_reason',
     'physical_model_break_offset_m',
@@ -77,6 +84,13 @@ ROBUST_PHYSICAL_OPTIONAL_KEYS = (
     'physical_model_resid_p50_ms',
     'physical_model_resid_p90_ms',
 )
+
+ROBUST_OPTIONAL_KEYS = (
+    *ROBUST_CENTER_OPTIONAL_KEYS,
+    *ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
+)
+
+ROBUST_PHYSICAL_OPTIONAL_KEYS = ROBUST_OPTIONAL_KEYS
 
 FINE_RESULT_REQUIRED_KEYS = (
     'dt_sec',
@@ -149,6 +163,9 @@ __all__ = [
     'REASON_MASK_INFEASIBLE',
     'REASON_MASK_LABELS',
     'REASON_MASK_LOW_SCORE',
+    'ROBUST_CENTER_OPTIONAL_KEYS',
+    'ROBUST_OPTIONAL_KEYS',
+    'ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS',
     'ROBUST_REQUIRED_KEYS',
     'ROBUST_PHYSICAL_OPTIONAL_KEYS',
     'ROBUST_SOURCE_COARSE_OBSERVED',

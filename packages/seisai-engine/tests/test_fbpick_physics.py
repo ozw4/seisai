@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -12,6 +13,9 @@ from seisai_engine.pipelines.fbpick.common import (
     REASON_MASK_FILLED_FROM_TREND,
     REASON_MASK_INFEASIBLE,
     REASON_MASK_LOW_SCORE,
+    ROBUST_CENTER_OPTIONAL_KEYS,
+    ROBUST_OPTIONAL_KEYS,
+    ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
     ROBUST_PHYSICAL_OPTIONAL_KEYS,
     ROBUST_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
@@ -132,6 +136,53 @@ def _make_robust_payload() -> dict[str, np.ndarray]:
         'conf_rs1': np.array([1.0, 1.0, 1.0], dtype=np.float32),
         'lineage': np.asarray(
             '{"iter_id":"","source_model_id":"x","cfg_hash":"y","git_sha":"z"}'
+        ),
+    }
+
+
+def _make_robust_optional_payload() -> dict[str, np.ndarray]:
+    center_i = np.array([100, 105, 110], dtype=np.int32)
+    center_t_sec = center_i.astype(np.float32) * np.float32(0.004)
+    return {
+        'trend_center_i': center_i,
+        'trend_center_t_sec': center_t_sec,
+        'physical_center_i': center_i,
+        'physical_center_t_sec': center_t_sec,
+        'fine_center_i': center_i,
+        'fine_center_t_sec': center_t_sec,
+        'physical_model_status': np.array([0, 1, 2], dtype=np.uint8),
+        'physical_model_failure_reason': np.array([0, 2, 3], dtype=np.uint8),
+        'physical_model_break_offset_m': np.array(
+            [500.0, np.nan, 600.0],
+            dtype=np.float32,
+        ),
+        'physical_model_slope_near_s_per_m': np.array(
+            [0.001, np.nan, 0.0012],
+            dtype=np.float32,
+        ),
+        'physical_model_slope_far_s_per_m': np.array(
+            [0.0004, np.nan, 0.0005],
+            dtype=np.float32,
+        ),
+        'physical_model_velocity_near_m_s': np.array(
+            [1000.0, np.nan, 833.0],
+            dtype=np.float32,
+        ),
+        'physical_model_velocity_far_m_s': np.array(
+            [2500.0, np.nan, 2000.0],
+            dtype=np.float32,
+        ),
+        'physical_model_neighbor_count': np.array([3, 3, 3], dtype=np.int32),
+        'physical_prefilter_valid_count': np.array([8, 8, 8], dtype=np.int32),
+        'physical_model_segment_id': np.array([0, -1, 0], dtype=np.int32),
+        'physical_model_side': np.array([1, 0, 1], dtype=np.int8),
+        'physical_model_resid_p50_ms': np.array(
+            [1.0, np.nan, 2.0],
+            dtype=np.float32,
+        ),
+        'physical_model_resid_p90_ms': np.array(
+            [3.0, np.nan, 4.0],
+            dtype=np.float32,
         ),
     }
 
@@ -718,6 +769,37 @@ def test_save_and_load_robust_npz_preserve_contract(tmp_path: Path) -> None:
             np.testing.assert_array_equal(loaded[key], value)
 
 
+def test_robust_optional_schema_constants_match_io_fields() -> None:
+    handled_optional = {
+        name
+        for name, parameter in inspect.signature(save_robust_npz).parameters.items()
+        if parameter.default is None
+    }
+
+    assert 'fine_center_i' in ROBUST_CENTER_OPTIONAL_KEYS
+    assert 'fine_center_t_sec' in ROBUST_CENTER_OPTIONAL_KEYS
+    assert ROBUST_OPTIONAL_KEYS == (
+        *ROBUST_CENTER_OPTIONAL_KEYS,
+        *ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
+    )
+    assert set(ROBUST_OPTIONAL_KEYS) == handled_optional
+    assert ROBUST_PHYSICAL_OPTIONAL_KEYS == ROBUST_OPTIONAL_KEYS
+
+
+def test_save_and_load_robust_npz_preserve_all_optional_fields(tmp_path: Path) -> None:
+    payload = {
+        **_make_robust_payload(),
+        **_make_robust_optional_payload(),
+    }
+
+    out_path = save_robust_npz(tmp_path / 'all_optional.robust.npz', **payload)
+    loaded = load_robust_npz(out_path)
+
+    assert set(ROBUST_OPTIONAL_KEYS).issubset(loaded.keys())
+    for key in ROBUST_OPTIONAL_KEYS:
+        np.testing.assert_array_equal(loaded[key], payload[key])
+
+
 def test_save_and_load_robust_npz_preserve_optional_center_fields(tmp_path: Path) -> None:
     center_i = np.array([100, 105, 110], dtype=np.int32)
     center_t_sec = center_i.astype(np.float32) * np.float32(0.004)
@@ -798,8 +880,8 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
     out_path = save_robust_npz(tmp_path / 'physical.robust.npz', **payload)
     loaded = load_robust_npz(out_path)
 
-    assert set(ROBUST_PHYSICAL_OPTIONAL_KEYS).issubset(loaded.keys())
-    for key in ROBUST_PHYSICAL_OPTIONAL_KEYS:
+    assert set(ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS).issubset(loaded.keys())
+    for key in ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS:
         np.testing.assert_array_equal(loaded[key], payload[key])
 
 
