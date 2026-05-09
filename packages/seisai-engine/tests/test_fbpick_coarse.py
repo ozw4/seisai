@@ -863,6 +863,50 @@ def test_global_anchor_raw_infer_dataset_returns_fixed_shape_without_target(
     assert not np.any(trace_valid[n_traces:])
 
 
+def test_global_anchor_raw_infer_dataset_survives_geometry_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from seisai_dataset import file_info as file_info_mod
+
+    n_traces = 16
+    n_samples = 32
+    traces = np.stack(
+        [
+            np.linspace(-1.0, 1.0, n_samples, dtype=np.float32) + i
+            for i in range(n_traces)
+        ],
+        axis=0,
+    )
+    segy_path = str(tmp_path / 'raw_global_geometry_failure.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+
+    def fail_geometry(*args, **kwargs):
+        raise RuntimeError('synthetic geometry failure')
+
+    monkeypatch.setattr(file_info_mod, 'read_geometry_arrays_from_segy', fail_geometry)
+
+    ds = build_raw_infer_dataset(
+        segy_files=[segy_path],
+        plan=_make_plan(),
+        trace_len=256,
+        time_len=2048,
+        standardize_eps=1.0e-8,
+        gap_ratio=5.0,
+        min_gap_m=None,
+        primary_keys=('ffid',),
+        waveform_mode='eager',
+        segy_endian='big',
+        use_header_cache=False,
+    )
+    try:
+        info = ds.file_infos[0]
+        assert not np.any(info['geometry_valid_mask'])
+        assert np.all(np.isnan(info['offset_abs_geom_m']))
+    finally:
+        ds.close()
+
+
 def test_global_anchor_raw_infer_loader_stacks_fixed_shape(tmp_path: Path) -> None:
     n_traces = 256
     n_samples = 2048

@@ -423,6 +423,8 @@ class GlobalAnchorCoarseRawInferDataset(Dataset):
                 header_cache_dir=None,
                 use_header_cache=bool(use_header_cache),
                 include_centroids=False,
+                include_geometry_arrays=True,
+                coord_unit_scale_to_m=1.0,
                 waveform_mode=str(waveform_mode),
                 segy_endian=str(segy_endian),
             )

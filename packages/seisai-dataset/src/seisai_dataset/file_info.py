@@ -8,6 +8,13 @@ from typing import Literal, cast
 import numpy as np
 import segyio
 
+from .geometry_headers import (
+    GEOMETRY_ARRAY_KEYS,
+    GEOMETRY_CACHE_SCALE_KEY,
+    invalid_geometry_arrays,
+    read_geometry_arrays_from_segy,
+)
+
 logger = logging.getLogger(__name__)
 
 WaveformMode = Literal['eager', 'mmap']
@@ -85,6 +92,12 @@ class FileInfo:
     offsets: np.ndarray
     ffid_centroids: dict[int, tuple[float, float]] | None
     chno_centroids: dict[int, tuple[float, float]] | None
+    source_x_m: np.ndarray | None = None
+    source_y_m: np.ndarray | None = None
+    receiver_x_m: np.ndarray | None = None
+    receiver_y_m: np.ndarray | None = None
+    offset_abs_geom_m: np.ndarray | None = None
+    geometry_valid_mask: np.ndarray | None = None
     fb: np.ndarray | None = None
     # Optional CSR phase picks (PhaseNet-style training). Stored as raw arrays to keep
     # file_info pickle/lightweight and avoid carrying variable-length lists in outputs.
@@ -123,6 +136,8 @@ def load_headers_with_cache(
     cache_dir: str | None = None,
     rebuild: bool = False,
     segy_endian: str = 'big',
+    include_geometry_arrays: bool = False,
+    coord_unit_scale_to_m: float = 1.0,
 ):
     """Load SEG-Y header fields with a small npz cache.
     Logs via `logging` (no print/warnings).
@@ -142,18 +157,61 @@ def load_headers_with_cache(
             and cache_p.exists()
             and cache_p.stat().st_mtime >= segy_p.stat().st_mtime
         ):
-            z = np.load(cache_p, allow_pickle=False)
-            meta = {
-                'ffid_values': z['ffid_values'],
-                'chno_values': z['chno_values'],
-                'cmp_values': (z['cmp_values'] if 'cmp_values' in z.files else None),
-                'offsets': z['offsets'],
-                'dt_us': int(z['dt_us']),
-                'n_traces': int(z['n_traces']),
-                'n_samples': int(z['n_samples']),
-            }
-            logger.info('Loaded header cache: %s', cache_p)
-            return meta
+            with np.load(cache_p, allow_pickle=False) as z:
+                missing_geometry_keys = [
+                    key for key in GEOMETRY_ARRAY_KEYS if key not in z.files
+                ]
+                geometry_scale_matches = True
+                if include_geometry_arrays and not missing_geometry_keys:
+                    cached_scale = (
+                        float(z[GEOMETRY_CACHE_SCALE_KEY])
+                        if GEOMETRY_CACHE_SCALE_KEY in z.files
+                        else 1.0
+                    )
+                    geometry_scale_matches = cached_scale == float(
+                        coord_unit_scale_to_m
+                    )
+                if include_geometry_arrays and (
+                    missing_geometry_keys or not geometry_scale_matches
+                ):
+                    if missing_geometry_keys:
+                        logger.info(
+                            'Header cache missing geometry keys (will rebuild): %s',
+                            cache_p,
+                        )
+                    else:
+                        logger.info(
+                            'Header cache geometry scale changed (will rebuild): %s',
+                            cache_p,
+                        )
+                else:
+                    meta = {
+                        'ffid_values': z['ffid_values'],
+                        'chno_values': z['chno_values'],
+                        'cmp_values': (
+                            z['cmp_values'] if 'cmp_values' in z.files else None
+                        ),
+                        'offsets': z['offsets'],
+                        'dt_us': int(z['dt_us']),
+                        'n_traces': int(z['n_traces']),
+                        'n_samples': int(z['n_samples']),
+                    }
+                    if include_geometry_arrays:
+                        n_traces = int(meta['n_traces'])
+                        for key in GEOMETRY_ARRAY_KEYS:
+                            arr = np.asarray(z[key])
+                            if arr.shape != (n_traces,):
+                                msg = (
+                                    f'{key} cache length mismatch: '
+                                    f'got {arr.shape}, want {(n_traces,)}'
+                                )
+                                raise ValueError(msg)
+                            if key == 'geometry_valid_mask':
+                                meta[key] = arr.astype(np.bool_, copy=False)
+                            else:
+                                meta[key] = arr.astype(np.float32, copy=False)
+                    logger.info('Loaded header cache: %s', cache_p)
+                    return meta
     except Exception:
         # broken cache etc. → rebuild
         logger.warning(
@@ -208,6 +266,25 @@ def load_headers_with_cache(
             'n_traces': f.tracecount,
             'n_samples': f.samples.size if f.samples is not None else 0,
         }
+        if include_geometry_arrays:
+            try:
+                meta.update(
+                    read_geometry_arrays_from_segy(
+                        f,
+                        coord_unit_scale_to_m=coord_unit_scale_to_m,
+                    )
+                )
+            except Exception:
+                logger.warning(
+                    'Failed to read geometry headers from %s (NaN-filling).',
+                    segy_path,
+                    exc_info=True,
+                )
+                meta.update(invalid_geometry_arrays(f.tracecount))
+            meta[GEOMETRY_CACHE_SCALE_KEY] = np.asarray(
+                coord_unit_scale_to_m,
+                dtype=np.float64,
+            )
 
     # save cache (atomic-ish replace)
     try:
@@ -272,6 +349,8 @@ def build_file_info(
     header_cache_dir: str | None = None,
     use_header_cache: bool = True,
     include_centroids: bool = False,
+    include_geometry_arrays: bool = False,
+    coord_unit_scale_to_m: float = 1.0,
     waveform_mode: str = 'eager',
     segy_endian: str = 'big',
 ) -> dict:
@@ -284,6 +363,7 @@ def build_file_info(
     - mmap を開いた segyio オブジェクトを保持(caller が close() を呼ぶこと)
     - include_centroids=True の場合、座標が読めたときのみキーごとのセントロイドを付与
     (座標が欠落/不一致なら警告を出して None を格納)
+    - include_geometry_arrays=True の場合、Source/Group 座標と幾何オフセットを付与
 
     Returns (dict):
     path, mmap, segy_obj, dt_sec, n_traces, n_samples,
@@ -308,6 +388,8 @@ def build_file_info(
         cache_dir=(header_cache_dir if use_header_cache else None),
         rebuild=False,
         segy_endian=endian,
+        include_geometry_arrays=bool(include_geometry_arrays),
+        coord_unit_scale_to_m=float(coord_unit_scale_to_m),
     )
     ffid_values = meta['ffid_values']
     chno_values = meta['chno_values']
@@ -345,49 +427,20 @@ def build_file_info(
     if include_centroids:
         # 座標読み出し(失敗/不一致時は警告して None)
         try:
-            srcx = np.asarray(
-                f.attributes(segyio.TraceField.SourceX)[:], dtype=np.float64
+            geometry = read_geometry_arrays_from_segy(
+                f,
+                coord_unit_scale_to_m=float(coord_unit_scale_to_m),
             )
-            srcy = np.asarray(
-                f.attributes(segyio.TraceField.SourceY)[:], dtype=np.float64
+            ffid_centroids = _build_centroids(
+                ffid_key_to_indices,
+                geometry['source_x_m'],
+                geometry['source_y_m'],
             )
-            grx = np.asarray(
-                f.attributes(segyio.TraceField.GroupX)[:], dtype=np.float64
+            chno_centroids = _build_centroids(
+                chno_key_to_indices,
+                geometry['receiver_x_m'],
+                geometry['receiver_y_m'],
             )
-            gry = np.asarray(
-                f.attributes(segyio.TraceField.GroupY)[:], dtype=np.float64
-            )
-
-            scal = np.asarray(
-                f.attributes(segyio.TraceField.SourceGroupScalar)[:], dtype=np.float64
-            )
-            # SEG-Y の SourceGroupScalar: 負値は分母(1/|scal|)
-            scal_arr = np.asarray(scal, dtype=np.float64)
-            scal_eff = np.ones_like(scal_arr, dtype=np.float64)
-
-            pos = scal_arr > 0.0
-            neg = scal_arr < 0.0
-
-            scal_eff[pos] = scal_arr[pos]
-            scal_eff[neg] = 1.0 / np.abs(scal_arr[neg])
-
-            if scal_eff.size not in (1, srcx.size):
-                msg = 'SourceGroupScalar size mismatch'
-                raise ValueError(msg)
-            if scal_eff.size == 1:
-                s = float(scal_eff.reshape(()))
-                srcx *= s
-                srcy *= s
-                grx *= s
-                gry *= s
-            else:
-                srcx *= scal_eff
-                srcy *= scal_eff
-                grx *= scal_eff
-                gry *= scal_eff
-
-            ffid_centroids = _build_centroids(ffid_key_to_indices, srcx, srcy)
-            chno_centroids = _build_centroids(chno_key_to_indices, grx, gry)
         except Exception as e:
             logger.warning(
                 'centroids disabled (coordinate read failed): %s', e, exc_info=True
@@ -395,7 +448,7 @@ def build_file_info(
             ffid_centroids = None
             chno_centroids = None
 
-    return {
+    info = {
         'path': segy_path,
         'mmap': mmap,
         'segy_obj': f,
@@ -417,6 +470,10 @@ def build_file_info(
         'ffid_centroids': ffid_centroids,
         'chno_centroids': chno_centroids,
     }
+    if include_geometry_arrays:
+        for key in GEOMETRY_ARRAY_KEYS:
+            info[key] = meta[key]
+    return info
 
 
 def build_file_info_dataclass(
@@ -428,6 +485,8 @@ def build_file_info_dataclass(
     header_cache_dir: str | None = None,
     use_header_cache: bool = True,
     include_centroids: bool = False,
+    include_geometry_arrays: bool = False,
+    coord_unit_scale_to_m: float = 1.0,
     waveform_mode: str = 'eager',
     segy_endian: str = 'big',
 ) -> FileInfo:
@@ -439,6 +498,8 @@ def build_file_info_dataclass(
         header_cache_dir=header_cache_dir,
         use_header_cache=use_header_cache,
         include_centroids=include_centroids,
+        include_geometry_arrays=include_geometry_arrays,
+        coord_unit_scale_to_m=coord_unit_scale_to_m,
         waveform_mode=waveform_mode,
         segy_endian=segy_endian,
     )
