@@ -27,6 +27,15 @@ COARSE_REQUIRED_KEYS = (
     'lineage',
 )
 
+COARSE_GEOMETRY_OPTIONAL_KEYS = (
+    'source_x_m',
+    'source_y_m',
+    'receiver_x_m',
+    'receiver_y_m',
+    'offset_abs_geom_m',
+    'geometry_valid_mask',
+)
+
 ROBUST_REQUIRED_KEYS = (
     'dt_sec',
     'n_samples_orig',
@@ -109,6 +118,7 @@ REASON_MASK_LABELS = {
 }
 
 __all__ = [
+    'COARSE_GEOMETRY_OPTIONAL_KEYS',
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
     'FINE_RESULT_REQUIRED_KEYS',

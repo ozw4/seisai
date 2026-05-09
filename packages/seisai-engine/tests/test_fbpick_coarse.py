@@ -27,7 +27,11 @@ from seisai_engine.pipelines.fbpick.coarse.infer import (
     validate_coarse_npz_payload,
     validate_checkpoint_for_global_anchor_infer,
 )
-from seisai_engine.pipelines.fbpick.common import COARSE_REQUIRED_KEYS, load_coarse_npz
+from seisai_engine.pipelines.fbpick.common import (
+    COARSE_GEOMETRY_OPTIONAL_KEYS,
+    COARSE_REQUIRED_KEYS,
+    load_coarse_npz,
+)
 from seisai_engine.train_loop import train_one_epoch
 from torch.utils.data import DataLoader, Subset
 
@@ -1404,11 +1408,41 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
 
     assert out_path.is_file()
     assert set(COARSE_REQUIRED_KEYS).issubset(data.keys())
+    assert set(COARSE_GEOMETRY_OPTIONAL_KEYS).issubset(data.keys())
     assert int(np.asarray(data['n_traces']).item()) == n_traces
     assert int(np.asarray(data['n_samples_orig']).item()) == n_samples
     np.testing.assert_array_equal(
         data['trace_indices'],
         np.arange(n_traces, dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        data['offsets_m'],
+        (np.arange(n_traces, dtype=np.float32) + np.float32(1.0))
+        * np.float32(10.0),
+    )
+    np.testing.assert_array_equal(
+        data['geometry_valid_mask'],
+        np.ones((n_traces,), dtype=np.bool_),
+    )
+    np.testing.assert_array_equal(
+        data['source_x_m'],
+        np.full((n_traces,), 100.0, dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        data['source_y_m'],
+        np.full((n_traces,), 2000.0, dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        data['receiver_x_m'],
+        np.asarray(1000 + np.arange(n_traces) * 10, dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        data['receiver_y_m'],
+        np.full((n_traces,), 2000.0, dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        data['offset_abs_geom_m'],
+        np.asarray(900 + np.arange(n_traces) * 10, dtype=np.float32),
     )
     np.testing.assert_array_equal(
         data['coarse_pick_i'],

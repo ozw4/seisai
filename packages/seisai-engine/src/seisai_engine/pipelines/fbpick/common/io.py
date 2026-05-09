@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from .artifacts import (
+    COARSE_GEOMETRY_OPTIONAL_KEYS,
     COARSE_REQUIRED_KEYS,
     FINAL_REQUIRED_KEYS,
     FINE_RESULT_REQUIRED_KEYS,
@@ -15,6 +16,7 @@ from .artifacts import (
 )
 
 __all__ = [
+    'COARSE_GEOMETRY_OPTIONAL_KEYS',
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
     'FINE_RESULT_REQUIRED_KEYS',
@@ -59,6 +61,97 @@ def _coerce_bool_vector(name: str, value, *, length: int) -> np.ndarray:
         msg = f'{name} length {int(arr.shape[0])} != n_traces {int(length)}'
         raise ValueError(msg)
     return arr
+
+
+def _validate_coarse_geometry_arrays(
+    arrays: dict[str, np.ndarray],
+    *,
+    n_traces: int,
+) -> None:
+    n_traces_int = int(n_traces)
+    for key in COARSE_GEOMETRY_OPTIONAL_KEYS:
+        arr = np.asarray(arrays[key])
+        if arr.ndim != 1 or int(arr.shape[0]) != n_traces_int:
+            msg = f'{key} must be 1D with length n_traces'
+            raise ValueError(msg)
+        expected_dtype = np.bool_ if key == 'geometry_valid_mask' else np.float32
+        _require_exact_dtype(key, arr, dtype=expected_dtype)
+
+    valid = np.asarray(arrays['geometry_valid_mask'], dtype=np.bool_)
+    if not np.any(valid):
+        return
+    for key in (
+        'source_x_m',
+        'source_y_m',
+        'receiver_x_m',
+        'receiver_y_m',
+        'offset_abs_geom_m',
+    ):
+        arr = np.asarray(arrays[key])
+        if not np.all(np.isfinite(arr[valid])):
+            msg = f'{key} must be finite where geometry_valid_mask is True'
+            raise ValueError(msg)
+
+
+def _coerce_optional_coarse_geometry(
+    *,
+    n_traces: int,
+    source_x_m,
+    source_y_m,
+    receiver_x_m,
+    receiver_y_m,
+    offset_abs_geom_m,
+    geometry_valid_mask,
+) -> dict[str, np.ndarray]:
+    values = {
+        'source_x_m': source_x_m,
+        'source_y_m': source_y_m,
+        'receiver_x_m': receiver_x_m,
+        'receiver_y_m': receiver_y_m,
+        'offset_abs_geom_m': offset_abs_geom_m,
+        'geometry_valid_mask': geometry_valid_mask,
+    }
+    provided = [key for key, value in values.items() if value is not None]
+    if not provided:
+        return {}
+    missing = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if values[key] is None]
+    if missing:
+        msg = f'coarse geometry arrays must be provided together; missing: {missing}'
+        raise ValueError(msg)
+
+    n_traces_int = int(n_traces)
+    arrays = {
+        key: _coerce_vector(
+            key,
+            values[key],
+            dtype=np.float32,
+            length=n_traces_int,
+        )
+        for key in COARSE_GEOMETRY_OPTIONAL_KEYS
+        if key != 'geometry_valid_mask'
+    }
+    arrays['geometry_valid_mask'] = _coerce_bool_vector(
+        'geometry_valid_mask',
+        values['geometry_valid_mask'],
+        length=n_traces_int,
+    )
+    _validate_coarse_geometry_arrays(arrays, n_traces=n_traces_int)
+    return arrays
+
+
+def _validate_optional_coarse_geometry(
+    out: dict[str, np.ndarray],
+    *,
+    n_traces: int,
+) -> None:
+    present = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key in out]
+    if not present:
+        return
+    missing = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key not in out]
+    if missing:
+        msg = f'coarse npz missing optional geometry keys: {missing}'
+        raise KeyError(msg)
+    _validate_coarse_geometry_arrays(out, n_traces=int(n_traces))
 
 
 def _coerce_lineage(lineage) -> np.ndarray:
@@ -161,6 +254,12 @@ def save_coarse_npz(
     coarse_pmax,
     coarse_prob_summary,
     lineage,
+    source_x_m=None,
+    source_y_m=None,
+    receiver_x_m=None,
+    receiver_y_m=None,
+    offset_abs_geom_m=None,
+    geometry_valid_mask=None,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +331,17 @@ def save_coarse_npz(
         ),
         'lineage': _coerce_lineage(lineage),
     }
+    arrays.update(
+        _coerce_optional_coarse_geometry(
+            n_traces=n_traces_int,
+            source_x_m=source_x_m,
+            source_y_m=source_y_m,
+            receiver_x_m=receiver_x_m,
+            receiver_y_m=receiver_y_m,
+            offset_abs_geom_m=offset_abs_geom_m,
+            geometry_valid_mask=geometry_valid_mask,
+        )
+    )
 
     coarse_pick_i_arr = arrays['coarse_pick_i']
     if np.any(coarse_pick_i_arr < 0) or np.any(coarse_pick_i_arr >= n_samples_orig_int):
@@ -281,6 +391,7 @@ def load_coarse_npz(path: str | Path) -> dict[str, np.ndarray]:
     if lineage.ndim != 0:
         msg = 'lineage must be scalar'
         raise ValueError(msg)
+    _validate_optional_coarse_geometry(out, n_traces=n_traces)
     return out
 
 
