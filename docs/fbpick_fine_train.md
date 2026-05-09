@@ -6,21 +6,27 @@ Fine inference behavior is documented separately in `docs/fbpick_fine_infer.md`.
 ## Window Center
 
 Fine training uses the physics / robust output as the local-window center source.
-The default center key is `robust_pick_i`:
+The code default remains `robust_pick_i` for compatibility with old robust
+artifacts, but the recommended config uses `fine_center_i` first and falls back
+to `robust_pick_i`:
 
 ```yaml
 window_center:
-  npz_key: robust_pick_i
-  fallback_npz_key: null
+  npz_key: fine_center_i
+  fallback_npz_key: robust_pick_i
 ```
 
-`robust_pick_i` remains the default center for training, validation, and
-inference. Do not switch the fine stage to `fine_center_i` or `trend_center_i`
-unless the fine-stage contract is changed.
+When the robust npz contains `fine_center_i`, the fine stage uses it as the
+center of each local window. Older robust artifacts without `fine_center_i` can
+still be used by setting `fallback_npz_key: robust_pick_i`.
+
+Physics output writes `fine_center_i` even when physical trend centering is not
+used. In that case `fine_center_i` is still the fine-stage center contract and
+may equal the robust center depending on the physics configuration.
 
 ## Center Jitter
 
-`center_augment` adds training-only perturbations to the selected robust center.
+`center_augment` adds training-only perturbations to the selected fine window center.
 It simulates realistic error in the upstream coarse / physics center while
 keeping the current fine target and loss unchanged.
 
@@ -82,14 +88,14 @@ contract.
 
 Center jitter is applied only by the fine training dataset. Validation and
 labeled-infer datasets use the configured `window_center` value directly, and
-raw fine inference also uses the configured robust center without jitter.
+raw fine inference also uses the configured window center without jitter.
 
 For deterministic validation and inference, keep:
 
 ```yaml
 window_center:
-  npz_key: robust_pick_i
-  fallback_npz_key: null
+  npz_key: fine_center_i
+  fallback_npz_key: robust_pick_i
 ```
 
 `center_augment` is not part of the fine inference config.
