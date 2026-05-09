@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -169,16 +170,24 @@ def _validate_mode(name: str, value: str) -> str:
 
 def _validate_positive_float(name: str, value: float) -> float:
     out = float(value)
-    if out <= 0.0:
-        msg = f'{name} must be > 0'
+    if (not math.isfinite(out)) or out <= 0.0:
+        msg = f'{name} must be finite and > 0'
         raise ValueError(msg)
     return out
 
 
 def _validate_nonnegative_float(name: str, value: float) -> float:
     out = float(value)
-    if out < 0.0:
-        msg = f'{name} must be >= 0'
+    if (not math.isfinite(out)) or out < 0.0:
+        msg = f'{name} must be finite and >= 0'
+        raise ValueError(msg)
+    return out
+
+
+def _validate_finite_float(name: str, value: float) -> float:
+    out = float(value)
+    if not math.isfinite(out):
+        msg = f'{name} must be finite'
         raise ValueError(msg)
     return out
 
@@ -383,8 +392,9 @@ def _validate_physical_trend_cfg(cfg: PhysicalTrendCfg) -> None:
         'physical_trend.coord_group_tol_m',
         cfg.coord_group_tol_m,
     )
-    if float(cfg.gap_ratio) <= 1.0:
-        msg = 'physical_trend.gap_ratio must be > 1.0'
+    gap_ratio = float(cfg.gap_ratio)
+    if (not math.isfinite(gap_ratio)) or gap_ratio <= 1.0:
+        msg = 'physical_trend.gap_ratio must be finite and > 1.0'
         raise ValueError(msg)
     if cfg.min_gap_m is not None:
         _validate_positive_float('physical_trend.min_gap_m', cfg.min_gap_m)
@@ -408,10 +418,22 @@ def _validate_physical_prefilter_cfg(cfg: PhysicalPrefilterCfg) -> None:
     if float(cfg.vmax_m_s) < float(cfg.vmin_m_s):
         msg = 'physical_prefilter.vmax_m_s must be >= physical_prefilter.vmin_m_s'
         raise ValueError(msg)
-    if float(cfg.t0_lo_ms) > float(cfg.t0_hi_ms):
+    t0_lo_ms = _validate_finite_float(
+        'physical_prefilter.t0_lo_ms',
+        cfg.t0_lo_ms,
+    )
+    t0_hi_ms = _validate_finite_float(
+        'physical_prefilter.t0_hi_ms',
+        cfg.t0_hi_ms,
+    )
+    if t0_lo_ms > t0_hi_ms:
         msg = 'physical_prefilter.t0_lo_ms must be <= physical_prefilter.t0_hi_ms'
         raise ValueError(msg)
-    if not 0.0 <= float(cfg.pmax_min) <= 1.0:
+    pmax_min = _validate_finite_float(
+        'physical_prefilter.pmax_min',
+        cfg.pmax_min,
+    )
+    if not 0.0 <= pmax_min <= 1.0:
         msg = 'physical_prefilter.pmax_min must lie in [0, 1]'
         raise ValueError(msg)
 
@@ -423,7 +445,9 @@ def _validate_two_piece_ransac_cfg(cfg: TwoPieceRansacCfg) -> None:
         msg = 'two_piece_ransac.min_pts must be >= 2'
         raise ValueError(msg)
     _validate_positive_int('two_piece_ransac.n_break_cand', cfg.n_break_cand)
-    if not 0.0 <= float(cfg.q_lo) < float(cfg.q_hi) <= 1.0:
+    q_lo = _validate_finite_float('two_piece_ransac.q_lo', cfg.q_lo)
+    q_hi = _validate_finite_float('two_piece_ransac.q_hi', cfg.q_hi)
+    if not 0.0 <= q_lo < q_hi <= 1.0:
         msg = 'two_piece_ransac requires 0 <= q_lo < q_hi <= 1'
         raise ValueError(msg)
     _validate_nonnegative_float('two_piece_ransac.slope_eps', cfg.slope_eps)
@@ -476,6 +500,8 @@ def _validate_physics_lite_config(cfg: PhysicsLiteConfig) -> PhysicsLiteConfig:
     if float(feasible.vmax_mask) < float(feasible.vmin_mask):
         msg = 'feasible_band.vmax_mask must be >= feasible_band.vmin_mask'
         raise ValueError(msg)
+    _validate_finite_float('feasible_band.t0_lo_ms', feasible.t0_lo_ms)
+    _validate_finite_float('feasible_band.t0_hi_ms', feasible.t0_hi_ms)
     _validate_nonnegative_float('feasible_band.taper_ms', feasible.taper_ms)
 
     trend = cfg.trend
@@ -510,14 +536,19 @@ def _validate_physics_lite_config(cfg: PhysicsLiteConfig) -> PhysicsLiteConfig:
     _validate_nonnegative_int('residual_statics.rs_max_lag', rs.rs_max_lag)
     _validate_positive_int('residual_statics.rs_k_neighbors', rs.rs_k_neighbors)
     _validate_nonnegative_int('residual_statics.rs_n_iter', rs.rs_n_iter)
-    if not 0.0 <= float(rs.rs_c_th) <= 1.0:
+    rs_c_th = _validate_finite_float('residual_statics.rs_c_th', rs.rs_c_th)
+    if not 0.0 <= rs_c_th <= 1.0:
         msg = 'residual_statics.rs_c_th must lie in [0, 1]'
         raise ValueError(msg)
     _validate_mode('residual_statics.final_snap_mode', rs.final_snap_mode)
     _validate_nonnegative_int('residual_statics.final_snap_ltcor', rs.final_snap_ltcor)
 
     keep = cfg.keep_reject
-    if float(keep.drop_low_frac) < 0.0 or float(keep.drop_low_frac) >= 1.0:
+    drop_low_frac = _validate_finite_float(
+        'keep_reject.drop_low_frac',
+        keep.drop_low_frac,
+    )
+    if drop_low_frac < 0.0 or drop_low_frac >= 1.0:
         msg = 'keep_reject.drop_low_frac must lie in [0, 1)'
         raise ValueError(msg)
 

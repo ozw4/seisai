@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -281,6 +282,14 @@ def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
             'physical_prefilter.vmax_m_s',
         ),
         (
+            {'physical_prefilter': {'vmin_m_s': math.nan}},
+            'physical_prefilter.vmin_m_s',
+        ),
+        (
+            {'physical_prefilter': {'vmax_m_s': math.inf}},
+            'physical_prefilter.vmax_m_s',
+        ),
+        (
             {'two_piece_ransac': {'q_lo': 0.8, 'q_hi': 0.2}},
             'q_lo < q_hi',
         ),
@@ -289,8 +298,24 @@ def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
             'neighbor_context.k_neighbors',
         ),
         (
+            {'neighbor_context': {'max_source_distance_m': math.nan}},
+            'neighbor_context.max_source_distance_m',
+        ),
+        (
             {'physical_trend': {'fit_kind': 'linear'}},
             'physical_trend.fit_kind',
+        ),
+        (
+            {'physical_trend': {'coord_group_tol_m': math.nan}},
+            'physical_trend.coord_group_tol_m',
+        ),
+        (
+            {'physical_trend': {'gap_ratio': math.inf}},
+            'physical_trend.gap_ratio',
+        ),
+        (
+            {'physical_trend': {'min_gap_m': math.inf}},
+            'physical_trend.min_gap_m',
         ),
         (
             {'physical_projection': {'mode': 'observed'}},
