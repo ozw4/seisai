@@ -406,6 +406,47 @@ def _obs_with_target_side(
     )
 
 
+def _obs_with_target_signed_offset_side(
+    *,
+    trace_idx: int,
+    obs_indices: np.ndarray,
+    signed_offset_m: np.ndarray,
+    zero_tol_m: float = 1.0e-6,
+) -> tuple[np.ndarray, int, bool]:
+    context_indices = _append_index(obs_indices, trace_idx)
+    signed = np.asarray(signed_offset_m, dtype=np.float32)[context_indices]
+    finite = np.isfinite(signed)
+    if int(np.count_nonzero(finite)) < 2:
+        return np.asarray(obs_indices, dtype=np.int64), 0, False
+
+    zero_tol = float(zero_tol_m)
+    if zero_tol < 0.0 or not np.isfinite(zero_tol):
+        msg = 'zero_tol_m must be finite and >= 0'
+        raise ValueError(msg)
+
+    side = np.zeros((context_indices.size,), dtype=np.int8)
+    signed_valid = np.asarray(signed[finite], dtype=np.float64)
+    if not np.any(np.abs(signed_valid) > zero_tol):
+        return np.asarray(obs_indices, dtype=np.int64), 0, False
+
+    side[finite] = np.where(
+        np.abs(signed_valid) <= zero_tol,
+        0,
+        np.where(signed_valid < 0.0, -1, 1),
+    ).astype(np.int8)
+    pos = _trace_position_map(context_indices)
+    target_side = int(side[pos[int(trace_idx)]])
+    obs_side = np.asarray(
+        [int(side[pos[int(obs_idx)]]) for obs_idx in obs_indices.tolist()],
+        dtype=np.int8,
+    )
+    return (
+        np.asarray(obs_indices, dtype=np.int64)[obs_side == target_side],
+        target_side,
+        True,
+    )
+
+
 def _obs_with_target_gap_segment(
     *,
     trace_idx: int,
@@ -440,6 +481,7 @@ def _build_observation_plan(
     groups_by_id: Mapping[int, SourceGroup],
     geometry: CoarseGeometry | None,
     offset_abs_m: np.ndarray,
+    offset_signed_m: np.ndarray | None,
     valid_for_fit: np.ndarray,
     cfg: PhysicsLiteConfig,
     use_neighbor_context: bool,
@@ -470,12 +512,19 @@ def _build_observation_plan(
     side_obs = valid_obs
     side = 0
     side_reliable = False
-    if geometry is not None and bool(cfg.physical_trend.segment_by_offset_sign):
-        side_obs, side, side_reliable = _obs_with_target_side(
-            trace_idx=trace_idx,
-            obs_indices=valid_obs,
-            geometry=geometry,
-        )
+    if bool(cfg.physical_trend.segment_by_offset_sign):
+        if offset_signed_m is not None:
+            side_obs, side, side_reliable = _obs_with_target_signed_offset_side(
+                trace_idx=trace_idx,
+                obs_indices=valid_obs,
+                signed_offset_m=offset_signed_m,
+            )
+        elif geometry is not None:
+            side_obs, side, side_reliable = _obs_with_target_side(
+                trace_idx=trace_idx,
+                obs_indices=valid_obs,
+                geometry=geometry,
+            )
 
     segment_obs = side_obs
     segment_id = 0
@@ -905,9 +954,16 @@ def build_geometry_two_piece_physical_center(
             n_traces=n,
             dtype=np.float32,
         )
+        offset_signed_m = None
         offset_source = PHYSICAL_OFFSET_SOURCE_GEOMETRY
     else:
         offset_abs_m = _table_offset_abs_m(table, n_traces=n)
+        offset_signed_m = _as_vector(
+            'table.offset_m',
+            table.offset_m,
+            n_traces=n,
+            dtype=np.float32,
+        )
         offset_source = PHYSICAL_OFFSET_SOURCE_HEADER
 
     source_groups_from_geometry = False
@@ -985,6 +1041,7 @@ def build_geometry_two_piece_physical_center(
             groups_by_id=groups_by_id,
             geometry=geometry,
             offset_abs_m=offset_abs_m,
+            offset_signed_m=offset_signed_m,
             valid_for_fit=valid_for_fit,
             cfg=cfg,
             use_neighbor_context=source_groups_from_geometry,

@@ -538,6 +538,120 @@ def test_header_offset_path_uses_source_xy_groups_without_geometry_offsets(
     )
 
 
+def test_header_offset_sign_segmentation_uses_table_offsets_without_geometry(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    offsets = np.asarray(
+        [-600.0, -500.0, -400.0, -300.0, 100.0, 200.0, 300.0, 400.0],
+        dtype=np.float32,
+    )
+    pick_i = np.rint(_two_piece_time_sec(np.abs(offsets)) / np.float32(0.001)).astype(
+        np.int32
+    )
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        with_geometry=False,
+    )
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'use_geometry_offset': False,
+                    'segment_by_offset_sign': True,
+                    'split_by_offset_gap': False,
+                },
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 2},
+            }
+        ),
+    )
+
+    call_offsets = sorted(
+        tuple(np.sort(np.rint(call).astype(np.int32)).tolist()) for call in calls
+    )
+    assert call_offsets == [(100, 200, 300, 400), (300, 400, 500, 600)]
+    np.testing.assert_array_equal(
+        result.physical_model_side,
+        np.asarray([-1, -1, -1, -1, 1, 1, 1, 1], dtype=np.int8),
+    )
+    assert np.all(
+        result.physical_offset_source == np.uint8(PHYSICAL_OFFSET_SOURCE_HEADER)
+    )
+
+
+def test_header_offset_sign_segmentation_ignores_geometry_signed_offsets(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    offsets = np.asarray(
+        [-600.0, -500.0, -400.0, -300.0, 100.0, 200.0, 300.0, 400.0],
+        dtype=np.float32,
+    )
+    pick_i = np.rint(_two_piece_time_sec(np.abs(offsets)) / np.float32(0.001)).astype(
+        np.int32
+    )
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        with_geometry=True,
+    )
+    coarse_npz['offset_signed_geom_m'] = np.asarray(
+        [-1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0],
+        dtype=np.float32,
+    )
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'use_geometry_offset': False,
+                    'segment_by_offset_sign': True,
+                    'split_by_offset_gap': False,
+                },
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 2},
+            }
+        ),
+    )
+
+    call_offsets = sorted(
+        tuple(np.sort(np.rint(call).astype(np.int32)).tolist()) for call in calls
+    )
+    assert call_offsets == [(100, 200, 300, 400), (300, 400, 500, 600)]
+    np.testing.assert_array_equal(
+        result.physical_model_side,
+        np.asarray([-1, -1, -1, -1, 1, 1, 1, 1], dtype=np.int8),
+    )
+    assert np.all(
+        result.physical_offset_source == np.uint8(PHYSICAL_OFFSET_SOURCE_HEADER)
+    )
+
+
 def test_fallback_status_reports_feasible_clip_when_trend_is_unusable() -> None:
     coarse_npz, table, feasible, trend, merged = _make_inputs(
         offsets_m=np.linspace(50.0, 1200.0, 12, dtype=np.float32),

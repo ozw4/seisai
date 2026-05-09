@@ -686,7 +686,7 @@ def test_summarize_errors_reports_physical_and_final_artifact_metrics() -> None:
     assert metrics['physical_center_R127'] == pytest.approx(1.0 / 3.0)
 
 
-def test_summarize_errors_ignores_invalid_final_pick_sentinels() -> None:
+def test_summarize_errors_counts_invalid_final_picks_as_misses() -> None:
     gt_pick_i = np.asarray([100, 500], dtype=np.int64)
 
     metrics, *_ = physics_qc_cli._summarize_errors(
@@ -694,15 +694,34 @@ def test_summarize_errors_ignores_invalid_final_pick_sentinels() -> None:
         robust_pick_i=gt_pick_i,
         window_start_i=np.asarray([0, 400], dtype=np.int32),
         window_end_i=np.asarray([255, 655], dtype=np.int32),
-        final_pick_i=np.asarray([0, 800], dtype=np.int32),
+        final_pick_i=np.asarray([100, 0], dtype=np.int32),
         gt_pick_i=gt_pick_i,
         n_traces=2,
         n_samples_orig=1000,
     )
 
     assert metrics['final_pick_valid_rate'] == pytest.approx(0.5)
+    assert metrics['final_pick_R127'] == pytest.approx(0.5)
+    assert metrics['final_pick_abs_err_median'] == pytest.approx(0.0)
+
+
+def test_summarize_errors_all_invalid_final_picks_keeps_stable_metrics() -> None:
+    gt_pick_i = np.asarray([100, 500], dtype=np.int64)
+
+    metrics, *_ = physics_qc_cli._summarize_errors(
+        coarse_pick_i=gt_pick_i,
+        robust_pick_i=gt_pick_i,
+        window_start_i=np.asarray([0, 400], dtype=np.int32),
+        window_end_i=np.asarray([255, 655], dtype=np.int32),
+        final_pick_i=np.asarray([0, 1000], dtype=np.int32),
+        gt_pick_i=gt_pick_i,
+        n_traces=2,
+        n_samples_orig=1000,
+    )
+
+    assert metrics['final_pick_valid_rate'] == pytest.approx(0.0)
     assert metrics['final_pick_R127'] == pytest.approx(0.0)
-    assert metrics['final_pick_abs_err_median'] == pytest.approx(300.0)
+    assert np.isnan(metrics['final_pick_abs_err_median'])
 
 
 def test_summarize_errors_absent_final_artifact_keeps_stable_columns() -> None:

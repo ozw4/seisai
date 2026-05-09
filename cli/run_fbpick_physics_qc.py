@@ -755,6 +755,9 @@ def _empty_optional_summary_arrays() -> dict[str, np.ndarray | None]:
 		'physical_center_r127': None,
 		'gt_in_actual_window': None,
 		'final_pick_valid': None,
+		'final_pick_r32': None,
+		'final_pick_r64': None,
+		'final_pick_r127': None,
 		'final_pick_abs_err': None,
 	}
 
@@ -946,24 +949,29 @@ def _summarize_errors(
 			valid_gt <= window_end[valid]
 		)
 		final_pick_valid = (final_pick > 0) & (final_pick < int(n_samples_orig))
-		final_pick_score_mask = valid & final_pick_valid
-		final_abs_err = np.abs(
-			final_pick[final_pick_score_mask] - gt_pick[final_pick_score_mask]
-		)
+		final_pick_valid_gt = final_pick_valid[valid]
+		final_abs_err_scored = np.abs(final_pick[valid] - valid_gt)
+		final_pick_r32 = final_pick_valid_gt & (final_abs_err_scored <= 32)
+		final_pick_r64 = final_pick_valid_gt & (final_abs_err_scored <= 64)
+		final_pick_r127 = final_pick_valid_gt & (final_abs_err_scored <= 127)
+		final_abs_err = final_abs_err_scored[final_pick_valid_gt]
 		metrics.update(
 			{
 				'gt_in_actual_window_rate': _rate(gt_in_actual_window),
-				'final_pick_valid_rate': _rate(final_pick_valid),
-				'final_pick_R32': _rate(final_abs_err <= 32),
-				'final_pick_R64': _rate(final_abs_err <= 64),
-				'final_pick_R127': _rate(final_abs_err <= 127),
+				'final_pick_valid_rate': _rate(final_pick_valid_gt),
+				'final_pick_R32': _rate(final_pick_r32),
+				'final_pick_R64': _rate(final_pick_r64),
+				'final_pick_R127': _rate(final_pick_r127),
 				'final_pick_abs_err_median': _percentile(final_abs_err, 50.0),
 				'final_pick_abs_err_p90': _percentile(final_abs_err, 90.0),
 				'final_pick_abs_err_p95': _percentile(final_abs_err, 95.0),
 			}
 		)
 		summary_arrays['gt_in_actual_window'] = gt_in_actual_window
-		summary_arrays['final_pick_valid'] = final_pick_valid
+		summary_arrays['final_pick_valid'] = final_pick_valid_gt
+		summary_arrays['final_pick_r32'] = final_pick_r32
+		summary_arrays['final_pick_r64'] = final_pick_r64
+		summary_arrays['final_pick_r127'] = final_pick_r127
 		summary_arrays['final_pick_abs_err'] = final_abs_err
 	return metrics, coarse_abs_err, robust_abs_err, r127, summary_arrays
 
@@ -1029,6 +1037,9 @@ def run_pipeline(config_path: str | Path) -> Path:
 	all_physical_center_r127: list[np.ndarray] = []
 	all_gt_in_actual_window: list[np.ndarray] = []
 	all_final_pick_valid: list[np.ndarray] = []
+	all_final_pick_r32: list[np.ndarray] = []
+	all_final_pick_r64: list[np.ndarray] = []
+	all_final_pick_r127: list[np.ndarray] = []
 	all_final_pick_abs_err: list[np.ndarray] = []
 	all_physical_model_status: list[np.ndarray] = []
 	all_physical_model_failure_reason: list[np.ndarray] = []
@@ -1184,6 +1195,12 @@ def run_pipeline(config_path: str | Path) -> Path:
 			)
 		if optional_summary_arrays['final_pick_valid'] is not None:
 			all_final_pick_valid.append(optional_summary_arrays['final_pick_valid'])
+		if optional_summary_arrays['final_pick_r32'] is not None:
+			all_final_pick_r32.append(optional_summary_arrays['final_pick_r32'])
+		if optional_summary_arrays['final_pick_r64'] is not None:
+			all_final_pick_r64.append(optional_summary_arrays['final_pick_r64'])
+		if optional_summary_arrays['final_pick_r127'] is not None:
+			all_final_pick_r127.append(optional_summary_arrays['final_pick_r127'])
 		if optional_summary_arrays['final_pick_abs_err'] is not None:
 			all_final_pick_abs_err.append(
 				optional_summary_arrays['final_pick_abs_err']
@@ -1214,6 +1231,9 @@ def run_pipeline(config_path: str | Path) -> Path:
 	global_physical_center_r127 = _concat_optional_arrays(all_physical_center_r127)
 	global_gt_in_actual_window = _concat_optional_arrays(all_gt_in_actual_window)
 	global_final_pick_valid = _concat_optional_arrays(all_final_pick_valid)
+	global_final_pick_r32 = _concat_optional_arrays(all_final_pick_r32)
+	global_final_pick_r64 = _concat_optional_arrays(all_final_pick_r64)
+	global_final_pick_r127 = _concat_optional_arrays(all_final_pick_r127)
 	global_final_pick_abs_err = _concat_optional_arrays(all_final_pick_abs_err)
 	global_physical_model_status = (
 		np.concatenate(all_physical_model_status, axis=0)
@@ -1307,15 +1327,18 @@ def run_pipeline(config_path: str | Path) -> Path:
 	if (
 		global_gt_in_actual_window is not None
 		and global_final_pick_valid is not None
+		and global_final_pick_r32 is not None
+		and global_final_pick_r64 is not None
+		and global_final_pick_r127 is not None
 		and global_final_pick_abs_err is not None
 	):
 		global_row.update(
 			{
 				'gt_in_actual_window_rate': _rate(global_gt_in_actual_window),
 				'final_pick_valid_rate': _rate(global_final_pick_valid),
-				'final_pick_R32': _rate(global_final_pick_abs_err <= 32),
-				'final_pick_R64': _rate(global_final_pick_abs_err <= 64),
-				'final_pick_R127': _rate(global_final_pick_abs_err <= 127),
+				'final_pick_R32': _rate(global_final_pick_r32),
+				'final_pick_R64': _rate(global_final_pick_r64),
+				'final_pick_R127': _rate(global_final_pick_r127),
 				'final_pick_abs_err_median': _percentile(
 					global_final_pick_abs_err,
 					50.0,
