@@ -659,18 +659,43 @@ def _fit_cache_key(plan: _ObservationPlan) -> tuple[int, ...]:
     return tuple(np.asarray(plan.obs_indices, dtype=np.int64).tolist())
 
 
+def _offset_spread_failure_reason(
+    x_obs: np.ndarray,
+    *,
+    min_pts: int,
+    min_offset_spread_m: float,
+) -> int | None:
+    finite_x = np.asarray(x_obs, dtype=np.float64)
+    finite_x = finite_x[np.isfinite(finite_x)]
+    if int(finite_x.size) < int(min_pts):
+        return PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS
+    if float(np.ptp(finite_x)) < float(min_offset_spread_m):
+        return PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS
+    return None
+
+
 def _fit_model_for_plan(
     *,
     strategy: TwoPieceRansacAutoBreakStrategy,
     plan: _ObservationPlan,
     x_obs: np.ndarray,
     y_obs: np.ndarray,
+    min_pts: int,
+    min_offset_spread_m: float,
     cache: dict[tuple[int, ...], _FitCacheEntry],
 ) -> tuple[
     object | None,
     tuple[float, float, float, float, float, float, float] | None,
     int | None,
 ]:
+    spread_failure_reason = _offset_spread_failure_reason(
+        x_obs,
+        min_pts=int(min_pts),
+        min_offset_spread_m=float(min_offset_spread_m),
+    )
+    if spread_failure_reason is not None:
+        return None, None, spread_failure_reason
+
     cache_key = _fit_cache_key(plan)
     entry = cache.get(cache_key)
     if entry is None:
@@ -1087,6 +1112,8 @@ def build_geometry_two_piece_physical_center(
             plan=plan,
             x_obs=x_obs,
             y_obs=y_obs,
+            min_pts=int(cfg.two_piece_ransac.min_pts),
+            min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
             cache=fit_cache,
         )
 

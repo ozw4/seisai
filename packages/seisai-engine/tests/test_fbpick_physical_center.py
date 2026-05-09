@@ -248,6 +248,80 @@ def test_physical_center_calls_existing_two_piece_ransac(monkeypatch) -> None:
     assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
 
 
+def test_all_zero_geometry_spread_falls_back_before_two_piece_fit(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.zeros((12,), dtype=np.float32),
+    )
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg({'two_piece_ransac': {'min_pts': 3}}),
+    )
+
+    assert calls == []
+    assert not np.any(
+        result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
+    )
+    assert np.all(
+        result.physical_model_failure_reason
+        == np.uint8(PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS)
+    )
+    assert np.all(result.fine_center_i >= 0)
+    assert np.all(result.fine_center_i < table.n_samples_orig)
+
+
+def test_constant_geometry_offsets_fall_back_even_with_enough_observations(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.linspace(50.0, 1200.0, 12, dtype=np.float32),
+    )
+    coarse_npz['offset_abs_geom_m'] = np.full((12,), 100.0, dtype=np.float32)
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 3},
+            }
+        ),
+    )
+
+    assert calls == []
+    assert not np.any(
+        result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
+    )
+    assert np.all(
+        result.physical_model_failure_reason
+        == np.uint8(PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS)
+    )
+
+
 def test_physical_center_fits_once_per_unique_observation_segment(monkeypatch) -> None:
     calls: list[np.ndarray] = []
 
@@ -490,6 +564,49 @@ def test_physical_center_uses_header_offsets_when_geometry_offset_disabled(
     np.testing.assert_allclose(calls[0], np.abs(table.offset_m), rtol=0, atol=0)
     assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
     assert np.all(result.physical_model_failure_reason == PHYSICAL_MODEL_FAILURE_NONE)
+    assert np.all(
+        result.physical_offset_source == np.uint8(PHYSICAL_OFFSET_SOURCE_HEADER)
+    )
+
+
+def test_constant_header_offsets_fall_back_when_geometry_offset_disabled(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.full((12,), 100.0, dtype=np.float32),
+        with_geometry=False,
+    )
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {'use_geometry_offset': False},
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 3},
+            }
+        ),
+    )
+
+    assert calls == []
+    assert not np.any(
+        result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
+    )
+    assert np.all(
+        result.physical_model_failure_reason
+        == np.uint8(PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS)
+    )
     assert np.all(
         result.physical_offset_source == np.uint8(PHYSICAL_OFFSET_SOURCE_HEADER)
     )

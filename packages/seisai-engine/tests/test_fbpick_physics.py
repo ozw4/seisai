@@ -203,6 +203,7 @@ def _physical_trend_blocks() -> dict[str, object]:
             'enabled': True,
             'fit_kind': 'two_piece_ransac_autobreak',
             'use_geometry_offset': True,
+            'min_offset_spread_m': 12.5,
             'coord_group_tol_m': 2.0,
             'segment_by_offset_sign': False,
             'split_by_offset_gap': True,
@@ -247,6 +248,7 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
 
     assert cfg.physical_trend.enabled is False
     assert cfg.physical_trend.fit_kind == 'two_piece_ransac_autobreak'
+    assert cfg.physical_trend.min_offset_spread_m == 1.0
     assert cfg.physical_trend.min_gap_m is None
     assert cfg.neighbor_context.mode == 'nearest_source_xy'
     assert cfg.neighbor_context.k_neighbors == 5
@@ -262,6 +264,7 @@ def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
     cfg = load_physics_lite_config(_physical_trend_blocks())
 
     assert cfg.physical_trend.enabled is True
+    assert cfg.physical_trend.min_offset_spread_m == 12.5
     assert cfg.physical_trend.coord_group_tol_m == 2.0
     assert cfg.physical_trend.segment_by_offset_sign is False
     assert cfg.physical_trend.min_gap_m == 25.0
@@ -308,6 +311,14 @@ def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
         (
             {'physical_trend': {'coord_group_tol_m': math.nan}},
             'physical_trend.coord_group_tol_m',
+        ),
+        (
+            {'physical_trend': {'min_offset_spread_m': -1.0}},
+            'physical_trend.min_offset_spread_m',
+        ),
+        (
+            {'physical_trend': {'min_offset_spread_m': math.inf}},
+            'physical_trend.min_offset_spread_m',
         ),
         (
             {'physical_trend': {'gap_ratio': math.inf}},
