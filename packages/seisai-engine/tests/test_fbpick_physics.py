@@ -277,6 +277,27 @@ def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
     assert cfg.two_piece_ransac.sort_offsets is False
 
 
+def test_physical_center_example_config_enables_physical_trend() -> None:
+    import yaml
+
+    repo_root = Path(__file__).resolve().parents[3]
+    path = repo_root / 'examples/config_run_fbpick_physics_physical_center.yaml'
+    raw = yaml.safe_load(path.read_text(encoding='utf-8'))
+
+    cfg = load_physics_lite_config(raw)
+
+    assert cfg.physical_trend.enabled is True
+    assert cfg.physical_trend.fit_kind == 'two_piece_ransac_autobreak'
+    assert cfg.physical_trend.use_geometry_offset is True
+    assert cfg.physical_trend.min_offset_spread_m == pytest.approx(1.0)
+    assert cfg.physical_prefilter.enabled is True
+    assert cfg.physical_prefilter.vmin_m_s == pytest.approx(300.0)
+    assert cfg.physical_prefilter.vmax_m_s == pytest.approx(6000.0)
+    assert cfg.two_piece_ransac.n_iter == 200
+    assert cfg.two_piece_ransac.min_pts == 8
+    assert cfg.two_piece_ransac.sort_offsets is True
+
+
 @pytest.mark.parametrize(
     ('cfg', 'match'),
     [
