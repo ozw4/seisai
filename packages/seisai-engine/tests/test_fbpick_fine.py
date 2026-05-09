@@ -17,6 +17,7 @@ from seisai_engine.pipelines.common import load_checkpoint
 from seisai_engine.pipelines.fbpick.common import (
     FINE_RESULT_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
+    build_final_npz_name,
     load_fbpick_final_npz,
     save_coarse_npz,
     save_robust_npz,
@@ -43,6 +44,7 @@ from seisai_engine.pipelines.fbpick.fine import (
     sample_center_jitter,
 )
 from seisai_engine.pipelines.fbpick.fine.infer import (
+    _derive_final_npz_path,
     _prepare_fine_infer_cfg,
     _save_fine_gather_qc_pngs,
     main as run_fine_infer_main,
@@ -529,6 +531,15 @@ def _write_fine_ckpt_for_infer(tmp_path: Path) -> str:
     }
     torch.save(ckpt, path)
     return str(path.resolve())
+
+
+def test_derive_final_npz_path_uses_parent_prefixed_name(tmp_path: Path) -> None:
+    out_path = _derive_final_npz_path(
+        segy_path=tmp_path / 'line' / 'survey.sgy',
+        out_dir=tmp_path / 'out',
+    )
+
+    assert out_path == tmp_path / 'out' / 'line__survey.fbpick_final.npz'
 
 
 def test_fine_build_plan_returns_single_channel_shapes() -> None:
@@ -1890,7 +1901,9 @@ def test_run_fine_infer_builds_and_saves_final_payload(
         (result['window_start_i'] + 255).astype(np.int32),
     )
 
-    saved = load_fbpick_final_npz(tmp_path / 'fine_infer_out' / 'fine_public.fbpick_final.npz')
+    saved = load_fbpick_final_npz(
+        tmp_path / 'fine_infer_out' / build_final_npz_name(segy_path)
+    )
     np.testing.assert_array_equal(saved['final_pick_i'], final_pick.astype(np.int32))
 
 
@@ -2167,7 +2180,7 @@ def test_fine_infer_main_merges_ckpt_cfg_and_writes_final_payload(
 
     run_fine_infer_main(['--config', str(cfg_path)])
 
-    out_path = tmp_path / 'fine_cli_out' / 'fine_cli.fbpick_final.npz'
+    out_path = tmp_path / 'fine_cli_out' / build_final_npz_name(segy_path)
     saved = load_fbpick_final_npz(out_path)
     validate_fbpick_final_payload(saved, high_conf_threshold=0.5)
     assert capsys.readouterr().out.strip() == str(out_path)

@@ -13,6 +13,10 @@ from seisai_engine.pipelines.fbpick.common.qc_gathers import (
 	iter_qc_gathers,
 	sort_gather_indices_for_qc,
 )
+from seisai_engine.pipelines.fbpick.common.path_naming import (
+	build_fbpick_tag,
+	build_final_npz_name,
+)
 from seisai_engine.pipelines.fbpick.physics.physical_center import (
 	PHYSICAL_MODEL_FAILURE_LABELS,
 	PHYSICAL_MODEL_STATUS_LABELS,
@@ -213,12 +217,7 @@ def _prepare_cfg(
 
 
 def _build_tag(segy_path: str | Path) -> str:
-	segy = Path(segy_path)
-	parent_name = segy.parent.name
-	if not parent_name:
-		msg = 'fbpick physics QC tag parent dir name is empty'
-		raise ValueError(msg)
-	return parent_name + '__' + segy.stem
+	return build_fbpick_tag(segy_path)
 
 
 def _build_coarse_npz_path(
@@ -236,7 +235,13 @@ def _build_robust_npz_path(
 def _build_final_npz_path(
 	*, segy_path: str | Path, final_npz_dir: str | Path
 ) -> Path:
-	return Path(final_npz_dir) / (_build_tag(segy_path) + '.fbpick_final.npz')
+	return Path(final_npz_dir) / build_final_npz_name(segy_path)
+
+
+def _build_legacy_final_npz_path(
+	*, segy_path: str | Path, final_npz_dir: str | Path
+) -> Path:
+	return Path(final_npz_dir) / f'{Path(segy_path).stem}.fbpick_final.npz'
 
 
 def _validate_paths(
@@ -697,10 +702,24 @@ def _resolve_final_npz_path(
 	if final_npz_files is not None:
 		return Path(final_npz_files[int(file_index)])
 	if final_npz_dir is not None:
-		return _build_final_npz_path(
+		canonical = _build_final_npz_path(
 			segy_path=segy_path,
 			final_npz_dir=final_npz_dir,
 		)
+		if canonical.is_file():
+			return canonical
+		legacy = _build_legacy_final_npz_path(
+			segy_path=segy_path,
+			final_npz_dir=final_npz_dir,
+		)
+		if legacy.is_file():
+			return legacy
+		msg = (
+			'final npz file not found; tried:\n'
+			f'- {canonical}\n'
+			f'- {legacy}'
+		)
+		raise FileNotFoundError(msg)
 	return None
 
 

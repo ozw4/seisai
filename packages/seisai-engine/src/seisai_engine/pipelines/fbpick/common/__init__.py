@@ -33,6 +33,7 @@ from .io import (
     validate_fbpick_final_payload,
     validate_fine_result_payload,
 )
+from .path_naming import build_fbpick_tag, build_final_npz_name
 from .qc_gathers import iter_qc_gathers, sort_gather_indices_for_qc
 from .ref_stats import compute_ref_stats, compute_ref_stats_from_records
 
@@ -58,6 +59,8 @@ __all__ = [
     'ROBUST_SOURCE_THEORETICAL',
     'ROBUST_SOURCE_TREND_FILL',
     'build_fbpick_final_payload',
+    'build_fbpick_tag',
+    'build_final_npz_name',
     'build_lineage_payload',
     'compute_ref_stats',
     'compute_ref_stats_from_records',
