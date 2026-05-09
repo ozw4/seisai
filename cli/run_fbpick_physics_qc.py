@@ -946,7 +946,10 @@ def _summarize_errors(
 			valid_gt <= window_end[valid]
 		)
 		final_pick_valid = (final_pick > 0) & (final_pick < int(n_samples_orig))
-		final_abs_err = np.abs(final_pick[valid] - valid_gt)
+		final_pick_score_mask = valid & final_pick_valid
+		final_abs_err = np.abs(
+			final_pick[final_pick_score_mask] - gt_pick[final_pick_score_mask]
+		)
 		metrics.update(
 			{
 				'gt_in_actual_window_rate': _rate(gt_in_actual_window),
