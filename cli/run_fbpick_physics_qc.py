@@ -360,10 +360,34 @@ def _save_vis_pngs(
 	dataset_cfg: dict[str, Any],
 	vis_cfg: dict[str, Any],
 	runtime: SimpleNamespace,
+	coarse_pmax: np.ndarray | None = None,
+	trend_center_i: np.ndarray | None = None,
+	physical_center_i: np.ndarray | None = None,
+	fine_center_i: np.ndarray | None = None,
+	window_start_i: np.ndarray | None = None,
+	window_end_i: np.ndarray | None = None,
+	final_pick_i: np.ndarray | None = None,
+	physical_model_status: np.ndarray | None = None,
 ) -> list[Path]:
 	max_gathers = int(vis_cfg['max_gathers_per_file'])
 	if max_gathers <= 0:
 		return []
+
+	n_traces = int(gt_pick_i.shape[0])
+
+	def _slice_optional_trace_array(
+		values: np.ndarray | None,
+		*,
+		key: str,
+		trace_indices: np.ndarray,
+	) -> np.ndarray | None:
+		if values is None:
+			return None
+		arr = np.asarray(values)
+		if arr.ndim != 1 or int(arr.shape[0]) != n_traces:
+			msg = f'{key} must be 1D with length {n_traces}'
+			raise ValueError(msg)
+		return arr[trace_indices]
 
 	tag = _build_tag(segy_path)
 	out_subdir = Path(out_dir) / tag
@@ -391,6 +415,46 @@ def _save_vis_pngs(
 				gt_pick_i=gt_pick_i[trace_indices],
 				coarse_pick_i=coarse_pick_i[trace_indices],
 				robust_pick_i=robust_pick_i[trace_indices],
+				coarse_pmax=_slice_optional_trace_array(
+					coarse_pmax,
+					key='coarse_pmax',
+					trace_indices=trace_indices,
+				),
+				trend_center_i=_slice_optional_trace_array(
+					trend_center_i,
+					key='trend_center_i',
+					trace_indices=trace_indices,
+				),
+				physical_center_i=_slice_optional_trace_array(
+					physical_center_i,
+					key='physical_center_i',
+					trace_indices=trace_indices,
+				),
+				fine_center_i=_slice_optional_trace_array(
+					fine_center_i,
+					key='fine_center_i',
+					trace_indices=trace_indices,
+				),
+				window_start_i=_slice_optional_trace_array(
+					window_start_i,
+					key='window_start_i',
+					trace_indices=trace_indices,
+				),
+				window_end_i=_slice_optional_trace_array(
+					window_end_i,
+					key='window_end_i',
+					trace_indices=trace_indices,
+				),
+				final_pick_i=_slice_optional_trace_array(
+					final_pick_i,
+					key='final_pick_i',
+					trace_indices=trace_indices,
+				),
+				physical_model_status=_slice_optional_trace_array(
+					physical_model_status,
+					key='physical_model_status',
+					trace_indices=trace_indices,
+				),
 				title=title,
 				waveform_norm=str(vis_cfg['waveform_norm']),
 				clip_percentile=float(vis_cfg['clip_percentile']),
@@ -628,6 +692,11 @@ def run_pipeline(config_path: str | Path) -> Path:
 			gt_pick_i = _load_gt_fb(fb_path, n_traces=n_traces)
 			coarse_pick_i = np.asarray(coarse['coarse_pick_i'], dtype=np.int64)
 			robust_pick_i = np.asarray(robust['robust_pick_i'], dtype=np.int64)
+			coarse_pmax = (
+				np.asarray(coarse['coarse_pmax'], dtype=np.float32)
+				if 'coarse_pmax' in coarse
+				else None
+			)
 			metrics, coarse_abs_err, robust_abs_err, r127 = _summarize_errors(
 				coarse_pick_i=coarse_pick_i,
 				robust_pick_i=robust_pick_i,
@@ -642,6 +711,11 @@ def run_pipeline(config_path: str | Path) -> Path:
 				gt_pick_i=gt_pick_i,
 				coarse_pick_i=coarse_pick_i,
 				robust_pick_i=robust_pick_i,
+				coarse_pmax=coarse_pmax,
+				trend_center_i=robust.get('trend_center_i'),
+				physical_center_i=robust.get('physical_center_i'),
+				fine_center_i=robust.get('fine_center_i'),
+				physical_model_status=robust.get('physical_model_status'),
 				dataset_cfg=dataset_cfg,
 				vis_cfg=vis_cfg,
 				runtime=runtime,

@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import torch
@@ -287,6 +290,66 @@ def test_save_fbpick_physics_qc_gather_png_per_trace_smoke(tmp_path) -> None:
     assert out_path == out_png.resolve()
     assert out_path.is_file()
     assert out_path.stat().st_size > 0
+
+
+def test_save_fbpick_physics_qc_gather_png_draws_physical_overlays(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out_png = tmp_path / 'physical_gather.png'
+    wave = np.linspace(-1.0, 1.0, 3 * 64, dtype=np.float32).reshape(3, 64)
+    picks = np.asarray([20, 24, 28], dtype=np.int64)
+    closed: list[object | None] = []
+    original_close = plt.close
+
+    def _capture_close(fig: object | None = None) -> None:
+        closed.append(fig)
+
+    monkeypatch.setattr(plt, 'close', _capture_close)
+
+    out_path = save_fbpick_physics_qc_gather_png(
+        out_png,
+        raw_wave_hw=wave,
+        gt_pick_i=picks,
+        coarse_pick_i=picks - 4,
+        robust_pick_i=picks - 2,
+        coarse_pmax=np.asarray([0.3, 0.6, 0.9], dtype=np.float32),
+        trend_center_i=picks - 1,
+        physical_center_i=picks,
+        fine_center_i=picks + 1,
+        window_start_i=picks - 8,
+        window_end_i=picks + 7,
+        final_pick_i=picks + 2,
+        physical_model_status=np.asarray([0, 1, 1], dtype=np.uint8),
+        title='physical overlays',
+        waveform_norm='per_trace',
+        clip_percentile=99.0,
+    )
+
+    assert out_path == out_png.resolve()
+    assert out_path.is_file()
+    assert closed
+    fig = closed[0]
+    try:
+        labels = {line.get_label() for line in fig.axes[0].lines}
+        assert {
+            'coarse',
+            'robust',
+            'trend center',
+            'physical center',
+            'fine center',
+            'window start',
+            'window end',
+            'final',
+        }.issubset(labels)
+        title_texts = [text.get_text() for text in fig.texts]
+        assert any('physical status: 0=1, 1=2' in text for text in title_texts)
+        assert [label.get_text() for label in fig.axes[2].get_yticklabels()] == [
+            'GT in robust',
+            'coarse pmax',
+        ]
+    finally:
+        original_close(fig)
 
 
 def test_save_fbpick_fine_qc_gather_png_per_trace_smoke(tmp_path) -> None:

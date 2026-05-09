@@ -208,3 +208,65 @@ def test_save_vis_pngs_passes_waveform_display_config(tmp_path: Path) -> None:
     assert len(out_paths) == 1
     assert captured['waveform_norm'] == 'per_trace'
     assert captured['clip_percentile'] == 98.5
+
+
+def test_save_vis_pngs_passes_optional_physical_overlay_arrays(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _save(out_png: Path, **kwargs: object) -> Path:
+        captured.update(kwargs)
+        return out_png
+
+    segy_path = tmp_path / 'line' / 'physical.sgy'
+    segy_path.parent.mkdir()
+    info = _ffid_info({1: [2, 0]})
+    info['mmap'] = [
+        np.asarray([0.0, 1.0, -1.0], dtype=np.float32),
+        np.asarray([0.0, 2.0, -2.0], dtype=np.float32),
+        np.asarray([0.0, 3.0, -3.0], dtype=np.float32),
+    ]
+    runtime = SimpleNamespace(save_fbpick_physics_qc_gather_png=_save)
+
+    out_paths = physics_qc_cli._save_vis_pngs(
+        info=info,
+        segy_path=str(segy_path),
+        out_dir=tmp_path / 'out',
+        gt_pick_i=np.asarray([1, 1, 1], dtype=np.int64),
+        coarse_pick_i=np.asarray([10, 20, 30], dtype=np.int64),
+        robust_pick_i=np.asarray([11, 21, 31], dtype=np.int64),
+        coarse_pmax=np.asarray([0.2, 0.4, 0.6], dtype=np.float32),
+        trend_center_i=np.asarray([12, 22, 32], dtype=np.int32),
+        physical_center_i=np.asarray([13, 23, 33], dtype=np.int32),
+        fine_center_i=np.asarray([14, 24, 34], dtype=np.int32),
+        physical_model_status=np.asarray([0, 1, 2], dtype=np.uint8),
+        dataset_cfg={'primary_keys': ['ffid']},
+        vis_cfg={
+            'max_gathers_per_file': 1,
+            'skip_gather_keys': {},
+            'max_traces_per_gather': None,
+            'waveform_norm': 'global',
+            'clip_percentile': 99.0,
+        },
+        runtime=runtime,
+    )
+
+    assert len(out_paths) == 1
+    np.testing.assert_array_equal(
+        captured['coarse_pmax'], np.asarray([0.2, 0.6], dtype=np.float32)
+    )
+    np.testing.assert_array_equal(
+        captured['trend_center_i'], np.asarray([12, 32], dtype=np.int32)
+    )
+    np.testing.assert_array_equal(
+        captured['physical_center_i'],
+        np.asarray([13, 33], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        captured['fine_center_i'], np.asarray([14, 34], dtype=np.int32)
+    )
+    np.testing.assert_array_equal(
+        captured['physical_model_status'],
+        np.asarray([0, 2], dtype=np.uint8),
+    )
