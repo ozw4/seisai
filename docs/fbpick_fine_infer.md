@@ -9,6 +9,21 @@ artifacts:
 The current fine inference CLI is a single-gather entrypoint. It requires exactly
 one `paths.segy_files` entry and exactly one `paths.robust_npz_files` entry.
 
+## Window Center
+
+Fine inference reads the local-window center from the robust npz. The
+recommended config uses `fine_center_i` when present and falls back to
+`robust_pick_i` for older robust artifacts:
+
+```yaml
+window_center:
+  npz_key: fine_center_i
+  fallback_npz_key: robust_pick_i
+```
+
+Physics output writes `fine_center_i` even when physical trend centering is not
+used, so new robust artifacts should provide the fine-stage center explicitly.
+
 ## Coarse NPZ Input
 
 Set `paths.coarse_npz_files` when the coarse and physics outputs live in

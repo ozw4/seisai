@@ -441,6 +441,38 @@ def _require_overview_vector(
 	return arr
 
 
+def _optional_qc_vector(
+	name: str,
+	value: np.ndarray | None,
+	*,
+	length: int,
+	dtype: object,
+) -> np.ndarray | None:
+	if value is None:
+		return None
+	arr = np.asarray(value, dtype=dtype)
+	if arr.ndim != 1 or int(arr.shape[0]) != int(length):
+		msg = f'{name} must be 1D with length {length}'
+		raise ValueError(msg)
+	return arr
+
+
+def _format_qc_status_counts(status: np.ndarray | None) -> str | None:
+	if status is None:
+		return None
+	status_i = np.asarray(status, dtype=np.int64)
+	if status_i.ndim != 1:
+		msg = 'physical_model_status must be 1D'
+		raise ValueError(msg)
+	if int(status_i.shape[0]) == 0:
+		return None
+	values, counts = np.unique(status_i, return_counts=True)
+	return ', '.join(
+		f'{int(value)}={int(count)}'
+		for value, count in zip(values, counts, strict=True)
+	)
+
+
 def _resolve_overview_clip(raw_wave_hw: np.ndarray, *, clip_percentile: float) -> float:
 	percentile = float(clip_percentile)
 	if percentile <= 0.0 or percentile > 100.0:
@@ -855,6 +887,14 @@ def save_fbpick_physics_qc_gather_png(
 	gt_pick_i: np.ndarray,
 	coarse_pick_i: np.ndarray,
 	robust_pick_i: np.ndarray,
+	coarse_pmax: np.ndarray | None = None,
+	trend_center_i: np.ndarray | None = None,
+	physical_center_i: np.ndarray | None = None,
+	fine_center_i: np.ndarray | None = None,
+	window_start_i: np.ndarray | None = None,
+	window_end_i: np.ndarray | None = None,
+	final_pick_i: np.ndarray | None = None,
+	physical_model_status: np.ndarray | None = None,
 	title: str | None = None,
 	dpi: int = 150,
 	clip_percentile: float = 99.0,
@@ -883,6 +923,55 @@ def save_fbpick_physics_qc_gather_png(
 		if arr.ndim != 1 or int(arr.shape[0]) != n_traces:
 			msg = f'{name} must be 1D with length {n_traces}'
 			raise ValueError(msg)
+	coarse_pmax_arr = _optional_qc_vector(
+		'coarse_pmax',
+		coarse_pmax,
+		length=n_traces,
+		dtype=np.float32,
+	)
+	trend = _optional_qc_vector(
+		'trend_center_i',
+		trend_center_i,
+		length=n_traces,
+		dtype=np.int64,
+	)
+	physical = _optional_qc_vector(
+		'physical_center_i',
+		physical_center_i,
+		length=n_traces,
+		dtype=np.int64,
+	)
+	fine = _optional_qc_vector(
+		'fine_center_i',
+		fine_center_i,
+		length=n_traces,
+		dtype=np.int64,
+	)
+	window_start = _optional_qc_vector(
+		'window_start_i',
+		window_start_i,
+		length=n_traces,
+		dtype=np.int64,
+	)
+	window_end = _optional_qc_vector(
+		'window_end_i',
+		window_end_i,
+		length=n_traces,
+		dtype=np.int64,
+	)
+	final = _optional_qc_vector(
+		'final_pick_i',
+		final_pick_i,
+		length=n_traces,
+		dtype=np.int64,
+	)
+	status = _optional_qc_vector(
+		'physical_model_status',
+		physical_model_status,
+		length=n_traces,
+		dtype=np.uint8,
+	)
+	status_summary = _format_qc_status_counts(status)
 
 	dpi_int = int(dpi)
 	if dpi_int <= 0:
@@ -939,39 +1028,87 @@ def save_fbpick_physics_qc_gather_png(
 		label='GT pick',
 	)
 	axes[0].plot(
-		x[valid_gt],
-		coarse.astype(np.float32)[valid_gt],
+		x,
+		coarse.astype(np.float32),
 		color='#00a6ff',
 		lw=1.0,
 		alpha=0.9,
-		label='coarse pick',
+		label='coarse',
 	)
 	axes[0].plot(
-		x[valid_gt],
-		robust.astype(np.float32)[valid_gt],
+		x,
+		robust.astype(np.float32),
 		color='yellow',
 		lw=1.0,
 		alpha=0.95,
-		label='robust pick',
+		label='robust',
 	)
+	if trend is not None:
+		axes[0].plot(
+			x,
+			trend.astype(np.float32),
+			color='#ff9f1c',
+			lw=1.0,
+			ls='--',
+			alpha=0.95,
+			label='trend center',
+		)
+	if physical is not None:
+		axes[0].plot(
+			x,
+			physical.astype(np.float32),
+			color='#d65db1',
+			lw=1.0,
+			alpha=0.95,
+			label='physical center',
+		)
+	if fine is not None:
+		axes[0].plot(
+			x,
+			fine.astype(np.float32),
+			color='#00f5d4',
+			lw=1.0,
+			ls='-.',
+			alpha=0.95,
+			label='fine center',
+		)
+	plot_window_start = window_start
+	plot_window_end = window_end
+	window_start_label = 'window start'
+	window_end_label = 'window end'
+	if plot_window_start is None:
+		plot_window_start = robust_window_start
+		window_start_label = 'robust window start'
+	if plot_window_end is None:
+		plot_window_end = robust_window_end
+		window_end_label = 'robust window end'
 	axes[0].plot(
-		x[valid_gt],
-		np.clip(robust_window_start, 0, n_samples - 1).astype(np.float32)[valid_gt],
+		x,
+		np.clip(plot_window_start, 0, n_samples - 1).astype(np.float32),
 		color='yellow',
 		lw=0.8,
 		ls='--',
 		alpha=0.75,
-		label='robust window start',
+		label=window_start_label,
 	)
 	axes[0].plot(
-		x[valid_gt],
-		np.clip(robust_window_end, 0, n_samples - 1).astype(np.float32)[valid_gt],
+		x,
+		np.clip(plot_window_end, 0, n_samples - 1).astype(np.float32),
 		color='yellow',
 		lw=0.8,
 		ls=':',
 		alpha=0.75,
-		label='robust window end',
+		label=window_end_label,
 	)
+	if final is not None:
+		axes[0].plot(
+			x,
+			final.astype(np.float32),
+			color='red',
+			lw=1.2,
+			alpha=0.95,
+			label='final',
+		)
 	axes[0].set_title(
 		f'waveform and picks (norm={norm_mode}, p{float(clip_percentile):g})'
 	)
@@ -995,7 +1132,12 @@ def save_fbpick_physics_qc_gather_png(
 	axes[1].set_ylabel('Sample Error')
 	axes[1].legend(loc='upper right', fontsize=8)
 
-	mask_values = in_robust_window.astype(np.float32)[None, :]
+	mask_rows = [in_robust_window.astype(np.float32)]
+	mask_labels = ['GT in robust']
+	if coarse_pmax_arr is not None:
+		mask_rows.append(np.clip(coarse_pmax_arr, 0.0, 1.0).astype(np.float32))
+		mask_labels.append('coarse pmax')
+	mask_values = np.stack(mask_rows, axis=0)
 	axes[2].imshow(
 		mask_values,
 		cmap='gray_r',
@@ -1005,13 +1147,18 @@ def save_fbpick_physics_qc_gather_png(
 		vmin=0.0,
 		vmax=1.0,
 	)
-	axes[2].set_title('GT in robust window')
+	axes[2].set_title('QC masks')
 	axes[2].set_xlabel('Trace Index')
-	axes[2].set_yticks([0])
-	axes[2].set_yticklabels(['mask'])
+	axes[2].set_yticks(np.arange(len(mask_labels)))
+	axes[2].set_yticklabels(mask_labels)
 
+	title_lines = []
 	if title is not None:
-		fig.suptitle(str(title))
+		title_lines.append(str(title))
+	if status_summary is not None:
+		title_lines.append(f'physical status: {status_summary}')
+	if title_lines:
+		fig.suptitle('\n'.join(title_lines))
 		fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.93))
 	else:
 		fig.tight_layout()

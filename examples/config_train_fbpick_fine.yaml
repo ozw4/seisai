@@ -23,8 +23,8 @@ transform:
   standardize_eps: 1.0e-8
 
 window_center:
-  npz_key: robust_pick_i
-  fallback_npz_key: null
+  npz_key: fine_center_i
+  fallback_npz_key: robust_pick_i
 
 center_augment:
   enabled: true

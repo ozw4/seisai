@@ -418,6 +418,8 @@ def _build_test_fine_train_dataset(
     segy_path: str,
     fb_path: str,
     robust_path: str,
+    window_center_npz_key: str = 'robust_pick_i',
+    window_center_fallback_npz_key: str | None = None,
     center_augment: FineCenterAugmentCfg | None = None,
     max_trials: int = 8,
 ):
@@ -442,6 +444,8 @@ def _build_test_fine_train_dataset(
         use_header_cache=False,
         waveform_mode='eager',
         segy_endian='big',
+        window_center_npz_key=window_center_npz_key,
+        window_center_fallback_npz_key=window_center_fallback_npz_key,
         center_augment=center_augment,
     )
 
@@ -451,6 +455,8 @@ def _build_test_fine_labeled_infer_dataset(
     segy_path: str,
     fb_path: str,
     robust_path: str,
+    window_center_npz_key: str = 'robust_pick_i',
+    window_center_fallback_npz_key: str | None = None,
     max_trials: int = 8,
 ):
     return build_labeled_infer_dataset(
@@ -472,6 +478,8 @@ def _build_test_fine_labeled_infer_dataset(
         use_header_cache=False,
         waveform_mode='eager',
         segy_endian='big',
+        window_center_npz_key=window_center_npz_key,
+        window_center_fallback_npz_key=window_center_fallback_npz_key,
     )
 
 
@@ -571,6 +579,24 @@ def test_load_fine_train_config_returns_fixed_contract_values(tmp_path: Path) ->
     assert typed.ckpt.stage == 'fine'
     assert typed.ckpt.output_ids == ('P',)
     assert typed.ckpt.softmax_axis == 'time'
+
+
+def test_load_fine_train_config_parses_window_center(tmp_path: Path) -> None:
+    cfg = _make_fine_train_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        fb_path='dummy.npy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['window_center'] = {
+        'npz_key': 'fine_center_i',
+        'fallback_npz_key': 'robust_pick_i',
+    }
+
+    typed = load_fine_train_config(cfg, base_dir=tmp_path)
+
+    assert typed.window_center.npz_key == 'fine_center_i'
+    assert typed.window_center.fallback_npz_key == 'robust_pick_i'
 
 
 def test_load_fine_train_config_parses_center_augment(tmp_path: Path) -> None:
@@ -1150,6 +1176,129 @@ def test_fine_labeled_infer_dataset_does_not_apply_center_jitter(
     meta = sample['meta']
     np.testing.assert_array_equal(meta['center_raw_i'], robust)
     np.testing.assert_array_equal(meta['window_start_i'], robust.astype(np.int32) - 128)
+
+
+def test_fine_train_dataset_uses_configured_fine_center(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 128
+    n_samples = 512
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 80, dtype=np.int32)
+    fine_center = np.linspace(180, 220, n_traces, dtype=np.int32)
+    fb = fine_center.astype(np.int64)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'train_fine_center.sgy', traces)
+    fb_path = _write_fb(tmp_path / 'train_fine_center_fb.npy', fb)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'train_fine_center.robust.npz',
+        robust_pick_i=robust,
+        fine_center_i=fine_center,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+    ds = _build_test_fine_train_dataset(
+        segy_path=segy_path,
+        fb_path=fb_path,
+        robust_path=robust_path,
+        window_center_npz_key='fine_center_i',
+        window_center_fallback_npz_key='robust_pick_i',
+    )
+
+    try:
+        ds._rng = np.random.default_rng(0)
+        sample = ds[0]
+    finally:
+        ds.close()
+
+    meta = sample['meta']
+    np.testing.assert_array_equal(meta['center_raw_i'], fine_center)
+    np.testing.assert_array_equal(
+        meta['window_start_i'],
+        fine_center.astype(np.int32) - 128,
+    )
+
+
+def test_fine_train_dataset_falls_back_to_robust_pick_when_fine_center_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 128
+    n_samples = 512
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 200, dtype=np.int32)
+    fb = robust.astype(np.int64)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'train_center_fallback.sgy', traces)
+    fb_path = _write_fb(tmp_path / 'train_center_fallback_fb.npy', fb)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'train_center_fallback.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+    ds = _build_test_fine_train_dataset(
+        segy_path=segy_path,
+        fb_path=fb_path,
+        robust_path=robust_path,
+        window_center_npz_key='fine_center_i',
+        window_center_fallback_npz_key='robust_pick_i',
+    )
+
+    try:
+        ds._rng = np.random.default_rng(0)
+        sample = ds[0]
+    finally:
+        ds.close()
+
+    np.testing.assert_array_equal(sample['meta']['center_raw_i'], robust)
+
+
+def test_fine_train_dataset_raises_when_center_key_and_fallback_are_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 128
+    n_samples = 512
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 200, dtype=np.int32)
+    fb = robust.astype(np.int64)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'train_center_missing.sgy', traces)
+    fb_path = _write_fb(tmp_path / 'train_center_missing_fb.npy', fb)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'train_center_missing.robust.npz',
+        robust_pick_i=robust,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+
+    with pytest.raises(KeyError, match='fine window center key'):
+        _build_test_fine_train_dataset(
+            segy_path=segy_path,
+            fb_path=fb_path,
+            robust_path=robust_path,
+            window_center_npz_key='fine_center_i',
+        )
 
 
 def test_fine_train_center_augment_clips_to_record(
