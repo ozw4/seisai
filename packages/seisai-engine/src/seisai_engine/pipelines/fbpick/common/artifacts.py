@@ -36,6 +36,10 @@ COARSE_GEOMETRY_OPTIONAL_KEYS = (
     'geometry_valid_mask',
 )
 
+COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS = (
+    'offset_signed_geom_m',
+)
+
 ROBUST_REQUIRED_KEYS = (
     'dt_sec',
     'n_samples_orig',
@@ -136,6 +140,7 @@ REASON_MASK_LABELS = {
 }
 
 __all__ = [
+    'COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS',
     'COARSE_GEOMETRY_OPTIONAL_KEYS',
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',

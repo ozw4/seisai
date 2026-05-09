@@ -22,6 +22,7 @@ from .geometry import (
     estimate_signed_offset_side,
     load_coarse_geometry_from_npz,
     select_nearest_source_groups,
+    signed_offset_side_from_geometry,
     split_offset_gap_segments,
 )
 from .physical_center import (
@@ -98,5 +99,6 @@ __all__ = [
     'physics_lite_config_to_dict',
     'run_physics_lite',
     'select_nearest_source_groups',
+    'signed_offset_side_from_geometry',
     'split_offset_gap_segments',
 ]

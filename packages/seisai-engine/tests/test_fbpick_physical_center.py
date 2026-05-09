@@ -292,6 +292,68 @@ def test_physical_center_fits_once_per_unique_observation_segment(monkeypatch) -
     assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
 
 
+def test_physical_center_uses_saved_signed_offset_for_side_segmentation(
+    monkeypatch,
+) -> None:
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    offsets = np.linspace(50.0, 600.0, 12, dtype=np.float32)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(offsets_m=offsets)
+    expected_side = np.asarray([-1] * 6 + [1] * 6, dtype=np.int8)
+    coarse_npz['offset_signed_geom_m'] = (
+        expected_side.astype(np.float32) * offsets
+    ).astype(np.float32)
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {'split_by_offset_gap': False},
+                'two_piece_ransac': {'min_pts': 3},
+            }
+        ),
+    )
+
+    np.testing.assert_array_equal(result.physical_model_side, expected_side)
+
+
+def test_physical_center_falls_back_to_pca_side_when_saved_signed_absent(
+    monkeypatch,
+) -> None:
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    offsets = np.linspace(50.0, 600.0, 12, dtype=np.float32)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(offsets_m=offsets)
+    expected_side = np.asarray([-1] * 6 + [1] * 6, dtype=np.int8)
+    receiver_x = expected_side.astype(np.float32) * offsets
+    coarse_npz['receiver_x_m'] = receiver_x.astype(np.float32)
+    coarse_npz['offset_abs_geom_m'] = np.abs(receiver_x).astype(np.float32)
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {'split_by_offset_gap': False},
+                'two_piece_ransac': {'min_pts': 3},
+            }
+        ),
+    )
+
+    np.testing.assert_array_equal(result.physical_model_side, expected_side)
+
+
 def test_synthetic_two_piece_trend_predicts_physical_centers() -> None:
     offsets = np.linspace(50.0, 2000.0, 28, dtype=np.float32)
     coarse_npz, table, feasible, trend, merged = _make_inputs(offsets_m=offsets)
@@ -510,7 +572,6 @@ def test_fit_failed_failure_reason_preserves_fallback_status(monkeypatch) -> Non
 
     def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
         calls.append(x_abs.detach().cpu().numpy().copy())
-        return None
 
     monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
     coarse_npz, table, feasible, trend, merged = _make_inputs(

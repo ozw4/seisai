@@ -13,9 +13,9 @@ from .geometry import (
     CoarseGeometry,
     SourceGroup,
     build_source_groups,
-    estimate_signed_offset_side,
     load_coarse_geometry_from_npz,
     select_nearest_source_groups,
+    signed_offset_side_from_geometry,
     split_offset_gap_segments,
 )
 from .merge import MergeResult
@@ -372,7 +372,7 @@ def _obs_with_target_side(
     geometry: CoarseGeometry,
 ) -> tuple[np.ndarray, int, bool]:
     context_indices = _append_index(obs_indices, trace_idx)
-    signed = estimate_signed_offset_side(geometry, context_indices)
+    signed = signed_offset_side_from_geometry(geometry, context_indices)
     if not bool(signed.reliable):
         return np.asarray(obs_indices, dtype=np.int64), 0, False
 

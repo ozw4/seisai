@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 from seisai_engine.pipelines.fbpick.common import (
+    COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS,
     COARSE_GEOMETRY_OPTIONAL_KEYS,
     REASON_MASK_FILLED_FROM_TREND,
     REASON_MASK_INFEASIBLE,
@@ -32,15 +33,15 @@ from seisai_engine.pipelines.fbpick.physics.feasible import (
     compute_velocity_t0_band_from_arrays,
 )
 from seisai_engine.pipelines.fbpick.physics.merge import apply_keep_reject_fill
-from seisai_engine.pipelines.fbpick.physics.pick_table import (
-    normalize_coarse_pick_table,
-)
 from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
     PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
+)
+from seisai_engine.pipelines.fbpick.physics.pick_table import (
+    normalize_coarse_pick_table,
 )
 from seisai_engine.pipelines.fbpick.physics.run import (
     build_robust_payload_from_coarse,
@@ -330,6 +331,39 @@ def test_save_and_load_coarse_npz_preserve_optional_geometry(tmp_path: Path) -> 
         np.testing.assert_array_equal(loaded[key], geometry[key])
 
 
+def test_save_and_load_coarse_npz_preserve_extra_signed_geometry(
+    tmp_path: Path,
+) -> None:
+    geometry = {
+        'source_x_m': np.array([0.0, 0.0, np.nan], dtype=np.float32),
+        'source_y_m': np.array([0.0, 0.0, np.nan], dtype=np.float32),
+        'receiver_x_m': np.array([-10.0, 10.0, np.nan], dtype=np.float32),
+        'receiver_y_m': np.array([0.0, 0.0, np.nan], dtype=np.float32),
+        'offset_abs_geom_m': np.array([10.0, 10.0, np.nan], dtype=np.float32),
+        'geometry_valid_mask': np.array([True, True, False], dtype=np.bool_),
+        'offset_signed_geom_m': np.array([-10.0, 10.0, np.nan], dtype=np.float32),
+    }
+    payload = _make_coarse_payload(
+        coarse_pick_i=np.array([10, 20, 30], dtype=np.int32),
+        coarse_pmax=np.array([0.9, 0.8, 0.7], dtype=np.float32),
+        offsets_m=np.array([100.0, 200.0, 300.0], dtype=np.float32),
+    )
+
+    out_path = save_coarse_npz(
+        tmp_path / 'signed_geometry.coarse.npz',
+        **payload,
+        **geometry,
+    )
+    loaded = load_coarse_npz(out_path)
+
+    assert set(COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS).issubset(loaded.keys())
+    assert loaded['offset_signed_geom_m'].dtype == np.dtype(np.float32)
+    np.testing.assert_array_equal(
+        loaded['offset_signed_geom_m'],
+        geometry['offset_signed_geom_m'],
+    )
+
+
 def test_save_coarse_npz_rejects_partial_geometry(tmp_path: Path) -> None:
     payload = _make_coarse_payload(
         coarse_pick_i=np.array([10, 20], dtype=np.int32),
@@ -362,6 +396,28 @@ def test_save_coarse_npz_rejects_nan_geometry_on_valid_trace(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match='source_x_m must be finite'):
         save_coarse_npz(tmp_path / 'bad_geometry.coarse.npz', **payload, **geometry)
+
+
+def test_save_coarse_npz_rejects_nan_signed_geometry_on_valid_trace(
+    tmp_path: Path,
+) -> None:
+    payload = _make_coarse_payload(
+        coarse_pick_i=np.array([10, 20], dtype=np.int32),
+        coarse_pmax=np.array([0.9, 0.8], dtype=np.float32),
+        offsets_m=np.array([100.0, 200.0], dtype=np.float32),
+    )
+    geometry = {
+        'source_x_m': np.array([0.0, 0.0], dtype=np.float32),
+        'source_y_m': np.array([0.0, 0.0], dtype=np.float32),
+        'receiver_x_m': np.array([-10.0, 10.0], dtype=np.float32),
+        'receiver_y_m': np.array([0.0, 0.0], dtype=np.float32),
+        'offset_abs_geom_m': np.array([10.0, 10.0], dtype=np.float32),
+        'geometry_valid_mask': np.array([True, True], dtype=np.bool_),
+        'offset_signed_geom_m': np.array([-10.0, np.nan], dtype=np.float32),
+    }
+
+    with pytest.raises(ValueError, match='offset_signed_geom_m must be finite'):
+        save_coarse_npz(tmp_path / 'bad_signed.coarse.npz', **payload, **geometry)
 
 
 def test_load_coarse_npz_accepts_legacy_payload_without_geometry(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from .artifacts import (
+    COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS,
     COARSE_GEOMETRY_OPTIONAL_KEYS,
     COARSE_REQUIRED_KEYS,
     FINAL_REQUIRED_KEYS,
@@ -17,6 +18,7 @@ from .artifacts import (
 )
 
 __all__ = [
+    'COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS',
     'COARSE_GEOMETRY_OPTIONAL_KEYS',
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
@@ -78,17 +80,29 @@ def _validate_coarse_geometry_arrays(
             raise ValueError(msg)
         expected_dtype = np.bool_ if key == 'geometry_valid_mask' else np.float32
         _require_exact_dtype(key, arr, dtype=expected_dtype)
+    for key in COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS:
+        if key not in arrays:
+            continue
+        arr = np.asarray(arrays[key])
+        if arr.ndim != 1 or int(arr.shape[0]) != n_traces_int:
+            msg = f'{key} must be 1D with length n_traces'
+            raise ValueError(msg)
+        _require_exact_dtype(key, arr, dtype=np.float32)
 
     valid = np.asarray(arrays['geometry_valid_mask'], dtype=np.bool_)
     if not np.any(valid):
         return
-    for key in (
+    finite_keys = [
         'source_x_m',
         'source_y_m',
         'receiver_x_m',
         'receiver_y_m',
         'offset_abs_geom_m',
-    ):
+    ]
+    finite_keys.extend(
+        key for key in COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS if key in arrays
+    )
+    for key in finite_keys:
         arr = np.asarray(arrays[key])
         if not np.all(np.isfinite(arr[valid])):
             msg = f'{key} must be finite where geometry_valid_mask is True'
@@ -104,6 +118,7 @@ def _coerce_optional_coarse_geometry(
     receiver_y_m,
     offset_abs_geom_m,
     geometry_valid_mask,
+    offset_signed_geom_m,
 ) -> dict[str, np.ndarray]:
     values = {
         'source_x_m': source_x_m,
@@ -113,8 +128,12 @@ def _coerce_optional_coarse_geometry(
         'offset_abs_geom_m': offset_abs_geom_m,
         'geometry_valid_mask': geometry_valid_mask,
     }
+    extra_values = {
+        'offset_signed_geom_m': offset_signed_geom_m,
+    }
     provided = [key for key, value in values.items() if value is not None]
-    if not provided:
+    provided_extra = [key for key, value in extra_values.items() if value is not None]
+    if not provided and not provided_extra:
         return {}
     missing = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if values[key] is None]
     if missing:
@@ -137,6 +156,13 @@ def _coerce_optional_coarse_geometry(
         values['geometry_valid_mask'],
         length=n_traces_int,
     )
+    if offset_signed_geom_m is not None:
+        arrays['offset_signed_geom_m'] = _coerce_vector(
+            'offset_signed_geom_m',
+            offset_signed_geom_m,
+            dtype=np.float32,
+            length=n_traces_int,
+        )
     _validate_coarse_geometry_arrays(arrays, n_traces=n_traces_int)
     return arrays
 
@@ -148,6 +174,13 @@ def _validate_optional_coarse_geometry(
 ) -> None:
     present = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key in out]
     if not present:
+        extra_present = [
+            key for key in COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS if key in out
+        ]
+        if extra_present:
+            missing = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key not in out]
+            msg = f'coarse npz missing optional geometry keys: {missing}'
+            raise KeyError(msg)
         return
     missing = [key for key in COARSE_GEOMETRY_OPTIONAL_KEYS if key not in out]
     if missing:
@@ -285,6 +318,7 @@ def save_coarse_npz(
     receiver_y_m=None,
     offset_abs_geom_m=None,
     geometry_valid_mask=None,
+    offset_signed_geom_m=None,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -365,6 +399,7 @@ def save_coarse_npz(
             receiver_y_m=receiver_y_m,
             offset_abs_geom_m=offset_abs_geom_m,
             geometry_valid_mask=geometry_valid_mask,
+            offset_signed_geom_m=offset_signed_geom_m,
         )
     )
 

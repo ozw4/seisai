@@ -98,6 +98,7 @@ class FileInfo:
     receiver_y_m: np.ndarray | None = None
     offset_abs_geom_m: np.ndarray | None = None
     geometry_valid_mask: np.ndarray | None = None
+    offset_signed_geom_m: np.ndarray | None = None
     fb: np.ndarray | None = None
     # Optional CSR phase picks (PhaseNet-style training). Stored as raw arrays to keep
     # file_info pickle/lightweight and avoid carrying variable-length lists in outputs.
