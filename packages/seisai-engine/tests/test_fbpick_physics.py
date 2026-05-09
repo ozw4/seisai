@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -25,7 +26,10 @@ from seisai_engine.pipelines.fbpick.physics.config import (
     load_physics_lite_config,
     physics_lite_config_to_dict,
 )
-from seisai_engine.pipelines.fbpick.physics.feasible import compute_feasible_band
+from seisai_engine.pipelines.fbpick.physics.feasible import (
+    compute_feasible_band,
+    compute_velocity_t0_band_from_arrays,
+)
 from seisai_engine.pipelines.fbpick.physics.merge import apply_keep_reject_fill
 from seisai_engine.pipelines.fbpick.physics.pick_table import (
     normalize_coarse_pick_table,
@@ -322,6 +326,162 @@ def test_load_coarse_npz_accepts_legacy_payload_without_geometry(tmp_path: Path)
         assert key not in loaded
 
 
+def test_velocity_t0_band_from_arrays_accepts_synthetic_trend_in_range() -> None:
+    offset_m = np.array([0.0, 100.0, 200.0], dtype=np.float32)
+    pick_t_sec = np.float32(0.02) + offset_m / np.float32(1000.0)
+
+    feasible = compute_velocity_t0_band_from_arrays(
+        offset_m=offset_m,
+        pick_t_sec=pick_t_sec,
+        vmin_m_s=800.0,
+        vmax_m_s=1200.0,
+        t0_lo_ms=10.0,
+        t0_hi_ms=30.0,
+    )
+
+    assert feasible.feasible_mask.tolist() == [True, True, True]
+    assert feasible.feasible_lo_sec.dtype == np.float32
+    assert feasible.feasible_hi_sec.dtype == np.float32
+
+
+def test_velocity_t0_band_from_arrays_rejects_t0_outside_range() -> None:
+    feasible = compute_velocity_t0_band_from_arrays(
+        offset_m=np.array([0.0, 0.0], dtype=np.float32),
+        pick_t_sec=np.array([-0.02, 0.06], dtype=np.float32),
+        vmin_m_s=800.0,
+        vmax_m_s=1200.0,
+        t0_lo_ms=0.0,
+        t0_hi_ms=50.0,
+    )
+
+    assert feasible.feasible_mask.tolist() == [False, False]
+
+
+def test_velocity_t0_band_from_arrays_rejects_velocity_outside_range() -> None:
+    offset_m = np.array([1000.0, 1000.0], dtype=np.float32)
+    pick_t_sec = np.array(
+        [
+            1000.0 / 6000.0,
+            1000.0 / 500.0,
+        ],
+        dtype=np.float32,
+    )
+
+    feasible = compute_velocity_t0_band_from_arrays(
+        offset_m=offset_m,
+        pick_t_sec=pick_t_sec,
+        vmin_m_s=1000.0,
+        vmax_m_s=5000.0,
+        t0_lo_ms=0.0,
+        t0_hi_ms=0.0,
+    )
+
+    assert feasible.feasible_mask.tolist() == [False, False]
+
+
+def test_velocity_t0_band_from_arrays_uses_abs_for_negative_offsets() -> None:
+    feasible = compute_velocity_t0_band_from_arrays(
+        offset_m=np.array([-100.0, 100.0], dtype=np.float32),
+        pick_t_sec=np.array([0.12, 0.12], dtype=np.float32),
+        vmin_m_s=800.0,
+        vmax_m_s=1200.0,
+        t0_lo_ms=10.0,
+        t0_hi_ms=30.0,
+    )
+
+    assert feasible.feasible_mask.tolist() == [True, True]
+    np.testing.assert_array_equal(
+        feasible.feasible_lo_sec,
+        np.array(
+            [100.0 / 1200.0 + 0.01, 100.0 / 1200.0 + 0.01],
+            dtype=np.float32,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ('kwargs', 'match'),
+    [
+        (
+            {
+                'offset_m': np.array([0.0, 1.0], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+            },
+            'same shape',
+        ),
+        (
+            {
+                'offset_m': np.array([[0.0]], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+            },
+            'offset_m must be a 1D array',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([[0.0]], dtype=np.float32),
+            },
+            'pick_t_sec must be a 1D array',
+        ),
+        (
+            {
+                'offset_m': np.array([np.nan], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+            },
+            'offset_m must be finite',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([np.nan], dtype=np.float32),
+            },
+            'pick_t_sec must be finite',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+                'vmin_m_s': 0.0,
+            },
+            'vmin_m_s',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+                'vmax_m_s': 500.0,
+            },
+            'vmax_m_s',
+        ),
+        (
+            {
+                'offset_m': np.array([0.0], dtype=np.float32),
+                'pick_t_sec': np.array([0.0], dtype=np.float32),
+                't0_lo_ms': 10.0,
+                't0_hi_ms': 0.0,
+            },
+            't0_lo_ms',
+        ),
+    ],
+)
+def test_velocity_t0_band_from_arrays_rejects_invalid_inputs(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    params: dict[str, object] = {
+        'offset_m': np.array([0.0], dtype=np.float32),
+        'pick_t_sec': np.array([0.0], dtype=np.float32),
+        'vmin_m_s': 1000.0,
+        'vmax_m_s': 5000.0,
+        't0_lo_ms': 0.0,
+        't0_hi_ms': 100.0,
+    }
+    params.update(kwargs)
+
+    with pytest.raises(ValueError, match=match):
+        compute_velocity_t0_band_from_arrays(**params)
+
+
 def test_feasible_band_rejects_early_and_late_picks() -> None:
     coarse = _make_coarse_payload(
         coarse_pick_i=np.array([0, 125, 300], dtype=np.int32),
@@ -337,6 +497,22 @@ def test_feasible_band_rejects_early_and_late_picks() -> None:
     assert feasible.feasible_mask.tolist() == [False, True, False]
     assert feasible.feasible_lo_sec.dtype == np.float32
     assert feasible.feasible_hi_sec.dtype == np.float32
+
+
+def test_feasible_band_preserves_table_n_traces_validation() -> None:
+    coarse = _make_coarse_payload(
+        coarse_pick_i=np.array([10], dtype=np.int32),
+        coarse_pmax=np.array([0.9], dtype=np.float32),
+        offsets_m=np.array([100.0], dtype=np.float32),
+    )
+    table = normalize_coarse_pick_table(coarse)
+    cfg = load_physics_lite_config({}).feasible_band
+
+    with pytest.raises(ValueError, match='table.n_traces must be positive'):
+        compute_feasible_band(replace(table, n_traces=0), cfg)
+
+    with pytest.raises(ValueError, match='coarse_pick_t_sec must have shape'):
+        compute_feasible_band(replace(table, n_traces=2), cfg)
 
 
 def test_conf_trend1_drops_with_trend_deviation() -> None:
