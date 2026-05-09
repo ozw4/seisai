@@ -77,7 +77,11 @@ def _load_runtime() -> SimpleNamespace:
 	import segyio
 	from seisai_dataset.file_info import build_file_info
 	from seisai_engine.pipelines.common import load_cfg_with_base_dir, resolve_cfg_paths
-	from seisai_engine.pipelines.fbpick.common import load_coarse_npz, load_robust_npz
+	from seisai_engine.pipelines.fbpick.common import (
+		load_coarse_npz,
+		load_fbpick_final_npz,
+		load_robust_npz,
+	)
 	from seisai_engine.viewer.fbpick import (
 		save_fbpick_physics_qc_cdf_png,
 		save_fbpick_physics_qc_gather_png,
@@ -89,6 +93,7 @@ def _load_runtime() -> SimpleNamespace:
 		expand_cfg_listfiles=expand_cfg_listfiles,
 		load_cfg_with_base_dir=load_cfg_with_base_dir,
 		load_coarse_npz=load_coarse_npz,
+		load_fbpick_final_npz=load_fbpick_final_npz,
 		load_robust_npz=load_robust_npz,
 		save_fbpick_physics_qc_cdf_png=save_fbpick_physics_qc_cdf_png,
 		save_fbpick_physics_qc_gather_png=save_fbpick_physics_qc_gather_png,
@@ -121,23 +126,63 @@ def _require_list_str(cfg: dict[str, Any], key: str) -> list[str]:
 	return list(value)
 
 
+def _optional_str(cfg: dict[str, Any], key: str) -> str | None:
+	value = cfg.get(key)
+	if value is None:
+		return None
+	if not isinstance(value, str) or not value:
+		msg = f'{key} must be non-empty str or null'
+		raise TypeError(msg)
+	return value
+
+
+def _optional_list_str(cfg: dict[str, Any], key: str) -> list[str] | None:
+	value = cfg.get(key)
+	if value is None:
+		return None
+	if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+		msg = f'{key} must be list[str] or null'
+		raise TypeError(msg)
+	if not value:
+		msg = f'{key} must be non-empty when specified'
+		raise ValueError(msg)
+	return list(value)
+
+
 def _prepare_cfg(
 	cfg: dict[str, Any],
 	*,
 	base_dir: Path,
 	runtime: SimpleNamespace,
 ) -> dict[str, Any]:
-	runtime.expand_cfg_listfiles(cfg, keys=['paths.segy_files', 'paths.fb_files'])
-	runtime.resolve_cfg_paths(
+	paths = cfg.get('paths')
+	optional_listfile_keys: list[str] = []
+	if isinstance(paths, dict) and paths.get('final_npz_files') is not None:
+		optional_listfile_keys.append('paths.final_npz_files')
+	runtime.expand_cfg_listfiles(
 		cfg,
-		base_dir,
 		keys=[
 			'paths.segy_files',
 			'paths.fb_files',
-			'paths.coarse_npz_dir',
-			'paths.robust_npz_dir',
-			'paths.out_dir',
+			*optional_listfile_keys,
 		],
+	)
+	path_keys = [
+		'paths.segy_files',
+		'paths.fb_files',
+		'paths.coarse_npz_dir',
+		'paths.robust_npz_dir',
+		'paths.out_dir',
+	]
+	if isinstance(paths, dict):
+		if paths.get('final_npz_dir') is not None:
+			path_keys.append('paths.final_npz_dir')
+		if paths.get('final_npz_files') is not None:
+			path_keys.append('paths.final_npz_files')
+	runtime.resolve_cfg_paths(
+		cfg,
+		base_dir,
+		keys=path_keys,
 	)
 	return cfg
 
@@ -163,9 +208,23 @@ def _build_robust_npz_path(
 	return Path(robust_npz_dir) / (_build_tag(segy_path) + '.robust.npz')
 
 
+def _build_final_npz_path(
+	*, segy_path: str | Path, final_npz_dir: str | Path
+) -> Path:
+	return Path(final_npz_dir) / (_build_tag(segy_path) + '.fbpick_final.npz')
+
+
 def _validate_paths(
 	cfg: dict[str, Any],
-) -> tuple[list[str], list[str], Path, Path, Path]:
+) -> tuple[
+	list[str],
+	list[str],
+	Path,
+	Path,
+	Path | None,
+	list[str] | None,
+	Path,
+]:
 	paths = _require_dict(cfg, 'paths')
 	segy_files = _require_list_str(paths, 'segy_files')
 	fb_files = _require_list_str(paths, 'fb_files')
@@ -178,8 +237,22 @@ def _validate_paths(
 
 	coarse_npz_dir = Path(_require_str(paths, 'coarse_npz_dir'))
 	robust_npz_dir = Path(_require_str(paths, 'robust_npz_dir'))
+	final_npz_dir_raw = _optional_str(paths, 'final_npz_dir')
+	final_npz_dir = Path(final_npz_dir_raw) if final_npz_dir_raw is not None else None
+	final_npz_files = _optional_list_str(paths, 'final_npz_files')
+	if final_npz_files is not None and len(final_npz_files) != len(segy_files):
+		msg = 'paths.final_npz_files must match paths.segy_files length'
+		raise ValueError(msg)
 	out_dir = Path(_require_str(paths, 'out_dir'))
-	return segy_files, fb_files, coarse_npz_dir, robust_npz_dir, out_dir
+	return (
+		segy_files,
+		fb_files,
+		coarse_npz_dir,
+		robust_npz_dir,
+		final_npz_dir,
+		final_npz_files,
+		out_dir,
+	)
 
 
 def _load_dataset_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -565,6 +638,47 @@ def _validate_coarse_robust_alignment(
 		raise ValueError(msg)
 
 
+def _validate_final_alignment(
+	robust: dict[str, np.ndarray],
+	final: dict[str, np.ndarray],
+) -> None:
+	for key in ('n_traces', 'n_samples_orig'):
+		if _require_scalar_int(robust, key) != _require_scalar_int(final, key):
+			msg = f'robust {key} != final {key}'
+			raise ValueError(msg)
+	if not np.isclose(
+		_require_scalar_float(robust, 'dt_sec'),
+		_require_scalar_float(final, 'dt_sec'),
+		rtol=0.0,
+		atol=DT_SEC_ATOL,
+	):
+		msg = 'robust dt_sec != final dt_sec'
+		raise ValueError(msg)
+	if not np.array_equal(
+		np.asarray(robust['trace_indices']),
+		np.asarray(final['trace_indices']),
+	):
+		msg = 'robust trace_indices != final trace_indices'
+		raise ValueError(msg)
+
+
+def _resolve_final_npz_path(
+	*,
+	segy_path: str | Path,
+	file_index: int,
+	final_npz_dir: Path | None,
+	final_npz_files: list[str] | None,
+) -> Path | None:
+	if final_npz_files is not None:
+		return Path(final_npz_files[int(file_index)])
+	if final_npz_dir is not None:
+		return _build_final_npz_path(
+			segy_path=segy_path,
+			final_npz_dir=final_npz_dir,
+		)
+	return None
+
+
 def _rate(mask: np.ndarray) -> float:
 	if int(mask.shape[0]) == 0:
 		return float('nan')
@@ -700,9 +814,15 @@ def run_pipeline(config_path: str | Path) -> Path:
 	prepared = _prepare_cfg(cfg, base_dir=base_dir, runtime=runtime)
 	dataset_cfg = _load_dataset_cfg(prepared)
 	vis_cfg = _load_vis_cfg(prepared)
-	segy_files, fb_files, coarse_npz_dir, robust_npz_dir, out_dir = _validate_paths(
-		prepared
-	)
+	(
+		segy_files,
+		fb_files,
+		coarse_npz_dir,
+		robust_npz_dir,
+		final_npz_dir,
+		final_npz_files,
+		out_dir,
+	) = _validate_paths(prepared)
 
 	per_file_rows: list[dict[str, Any]] = []
 	all_coarse_abs_err: list[np.ndarray] = []
@@ -714,7 +834,9 @@ def run_pipeline(config_path: str | Path) -> Path:
 	total_valid_gt = 0
 	total_invalid_gt = 0
 
-	for segy_path, fb_path in zip(segy_files, fb_files, strict=True):
+	for file_index, (segy_path, fb_path) in enumerate(
+		zip(segy_files, fb_files, strict=True)
+	):
 		coarse_npz_path = _build_coarse_npz_path(
 			segy_path=segy_path,
 			coarse_npz_dir=coarse_npz_dir,
@@ -722,6 +844,12 @@ def run_pipeline(config_path: str | Path) -> Path:
 		robust_npz_path = _build_robust_npz_path(
 			segy_path=segy_path,
 			robust_npz_dir=robust_npz_dir,
+		)
+		final_npz_path = _resolve_final_npz_path(
+			segy_path=segy_path,
+			file_index=file_index,
+			final_npz_dir=final_npz_dir,
+			final_npz_files=final_npz_files,
 		)
 
 		info = _build_info(
@@ -733,6 +861,11 @@ def run_pipeline(config_path: str | Path) -> Path:
 			_validate_payload_against_info(coarse, kind='coarse', info=info)
 			_validate_payload_against_info(robust, kind='robust', info=info)
 			_validate_coarse_robust_alignment(coarse, robust)
+			final = None
+			if final_npz_path is not None:
+				final = runtime.load_fbpick_final_npz(final_npz_path)
+				_validate_payload_against_info(final, kind='final', info=info)
+				_validate_final_alignment(robust, final)
 
 			n_traces = _require_scalar_int(robust, 'n_traces')
 			n_samples_orig = _require_scalar_int(robust, 'n_samples_orig')
@@ -772,6 +905,9 @@ def run_pipeline(config_path: str | Path) -> Path:
 				trend_center_i=robust.get('trend_center_i'),
 				physical_center_i=robust.get('physical_center_i'),
 				fine_center_i=robust.get('fine_center_i'),
+				window_start_i=None if final is None else final.get('window_start_i'),
+				window_end_i=None if final is None else final.get('window_end_i'),
+				final_pick_i=None if final is None else final.get('final_pick_i'),
 				physical_model_status=physical_model_status,
 				dataset_cfg=dataset_cfg,
 				vis_cfg=vis_cfg,
