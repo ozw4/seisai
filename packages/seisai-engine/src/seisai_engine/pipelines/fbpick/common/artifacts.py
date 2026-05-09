@@ -74,6 +74,7 @@ ROBUST_CENTER_OPTIONAL_KEYS = (
 ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS = (
     'physical_model_status',
     'physical_model_failure_reason',
+    'physical_offset_source',
     'physical_model_break_offset_m',
     'physical_model_slope_near_s_per_m',
     'physical_model_slope_far_s_per_m',

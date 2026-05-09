@@ -8,6 +8,7 @@ from seisai_engine.pipelines.fbpick.physics.config import load_physics_lite_conf
 from seisai_engine.pipelines.fbpick.physics.feasible import FeasibleBandResult
 from seisai_engine.pipelines.fbpick.physics.merge import MergeResult
 from seisai_engine.pipelines.fbpick.physics.physical_center import (
+    PHYSICAL_OFFSET_SOURCE_HEADER,
     PHYSICAL_MODEL_FAILURE_FIT_FAILED,
     PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
     PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
@@ -453,6 +454,90 @@ def test_geometry_missing_falls_back_to_existing_trend_without_crashing() -> Non
     )
 
 
+def test_physical_center_uses_header_offsets_when_geometry_offset_disabled(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.linspace(50.0, 600.0, 12, dtype=np.float32),
+        with_geometry=False,
+    )
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'use_geometry_offset': False,
+                    'split_by_offset_gap': False,
+                },
+                'two_piece_ransac': {'min_pts': 3},
+            }
+        ),
+    )
+
+    assert len(calls) == 1
+    np.testing.assert_allclose(calls[0], np.abs(table.offset_m), rtol=0, atol=0)
+    assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+    assert np.all(result.physical_model_failure_reason == PHYSICAL_MODEL_FAILURE_NONE)
+    assert np.all(
+        result.physical_offset_source == np.uint8(PHYSICAL_OFFSET_SOURCE_HEADER)
+    )
+
+
+def test_header_offset_path_uses_source_xy_groups_without_geometry_offsets(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    offsets = np.linspace(50.0, 600.0, 12, dtype=np.float32)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        with_geometry=False,
+    )
+    coarse_npz['source_x_m'] = np.asarray([0.0] * 6 + [1000.0] * 6, dtype=np.float32)
+    coarse_npz['source_y_m'] = np.zeros((12,), dtype=np.float32)
+    coarse_npz['geometry_valid_mask'] = np.ones((12,), dtype=np.bool_)
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'use_geometry_offset': False,
+                    'split_by_offset_gap': False,
+                },
+                'two_piece_ransac': {'min_pts': 2},
+            }
+        ),
+    )
+
+    assert sorted(int(call.size) for call in calls) == [6, 6]
+    assert np.all(result.physical_model_neighbor_count == np.int32(1))
+    assert np.all(
+        result.physical_offset_source == np.uint8(PHYSICAL_OFFSET_SOURCE_HEADER)
+    )
+
+
 def test_fallback_status_reports_feasible_clip_when_trend_is_unusable() -> None:
     coarse_npz, table, feasible, trend, merged = _make_inputs(
         offsets_m=np.linspace(50.0, 1200.0, 12, dtype=np.float32),
@@ -679,6 +764,7 @@ def test_physical_center_diagnostic_arrays_are_save_friendly() -> None:
         'fine_center_t_sec': np.float32,
         'physical_model_status': np.uint8,
         'physical_model_failure_reason': np.uint8,
+        'physical_offset_source': np.uint8,
         'physical_model_break_offset_m': np.float32,
         'physical_model_slope_near_s_per_m': np.float32,
         'physical_model_slope_far_s_per_m': np.float32,

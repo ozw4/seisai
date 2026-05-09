@@ -296,6 +296,7 @@ _ROBUST_CENTER_OPTIONAL_KEY_PAIRS = tuple(
 _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
     'physical_model_status': np.uint8,
     'physical_model_failure_reason': np.uint8,
+    'physical_offset_source': np.uint8,
     'physical_model_break_offset_m': np.float32,
     'physical_model_slope_near_s_per_m': np.float32,
     'physical_model_slope_far_s_per_m': np.float32,
@@ -522,6 +523,7 @@ def save_robust_npz(
     fine_center_t_sec=None,
     physical_model_status=None,
     physical_model_failure_reason=None,
+    physical_offset_source=None,
     physical_model_break_offset_m=None,
     physical_model_slope_near_s_per_m=None,
     physical_model_slope_far_s_per_m=None,
@@ -674,6 +676,7 @@ def save_robust_npz(
     physical_diagnostic_values = {
         'physical_model_status': physical_model_status,
         'physical_model_failure_reason': physical_model_failure_reason,
+        'physical_offset_source': physical_offset_source,
         'physical_model_break_offset_m': physical_model_break_offset_m,
         'physical_model_slope_near_s_per_m': physical_model_slope_near_s_per_m,
         'physical_model_slope_far_s_per_m': physical_model_slope_far_s_per_m,
