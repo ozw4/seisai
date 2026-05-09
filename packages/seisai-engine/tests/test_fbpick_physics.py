@@ -5,16 +5,15 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from seisai_engine.pipelines.fbpick.common import (
     COARSE_GEOMETRY_OPTIONAL_KEYS,
-    build_lineage_payload,
     REASON_MASK_FILLED_FROM_TREND,
     REASON_MASK_INFEASIBLE,
     REASON_MASK_LOW_SCORE,
     ROBUST_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
     ROBUST_SOURCE_TREND_FILL,
+    build_lineage_payload,
     load_coarse_npz,
     load_robust_npz,
     read_git_sha,
@@ -22,10 +21,15 @@ from seisai_engine.pipelines.fbpick.common import (
     save_robust_npz,
 )
 from seisai_engine.pipelines.fbpick.physics.confidence import compute_confidence_terms
-from seisai_engine.pipelines.fbpick.physics.config import load_physics_lite_config
+from seisai_engine.pipelines.fbpick.physics.config import (
+    load_physics_lite_config,
+    physics_lite_config_to_dict,
+)
 from seisai_engine.pipelines.fbpick.physics.feasible import compute_feasible_band
 from seisai_engine.pipelines.fbpick.physics.merge import apply_keep_reject_fill
-from seisai_engine.pipelines.fbpick.physics.pick_table import normalize_coarse_pick_table
+from seisai_engine.pipelines.fbpick.physics.pick_table import (
+    normalize_coarse_pick_table,
+)
 from seisai_engine.pipelines.fbpick.physics.run import (
     build_robust_payload_from_coarse,
     run_physics_lite,
@@ -80,6 +84,134 @@ def _write_git_repo(repo_root: Path, *, sha: str) -> None:
     ref_path.parent.mkdir(parents=True)
     (repo_root / '.git' / 'HEAD').write_text('ref: refs/heads/main\n', encoding='utf-8')
     ref_path.write_text(f'{sha}\n', encoding='utf-8')
+
+
+def _physical_trend_blocks() -> dict[str, object]:
+    return {
+        'physical_trend': {
+            'enabled': True,
+            'fit_kind': 'two_piece_ransac_autobreak',
+            'use_geometry_offset': True,
+            'coord_group_tol_m': 2.0,
+            'segment_by_offset_sign': False,
+            'split_by_offset_gap': True,
+            'gap_ratio': 6.0,
+            'min_gap_m': 25.0,
+        },
+        'neighbor_context': {
+            'enabled': True,
+            'mode': 'nearest_source_xy',
+            'k_neighbors': 7,
+            'max_source_distance_m': 1000.0,
+            'include_self': False,
+        },
+        'physical_prefilter': {
+            'enabled': True,
+            'vmin_m_s': 400.0,
+            'vmax_m_s': 5500.0,
+            't0_lo_ms': -10.0,
+            't0_hi_ms': 180.0,
+            'pmax_min': 0.25,
+            'use_existing_feasible_mask': True,
+        },
+        'two_piece_ransac': {
+            'n_iter': 300,
+            'inlier_th_ms': 30.0,
+            'min_pts': 10,
+            'n_break_cand': 32,
+            'q_lo': 0.2,
+            'q_hi': 0.8,
+            'seed': 11,
+            'slope_eps': 1.0e-5,
+            'sort_offsets': False,
+        },
+        'physical_projection': {
+            'mode': 'model',
+        },
+    }
+
+
+def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> None:
+    cfg = load_physics_lite_config({})
+
+    assert cfg.physical_trend.enabled is False
+    assert cfg.physical_trend.fit_kind == 'two_piece_ransac_autobreak'
+    assert cfg.physical_trend.min_gap_m is None
+    assert cfg.neighbor_context.mode == 'nearest_source_xy'
+    assert cfg.neighbor_context.k_neighbors == 5
+    assert cfg.neighbor_context.max_source_distance_m is None
+    assert cfg.physical_prefilter.vmin_m_s == 300.0
+    assert cfg.physical_prefilter.vmax_m_s == 6000.0
+    assert cfg.two_piece_ransac.q_lo == 0.15
+    assert cfg.two_piece_ransac.q_hi == 0.85
+    assert cfg.physical_projection.mode == 'model'
+
+
+def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
+    cfg = load_physics_lite_config(_physical_trend_blocks())
+
+    assert cfg.physical_trend.enabled is True
+    assert cfg.physical_trend.coord_group_tol_m == 2.0
+    assert cfg.physical_trend.segment_by_offset_sign is False
+    assert cfg.physical_trend.min_gap_m == 25.0
+    assert cfg.neighbor_context.k_neighbors == 7
+    assert cfg.neighbor_context.max_source_distance_m == 1000.0
+    assert cfg.neighbor_context.include_self is False
+    assert cfg.physical_prefilter.pmax_min == 0.25
+    assert cfg.physical_prefilter.use_existing_feasible_mask is True
+    assert cfg.two_piece_ransac.n_iter == 300
+    assert cfg.two_piece_ransac.sort_offsets is False
+
+
+@pytest.mark.parametrize(
+    ('cfg', 'match'),
+    [
+        (
+            {'physical_prefilter': {'vmin_m_s': 6000.0, 'vmax_m_s': 300.0}},
+            'physical_prefilter.vmax_m_s',
+        ),
+        (
+            {'two_piece_ransac': {'q_lo': 0.8, 'q_hi': 0.2}},
+            'q_lo < q_hi',
+        ),
+        (
+            {'neighbor_context': {'k_neighbors': 0}},
+            'neighbor_context.k_neighbors',
+        ),
+        (
+            {'physical_trend': {'fit_kind': 'linear'}},
+            'physical_trend.fit_kind',
+        ),
+        (
+            {'physical_projection': {'mode': 'observed'}},
+            'physical_projection.mode',
+        ),
+    ],
+)
+def test_load_physics_lite_config_rejects_invalid_physical_trend_blocks(
+    cfg: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        load_physics_lite_config(cfg)
+
+
+def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
+    cfg = load_physics_lite_config(_physical_trend_blocks())
+    out = physics_lite_config_to_dict(cfg)
+
+    assert set(out).issuperset(
+        {
+            'physical_trend',
+            'neighbor_context',
+            'physical_prefilter',
+            'two_piece_ransac',
+            'physical_projection',
+        }
+    )
+    assert out['physical_trend']['enabled'] is True
+    assert out['neighbor_context']['max_source_distance_m'] == 1000.0
+    assert out['physical_projection']['mode'] == 'model'
 
 
 def test_normalize_coarse_pick_table_preserves_contract(tmp_path: Path) -> None:
