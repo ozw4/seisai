@@ -15,6 +15,21 @@ GEOMETRY_ARRAY_KEYS = (
 GEOMETRY_CACHE_SCALE_KEY = 'geometry_coord_unit_scale_to_m'
 
 
+def validate_coord_unit_scale_to_m(coord_unit_scale_to_m: float) -> float:
+    if isinstance(coord_unit_scale_to_m, bool):
+        msg = 'coord_unit_scale_to_m must be float'
+        raise TypeError(msg)
+    try:
+        unit_scale = float(coord_unit_scale_to_m)
+    except (TypeError, ValueError) as exc:
+        msg = 'coord_unit_scale_to_m must be float'
+        raise TypeError(msg) from exc
+    if (not np.isfinite(unit_scale)) or unit_scale <= 0.0:
+        msg = 'coord_unit_scale_to_m must be finite and > 0'
+        raise ValueError(msg)
+    return unit_scale
+
+
 def apply_source_group_scalar(values: np.ndarray, scalar: np.ndarray) -> np.ndarray:
     """Apply the SEG-Y SourceGroupScalar convention to coordinate values."""
     arr = np.asarray(values, dtype=np.float64)
@@ -124,10 +139,7 @@ def read_geometry_arrays_from_segy(
     coord_unit_scale_to_m: float = 1.0,
 ) -> dict[str, np.ndarray]:
     n_traces = int(f.tracecount)
-    unit_scale = float(coord_unit_scale_to_m)
-    if not np.isfinite(unit_scale):
-        msg = 'coord_unit_scale_to_m must be finite'
-        raise ValueError(msg)
+    unit_scale = validate_coord_unit_scale_to_m(coord_unit_scale_to_m)
 
     source_x = _read_1d_header(
         f,

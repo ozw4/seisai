@@ -40,6 +40,8 @@ COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS = (
     'offset_signed_geom_m',
 )
 
+COARSE_GEOMETRY_SCALE_KEY = 'geometry_coord_unit_scale_to_m'
+
 ROBUST_REQUIRED_KEYS = (
     'dt_sec',
     'n_samples_orig',
@@ -156,6 +158,7 @@ REASON_MASK_LABELS = {
 __all__ = [
     'COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS',
     'COARSE_GEOMETRY_OPTIONAL_KEYS',
+    'COARSE_GEOMETRY_SCALE_KEY',
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
     'FINE_RESULT_REQUIRED_KEYS',

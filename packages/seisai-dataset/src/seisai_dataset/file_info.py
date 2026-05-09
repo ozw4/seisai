@@ -13,6 +13,7 @@ from .geometry_headers import (
     GEOMETRY_CACHE_SCALE_KEY,
     invalid_geometry_arrays,
     read_geometry_arrays_from_segy,
+    validate_coord_unit_scale_to_m,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,7 @@ def load_headers_with_cache(
     Logs via `logging` (no print/warnings).
     """
     endian = normalize_segy_endian(segy_endian)
+    coord_unit_scale_to_m = validate_coord_unit_scale_to_m(coord_unit_scale_to_m)
     segy_p = Path(segy_path)
     cache_p = (
         Path(cache_dir) / (segy_p.name + f'.headers.{endian}.npz')
@@ -380,6 +382,7 @@ def build_file_info(
 
     mode = normalize_waveform_mode(waveform_mode)
     endian = normalize_segy_endian(segy_endian)
+    coord_unit_scale_to_m = validate_coord_unit_scale_to_m(coord_unit_scale_to_m)
 
     meta = load_headers_with_cache(
         segy_path,
@@ -390,7 +393,7 @@ def build_file_info(
         rebuild=False,
         segy_endian=endian,
         include_geometry_arrays=bool(include_geometry_arrays),
-        coord_unit_scale_to_m=float(coord_unit_scale_to_m),
+        coord_unit_scale_to_m=coord_unit_scale_to_m,
     )
     ffid_values = meta['ffid_values']
     chno_values = meta['chno_values']
@@ -430,7 +433,7 @@ def build_file_info(
         try:
             geometry = read_geometry_arrays_from_segy(
                 f,
-                coord_unit_scale_to_m=float(coord_unit_scale_to_m),
+                coord_unit_scale_to_m=coord_unit_scale_to_m,
             )
             ffid_centroids = _build_centroids(
                 ffid_key_to_indices,

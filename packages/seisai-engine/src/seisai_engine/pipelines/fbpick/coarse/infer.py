@@ -443,6 +443,7 @@ def run_coarse_infer(
         waveform_mode=typed.dataset.waveform_mode,
         segy_endian=typed.dataset.infer_endian,
         use_header_cache=typed.dataset.use_header_cache,
+        coord_unit_scale_to_m=typed.dataset.coord_unit_scale_to_m,
     )
 
     loader = DataLoader(
@@ -677,6 +678,7 @@ def run_coarse_infer(
             offset_abs_geom_m=np.asarray(info['offset_abs_geom_m'], dtype=np.float32),
             geometry_valid_mask=geometry_valid_mask,
             offset_signed_geom_m=offset_signed_geom_m,
+            geometry_coord_unit_scale_to_m=typed.dataset.coord_unit_scale_to_m,
         )
     finally:
         dataset.close()

@@ -7,6 +7,7 @@ import numpy as np
 from .artifacts import (
     COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS,
     COARSE_GEOMETRY_OPTIONAL_KEYS,
+    COARSE_GEOMETRY_SCALE_KEY,
     COARSE_REQUIRED_KEYS,
     FINAL_REQUIRED_KEYS,
     FINE_RESULT_REQUIRED_KEYS,
@@ -23,6 +24,7 @@ from .artifacts import (
 __all__ = [
     'COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS',
     'COARSE_GEOMETRY_OPTIONAL_KEYS',
+    'COARSE_GEOMETRY_SCALE_KEY',
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
     'FINE_RESULT_REQUIRED_KEYS',
@@ -47,6 +49,15 @@ def _coerce_scalar(name: str, value, *, dtype) -> np.ndarray:
     arr = np.asarray(value, dtype=dtype)
     if arr.ndim != 0:
         msg = f'{name} must be scalar'
+        raise ValueError(msg)
+    return arr
+
+
+def _coerce_positive_finite_scalar(name: str, value, *, dtype) -> np.ndarray:
+    arr = _coerce_scalar(name, value, dtype=dtype)
+    scalar = float(arr.item())
+    if (not np.isfinite(scalar)) or scalar <= 0.0:
+        msg = f'{name} must be finite and > 0'
         raise ValueError(msg)
     return arr
 
@@ -334,6 +345,7 @@ def save_coarse_npz(
     offset_abs_geom_m=None,
     geometry_valid_mask=None,
     offset_signed_geom_m=None,
+    geometry_coord_unit_scale_to_m=None,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -417,6 +429,12 @@ def save_coarse_npz(
             offset_signed_geom_m=offset_signed_geom_m,
         )
     )
+    if geometry_coord_unit_scale_to_m is not None:
+        arrays[COARSE_GEOMETRY_SCALE_KEY] = _coerce_positive_finite_scalar(
+            COARSE_GEOMETRY_SCALE_KEY,
+            geometry_coord_unit_scale_to_m,
+            dtype=np.float64,
+        )
 
     coarse_pick_i_arr = arrays['coarse_pick_i']
     if np.any(coarse_pick_i_arr < 0) or np.any(coarse_pick_i_arr >= n_samples_orig_int):
@@ -466,6 +484,12 @@ def load_coarse_npz(path: str | Path) -> dict[str, np.ndarray]:
     if lineage.ndim != 0:
         msg = 'lineage must be scalar'
         raise ValueError(msg)
+    if COARSE_GEOMETRY_SCALE_KEY in out:
+        _coerce_positive_finite_scalar(
+            COARSE_GEOMETRY_SCALE_KEY,
+            out[COARSE_GEOMETRY_SCALE_KEY],
+            dtype=np.float64,
+        )
     _validate_optional_coarse_geometry(out, n_traces=n_traces)
     return out
 

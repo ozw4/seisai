@@ -15,6 +15,7 @@ dataset:
   waveform_mode: eager
   train_endian: big
   infer_endian: big
+  coord_unit_scale_to_m: 1.0
 
 transform:
   trace_len: 256

@@ -29,6 +29,7 @@ from seisai_engine.pipelines.fbpick.coarse.infer import (
 )
 from seisai_engine.pipelines.fbpick.common import (
     COARSE_GEOMETRY_OPTIONAL_KEYS,
+    COARSE_GEOMETRY_SCALE_KEY,
     COARSE_REQUIRED_KEYS,
     load_coarse_npz,
 )
@@ -42,6 +43,12 @@ def write_unstructured_segy(
     dt_us: int,
     *,
     ffid_values: np.ndarray | None = None,
+    source_x: int = 100,
+    source_y: int = 2000,
+    group_x_start: int = 1000,
+    group_x_step: int = 10,
+    group_y: int = 2000,
+    source_group_scalar: int = 1,
 ) -> None:
     arr = np.asarray(traces, dtype=np.float32)
     if arr.ndim != 2:
@@ -72,11 +79,11 @@ def write_unstructured_segy(
                 segyio.TraceField.TraceNumber: int(i + 1),
                 segyio.TraceField.CDP: 1,
                 segyio.TraceField.offset: int((i + 1) * 10),
-                segyio.TraceField.SourceX: 100,
-                segyio.TraceField.SourceY: 2000,
-                segyio.TraceField.GroupX: 1000 + i * 10,
-                segyio.TraceField.GroupY: 2000,
-                segyio.TraceField.SourceGroupScalar: 1,
+                segyio.TraceField.SourceX: int(source_x),
+                segyio.TraceField.SourceY: int(source_y),
+                segyio.TraceField.GroupX: int(group_x_start + i * group_x_step),
+                segyio.TraceField.GroupY: int(group_y),
+                segyio.TraceField.SourceGroupScalar: int(source_group_scalar),
             }
             f.trace[i] = arr[i]
 
@@ -295,10 +302,56 @@ def test_load_coarse_infer_config_returns_global_anchor_contract(
     assert typed.trace_anchor.gap_ratio == pytest.approx(5.0)
     assert typed.trace_anchor.infer_mode == 'center'
     assert typed.dataset.primary_keys == ('ffid',)
+    assert typed.dataset.coord_unit_scale_to_m == pytest.approx(1.0)
     assert typed.model_sig['in_chans'] == 3
     assert typed.qc.enabled is False
     assert typed.qc.max_gathers == 16
     assert typed.qc.out_subdir == 'vis/coarse_global_anchor'
+
+
+def test_load_coarse_infer_config_accepts_coord_unit_scale_to_m(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
+    cfg['paths'].pop('fb_files')
+    _use_raw_infer_runtime_cfg(cfg)
+    cfg['dataset']['coord_unit_scale_to_m'] = 0.001
+
+    typed = load_coarse_infer_config(cfg)
+
+    assert typed.dataset.coord_unit_scale_to_m == pytest.approx(0.001)
+
+
+@pytest.mark.parametrize('bad_value', [0.0, -1.0, float('nan'), float('inf')])
+def test_load_coarse_infer_config_rejects_invalid_coord_unit_scale_to_m(
+    tmp_path: Path,
+    bad_value: float,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
+    cfg['paths'].pop('fb_files')
+    _use_raw_infer_runtime_cfg(cfg)
+    cfg['dataset']['coord_unit_scale_to_m'] = bad_value
+
+    with pytest.raises(ValueError) as exc:
+        load_coarse_infer_config(cfg)
+
+    assert 'dataset.coord_unit_scale_to_m must be finite and > 0' in str(exc.value)
+
+
+@pytest.mark.parametrize('bad_value', [True, '0.001'])
+def test_load_coarse_infer_config_rejects_non_float_coord_unit_scale_to_m(
+    tmp_path: Path,
+    bad_value: object,
+) -> None:
+    cfg = _make_training_config(tmp_path, segy_path='dummy.sgy', fb_path='dummy.npy')
+    cfg['paths'].pop('fb_files')
+    _use_raw_infer_runtime_cfg(cfg)
+    cfg['dataset']['coord_unit_scale_to_m'] = bad_value
+
+    with pytest.raises(TypeError) as exc:
+        load_coarse_infer_config(cfg)
+
+    assert 'config.dataset.coord_unit_scale_to_m must be float' in str(exc.value)
 
 
 def test_load_coarse_infer_config_accepts_qc_block(tmp_path: Path) -> None:
@@ -867,6 +920,83 @@ def test_global_anchor_raw_infer_dataset_returns_fixed_shape_without_target(
     assert not np.any(trace_valid[n_traces:])
 
 
+def test_global_anchor_raw_infer_dataset_defaults_coord_unit_scale_to_m(
+    tmp_path: Path,
+) -> None:
+    traces = np.zeros((1, 32), dtype=np.float32)
+    segy_path = str(tmp_path / 'raw_global_default_coord_scale.sgy')
+    write_unstructured_segy(
+        segy_path,
+        traces,
+        dt_us=2000,
+        source_x=0,
+        source_y=0,
+        group_x_start=1000,
+        group_x_step=0,
+        group_y=0,
+    )
+
+    ds = build_raw_infer_dataset(
+        segy_files=[segy_path],
+        plan=_make_plan(),
+        trace_len=256,
+        time_len=2048,
+        standardize_eps=1.0e-8,
+        gap_ratio=5.0,
+        min_gap_m=None,
+        primary_keys=('ffid',),
+        waveform_mode='eager',
+        segy_endian='big',
+        use_header_cache=False,
+    )
+    try:
+        np.testing.assert_allclose(
+            ds.file_infos[0]['offset_abs_geom_m'],
+            np.asarray([1000.0], dtype=np.float32),
+        )
+    finally:
+        ds.close()
+
+
+def test_global_anchor_raw_infer_dataset_applies_coord_unit_scale_to_m(
+    tmp_path: Path,
+) -> None:
+    traces = np.zeros((1, 32), dtype=np.float32)
+    segy_path = str(tmp_path / 'raw_global_mm_coord_scale.sgy')
+    write_unstructured_segy(
+        segy_path,
+        traces,
+        dt_us=2000,
+        source_x=0,
+        source_y=0,
+        group_x_start=1000,
+        group_x_step=0,
+        group_y=0,
+    )
+
+    ds = build_raw_infer_dataset(
+        segy_files=[segy_path],
+        plan=_make_plan(),
+        trace_len=256,
+        time_len=2048,
+        standardize_eps=1.0e-8,
+        gap_ratio=5.0,
+        min_gap_m=None,
+        primary_keys=('ffid',),
+        waveform_mode='eager',
+        segy_endian='big',
+        use_header_cache=False,
+        coord_unit_scale_to_m=0.001,
+    )
+    try:
+        np.testing.assert_allclose(
+            ds.file_infos[0]['offset_abs_geom_m'],
+            np.asarray([1.0], dtype=np.float32),
+        )
+    finally:
+        ds.close()
+
+
 def test_global_anchor_raw_infer_dataset_survives_geometry_read_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1409,6 +1539,10 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
     assert out_path.is_file()
     assert set(COARSE_REQUIRED_KEYS).issubset(data.keys())
     assert set(COARSE_GEOMETRY_OPTIONAL_KEYS).issubset(data.keys())
+    assert COARSE_GEOMETRY_SCALE_KEY in data
+    assert float(np.asarray(data[COARSE_GEOMETRY_SCALE_KEY]).item()) == pytest.approx(
+        1.0
+    )
     assert int(np.asarray(data['n_traces']).item()) == n_traces
     assert int(np.asarray(data['n_samples_orig']).item()) == n_samples
     np.testing.assert_array_equal(
@@ -1464,6 +1598,52 @@ def test_coarse_raw_only_infer_writes_npz(tmp_path: Path) -> None:
     assert lineage['cfg_hash']
     assert lineage['git_sha'] is None
     assert not (tmp_path / 'infer_out' / 'vis' / 'coarse_global_anchor').exists()
+
+
+def test_coarse_raw_only_infer_saves_non_default_coord_unit_scale_geometry(
+    tmp_path: Path,
+) -> None:
+    n_traces = 4
+    n_samples = 32
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    segy_path = str(tmp_path / 'coarse_infer_mm_coord_scale.sgy')
+    write_unstructured_segy(
+        segy_path,
+        traces,
+        dt_us=2000,
+        source_x=0,
+        source_y=0,
+        group_x_start=1000,
+        group_x_step=0,
+        group_y=0,
+    )
+
+    cfg = _make_training_config(tmp_path, segy_path=segy_path, fb_path='unused.npy')
+    cfg['paths'].pop('fb_files')
+    cfg['paths']['out_dir'] = str(tmp_path / 'infer_mm_coord_scale_out')
+    cfg['dataset']['coord_unit_scale_to_m'] = 0.001
+    cfg['infer'] = {
+        'batch_size': 1,
+        'num_workers': 0,
+        'amp': False,
+        'use_tqdm': False,
+    }
+
+    out_path = run_coarse_infer(
+        model=_TimeChannelModel(),
+        cfg=cfg,
+        device=torch.device('cpu'),
+        ckpt=_make_global_anchor_ckpt(),
+    )
+    data = load_coarse_npz(out_path)
+
+    assert float(np.asarray(data[COARSE_GEOMETRY_SCALE_KEY]).item()) == pytest.approx(
+        0.001
+    )
+    np.testing.assert_allclose(
+        data['offset_abs_geom_m'],
+        np.full((n_traces,), 1.0, dtype=np.float32),
+    )
 
 
 def test_coarse_raw_only_infer_qc_respects_max_gathers(tmp_path: Path) -> None:
