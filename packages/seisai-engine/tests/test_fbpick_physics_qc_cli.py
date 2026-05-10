@@ -619,6 +619,54 @@ def test_run_pipeline_global_fine_ready_uses_fine_center_arrays(
     assert rows[0]['fine_ready'] == 'True'
 
 
+def test_run_pipeline_global_fine_ready_falls_back_per_legacy_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fb_paths = [tmp_path / 'fb0.npy', tmp_path / 'fb1.npy']
+    segy_paths = [
+        tmp_path / 'line' / 'fine.sgy',
+        tmp_path / 'line' / 'legacy.sgy',
+    ]
+    for fb_path in fb_paths:
+        _write_fb(fb_path)
+    with_fine_center = _qc_robust_payload()
+    with_fine_center['robust_pick_i'] = np.asarray([400, 401, 402], dtype=np.int32)
+    with_fine_center['fine_center_i'] = np.asarray([100, 101, 102], dtype=np.int32)
+    legacy = _qc_robust_payload()
+    legacy['robust_pick_i'] = np.asarray([400, 401, 402], dtype=np.int32)
+    robust_payloads = iter([with_fine_center, legacy])
+    cfg = {
+        'paths': {
+            'segy_files': [str(path) for path in segy_paths],
+            'fb_files': [str(path) for path in fb_paths],
+            'coarse_npz_dir': str(tmp_path / 'coarse'),
+            'robust_npz_dir': str(tmp_path / 'robust'),
+            'out_dir': str(tmp_path / 'out'),
+        },
+        'dataset': {'primary_keys': ['ffid']},
+        'vis': {'save_summary_csv': True, 'max_gathers_per_file': 0},
+    }
+    runtime = _physics_qc_runtime(cfg=cfg, base_dir=tmp_path)
+    runtime.load_robust_npz = lambda path: next(robust_payloads)
+
+    monkeypatch.setattr(physics_qc_cli, '_load_runtime', lambda: runtime)
+
+    physics_qc_cli.run_pipeline(tmp_path / 'config.yaml')
+
+    with (tmp_path / 'out' / 'summary_global.csv').open(
+        newline='',
+        encoding='utf-8',
+    ) as f:
+        rows = list(csv.DictReader(f))
+
+    assert rows[0]['R127'] == '0'
+    assert rows[0]['fine_center_R127'] == '1'
+    assert rows[0]['robust_ready'] == 'False'
+    assert rows[0]['fine_center_ready'] == 'True'
+    assert rows[0]['fine_ready'] == 'False'
+
+
 def test_run_pipeline_final_npz_files_take_priority_over_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

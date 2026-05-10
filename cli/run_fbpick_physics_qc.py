@@ -1067,6 +1067,7 @@ def run_pipeline(config_path: str | Path) -> Path:
 	all_coarse_abs_err: list[np.ndarray] = []
 	all_robust_abs_err: list[np.ndarray] = []
 	all_r127: list[np.ndarray] = []
+	all_fine_ready_r127: list[np.ndarray] = []
 	all_fine_center_abs_err: list[np.ndarray] = []
 	all_fine_center_robust_abs_err: list[np.ndarray] = []
 	all_fine_center_r127: list[np.ndarray] = []
@@ -1208,6 +1209,10 @@ def run_pipeline(config_path: str | Path) -> Path:
 		all_coarse_abs_err.append(coarse_abs_err)
 		all_robust_abs_err.append(robust_abs_err)
 		all_r127.append(r127)
+		if optional_summary_arrays['fine_center_r127'] is not None:
+			all_fine_ready_r127.append(optional_summary_arrays['fine_center_r127'])
+		else:
+			all_fine_ready_r127.append(r127)
 		if optional_summary_arrays['fine_center_abs_err'] is not None:
 			all_fine_center_abs_err.append(
 				optional_summary_arrays['fine_center_abs_err']
@@ -1253,6 +1258,7 @@ def run_pipeline(config_path: str | Path) -> Path:
 	global_coarse_abs_err = np.concatenate(all_coarse_abs_err, axis=0)
 	global_robust_abs_err = np.concatenate(all_robust_abs_err, axis=0)
 	global_r127 = np.concatenate(all_r127, axis=0)
+	global_fine_ready_r127 = np.concatenate(all_fine_ready_r127, axis=0)
 	global_coarse_p90 = _percentile(global_coarse_abs_err, 90.0)
 	global_coarse_p95 = _percentile(global_coarse_abs_err, 95.0)
 	global_robust_p90 = _percentile(global_robust_abs_err, 90.0)
@@ -1283,9 +1289,10 @@ def run_pipeline(config_path: str | Path) -> Path:
 		else None
 	)
 	global_robust_ready = _ready_from_valid_mask(global_r127)
+	global_fine_ready = _ready_from_valid_mask(global_fine_ready_r127)
 	global_row = {
 		'scope': 'global',
-		'fine_ready': global_robust_ready,
+		'fine_ready': global_fine_ready,
 		'robust_ready': global_robust_ready,
 		'fine_center_ready': float('nan'),
 		'actual_window_ready': float('nan'),
@@ -1332,7 +1339,6 @@ def run_pipeline(config_path: str | Path) -> Path:
 		global_fine_center_ready = _ready_from_valid_mask(global_fine_center_r127)
 		global_row.update(
 			{
-				'fine_ready': global_fine_center_ready,
 				'fine_center_ready': global_fine_center_ready,
 				'fine_center_R32': _rate(global_fine_center_abs_err <= 32),
 				'fine_center_R64': _rate(global_fine_center_abs_err <= 64),
