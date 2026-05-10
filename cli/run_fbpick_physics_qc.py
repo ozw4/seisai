@@ -57,6 +57,9 @@ PER_FILE_COLUMNS = [
 	'coarse_npz_path',
 	'robust_npz_path',
 	'fine_ready',
+	'robust_ready',
+	'fine_center_ready',
+	'actual_window_ready',
 	'n_traces',
 	'n_valid_gt',
 	'n_invalid_gt',
@@ -81,6 +84,9 @@ PER_FILE_COLUMNS = [
 GLOBAL_COLUMNS = [
 	'scope',
 	'fine_ready',
+	'robust_ready',
+	'fine_center_ready',
+	'actual_window_ready',
 	'n_files',
 	'n_traces',
 	'n_valid_gt',
@@ -765,6 +771,10 @@ def _center_r127_mask(center_i: np.ndarray, gt_pick_i: np.ndarray) -> np.ndarray
 	return (gt >= center - 128) & (gt <= center + 127)
 
 
+def _ready_from_valid_mask(mask: np.ndarray) -> bool:
+	return bool(int(mask.shape[0]) > 0 and np.all(mask))
+
+
 def _empty_optional_summary_arrays() -> dict[str, np.ndarray | None]:
 	return {
 		'fine_center_abs_err': None,
@@ -907,8 +917,12 @@ def _summarize_errors(
 	robust_p90 = _percentile(robust_abs_err, 90.0)
 	robust_p95 = _percentile(robust_abs_err, 95.0)
 	summary_arrays = _empty_optional_summary_arrays()
+	robust_ready = _ready_from_valid_mask(r127)
 	metrics = {
-		'fine_ready': bool(int(valid.sum()) > 0 and np.all(r127)),
+		'fine_ready': robust_ready,
+		'robust_ready': robust_ready,
+		'fine_center_ready': float('nan'),
+		'actual_window_ready': float('nan'),
 		'n_traces': int(n_traces),
 		'n_valid_gt': int(valid.sum()),
 		'n_invalid_gt': int(n_traces) - int(valid.sum()),
@@ -930,8 +944,11 @@ def _summarize_errors(
 		fine_r127 = _center_r127_mask(fine_center[valid], valid_gt)
 		fine_p90 = _percentile(fine_abs_err, 90.0)
 		fine_p95 = _percentile(fine_abs_err, 95.0)
+		fine_center_ready = _ready_from_valid_mask(fine_r127)
 		metrics.update(
 			{
+				'fine_ready': fine_center_ready,
+				'fine_center_ready': fine_center_ready,
 				'fine_center_R32': _rate(fine_abs_err <= 32),
 				'fine_center_R64': _rate(fine_abs_err <= 64),
 				'fine_center_R127': _rate(fine_r127),
@@ -976,6 +993,7 @@ def _summarize_errors(
 		final_abs_err = final_abs_err_scored[final_pick_valid_gt]
 		metrics.update(
 			{
+				'actual_window_ready': _ready_from_valid_mask(gt_in_actual_window),
 				'gt_in_actual_window_rate': _rate(gt_in_actual_window),
 				'final_pick_valid_rate': _rate(final_pick_valid_gt),
 				'final_pick_R32': _rate(final_pick_r32),
@@ -1264,9 +1282,13 @@ def run_pipeline(config_path: str | Path) -> Path:
 		if all_physical_model_failure_reason
 		else None
 	)
+	global_robust_ready = _ready_from_valid_mask(global_r127)
 	global_row = {
 		'scope': 'global',
-		'fine_ready': bool(total_valid_gt > 0 and np.all(global_r127)),
+		'fine_ready': global_robust_ready,
+		'robust_ready': global_robust_ready,
+		'fine_center_ready': float('nan'),
+		'actual_window_ready': float('nan'),
 		'n_files': len(per_file_rows),
 		'n_traces': total_traces,
 		'n_valid_gt': total_valid_gt,
@@ -1307,8 +1329,11 @@ def run_pipeline(config_path: str | Path) -> Path:
 			global_fine_center_robust_abs_err,
 			95.0,
 		)
+		global_fine_center_ready = _ready_from_valid_mask(global_fine_center_r127)
 		global_row.update(
 			{
+				'fine_ready': global_fine_center_ready,
+				'fine_center_ready': global_fine_center_ready,
 				'fine_center_R32': _rate(global_fine_center_abs_err <= 32),
 				'fine_center_R64': _rate(global_fine_center_abs_err <= 64),
 				'fine_center_R127': _rate(global_fine_center_r127),
@@ -1353,6 +1378,9 @@ def run_pipeline(config_path: str | Path) -> Path:
 	):
 		global_row.update(
 			{
+				'actual_window_ready': _ready_from_valid_mask(
+					global_gt_in_actual_window
+				),
 				'gt_in_actual_window_rate': _rate(global_gt_in_actual_window),
 				'final_pick_valid_rate': _rate(global_final_pick_valid),
 				'final_pick_R32': _rate(global_final_pick_r32),
