@@ -17,6 +17,7 @@ __all__ = [
     "SourceGroup",
     "build_source_groups",
     "estimate_signed_offset_side",
+    "is_source_xy_degenerate",
     "load_coarse_geometry_from_npz",
     "select_nearest_source_groups",
     "signed_offset_side_from_geometry",
@@ -128,6 +129,10 @@ def _validate_geometry_finite_where_valid(geometry: CoarseGeometry) -> None:
         if not np.all(np.isfinite(arr[valid])):
             msg = f"{key} must be finite where geometry_valid_mask is True"
             raise ValueError(msg)
+    offset_abs = np.asarray(geometry.offset_abs_geom_m, dtype=np.float32)
+    if np.any(offset_abs[valid] < 0.0):
+        msg = "offset_abs_geom_m must be >= 0 where geometry_valid_mask is True"
+        raise ValueError(msg)
 
 
 def load_coarse_geometry_from_npz(
@@ -255,6 +260,41 @@ def build_source_groups(
             )
         )
     return tuple(groups)
+
+
+def _unique_id_count(name: str, value, *, n_traces: int) -> int:
+    arr = np.asarray(value)
+    if arr.ndim != 1 or int(arr.shape[0]) != int(n_traces):
+        msg = f"{name} must be 1D with length n_traces"
+        raise ValueError(msg)
+    return int(np.unique(arr).size)
+
+
+def is_source_xy_degenerate(
+    geometry: CoarseGeometry,
+    *,
+    table,
+    coord_group_tol_m: float,
+) -> bool:
+    groups = build_source_groups(
+        geometry,
+        coord_group_tol_m=coord_group_tol_m,
+    )
+    if len(groups) > 1:
+        return False
+
+    n_traces = int(np.asarray(geometry.geometry_valid_mask).shape[0])
+    shot_count = _unique_id_count(
+        "table.shot_id",
+        table.shot_id,
+        n_traces=n_traces,
+    )
+    ffid_count = _unique_id_count(
+        "table.ffid",
+        table.ffid,
+        n_traces=n_traces,
+    )
+    return max(shot_count, ffid_count) > 1
 
 
 def select_nearest_source_groups(
