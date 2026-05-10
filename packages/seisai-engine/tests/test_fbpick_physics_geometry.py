@@ -89,6 +89,39 @@ def test_load_coarse_geometry_from_npz_rejects_partial_geometry() -> None:
         )
 
 
+def test_load_coarse_geometry_from_npz_rejects_negative_valid_offset() -> None:
+    coarse = {
+        "source_x_m": np.array([0.0, 0.0], dtype=np.float32),
+        "source_y_m": np.array([0.0, 0.0], dtype=np.float32),
+        "receiver_x_m": np.array([10.0, 20.0], dtype=np.float32),
+        "receiver_y_m": np.array([0.0, 0.0], dtype=np.float32),
+        "offset_abs_geom_m": np.array([10.0, -20.0], dtype=np.float32),
+        "geometry_valid_mask": np.array([True, True], dtype=np.bool_),
+    }
+
+    with pytest.raises(ValueError, match="offset_abs_geom_m must be >= 0"):
+        load_coarse_geometry_from_npz(coarse, n_traces=2)
+
+
+def test_load_coarse_geometry_from_npz_allows_invalid_offset_placeholder() -> None:
+    coarse = {
+        "source_x_m": np.array([0.0, np.nan], dtype=np.float32),
+        "source_y_m": np.array([0.0, np.nan], dtype=np.float32),
+        "receiver_x_m": np.array([10.0, np.nan], dtype=np.float32),
+        "receiver_y_m": np.array([0.0, np.nan], dtype=np.float32),
+        "offset_abs_geom_m": np.array([10.0, -1.0], dtype=np.float32),
+        "geometry_valid_mask": np.array([True, False], dtype=np.bool_),
+    }
+
+    geometry = load_coarse_geometry_from_npz(coarse, n_traces=2)
+
+    assert geometry is not None
+    np.testing.assert_array_equal(
+        geometry.geometry_valid_mask,
+        np.array([True, False], dtype=np.bool_),
+    )
+
+
 def test_build_source_groups_uses_coordinate_tolerance_and_excludes_invalid() -> None:
     geometry = _geometry(
         source_x_m=np.array([10.1, 10.8, 14.2, 99.0], dtype=np.float32),

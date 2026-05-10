@@ -576,6 +576,97 @@ def test_run_pipeline_summary_csv_includes_fine_physical_and_final_metrics(
     assert rows[0]['final_pick_R127'] == '1'
 
 
+def test_run_pipeline_global_fine_ready_uses_fine_center_arrays(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fb_path = tmp_path / 'fb.npy'
+    segy_path = tmp_path / 'line' / 'survey.sgy'
+    _write_fb(fb_path)
+    robust = _qc_robust_payload()
+    robust['robust_pick_i'] = np.asarray([400, 401, 402], dtype=np.int32)
+    robust['fine_center_i'] = np.asarray([100, 101, 102], dtype=np.int32)
+    cfg = {
+        'paths': {
+            'segy_files': [str(segy_path)],
+            'fb_files': [str(fb_path)],
+            'coarse_npz_dir': str(tmp_path / 'coarse'),
+            'robust_npz_dir': str(tmp_path / 'robust'),
+            'out_dir': str(tmp_path / 'out'),
+        },
+        'dataset': {'primary_keys': ['ffid']},
+        'vis': {'save_summary_csv': True, 'max_gathers_per_file': 0},
+    }
+
+    monkeypatch.setattr(
+        physics_qc_cli,
+        '_load_runtime',
+        lambda: _physics_qc_runtime(cfg=cfg, base_dir=tmp_path, robust=robust),
+    )
+
+    physics_qc_cli.run_pipeline(tmp_path / 'config.yaml')
+
+    with (tmp_path / 'out' / 'summary_global.csv').open(
+        newline='',
+        encoding='utf-8',
+    ) as f:
+        rows = list(csv.DictReader(f))
+
+    assert rows[0]['R127'] == '0'
+    assert rows[0]['fine_center_R127'] == '1'
+    assert rows[0]['robust_ready'] == 'False'
+    assert rows[0]['fine_center_ready'] == 'True'
+    assert rows[0]['fine_ready'] == 'True'
+
+
+def test_run_pipeline_global_fine_ready_falls_back_per_legacy_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fb_paths = [tmp_path / 'fb0.npy', tmp_path / 'fb1.npy']
+    segy_paths = [
+        tmp_path / 'line' / 'fine.sgy',
+        tmp_path / 'line' / 'legacy.sgy',
+    ]
+    for fb_path in fb_paths:
+        _write_fb(fb_path)
+    with_fine_center = _qc_robust_payload()
+    with_fine_center['robust_pick_i'] = np.asarray([400, 401, 402], dtype=np.int32)
+    with_fine_center['fine_center_i'] = np.asarray([100, 101, 102], dtype=np.int32)
+    legacy = _qc_robust_payload()
+    legacy['robust_pick_i'] = np.asarray([400, 401, 402], dtype=np.int32)
+    robust_payloads = iter([with_fine_center, legacy])
+    cfg = {
+        'paths': {
+            'segy_files': [str(path) for path in segy_paths],
+            'fb_files': [str(path) for path in fb_paths],
+            'coarse_npz_dir': str(tmp_path / 'coarse'),
+            'robust_npz_dir': str(tmp_path / 'robust'),
+            'out_dir': str(tmp_path / 'out'),
+        },
+        'dataset': {'primary_keys': ['ffid']},
+        'vis': {'save_summary_csv': True, 'max_gathers_per_file': 0},
+    }
+    runtime = _physics_qc_runtime(cfg=cfg, base_dir=tmp_path)
+    runtime.load_robust_npz = lambda path: next(robust_payloads)
+
+    monkeypatch.setattr(physics_qc_cli, '_load_runtime', lambda: runtime)
+
+    physics_qc_cli.run_pipeline(tmp_path / 'config.yaml')
+
+    with (tmp_path / 'out' / 'summary_global.csv').open(
+        newline='',
+        encoding='utf-8',
+    ) as f:
+        rows = list(csv.DictReader(f))
+
+    assert rows[0]['R127'] == '0'
+    assert rows[0]['fine_center_R127'] == '1'
+    assert rows[0]['robust_ready'] == 'False'
+    assert rows[0]['fine_center_ready'] == 'True'
+    assert rows[0]['fine_ready'] == 'False'
+
+
 def test_run_pipeline_final_npz_files_take_priority_over_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -689,6 +780,17 @@ def test_qc_summary_columns_include_physical_failure_reason_counts() -> None:
     assert 'physical_model_failure_reason_counts' in physics_qc_cli.GLOBAL_COLUMNS
 
 
+def test_qc_summary_columns_include_readiness_fields() -> None:
+    for column in (
+        'fine_ready',
+        'robust_ready',
+        'fine_center_ready',
+        'actual_window_ready',
+    ):
+        assert column in physics_qc_cli.PER_FILE_COLUMNS
+        assert column in physics_qc_cli.GLOBAL_COLUMNS
+
+
 def test_format_uint8_counts_uses_physical_failure_labels() -> None:
     summary = physics_qc_cli._format_uint8_counts(
         np.asarray([0, 2, 2, 5], dtype=np.uint8),
@@ -730,6 +832,45 @@ def test_summarize_errors_reports_fine_center_regression() -> None:
     assert metrics['fine_center_delta_p95_vs_robust'] > 0.0
 
 
+def test_summarize_errors_fine_ready_uses_fine_center_when_present() -> None:
+    gt_pick_i = np.asarray([200, 300, 400], dtype=np.int64)
+
+    metrics, *_ = physics_qc_cli._summarize_errors(
+        coarse_pick_i=gt_pick_i,
+        robust_pick_i=np.asarray([0, 600, 1000], dtype=np.int64),
+        fine_center_i=gt_pick_i,
+        gt_pick_i=gt_pick_i,
+        n_traces=3,
+        n_samples_orig=1200,
+    )
+
+    assert metrics['R127'] == pytest.approx(0.0)
+    assert metrics['fine_center_R127'] == pytest.approx(1.0)
+    assert metrics['robust_ready'] is False
+    assert metrics['fine_center_ready'] is True
+    assert metrics['fine_ready'] is True
+
+
+@pytest.mark.parametrize('robust_delta, expected_ready', [(0, True), (200, False)])
+def test_summarize_errors_legacy_fine_ready_stays_robust_based(
+    robust_delta: int,
+    expected_ready: bool,
+) -> None:
+    gt_pick_i = np.asarray([100, 200, 300], dtype=np.int64)
+
+    metrics, *_ = physics_qc_cli._summarize_errors(
+        coarse_pick_i=gt_pick_i,
+        robust_pick_i=gt_pick_i + robust_delta,
+        gt_pick_i=gt_pick_i,
+        n_traces=3,
+        n_samples_orig=1000,
+    )
+
+    assert metrics['robust_ready'] is expected_ready
+    assert metrics['fine_ready'] is expected_ready
+    assert np.isnan(metrics['fine_center_ready'])
+
+
 def test_summarize_errors_reports_physical_and_final_artifact_metrics() -> None:
     gt_pick_i = np.asarray([100, 200, 0, 300], dtype=np.int64)
 
@@ -749,6 +890,35 @@ def test_summarize_errors_reports_physical_and_final_artifact_metrics() -> None:
     assert metrics['gt_in_actual_window_rate'] == pytest.approx(1.0 / 3.0)
     assert metrics['final_pick_R127'] == pytest.approx(2.0 / 3.0)
     assert metrics['physical_center_R127'] == pytest.approx(1.0 / 3.0)
+    assert metrics['actual_window_ready'] is False
+
+
+def test_summarize_errors_actual_window_ready_requires_all_valid_gt_inside() -> None:
+    gt_pick_i = np.asarray([100, 500], dtype=np.int64)
+
+    metrics_inside, *_ = physics_qc_cli._summarize_errors(
+        coarse_pick_i=gt_pick_i,
+        robust_pick_i=gt_pick_i,
+        window_start_i=np.asarray([90, 490], dtype=np.int32),
+        window_end_i=np.asarray([110, 510], dtype=np.int32),
+        final_pick_i=gt_pick_i,
+        gt_pick_i=gt_pick_i,
+        n_traces=2,
+        n_samples_orig=1000,
+    )
+    metrics_outside, *_ = physics_qc_cli._summarize_errors(
+        coarse_pick_i=gt_pick_i,
+        robust_pick_i=gt_pick_i,
+        window_start_i=np.asarray([90, 600], dtype=np.int32),
+        window_end_i=np.asarray([110, 700], dtype=np.int32),
+        final_pick_i=gt_pick_i,
+        gt_pick_i=gt_pick_i,
+        n_traces=2,
+        n_samples_orig=1000,
+    )
+
+    assert metrics_inside['actual_window_ready'] is True
+    assert metrics_outside['actual_window_ready'] is False
 
 
 def test_summarize_errors_counts_invalid_final_picks_as_misses() -> None:
@@ -801,6 +971,7 @@ def test_summarize_errors_absent_final_artifact_keeps_stable_columns() -> None:
     )
 
     for column in (
+        'actual_window_ready',
         'gt_in_actual_window_rate',
         'final_pick_valid_rate',
         'final_pick_R32',

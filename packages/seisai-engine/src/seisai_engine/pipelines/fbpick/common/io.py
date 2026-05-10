@@ -124,6 +124,10 @@ def _validate_coarse_geometry_arrays(
         if not np.all(np.isfinite(arr[valid])):
             msg = f'{key} must be finite where geometry_valid_mask is True'
             raise ValueError(msg)
+    offset_abs = np.asarray(arrays['offset_abs_geom_m'], dtype=np.float32)
+    if np.any(offset_abs[valid] < 0.0):
+        msg = 'offset_abs_geom_m must be >= 0 where geometry_valid_mask is True'
+        raise ValueError(msg)
 
 
 def _coerce_optional_coarse_geometry(

@@ -13,6 +13,7 @@ from .geometry import (
     CoarseGeometry,
     SourceGroup,
     build_source_groups,
+    is_source_xy_degenerate,
     load_coarse_geometry_from_npz,
     select_nearest_source_groups,
     signed_offset_side_from_geometry,
@@ -1000,11 +1001,26 @@ def build_geometry_two_piece_physical_center(
             n_traces=n,
         )
     if source_group_geometry is not None:
-        groups = build_source_groups(
+        coord_group_tol_m = float(cfg.physical_trend.coord_group_tol_m)
+        source_xy_degenerate = is_source_xy_degenerate(
             source_group_geometry,
-            coord_group_tol_m=float(cfg.physical_trend.coord_group_tol_m),
+            table=table,
+            coord_group_tol_m=coord_group_tol_m,
         )
-        source_groups_from_geometry = len(groups) > 0
+        if source_xy_degenerate and use_geometry_offset:
+            return _assign_fallback_all(
+                failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+                table=table,
+                feasible=feasible,
+                trend=trend,
+                merged=merged,
+            )
+        if not source_xy_degenerate:
+            groups = build_source_groups(
+                source_group_geometry,
+                coord_group_tol_m=coord_group_tol_m,
+            )
+            source_groups_from_geometry = len(groups) > 0
     if len(groups) == 0 and not use_geometry_offset:
         groups = _build_table_source_groups(table, n_traces=n)
 

@@ -508,6 +508,31 @@ def test_save_coarse_npz_rejects_nan_geometry_on_valid_trace(tmp_path: Path) -> 
         save_coarse_npz(tmp_path / 'bad_geometry.coarse.npz', **payload, **geometry)
 
 
+def test_save_coarse_npz_rejects_negative_valid_geometry_offset(
+    tmp_path: Path,
+) -> None:
+    payload = _make_coarse_payload(
+        coarse_pick_i=np.array([10, 20], dtype=np.int32),
+        coarse_pmax=np.array([0.9, 0.8], dtype=np.float32),
+        offsets_m=np.array([100.0, 200.0], dtype=np.float32),
+    )
+    geometry = {
+        'source_x_m': np.array([10.0, 10.0], dtype=np.float32),
+        'source_y_m': np.array([20.0, 20.0], dtype=np.float32),
+        'receiver_x_m': np.array([13.0, 16.0], dtype=np.float32),
+        'receiver_y_m': np.array([24.0, 28.0], dtype=np.float32),
+        'offset_abs_geom_m': np.array([5.0, -10.0], dtype=np.float32),
+        'geometry_valid_mask': np.array([True, True], dtype=np.bool_),
+    }
+
+    with pytest.raises(ValueError, match='offset_abs_geom_m must be >= 0'):
+        save_coarse_npz(
+            tmp_path / 'negative_offset_geometry.coarse.npz',
+            **payload,
+            **geometry,
+        )
+
+
 def test_save_coarse_npz_rejects_nan_signed_geometry_on_valid_trace(
     tmp_path: Path,
 ) -> None:

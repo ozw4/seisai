@@ -322,6 +322,83 @@ def test_constant_geometry_offsets_fall_back_even_with_enough_observations(
     )
 
 
+def test_collapsed_source_xy_across_multiple_shots_rejects_geometry_fit(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.linspace(50.0, 600.0, 12, dtype=np.float32),
+    )
+    shot_id = np.asarray([101] * 6 + [102] * 6, dtype=np.int32)
+    table = replace(table, shot_id=shot_id, ffid=shot_id.copy())
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {'split_by_offset_gap': False},
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 3},
+            }
+        ),
+    )
+
+    assert calls == []
+    assert not np.any(
+        result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
+    )
+    assert np.all(
+        result.physical_model_failure_reason
+        == np.uint8(PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID)
+    )
+
+
+def test_single_shot_collapsed_source_xy_still_allows_geometry_fit(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.linspace(50.0, 600.0, 12, dtype=np.float32),
+    )
+    shot_id = np.full((12,), 101, dtype=np.int32)
+    table = replace(table, shot_id=shot_id, ffid=shot_id.copy())
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {'split_by_offset_gap': False},
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 3},
+            }
+        ),
+    )
+
+    assert len(calls) == 1
+    assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+    assert np.all(result.physical_model_failure_reason == PHYSICAL_MODEL_FAILURE_NONE)
+
+
 def test_physical_center_fits_once_per_unique_observation_segment(monkeypatch) -> None:
     calls: list[np.ndarray] = []
 
@@ -650,6 +727,53 @@ def test_header_offset_path_uses_source_xy_groups_without_geometry_offsets(
 
     assert sorted(int(call.size) for call in calls) == [6, 6]
     assert np.all(result.physical_model_neighbor_count == np.int32(1))
+    assert np.all(
+        result.physical_offset_source == np.uint8(PHYSICAL_OFFSET_SOURCE_HEADER)
+    )
+
+
+def test_header_offset_path_uses_table_groups_when_source_xy_degenerate(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    offsets = np.linspace(50.0, 600.0, 12, dtype=np.float32)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        with_geometry=False,
+    )
+    shot_id = np.asarray([101] * 6 + [102] * 6, dtype=np.int32)
+    table = replace(table, shot_id=shot_id, ffid=shot_id.copy())
+    coarse_npz['source_x_m'] = np.zeros((12,), dtype=np.float32)
+    coarse_npz['source_y_m'] = np.zeros((12,), dtype=np.float32)
+    coarse_npz['geometry_valid_mask'] = np.ones((12,), dtype=np.bool_)
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'use_geometry_offset': False,
+                    'split_by_offset_gap': False,
+                },
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 2},
+            }
+        ),
+    )
+
+    assert sorted(int(call.size) for call in calls) == [6, 6]
+    assert np.all(result.physical_model_neighbor_count == np.int32(1))
+    assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
     assert np.all(
         result.physical_offset_source == np.uint8(PHYSICAL_OFFSET_SOURCE_HEADER)
     )
