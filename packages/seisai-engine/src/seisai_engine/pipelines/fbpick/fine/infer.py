@@ -26,6 +26,8 @@ from seisai_engine.pipelines.common import (
 )
 from seisai_engine.pipelines.fbpick.common import (
     build_fbpick_final_payload,
+    build_fbpick_tag,
+    build_final_npz_name,
     build_lineage_payload,
     iter_qc_gathers,
     load_coarse_npz,
@@ -451,25 +453,17 @@ def require_existing_coarse_npz_path(
 
 
 def _derive_final_npz_path(*, segy_path: str | Path, out_dir: str | Path) -> Path:
-    return Path(out_dir).expanduser().resolve() / f'{Path(segy_path).stem}.fbpick_final.npz'
+    return Path(out_dir).expanduser().resolve() / build_final_npz_name(segy_path)
 
 
 def _derive_overview_png_path(*, segy_path: str | Path, out_dir: str | Path) -> Path:
     return Path(out_dir).expanduser().resolve() / f'{Path(segy_path).stem}.overview.png'
 
 
-def _derive_qc_tag(segy_path: str | Path) -> str:
-    segy = Path(segy_path)
-    parent_name = segy.parent.name
-    if parent_name:
-        return parent_name + '__' + segy.stem
-    return segy.stem
-
-
 def _derive_fine_qc_dir(*, segy_path: str | Path, out_dir: str | Path) -> Path:
     return (
         Path(out_dir).expanduser().resolve()
-        / f'{_derive_qc_tag(segy_path)}.fine_qc'
+        / f'{build_fbpick_tag(segy_path)}.fine_qc'
     )
 
 

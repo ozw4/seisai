@@ -419,6 +419,9 @@ def test_run_pipeline_final_npz_dir_passes_actual_arrays_to_vis(
     fb_path = tmp_path / 'fb.npy'
     segy_path = tmp_path / 'line' / 'survey.sgy'
     _write_fb(fb_path)
+    final_path = tmp_path / 'final' / 'line__survey.fbpick_final.npz'
+    final_path.parent.mkdir(parents=True)
+    final_path.touch()
     final = _qc_final_payload()
     loaded_final_paths: list[Path] = []
     cfg = {
@@ -454,11 +457,73 @@ def test_run_pipeline_final_npz_dir_passes_actual_arrays_to_vis(
     physics_qc_cli.run_pipeline(tmp_path / 'config.yaml')
 
     assert loaded_final_paths == [
-        tmp_path / 'final' / 'line__survey.fbpick_final.npz'
+        final_path
     ]
     np.testing.assert_array_equal(captured['window_start_i'], final['window_start_i'])
     np.testing.assert_array_equal(captured['window_end_i'], final['window_end_i'])
     np.testing.assert_array_equal(captured['final_pick_i'], final['final_pick_i'])
+
+
+def test_run_pipeline_final_npz_dir_accepts_legacy_stem_only_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fb_path = tmp_path / 'fb.npy'
+    segy_path = tmp_path / 'line' / 'survey.sgy'
+    legacy_final_path = tmp_path / 'final' / 'survey.fbpick_final.npz'
+    legacy_final_path.parent.mkdir(parents=True)
+    legacy_final_path.touch()
+    _write_fb(fb_path)
+    loaded_final_paths: list[Path] = []
+    cfg = {
+        'paths': {
+            'segy_files': [str(segy_path)],
+            'fb_files': [str(fb_path)],
+            'coarse_npz_dir': str(tmp_path / 'coarse'),
+            'robust_npz_dir': str(tmp_path / 'robust'),
+            'final_npz_dir': str(tmp_path / 'final'),
+            'out_dir': str(tmp_path / 'out'),
+        },
+        'dataset': {'primary_keys': ['ffid']},
+        'vis': {'save_summary_csv': False, 'max_gathers_per_file': 0},
+    }
+
+    monkeypatch.setattr(
+        physics_qc_cli,
+        '_load_runtime',
+        lambda: _physics_qc_runtime(
+            cfg=cfg,
+            base_dir=tmp_path,
+            final=_qc_final_payload(),
+            loaded_final_paths=loaded_final_paths,
+        ),
+    )
+    monkeypatch.setattr(physics_qc_cli, '_save_vis_pngs', lambda **kwargs: [])
+
+    physics_qc_cli.run_pipeline(tmp_path / 'config.yaml')
+
+    assert loaded_final_paths == [legacy_final_path]
+
+
+def test_resolve_final_npz_path_dir_missing_reports_canonical_and_legacy(
+    tmp_path: Path,
+) -> None:
+    final_dir = tmp_path / 'final'
+    segy_path = tmp_path / 'line' / 'survey.sgy'
+    canonical = final_dir / 'line__survey.fbpick_final.npz'
+    legacy = final_dir / 'survey.fbpick_final.npz'
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        physics_qc_cli._resolve_final_npz_path(
+            segy_path=segy_path,
+            file_index=0,
+            final_npz_dir=final_dir,
+            final_npz_files=None,
+        )
+
+    msg = str(excinfo.value)
+    assert str(canonical) in msg
+    assert str(legacy) in msg
 
 
 def test_run_pipeline_summary_csv_includes_fine_physical_and_final_metrics(

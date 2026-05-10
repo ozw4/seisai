@@ -90,6 +90,7 @@ class PhysicalTrendCfg:
     enabled: bool = False
     fit_kind: str = 'two_piece_ransac_autobreak'
     use_geometry_offset: bool = True
+    min_offset_spread_m: float = 1.0
     coord_group_tol_m: float = 1.0
     segment_by_offset_sign: bool = True
     split_by_offset_gap: bool = True
@@ -315,6 +316,7 @@ def _load_physical_trend_cfg(cfg: dict[str, Any]) -> PhysicalTrendCfg:
         use_geometry_offset=bool(
             optional_bool(cfg, 'use_geometry_offset', default=True)
         ),
+        min_offset_spread_m=float(optional_float(cfg, 'min_offset_spread_m', 1.0)),
         coord_group_tol_m=float(optional_float(cfg, 'coord_group_tol_m', 1.0)),
         segment_by_offset_sign=bool(
             optional_bool(cfg, 'segment_by_offset_sign', default=True)
@@ -391,6 +393,10 @@ def _validate_physical_trend_cfg(cfg: PhysicalTrendCfg) -> None:
     _validate_positive_float(
         'physical_trend.coord_group_tol_m',
         cfg.coord_group_tol_m,
+    )
+    _validate_nonnegative_float(
+        'physical_trend.min_offset_spread_m',
+        cfg.min_offset_spread_m,
     )
     gap_ratio = float(cfg.gap_ratio)
     if (not math.isfinite(gap_ratio)) or gap_ratio <= 1.0:
