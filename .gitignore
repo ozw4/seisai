@@ -17,9 +17,6 @@ example_data/
 # OS ファイル
 .DS_Store
 Thumbs.db
-.devcontainer/
-Dockerfile
-ruff.toml
 .codex
 
 # 環境設定

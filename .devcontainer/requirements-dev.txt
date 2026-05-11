@@ -1,0 +1,7 @@
+numpy<2
+scipy
+segyio
+timm
+ruff==0.14.14
+matplotlib
+mlflow
