@@ -136,6 +136,11 @@ def test_load_vis_cfg_parses_skip_keys_and_max_traces() -> None:
                 'clip_percentile': 99.0,
                 'gather_selection': 'even',
                 'overlays': {'window': False, 'final_pick': False},
+                'first_panel_flatten': {
+                    'enabled': True,
+                    'reference_key': 'physical_center_i',
+                    'half_samples': 256,
+                },
             }
         }
     )
@@ -148,6 +153,11 @@ def test_load_vis_cfg_parses_skip_keys_and_max_traces() -> None:
     assert vis_cfg['overlays']['window'] is False
     assert vis_cfg['overlays']['final_pick'] is False
     assert vis_cfg['overlays']['coarse_pmax'] is True
+    assert vis_cfg['first_panel_flatten'] == {
+        'enabled': True,
+        'reference_key': 'physical_center_i',
+        'half_samples': 256,
+    }
 
 
 def test_load_vis_cfg_allows_null_max_traces() -> None:
@@ -179,6 +189,18 @@ def test_load_vis_cfg_allows_null_max_traces() -> None:
         {'overlays': {1: True}},
         {'overlays': {'window': 1}},
         {'overlays': {'unknown': True}},
+        {'first_panel_flatten': []},
+        {'first_panel_flatten': {'enabled': 1}},
+        {'first_panel_flatten': {'reference_key': 'unknown'}},
+        {
+            'first_panel_flatten': {
+                'center_key': 'physical_center_i',
+                'reference_key': 'robust_pick_i',
+            }
+        },
+        {'first_panel_flatten': {'half_samples': 0}},
+        {'first_panel_flatten': {'half_samples': True}},
+        {'first_panel_flatten': {'unknown': True}},
     ],
 )
 def test_load_vis_cfg_rejects_invalid_new_fields(vis: dict[str, object]) -> None:
@@ -402,6 +424,57 @@ def test_save_vis_pngs_passes_optional_physical_overlay_arrays(
         captured['physical_model_status'],
         np.asarray([0, 2], dtype=np.uint8),
     )
+
+
+def test_save_vis_pngs_passes_first_panel_flatten_reference(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _save(out_png: Path, **kwargs: object) -> Path:
+        captured.update(kwargs)
+        return out_png
+
+    segy_path = tmp_path / 'line' / 'flatten.sgy'
+    segy_path.parent.mkdir()
+    info = _ffid_info({1: [1, 0]})
+    info['mmap'] = [
+        np.asarray([0.0, 1.0, -1.0], dtype=np.float32),
+        np.asarray([0.0, 2.0, -2.0], dtype=np.float32),
+    ]
+    runtime = SimpleNamespace(save_fbpick_physics_qc_gather_png=_save)
+
+    out_paths = physics_qc_cli._save_vis_pngs(
+        info=info,
+        segy_path=str(segy_path),
+        out_dir=tmp_path / 'out',
+        gt_pick_i=np.asarray([1, 1], dtype=np.int64),
+        coarse_pick_i=np.asarray([10, 20], dtype=np.int64),
+        robust_pick_i=np.asarray([11, 21], dtype=np.int64),
+        physical_center_i=np.asarray([13, 23], dtype=np.int32),
+        dataset_cfg={'primary_keys': ['ffid']},
+        vis_cfg={
+            'max_gathers_per_file': 1,
+            'skip_gather_keys': {},
+            'max_traces_per_gather': None,
+            'waveform_norm': 'global',
+            'clip_percentile': 99.0,
+            'first_panel_flatten': {
+                'enabled': True,
+                'reference_key': 'physical_center_i',
+                'half_samples': 128,
+            },
+        },
+        runtime=runtime,
+    )
+
+    assert len(out_paths) == 1
+    np.testing.assert_array_equal(
+        captured['first_panel_flatten_reference_i'],
+        np.asarray([13, 23], dtype=np.int32),
+    )
+    assert captured['first_panel_flatten_reference_label'] == 'physical_center_i'
+    assert captured['first_panel_flatten_half_samples'] == 128
 
 
 def test_save_vis_pngs_omits_disabled_overlay_arrays(tmp_path: Path) -> None:

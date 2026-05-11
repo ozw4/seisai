@@ -352,6 +352,55 @@ def test_save_fbpick_physics_qc_gather_png_draws_physical_overlays(
         original_close(fig)
 
 
+def test_save_fbpick_physics_qc_gather_png_flattens_first_panel(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out_png = tmp_path / 'flattened_gather.png'
+    wave = np.zeros((3, 80), dtype=np.float32)
+    wave[0, 30] = 1.0
+    wave[1, 35] = 1.0
+    wave[2, 40] = 1.0
+    physical = np.asarray([30, 35, 40], dtype=np.int64)
+    coarse = physical + np.asarray([1, -2, 3], dtype=np.int64)
+    robust = physical + 2
+    closed: list[object | None] = []
+    original_close = plt.close
+
+    def _capture_close(fig: object | None = None) -> None:
+        closed.append(fig)
+
+    monkeypatch.setattr(plt, 'close', _capture_close)
+
+    out_path = save_fbpick_physics_qc_gather_png(
+        out_png,
+        raw_wave_hw=wave,
+        gt_pick_i=physical,
+        coarse_pick_i=coarse,
+        robust_pick_i=robust,
+        physical_center_i=physical,
+        first_panel_flatten_reference_i=physical,
+        first_panel_flatten_reference_label='physical_center_i',
+        first_panel_flatten_half_samples=16,
+        show_window=False,
+    )
+
+    assert out_path == out_png.resolve()
+    assert out_path.is_file()
+    assert closed
+    fig = closed[0]
+    try:
+        first_ax = fig.axes[0]
+        assert 'flattened by physical_center_i' in first_ax.get_title()
+        assert first_ax.get_ylabel() == 'Sample Offset from physical_center_i'
+        labels_to_y = {line.get_label(): line.get_ydata() for line in first_ax.lines}
+        np.testing.assert_allclose(labels_to_y['physical center'], np.zeros(3))
+        np.testing.assert_allclose(labels_to_y['coarse'], np.asarray([1, -2, 3]))
+        np.testing.assert_allclose(labels_to_y['robust'], np.asarray([2, 2, 2]))
+    finally:
+        original_close(fig)
+
+
 def test_save_fbpick_physics_qc_gather_png_can_hide_window_overlay(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

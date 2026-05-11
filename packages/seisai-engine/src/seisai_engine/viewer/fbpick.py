@@ -534,6 +534,86 @@ def _normalize_waveform_for_qc_display(
 	raise ValueError(msg)
 
 
+def _build_flattened_waveform_for_qc_display(
+	wave_hw: np.ndarray,
+	reference_i: np.ndarray,
+	*,
+	half_samples: int,
+) -> np.ndarray:
+	wave = np.ascontiguousarray(np.asarray(wave_hw, dtype=np.float32))
+	if wave.ndim != 2:
+		msg = f'wave_hw must be 2D, got {wave.shape}'
+		raise ValueError(msg)
+	n_traces, n_samples = wave.shape
+	reference = np.asarray(reference_i, dtype=np.float32)
+	if reference.ndim != 1 or int(reference.shape[0]) != int(n_traces):
+		msg = f'reference_i must be 1D with length {n_traces}'
+		raise ValueError(msg)
+	half = _require_strict_int(half_samples, name='half_samples')
+	if half <= 0:
+		msg = 'half_samples must be > 0'
+		raise ValueError(msg)
+
+	relative_axis = np.arange(-half, half + 1, dtype=np.int32)
+	flattened = np.zeros((n_traces, int(relative_axis.size)), dtype=np.float32)
+	finite_reference = np.isfinite(reference)
+	reference_round = np.full(reference.shape, -1, dtype=np.int64)
+	reference_round[finite_reference] = np.rint(reference[finite_reference]).astype(
+		np.int64,
+		copy=False,
+	)
+	valid_reference = (
+		finite_reference
+		& (reference_round >= 0)
+		& (reference_round < int(n_samples))
+	)
+	for trace_idx in np.nonzero(valid_reference)[0]:
+		center = int(reference_round[int(trace_idx)])
+		src = center + relative_axis.astype(np.int64, copy=False)
+		valid_src = (src >= 0) & (src < int(n_samples))
+		if np.any(valid_src):
+			flattened[int(trace_idx), valid_src] = wave[int(trace_idx), src[valid_src]]
+	return flattened
+
+
+def _relative_pick_for_flattened_qc_panel(
+	pick_i: np.ndarray,
+	reference_i: np.ndarray,
+	*,
+	n_samples: int,
+) -> np.ndarray:
+	pick = np.asarray(pick_i, dtype=np.float32)
+	reference = np.asarray(reference_i, dtype=np.float32)
+	if pick.ndim != 1 or reference.ndim != 1 or pick.shape != reference.shape:
+		msg = 'pick_i and reference_i must be 1D arrays with the same shape'
+		raise ValueError(msg)
+	valid = (
+		np.isfinite(pick)
+		& np.isfinite(reference)
+		& (pick >= 0.0)
+		& (pick < float(n_samples))
+		& (reference >= 0.0)
+		& (reference < float(n_samples))
+	)
+	relative = pick - reference
+	relative[~valid] = np.nan
+	return relative.astype(np.float32, copy=False)
+
+
+def _relative_window_bound_for_flattened_qc_panel(
+	bound_i: np.ndarray,
+	reference_i: np.ndarray,
+) -> np.ndarray:
+	bound = np.asarray(bound_i, dtype=np.float32)
+	reference = np.asarray(reference_i, dtype=np.float32)
+	if bound.ndim != 1 or reference.ndim != 1 or bound.shape != reference.shape:
+		msg = 'bound_i and reference_i must be 1D arrays with the same shape'
+		raise ValueError(msg)
+	relative = bound - reference
+	relative[~np.isfinite(reference)] = np.nan
+	return relative.astype(np.float32, copy=False)
+
+
 def _extract_batch_scalar(value: object, *, b: int) -> object:
 	if torch.is_tensor(value):
 		if value.ndim == 0:
@@ -895,6 +975,9 @@ def save_fbpick_physics_qc_gather_png(
 	window_end_i: np.ndarray | None = None,
 	final_pick_i: np.ndarray | None = None,
 	physical_model_status: np.ndarray | None = None,
+	first_panel_flatten_reference_i: np.ndarray | None = None,
+	first_panel_flatten_reference_label: str | None = None,
+	first_panel_flatten_half_samples: int = 256,
 	title: str | None = None,
 	dpi: int = 150,
 	clip_percentile: float = 99.0,
@@ -972,6 +1055,24 @@ def save_fbpick_physics_qc_gather_png(
 		length=n_traces,
 		dtype=np.uint8,
 	)
+	flatten_reference = _optional_qc_vector(
+		'first_panel_flatten_reference_i',
+		first_panel_flatten_reference_i,
+		length=n_traces,
+		dtype=np.float32,
+	)
+	flatten_half = _require_strict_int(
+		first_panel_flatten_half_samples,
+		name='first_panel_flatten_half_samples',
+	)
+	if flatten_half <= 0:
+		msg = 'first_panel_flatten_half_samples must be > 0'
+		raise ValueError(msg)
+	flatten_label = (
+		'flatten reference'
+		if first_panel_flatten_reference_label is None
+		else str(first_panel_flatten_reference_label)
+	)
 	status_summary = _format_qc_status_counts(status)
 
 	dpi_int = int(dpi)
@@ -992,13 +1093,26 @@ def save_fbpick_physics_qc_gather_png(
 
 	x = np.arange(n_traces, dtype=np.float32)
 	norm_mode = str(waveform_norm)
+	flatten_enabled = flatten_reference is not None
+	plot_wave_raw = (
+		_build_flattened_waveform_for_qc_display(
+			wave,
+			flatten_reference,
+			half_samples=flatten_half,
+		)
+		if flatten_enabled
+		else wave
+	)
 	wave_display = _normalize_waveform_for_qc_display(
-		wave,
+		plot_wave_raw,
 		mode=norm_mode,
 		clip_percentile=clip_percentile,
 	)
 	if norm_mode == 'global':
-		display_vmin = -_resolve_overview_clip(wave, clip_percentile=clip_percentile)
+		display_vmin = -_resolve_overview_clip(
+			plot_wave_raw,
+			clip_percentile=clip_percentile,
+		)
 		display_vmax = -display_vmin
 	else:
 		display_vmin = -1.0
@@ -1011,18 +1125,67 @@ def save_fbpick_physics_qc_gather_png(
 		gridspec_kw={'width_ratios': [2.2, 1.5, 0.7]},
 	)
 
-	axes[0].imshow(
-		wave_display.T,
-		cmap='gray',
-		aspect='auto',
-		interpolation='nearest',
-		origin='upper',
-		vmin=display_vmin,
-		vmax=display_vmax,
-	)
+	def _first_panel_y(values: np.ndarray) -> np.ndarray:
+		if not flatten_enabled:
+			return np.asarray(values, dtype=np.float32)
+		if flatten_reference is None:
+			msg = 'flatten_reference must be available when flattening is enabled'
+			raise ValueError(msg)
+		return _relative_pick_for_flattened_qc_panel(
+			values,
+			flatten_reference,
+			n_samples=n_samples,
+		)
+
+	def _first_panel_window_y(values: np.ndarray) -> np.ndarray:
+		if not flatten_enabled:
+			return np.clip(values, 0, n_samples - 1).astype(np.float32)
+		if flatten_reference is None:
+			msg = 'flatten_reference must be available when flattening is enabled'
+			raise ValueError(msg)
+		return _relative_window_bound_for_flattened_qc_panel(values, flatten_reference)
+
+	if flatten_enabled:
+		axes[0].imshow(
+			wave_display.T,
+			cmap='gray',
+			aspect='auto',
+			interpolation='nearest',
+			origin='upper',
+			extent=(
+				-0.5,
+				float(n_traces) - 0.5,
+				float(flatten_half) + 0.5,
+				-float(flatten_half) - 0.5,
+			),
+			vmin=display_vmin,
+			vmax=display_vmax,
+		)
+		axes[0].axhline(
+			0.0,
+			color='white',
+			lw=0.8,
+			ls=':',
+			alpha=0.85,
+			label=f'{flatten_label} = 0',
+		)
+		axes[0].set_ylim(float(flatten_half), -float(flatten_half))
+	else:
+		axes[0].imshow(
+			wave_display.T,
+			cmap='gray',
+			aspect='auto',
+			interpolation='nearest',
+			origin='upper',
+			vmin=display_vmin,
+			vmax=display_vmax,
+		)
+
+	gt_y = _first_panel_y(gt)
+	valid_gt_for_plot = valid_gt & np.isfinite(gt_y)
 	axes[0].plot(
-		x[valid_gt],
-		gt.astype(np.float32)[valid_gt],
+		x[valid_gt_for_plot],
+		gt_y[valid_gt_for_plot],
 		color='lime',
 		lw=1.2,
 		alpha=0.95,
@@ -1030,7 +1193,7 @@ def save_fbpick_physics_qc_gather_png(
 	)
 	axes[0].plot(
 		x,
-		coarse.astype(np.float32),
+		_first_panel_y(coarse),
 		color='#00a6ff',
 		lw=1.0,
 		alpha=0.9,
@@ -1038,7 +1201,7 @@ def save_fbpick_physics_qc_gather_png(
 	)
 	axes[0].plot(
 		x,
-		robust.astype(np.float32),
+		_first_panel_y(robust),
 		color='yellow',
 		lw=1.0,
 		alpha=0.95,
@@ -1047,7 +1210,7 @@ def save_fbpick_physics_qc_gather_png(
 	if trend is not None:
 		axes[0].plot(
 			x,
-			trend.astype(np.float32),
+			_first_panel_y(trend),
 			color='#ff9f1c',
 			lw=1.0,
 			ls='--',
@@ -1057,7 +1220,7 @@ def save_fbpick_physics_qc_gather_png(
 	if physical is not None:
 		axes[0].plot(
 			x,
-			physical.astype(np.float32),
+			_first_panel_y(physical),
 			color='#d65db1',
 			lw=1.0,
 			alpha=0.95,
@@ -1066,7 +1229,7 @@ def save_fbpick_physics_qc_gather_png(
 	if fine is not None:
 		axes[0].plot(
 			x,
-			fine.astype(np.float32),
+			_first_panel_y(fine),
 			color='#00f5d4',
 			lw=1.0,
 			ls='-.',
@@ -1086,7 +1249,7 @@ def save_fbpick_physics_qc_gather_png(
 			window_end_label = 'robust window end'
 		axes[0].plot(
 			x,
-			np.clip(plot_window_start, 0, n_samples - 1).astype(np.float32),
+			_first_panel_window_y(plot_window_start),
 			color='yellow',
 			lw=0.8,
 			ls='--',
@@ -1095,7 +1258,7 @@ def save_fbpick_physics_qc_gather_png(
 		)
 		axes[0].plot(
 			x,
-			np.clip(plot_window_end, 0, n_samples - 1).astype(np.float32),
+			_first_panel_window_y(plot_window_end),
 			color='yellow',
 			lw=0.8,
 			ls=':',
@@ -1105,17 +1268,24 @@ def save_fbpick_physics_qc_gather_png(
 	if final is not None:
 		axes[0].plot(
 			x,
-			final.astype(np.float32),
+			_first_panel_y(final),
 			color='red',
 			lw=1.2,
 			alpha=0.95,
 			label='final',
 		)
-	axes[0].set_title(
-		f'waveform and picks (norm={norm_mode}, p{float(clip_percentile):g})'
-	)
+	if flatten_enabled:
+		axes[0].set_title(
+			f'waveform and picks flattened by {flatten_label} '
+			f'(+/-{flatten_half} samples, norm={norm_mode}, p{float(clip_percentile):g})'
+		)
+		axes[0].set_ylabel(f'Sample Offset from {flatten_label}')
+	else:
+		axes[0].set_title(
+			f'waveform and picks (norm={norm_mode}, p{float(clip_percentile):g})'
+		)
+		axes[0].set_ylabel('Sample Index')
 	axes[0].set_xlabel('Trace Index')
-	axes[0].set_ylabel('Sample Index')
 	axes[0].legend(loc='upper right', fontsize=8)
 
 	axes[1].plot(x, coarse_err, color='#00a6ff', lw=1.0, label='coarse - GT')

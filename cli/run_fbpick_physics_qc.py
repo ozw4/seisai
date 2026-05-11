@@ -26,6 +26,18 @@ __all__ = ['main', 'run_pipeline']
 
 DT_SEC_ATOL = 1e-9
 
+FIRST_PANEL_FLATTEN_REFERENCE_KEYS = (
+	'gt_pick_i',
+	'coarse_pick_i',
+	'robust_pick_i',
+	'trend_center_i',
+	'physical_center_i',
+	'fine_center_i',
+	'window_start_i',
+	'window_end_i',
+	'final_pick_i',
+)
+
 
 OPTIONAL_SUMMARY_METRIC_COLUMNS = [
 	'fine_center_R32',
@@ -409,6 +421,56 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 			raise TypeError(msg)
 		overlays[key] = bool(value)
 
+	flatten_raw = vis.get('first_panel_flatten', {})
+	if flatten_raw is None:
+		flatten_raw = {}
+	if not isinstance(flatten_raw, dict) or not all(
+		isinstance(key, str) for key in flatten_raw
+	):
+		msg = 'vis.first_panel_flatten must be dict'
+		raise TypeError(msg)
+	unknown_flatten_keys = sorted(
+		set(flatten_raw) - {'enabled', 'reference_key', 'center_key', 'half_samples'}
+	)
+	if unknown_flatten_keys:
+		msg = 'vis.first_panel_flatten contains unsupported keys: ' + ', '.join(
+			unknown_flatten_keys
+		)
+		raise ValueError(msg)
+	flatten_enabled = flatten_raw.get('enabled', False)
+	if not isinstance(flatten_enabled, bool):
+		msg = 'vis.first_panel_flatten.enabled must be bool'
+		raise TypeError(msg)
+	if 'reference_key' in flatten_raw and 'center_key' in flatten_raw:
+		msg = 'vis.first_panel_flatten must not specify both reference_key and center_key'
+		raise ValueError(msg)
+	flatten_reference_key = flatten_raw.get(
+		'reference_key',
+		flatten_raw.get('center_key', 'physical_center_i'),
+	)
+	if not isinstance(flatten_reference_key, str):
+		msg = 'vis.first_panel_flatten.reference_key must be str'
+		raise TypeError(msg)
+	if flatten_reference_key not in FIRST_PANEL_FLATTEN_REFERENCE_KEYS:
+		msg = (
+			'vis.first_panel_flatten.reference_key must be one of: '
+			+ ', '.join(FIRST_PANEL_FLATTEN_REFERENCE_KEYS)
+		)
+		raise ValueError(msg)
+	flatten_half_raw = flatten_raw.get('half_samples', 256)
+	if isinstance(flatten_half_raw, bool) or not isinstance(flatten_half_raw, int):
+		msg = 'vis.first_panel_flatten.half_samples must be int > 0'
+		raise TypeError(msg)
+	flatten_half_samples = int(flatten_half_raw)
+	if flatten_half_samples <= 0:
+		msg = 'vis.first_panel_flatten.half_samples must be int > 0'
+		raise ValueError(msg)
+	first_panel_flatten = {
+		'enabled': bool(flatten_enabled),
+		'reference_key': flatten_reference_key,
+		'half_samples': flatten_half_samples,
+	}
+
 	skip_gather_keys_raw = vis.get('skip_gather_keys', {})
 	if not isinstance(skip_gather_keys_raw, dict) or not all(
 		isinstance(key, str) for key in skip_gather_keys_raw
@@ -446,6 +508,7 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		'clip_percentile': clip_percentile,
 		'gather_selection': gather_selection,
 		'overlays': overlays,
+		'first_panel_flatten': first_panel_flatten,
 		'skip_gather_keys': skip_gather_keys,
 		'max_traces_per_gather': max_traces_per_gather,
 	}
@@ -551,6 +614,32 @@ def _save_vis_pngs(
 	tag = _build_tag(segy_path)
 	out_subdir = Path(out_dir) / tag
 	overlays = dict(vis_cfg.get('overlays', {}))
+	flatten_cfg = dict(vis_cfg.get('first_panel_flatten', {}))
+	flatten_enabled = bool(flatten_cfg.get('enabled', False))
+	flatten_reference_key = str(
+		flatten_cfg.get('reference_key', 'physical_center_i')
+	)
+	flatten_reference_arrays = {
+		'gt_pick_i': gt_pick_i,
+		'coarse_pick_i': coarse_pick_i,
+		'robust_pick_i': robust_pick_i,
+		'trend_center_i': trend_center_i,
+		'physical_center_i': physical_center_i,
+		'fine_center_i': fine_center_i,
+		'window_start_i': window_start_i,
+		'window_end_i': window_end_i,
+		'final_pick_i': final_pick_i,
+	}
+	if flatten_reference_key not in flatten_reference_arrays:
+		msg = f'unsupported first_panel_flatten reference_key: {flatten_reference_key}'
+		raise ValueError(msg)
+	flatten_reference_all = flatten_reference_arrays[flatten_reference_key]
+	if flatten_enabled and flatten_reference_all is None:
+		msg = (
+			f'vis.first_panel_flatten.reference_key={flatten_reference_key!r} '
+			'is unavailable for this QC input'
+		)
+		raise ValueError(msg)
 	out_paths: list[Path] = []
 	for gather_idx, (primary_key, gather_key, trace_indices) in enumerate(
 		_iter_vis_gathers(
@@ -647,6 +736,21 @@ def _save_vis_pngs(
 					)
 					if bool(overlays.get('physical_model_status', True))
 					else None
+				),
+				first_panel_flatten_reference_i=(
+					_slice_optional_trace_array(
+						flatten_reference_all,
+						key=flatten_reference_key,
+						trace_indices=trace_indices,
+					)
+					if flatten_enabled
+					else None
+				),
+				first_panel_flatten_reference_label=(
+					flatten_reference_key if flatten_enabled else None
+				),
+				first_panel_flatten_half_samples=int(
+					flatten_cfg.get('half_samples', 256)
 				),
 				title=title,
 				waveform_norm=str(vis_cfg['waveform_norm']),
