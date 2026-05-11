@@ -391,6 +391,11 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		msg = 'vis.gather_selection must be one of: first, even'
 		raise ValueError(msg)
 
+	first_panel_only = vis.get('first_panel_only', False)
+	if not isinstance(first_panel_only, bool):
+		msg = 'vis.first_panel_only must be bool'
+		raise TypeError(msg)
+
 	default_overlays = {
 		'coarse_pmax': True,
 		'trend_center': True,
@@ -507,6 +512,7 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		'waveform_norm': waveform_norm,
 		'clip_percentile': clip_percentile,
 		'gather_selection': gather_selection,
+		'first_panel_only': bool(first_panel_only),
 		'overlays': overlays,
 		'first_panel_flatten': first_panel_flatten,
 		'skip_gather_keys': skip_gather_keys,
@@ -756,6 +762,7 @@ def _save_vis_pngs(
 				waveform_norm=str(vis_cfg['waveform_norm']),
 				clip_percentile=float(vis_cfg['clip_percentile']),
 				show_window=bool(overlays.get('window', True)),
+				first_panel_only=bool(vis_cfg.get('first_panel_only', False)),
 			)
 		)
 	if not out_paths:

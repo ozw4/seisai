@@ -401,6 +401,47 @@ def test_save_fbpick_physics_qc_gather_png_flattens_first_panel(
         original_close(fig)
 
 
+def test_save_fbpick_physics_qc_gather_png_can_show_first_panel_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out_png = tmp_path / 'first_panel_only.png'
+    wave = np.linspace(-1.0, 1.0, 4 * 64, dtype=np.float32).reshape(4, 64)
+    picks = np.asarray([20, 22, 24, 26], dtype=np.int64)
+    closed: list[object | None] = []
+    original_close = plt.close
+
+    def _capture_close(fig: object | None = None) -> None:
+        closed.append(fig)
+
+    monkeypatch.setattr(plt, 'close', _capture_close)
+
+    out_path = save_fbpick_physics_qc_gather_png(
+        out_png,
+        raw_wave_hw=wave,
+        gt_pick_i=picks,
+        coarse_pick_i=picks - 1,
+        robust_pick_i=picks,
+        physical_center_i=picks + 1,
+        physical_model_status=np.asarray([0, 0, 1, 2], dtype=np.uint8),
+        first_panel_only=True,
+        show_window=False,
+    )
+
+    assert out_path == out_png.resolve()
+    assert out_path.is_file()
+    assert closed
+    fig = closed[0]
+    try:
+        assert len(fig.axes) == 1
+        labels = {line.get_label() for line in fig.axes[0].lines}
+        assert {'coarse', 'robust', 'physical center'}.issubset(labels)
+        title_texts = [text.get_text() for text in fig.texts]
+        assert any('physical status: 0=2, 1=1, 2=1' in text for text in title_texts)
+    finally:
+        original_close(fig)
+
+
 def test_save_fbpick_physics_qc_gather_png_can_hide_window_overlay(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

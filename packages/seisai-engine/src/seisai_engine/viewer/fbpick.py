@@ -983,6 +983,7 @@ def save_fbpick_physics_qc_gather_png(
 	clip_percentile: float = 99.0,
 	waveform_norm: str = 'global',
 	show_window: bool = True,
+	first_panel_only: bool = False,
 ) -> Path:
 	import matplotlib.pyplot as plt
 
@@ -1073,6 +1074,9 @@ def save_fbpick_physics_qc_gather_png(
 		if first_panel_flatten_reference_label is None
 		else str(first_panel_flatten_reference_label)
 	)
+	if not isinstance(first_panel_only, bool):
+		msg = 'first_panel_only must be bool'
+		raise TypeError(msg)
 	status_summary = _format_qc_status_counts(status)
 
 	dpi_int = int(dpi)
@@ -1118,12 +1122,16 @@ def save_fbpick_physics_qc_gather_png(
 		display_vmin = -1.0
 		display_vmax = 1.0
 	fig_width = max(14.0, float(n_traces) / 12.0)
-	fig, axes = plt.subplots(
-		1,
-		3,
-		figsize=(fig_width, 6.0),
-		gridspec_kw={'width_ratios': [2.2, 1.5, 0.7]},
-	)
+	if first_panel_only:
+		fig, first_ax = plt.subplots(1, 1, figsize=(fig_width, 6.0))
+		axes = [first_ax]
+	else:
+		fig, axes = plt.subplots(
+			1,
+			3,
+			figsize=(fig_width, 6.0),
+			gridspec_kw={'width_ratios': [2.2, 1.5, 0.7]},
+		)
 
 	def _first_panel_y(values: np.ndarray) -> np.ndarray:
 		if not flatten_enabled:
@@ -1288,41 +1296,42 @@ def save_fbpick_physics_qc_gather_png(
 	axes[0].set_xlabel('Trace Index')
 	axes[0].legend(loc='upper right', fontsize=8)
 
-	axes[1].plot(x, coarse_err, color='#00a6ff', lw=1.0, label='coarse - GT')
-	axes[1].plot(x, robust_err, color='yellow', lw=1.0, label='robust - GT')
-	for y in (0, 32, -32, 64, -64, 127, -127):
-		if y == 0:
-			axes[1].axhline(y, color='black', lw=0.9, alpha=0.8)
-		elif abs(y) == 32:
-			axes[1].axhline(y, color='gray', lw=0.8, ls='--', alpha=0.7)
-		elif abs(y) == 64:
-			axes[1].axhline(y, color='gray', lw=0.8, ls=':', alpha=0.7)
-		else:
-			axes[1].axhline(y, color='red', lw=0.8, ls='--', alpha=0.65)
-	axes[1].set_title('pick error')
-	axes[1].set_xlabel('Trace Index')
-	axes[1].set_ylabel('Sample Error')
-	axes[1].legend(loc='upper right', fontsize=8)
+	if not first_panel_only:
+		axes[1].plot(x, coarse_err, color='#00a6ff', lw=1.0, label='coarse - GT')
+		axes[1].plot(x, robust_err, color='yellow', lw=1.0, label='robust - GT')
+		for y in (0, 32, -32, 64, -64, 127, -127):
+			if y == 0:
+				axes[1].axhline(y, color='black', lw=0.9, alpha=0.8)
+			elif abs(y) == 32:
+				axes[1].axhline(y, color='gray', lw=0.8, ls='--', alpha=0.7)
+			elif abs(y) == 64:
+				axes[1].axhline(y, color='gray', lw=0.8, ls=':', alpha=0.7)
+			else:
+				axes[1].axhline(y, color='red', lw=0.8, ls='--', alpha=0.65)
+		axes[1].set_title('pick error')
+		axes[1].set_xlabel('Trace Index')
+		axes[1].set_ylabel('Sample Error')
+		axes[1].legend(loc='upper right', fontsize=8)
 
-	mask_rows = [in_robust_window.astype(np.float32)]
-	mask_labels = ['GT in robust']
-	if coarse_pmax_arr is not None:
-		mask_rows.append(np.clip(coarse_pmax_arr, 0.0, 1.0).astype(np.float32))
-		mask_labels.append('coarse pmax')
-	mask_values = np.stack(mask_rows, axis=0)
-	axes[2].imshow(
-		mask_values,
-		cmap='gray_r',
-		aspect='auto',
-		interpolation='nearest',
-		origin='upper',
-		vmin=0.0,
-		vmax=1.0,
-	)
-	axes[2].set_title('QC masks')
-	axes[2].set_xlabel('Trace Index')
-	axes[2].set_yticks(np.arange(len(mask_labels)))
-	axes[2].set_yticklabels(mask_labels)
+		mask_rows = [in_robust_window.astype(np.float32)]
+		mask_labels = ['GT in robust']
+		if coarse_pmax_arr is not None:
+			mask_rows.append(np.clip(coarse_pmax_arr, 0.0, 1.0).astype(np.float32))
+			mask_labels.append('coarse pmax')
+		mask_values = np.stack(mask_rows, axis=0)
+		axes[2].imshow(
+			mask_values,
+			cmap='gray_r',
+			aspect='auto',
+			interpolation='nearest',
+			origin='upper',
+			vmin=0.0,
+			vmax=1.0,
+		)
+		axes[2].set_title('QC masks')
+		axes[2].set_xlabel('Trace Index')
+		axes[2].set_yticks(np.arange(len(mask_labels)))
+		axes[2].set_yticklabels(mask_labels)
 
 	title_lines = []
 	if title is not None:

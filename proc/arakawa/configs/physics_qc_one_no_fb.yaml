@@ -19,6 +19,7 @@ vis:
   clip_percentile: 99.0
   max_gathers_per_file: 10
   gather_selection: even
+  first_panel_only: true
   max_traces_per_gather: 10000
   save_cdf: false
   save_summary_csv: true
@@ -34,3 +35,8 @@ vis:
     final_pick: false
 
     physical_model_status: true
+
+  first_panel_flatten:
+    enabled: true
+    reference_key: physical_center_i
+    half_samples: 256

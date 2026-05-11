@@ -135,6 +135,7 @@ def test_load_vis_cfg_parses_skip_keys_and_max_traces() -> None:
                 'waveform_norm': 'per_trace',
                 'clip_percentile': 99.0,
                 'gather_selection': 'even',
+                'first_panel_only': True,
                 'overlays': {'window': False, 'final_pick': False},
                 'first_panel_flatten': {
                     'enabled': True,
@@ -150,6 +151,7 @@ def test_load_vis_cfg_parses_skip_keys_and_max_traces() -> None:
     assert vis_cfg['waveform_norm'] == 'per_trace'
     assert vis_cfg['clip_percentile'] == 99.0
     assert vis_cfg['gather_selection'] == 'even'
+    assert vis_cfg['first_panel_only'] is True
     assert vis_cfg['overlays']['window'] is False
     assert vis_cfg['overlays']['final_pick'] is False
     assert vis_cfg['overlays']['coarse_pmax'] is True
@@ -185,6 +187,7 @@ def test_load_vis_cfg_allows_null_max_traces() -> None:
         {'clip_percentile': '99.0'},
         {'gather_selection': 1},
         {'gather_selection': 'middle'},
+        {'first_panel_only': 1},
         {'overlays': []},
         {'overlays': {1: True}},
         {'overlays': {'window': 1}},
@@ -459,6 +462,7 @@ def test_save_vis_pngs_passes_first_panel_flatten_reference(
             'max_traces_per_gather': None,
             'waveform_norm': 'global',
             'clip_percentile': 99.0,
+            'first_panel_only': True,
             'first_panel_flatten': {
                 'enabled': True,
                 'reference_key': 'physical_center_i',
@@ -475,6 +479,7 @@ def test_save_vis_pngs_passes_first_panel_flatten_reference(
     )
     assert captured['first_panel_flatten_reference_label'] == 'physical_center_i'
     assert captured['first_panel_flatten_half_samples'] == 128
+    assert captured['first_panel_only'] is True
 
 
 def test_save_vis_pngs_omits_disabled_overlay_arrays(tmp_path: Path) -> None:
