@@ -27,7 +27,7 @@ norm_refs:
   time_ref_sec: 20.0
   offset_ref_m: 2000.0
 infer:
-  ckpt_path: /workspace/proc/fbpick/site54/oof/coarse_fold01_train_out/ckpt/best.pt
+  ckpt_path: /workspace/proc/arakawa/weight/coarse.pt
   device: auto
   batch_size: 1
   num_workers: 0
