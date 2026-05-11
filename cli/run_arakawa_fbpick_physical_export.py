@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import yaml
 
 __all__ = ['main', 'run_pipeline']
@@ -23,6 +24,7 @@ def _repo_root() -> Path:
 def _load_runtime() -> SimpleNamespace:
     from cli.run_fbpick_coarse_infer import run_pipeline as run_coarse_infer
     from cli.run_fbpick_physics import run_pipeline as run_physics
+    from cli.run_fbpick_physics_qc import run_pipeline as run_physics_qc
 
     from seisai_engine.pipelines.common import load_cfg_with_base_dir, resolve_relpath
     from seisai_engine.pipelines.fbpick.common.path_naming import build_fbpick_tag
@@ -35,6 +37,7 @@ def _load_runtime() -> SimpleNamespace:
         resolve_relpath=resolve_relpath,
         run_coarse_infer=run_coarse_infer,
         run_physics=run_physics,
+        run_physics_qc=run_physics_qc,
     )
 
 
@@ -230,6 +233,198 @@ def _prepare_physics_config(
     return out
 
 
+def _get_optional_section_path_str(
+    cfg: dict[str, Any],
+    *,
+    section: str,
+    keys: tuple[str, ...],
+) -> str | None:
+    sec = _as_dict(cfg.get(section), name=section)
+    for key in keys:
+        value = sec.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            msg = f'{section}.{key} must be non-empty str'
+            raise TypeError(msg)
+        return value
+    return None
+
+
+def _infer_n_traces_from_npz(path: Path) -> int | None:
+    try:
+        with np.load(path) as payload:
+            if 'n_traces' in payload.files:
+                return int(np.asarray(payload['n_traces']).item())
+            if 'trace_indices' in payload.files:
+                return int(np.asarray(payload['trace_indices']).shape[0])
+            for key in ('robust_pick_i', 'coarse_pick_i', 'physical_center_i'):
+                if key in payload.files:
+                    return int(np.asarray(payload[key]).shape[0])
+    except Exception:
+        return None
+    return None
+
+
+def _make_dummy_fb_npy(
+    *,
+    robust_npz_path: Path,
+    coarse_npz_path: Path,
+    out_path: Path,
+) -> Path:
+    n_traces = _infer_n_traces_from_npz(robust_npz_path)
+    if n_traces is None:
+        n_traces = _infer_n_traces_from_npz(coarse_npz_path)
+    if n_traces is None:
+        msg = (
+            'cannot infer n_traces from robust or coarse npz; tried '
+            f'{robust_npz_path} and {coarse_npz_path}'
+        )
+        raise KeyError(msg)
+    if n_traces <= 0:
+        msg = f'n_traces must be positive: {n_traces}'
+        raise ValueError(msg)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_ok = False
+    if out_path.is_file():
+        try:
+            existing = np.asarray(np.load(out_path), dtype=np.int64)
+            existing_ok = bool(existing.ndim == 1 and int(existing.shape[0]) == n_traces)
+        except Exception:
+            existing_ok = False
+    if not existing_ok:
+        np.save(out_path, np.full((n_traces,), -1, dtype=np.int64))
+    return out_path
+
+
+def _prepare_visualization_config(
+    *,
+    cfg: dict[str, Any],
+    base_dir: Path,
+    runtime: SimpleNamespace,
+    segy_path: str,
+    tag: str,
+    work_dir: Path,
+    coarse_dir: Path,
+    robust_dir: Path,
+    robust_npz_path: Path,
+    coarse_npz_path: Path,
+) -> tuple[dict[str, Any] | None, Path | None, Path | None]:
+    vis_runner_cfg = _as_dict(cfg.get('visualization'), name='visualization')
+    enabled = vis_runner_cfg.get('enabled', False)
+    if not isinstance(enabled, bool):
+        msg = 'visualization.enabled must be bool'
+        raise TypeError(msg)
+    if not enabled:
+        return None, None, None
+
+    paths_cfg = _as_dict(cfg.get('paths'), name='paths')
+    qc_out_value = vis_runner_cfg.get('out_dir', paths_cfg.get('qc_dir', str(work_dir / 'qc')))
+    if not isinstance(qc_out_value, str) or not qc_out_value:
+        msg = 'visualization.out_dir must be str when provided'
+        raise TypeError(msg)
+    qc_out_dir = Path(runtime.resolve_relpath(base_dir, qc_out_value))
+
+    fb_value = _get_optional_section_path_str(
+        cfg,
+        section='paths',
+        keys=('fb_file', 'fb_path', 'fb_npy', 'fb'),
+    )
+    if fb_value is None:
+        fb_value = _get_optional_section_path_str(
+            cfg,
+            section='visualization',
+            keys=('fb_file', 'fb_path', 'fb_npy'),
+        )
+
+    if fb_value is not None:
+        fb_path = Path(runtime.resolve_relpath(base_dir, fb_value))
+    else:
+        allow_no_fb = vis_runner_cfg.get('allow_no_fb', True)
+        if not isinstance(allow_no_fb, bool):
+            msg = 'visualization.allow_no_fb must be bool'
+            raise TypeError(msg)
+        if not allow_no_fb:
+            msg = (
+                'visualization is enabled but no FB npy file was provided; set '
+                'paths.fb_file or visualization.allow_no_fb=true'
+            )
+            raise ValueError(msg)
+        fb_dir_value = vis_runner_cfg.get('fb_dummy_dir', str(work_dir / 'fb_dummy'))
+        if not isinstance(fb_dir_value, str) or not fb_dir_value:
+            msg = 'visualization.fb_dummy_dir must be str when provided'
+            raise TypeError(msg)
+        fb_dir = Path(runtime.resolve_relpath(base_dir, fb_dir_value))
+        fb_path = _make_dummy_fb_npy(
+            robust_npz_path=robust_npz_path,
+            coarse_npz_path=coarse_npz_path,
+            out_path=fb_dir / f'{tag}.fb_none.npy',
+        )
+
+    dataset_src = _as_dict(cfg.get('dataset'), name='dataset')
+    dataset_cfg: dict[str, Any] = {
+        'primary_keys': dataset_src.get('primary_keys', ['ffid']),
+        'infer_endian': dataset_src.get('infer_endian', 'big'),
+        'use_header_cache': dataset_src.get('use_header_cache', True),
+    }
+    dataset_override = _as_dict(vis_runner_cfg.get('dataset'), name='visualization.dataset')
+    dataset_cfg.update(dataset_override)
+
+    overlays = {
+        'coarse_pmax': True,
+        'trend_center': True,
+        'physical_center': True,
+        'fine_center': False,
+        'window': False,
+        'final_pick': False,
+        'physical_model_status': True,
+    }
+    overlays.update(_as_dict(vis_runner_cfg.get('overlays'), name='visualization.overlays'))
+
+    flatten = {
+        'enabled': True,
+        'reference_key': 'physical_center_i',
+        'half_samples': 256,
+    }
+    flatten.update(
+        _as_dict(
+            vis_runner_cfg.get('first_panel_flatten'),
+            name='visualization.first_panel_flatten',
+        )
+    )
+
+    vis_cfg: dict[str, Any] = {
+        'waveform_norm': vis_runner_cfg.get('waveform_norm', 'per_trace'),
+        'clip_percentile': vis_runner_cfg.get('clip_percentile', 99.0),
+        'max_gathers_per_file': vis_runner_cfg.get('max_gathers_per_file', 10),
+        'gather_selection': vis_runner_cfg.get('gather_selection', 'even'),
+        'first_panel_only': vis_runner_cfg.get('first_panel_only', True),
+        'max_traces_per_gather': vis_runner_cfg.get('max_traces_per_gather', 10000),
+        'save_cdf': vis_runner_cfg.get('save_cdf', False),
+        'save_summary_csv': vis_runner_cfg.get('save_summary_csv', True),
+        'skip_gather_keys': vis_runner_cfg.get('skip_gather_keys', {}),
+        'overlays': overlays,
+        'first_panel_flatten': flatten,
+    }
+
+    return (
+        {
+            'paths': {
+                'segy_files': [segy_path],
+                'fb_files': [str(fb_path)],
+                'coarse_npz_dir': str(coarse_dir),
+                'robust_npz_dir': str(robust_dir),
+                'out_dir': str(qc_out_dir),
+            },
+            'dataset': dataset_cfg,
+            'vis': vis_cfg,
+        },
+        qc_out_dir,
+        fb_path,
+    )
+
+
 def run_pipeline(config_path: str | Path) -> Path:
     runtime = _load_runtime()
     cfg, base_dir = runtime.load_cfg_with_base_dir(Path(config_path))
@@ -305,6 +500,7 @@ def run_pipeline(config_path: str | Path) -> Path:
 
     coarse_cfg_path = generated_cfg_dir / f'{tag}.coarse.yaml'
     physics_cfg_path = generated_cfg_dir / f'{tag}.physics.yaml'
+    qc_cfg_path = generated_cfg_dir / f'{tag}.physics_qc.yaml'
 
     coarse_cfg = _prepare_coarse_config(
         template_path=coarse_template,
@@ -419,6 +615,28 @@ def run_pipeline(config_path: str | Path) -> Path:
             eval_strict_shape=_bool_cfg(cfg, 'evaluation', 'strict_shape', True),
         )
 
+    visualization_cfg, visualization_out_dir, visualization_fb_path = (
+        _prepare_visualization_config(
+            cfg=cfg,
+            base_dir=base_dir,
+            runtime=runtime,
+            segy_path=segy_path,
+            tag=tag,
+            work_dir=work_dir,
+            coarse_dir=coarse_dir,
+            robust_dir=robust_dir,
+            robust_npz_path=robust_npz_path,
+            coarse_npz_path=coarse_npz_path,
+        )
+    )
+    visualization_cfg_path: Path | None = None
+    visualization_summary_path: Path | None = None
+    if visualization_cfg is not None:
+        visualization_cfg_path = qc_cfg_path
+        _write_yaml(visualization_cfg_path, visualization_cfg)
+        print(f'[run] visualization QC: {visualization_cfg_path}')
+        visualization_summary_path = Path(runtime.run_physics_qc(visualization_cfg_path))
+
     run_summary = {
         'tag': tag,
         'segy': segy_path,
@@ -428,6 +646,19 @@ def run_pipeline(config_path: str | Path) -> Path:
         'out_npz': str(out_npz),
         'coarse_config': str(coarse_cfg_path),
         'physics_config': str(physics_cfg_path),
+        'visualization_enabled': visualization_cfg is not None,
+        'visualization_config': (
+            str(visualization_cfg_path) if visualization_cfg_path is not None else ''
+        ),
+        'visualization_out_dir': (
+            str(visualization_out_dir) if visualization_out_dir is not None else ''
+        ),
+        'visualization_fb_file': (
+            str(visualization_fb_path) if visualization_fb_path is not None else ''
+        ),
+        'visualization_summary_csv': (
+            str(visualization_summary_path) if visualization_summary_path is not None else ''
+        ),
         'reference_grstat': reference_grstat or '',
         'evaluation_enabled': eval_enabled,
         'evaluation_write_per_trace_csv': bool(write_per_trace_csv),

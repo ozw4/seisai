@@ -7,6 +7,7 @@ Coarse infer
 → Physics / robust center 作成
 → physical_center_i を phase へ snap
 → grstat 形式の初動ファイルを書き出し
+→ QC 可視化図を作成
 → 任意でユーザー提供 grstat 初動との誤差評価
 ```
 
@@ -83,6 +84,9 @@ proc/arakawa/coarse/<TAG>.coarse.npz
 proc/arakawa/robust/<TAG>.robust.npz
 proc/arakawa/grstat/<TAG>.physical_center.snap_peak.ltcor2.crd
 proc/arakawa/grstat/<TAG>.physical_center.snap_peak.ltcor2.npz
+proc/arakawa/qc/<TAG>/gather_*.png
+proc/arakawa/qc/summary_global.csv
+proc/arakawa/qc/summary_per_file.csv
 proc/arakawa/<TAG>.arakawa_physical_export_summary.json
 ```
 
@@ -114,7 +118,58 @@ physical_center_i を初期 pick とする
 
 ---
 
-## 5. ユーザー提供 grstat 初動と比較する場合
+## 5. QC 可視化図
+
+デフォルトでは、export 後に QC 可視化図も作成します。FB/教師データが無い場合は、runner が自動で dummy FB を作成するため、ユーザー側で追加ファイルを用意する必要はありません。
+
+出力例:
+
+```text
+proc/arakawa/qc/<TAG>/gather_*.png
+proc/arakawa/qc/summary_global.csv
+proc/arakawa/qc/summary_per_file.csv
+proc/arakawa/fb_dummy/<TAG>.fb_none.npy
+```
+
+デフォルトの可視化設定は以下です。
+
+```yaml
+visualization:
+  enabled: true
+  allow_no_fb: true
+  max_gathers_per_file: 10
+  gather_selection: even
+  first_panel_only: true
+
+  first_panel_flatten:
+    enabled: true
+    reference_key: physical_center_i
+    half_samples: 256
+
+  overlays:
+    coarse_pmax: true
+    trend_center: true
+    physical_center: true
+    fine_center: false
+    window: false
+    final_pick: false
+    physical_model_status: true
+```
+
+この設定では、第1パネルのみを表示します。波形は `physical_center_i` を基準に flattening され、縦軸は `sample - physical_center_i` になります。表示範囲は上下 ±256 samples です。
+
+表示する gather は先頭から連番ではなく、対象範囲から等間隔に選びます。たとえば FFID 1〜300 から 3 枚表示する場合は、おおむね 1, 150, 300 が選ばれます。
+
+可視化を止めたい場合だけ、以下のようにします。
+
+```yaml
+visualization:
+  enabled: false
+```
+
+---
+
+## 6. ユーザー提供 grstat 初動と比較する場合
 
 既存の grstat 初動ファイルと最終結果を比較したい場合は、config に `reference_grstat_path` を追加します。
 
@@ -156,7 +211,7 @@ evaluation:
 
 ---
 
-## 6. 代表的な config 例
+## 7. 代表的な config 例
 
 ### SEG-Y だけ指定する最小例
 
@@ -182,7 +237,7 @@ paths:
 
 ---
 
-## 7. 実行後に見るファイル
+## 8. 実行後に見るファイル
 
 まず見るべきファイルは grstat 出力です。
 
@@ -196,6 +251,12 @@ summary も確認します。
 cat proc/arakawa/*arakawa_physical_export_summary.json
 ```
 
+可視化図も確認します。
+
+```bash
+ls -lh proc/arakawa/qc/*/gather_*.png
+```
+
 参照 grstat を指定した場合は、評価 summary を確認します。
 
 ```bash
@@ -204,7 +265,7 @@ cat proc/arakawa/eval/*.eval_summary.json
 
 ---
 
-## 8. よくあるエラー
+## 9. よくあるエラー
 
 ### SEG-Y が見つからない
 
@@ -243,7 +304,7 @@ export:
 
 ---
 
-## 9. 作業の最小手順まとめ
+## 10. 作業の最小手順まとめ
 
 ```bash
 cd /workspace

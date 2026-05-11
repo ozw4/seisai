@@ -37,3 +37,29 @@ evaluation:
   strict_gather_numbers: true
   strict_shape: true
   write_per_trace_csv: false
+
+
+# Optional physics QC visualization after export.
+# This writes first-panel-only flattened gather PNGs centered on physical_center_i.
+visualization:
+  enabled: true
+  allow_no_fb: true
+  out_dir: /workspace/proc/arakawa/qc
+
+  max_gathers_per_file: 10
+  gather_selection: even
+  first_panel_only: true
+
+  first_panel_flatten:
+    enabled: true
+    reference_key: physical_center_i
+    half_samples: 256
+
+  overlays:
+    coarse_pmax: true
+    trend_center: true
+    physical_center: true
+    fine_center: false
+    window: false
+    final_pick: false
+    physical_model_status: true
