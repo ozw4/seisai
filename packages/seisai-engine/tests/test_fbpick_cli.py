@@ -60,6 +60,7 @@ def _load_cli_module(file_name: str, monkeypatch: pytest.MonkeyPatch):
         'run_fbpick_physics_batch.py',
         'run_fbpick_fine_train.py',
         'run_fbpick_fine_infer.py',
+        'run_arakawa_fbpick_physical_export.py',
     ],
 )
 def test_cli_modules_import_without_segyio_or_timm(
@@ -81,6 +82,7 @@ def test_cli_modules_import_without_segyio_or_timm(
         ('run_fbpick_physics_batch.py', 'main'),
         ('run_fbpick_fine_train.py', 'main'),
         ('run_fbpick_fine_infer.py', 'main'),
+        ('run_arakawa_fbpick_physical_export.py', 'main'),
     ],
 )
 def test_all_fbpick_cli_entrypoints_require_config(

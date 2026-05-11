@@ -1,0 +1,10 @@
+# Minimal Arakawa runner config. Edit only this SEG-Y filename.
+# The runner resolves bare filenames against:
+# /home/dcuser/data/ActiveSeisField/Arakawa2026
+paths:
+  sgy_file: fdata_hset_ARA26_Vib.sgy
+
+# Optional evaluation against a grstat first-break file:
+# paths:
+#   sgy_file: fdata_hset_ARA26_Vib.sgy
+#   reference_grstat_path: /path/to/reference_first_break.crd

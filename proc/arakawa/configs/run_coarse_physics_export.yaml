@@ -1,0 +1,39 @@
+# Arakawa one-shot runner: Coarse -> Physics -> physical_center_i grstat export.
+# Usually only paths.sgy_file needs to be changed.
+paths:
+  # Bare filenames are resolved against sgy_dir.
+  sgy_file: fdata_hset_ARA26_Vib.sgy
+  sgy_dir: /home/dcuser/data/ActiveSeisField/Arakawa2026
+
+  # Optional. Defaults to /workspace/proc/arakawa.
+  work_dir: /workspace/proc/arakawa
+
+  # Optional. When set, export also evaluates against this grstat first-break file.
+  # reference_grstat_path: /path/to/reference_first_break.crd
+
+  # Optional. Defaults to the existing Arakawa templates below.
+  # coarse_template: /workspace/proc/arakawa/configs/coarse_one.yaml
+  # physics_template: /workspace/proc/arakawa/configs/physics_one.yaml
+
+run:
+  # false: reuse existing coarse/robust/export artifacts.
+  # true: regenerate existing artifacts.
+  force: false
+  force_coarse: false
+  force_physics: false
+  force_export: true
+
+export:
+  pick_key: physical_center_i
+  phase_mode: peak
+  max_shift_samples: 2
+  endian: big
+  duplicate_policy: error
+  header_comment: Arakawa physical_center_i snap to phase
+
+# Used only when paths.reference_grstat_path is set.
+evaluation:
+  enabled: true
+  strict_gather_numbers: true
+  strict_shape: true
+  write_per_trace_csv: false
