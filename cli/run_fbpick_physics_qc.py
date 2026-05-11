@@ -371,6 +371,44 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		msg = 'vis.clip_percentile must lie in (0, 100]'
 		raise ValueError(msg)
 
+	gather_selection = vis.get('gather_selection', 'first')
+	if not isinstance(gather_selection, str):
+		msg = 'vis.gather_selection must be str'
+		raise TypeError(msg)
+	if gather_selection not in ('first', 'even'):
+		msg = 'vis.gather_selection must be one of: first, even'
+		raise ValueError(msg)
+
+	default_overlays = {
+		'coarse_pmax': True,
+		'trend_center': True,
+		'physical_center': True,
+		'fine_center': True,
+		'window': True,
+		'final_pick': True,
+		'physical_model_status': True,
+	}
+	overlays_raw = vis.get('overlays', {})
+	if overlays_raw is None:
+		overlays_raw = {}
+	if not isinstance(overlays_raw, dict) or not all(
+		isinstance(key, str) for key in overlays_raw
+	):
+		msg = 'vis.overlays must be dict[str, bool]'
+		raise TypeError(msg)
+	unknown_overlay_keys = sorted(set(overlays_raw) - set(default_overlays))
+	if unknown_overlay_keys:
+		msg = 'vis.overlays contains unsupported keys: ' + ', '.join(
+			unknown_overlay_keys
+		)
+		raise ValueError(msg)
+	overlays = dict(default_overlays)
+	for key, value in overlays_raw.items():
+		if not isinstance(value, bool):
+			msg = 'vis.overlays must be dict[str, bool]'
+			raise TypeError(msg)
+		overlays[key] = bool(value)
+
 	skip_gather_keys_raw = vis.get('skip_gather_keys', {})
 	if not isinstance(skip_gather_keys_raw, dict) or not all(
 		isinstance(key, str) for key in skip_gather_keys_raw
@@ -406,6 +444,8 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		'save_summary_csv': bool(save_summary_csv),
 		'waveform_norm': waveform_norm,
 		'clip_percentile': clip_percentile,
+		'gather_selection': gather_selection,
+		'overlays': overlays,
 		'skip_gather_keys': skip_gather_keys,
 		'max_traces_per_gather': max_traces_per_gather,
 	}
@@ -432,6 +472,7 @@ def _iter_vis_gathers(
 	skip_gather_keys: dict[str, set[int]],
 	max_traces_per_gather: int | None,
 	segy_path: str | Path | None = None,
+	gather_selection: str = 'first',
 ):
 	yield from iter_qc_gathers(
 		info,
@@ -440,6 +481,7 @@ def _iter_vis_gathers(
 		skip_gather_keys=skip_gather_keys,
 		max_traces_per_gather=max_traces_per_gather,
 		segy_path=segy_path,
+		gather_selection=gather_selection,
 	)
 
 
@@ -508,6 +550,7 @@ def _save_vis_pngs(
 
 	tag = _build_tag(segy_path)
 	out_subdir = Path(out_dir) / tag
+	overlays = dict(vis_cfg.get('overlays', {}))
 	out_paths: list[Path] = []
 	for gather_idx, (primary_key, gather_key, trace_indices) in enumerate(
 		_iter_vis_gathers(
@@ -517,6 +560,7 @@ def _save_vis_pngs(
 			skip_gather_keys=dict(vis_cfg['skip_gather_keys']),
 			max_traces_per_gather=vis_cfg['max_traces_per_gather'],
 			segy_path=segy_path,
+			gather_selection=str(vis_cfg.get('gather_selection', 'first')),
 		)
 	):
 		x_hw = np.stack(
@@ -532,49 +576,82 @@ def _save_vis_pngs(
 				gt_pick_i=gt_pick_i[trace_indices],
 				coarse_pick_i=coarse_pick_i[trace_indices],
 				robust_pick_i=robust_pick_i[trace_indices],
-				coarse_pmax=_slice_optional_trace_array(
-					coarse_pmax,
-					key='coarse_pmax',
-					trace_indices=trace_indices,
+				coarse_pmax=(
+					_slice_optional_trace_array(
+						coarse_pmax,
+						key='coarse_pmax',
+						trace_indices=trace_indices,
+					)
+					if bool(overlays.get('coarse_pmax', True))
+					else None
 				),
-				trend_center_i=_slice_optional_trace_array(
-					trend_center_i,
-					key='trend_center_i',
-					trace_indices=trace_indices,
+				trend_center_i=(
+					_slice_optional_trace_array(
+						trend_center_i,
+						key='trend_center_i',
+						trace_indices=trace_indices,
+					)
+					if bool(overlays.get('trend_center', True))
+					else None
 				),
-				physical_center_i=_slice_optional_trace_array(
-					physical_center_i,
-					key='physical_center_i',
-					trace_indices=trace_indices,
+				physical_center_i=(
+					_slice_optional_trace_array(
+						physical_center_i,
+						key='physical_center_i',
+						trace_indices=trace_indices,
+					)
+					if bool(overlays.get('physical_center', True))
+					else None
 				),
-				fine_center_i=_slice_optional_trace_array(
-					fine_center_i,
-					key='fine_center_i',
-					trace_indices=trace_indices,
+				fine_center_i=(
+					_slice_optional_trace_array(
+						fine_center_i,
+						key='fine_center_i',
+						trace_indices=trace_indices,
+					)
+					if bool(overlays.get('fine_center', True))
+					else None
 				),
-				window_start_i=_slice_optional_trace_array(
-					window_start_i,
-					key='window_start_i',
-					trace_indices=trace_indices,
+				window_start_i=(
+					_slice_optional_trace_array(
+						window_start_i,
+						key='window_start_i',
+						trace_indices=trace_indices,
+					)
+					if bool(overlays.get('window', True))
+					else None
 				),
-				window_end_i=_slice_optional_trace_array(
-					window_end_i,
-					key='window_end_i',
-					trace_indices=trace_indices,
+				window_end_i=(
+					_slice_optional_trace_array(
+						window_end_i,
+						key='window_end_i',
+						trace_indices=trace_indices,
+					)
+					if bool(overlays.get('window', True))
+					else None
 				),
-				final_pick_i=_slice_optional_trace_array(
-					final_pick_i,
-					key='final_pick_i',
-					trace_indices=trace_indices,
+				final_pick_i=(
+					_slice_optional_trace_array(
+						final_pick_i,
+						key='final_pick_i',
+						trace_indices=trace_indices,
+					)
+					if bool(overlays.get('final_pick', True))
+					else None
 				),
-				physical_model_status=_slice_optional_trace_array(
-					physical_model_status,
-					key='physical_model_status',
-					trace_indices=trace_indices,
+				physical_model_status=(
+					_slice_optional_trace_array(
+						physical_model_status,
+						key='physical_model_status',
+						trace_indices=trace_indices,
+					)
+					if bool(overlays.get('physical_model_status', True))
+					else None
 				),
 				title=title,
 				waveform_norm=str(vis_cfg['waveform_norm']),
 				clip_percentile=float(vis_cfg['clip_percentile']),
+				show_window=bool(overlays.get('window', True)),
 			)
 		)
 	if not out_paths:

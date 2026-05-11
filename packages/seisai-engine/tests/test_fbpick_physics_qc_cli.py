@@ -134,6 +134,8 @@ def test_load_vis_cfg_parses_skip_keys_and_max_traces() -> None:
                 'max_traces_per_gather': 10000,
                 'waveform_norm': 'per_trace',
                 'clip_percentile': 99.0,
+                'gather_selection': 'even',
+                'overlays': {'window': False, 'final_pick': False},
             }
         }
     )
@@ -142,6 +144,10 @@ def test_load_vis_cfg_parses_skip_keys_and_max_traces() -> None:
     assert vis_cfg['max_traces_per_gather'] == 10000
     assert vis_cfg['waveform_norm'] == 'per_trace'
     assert vis_cfg['clip_percentile'] == 99.0
+    assert vis_cfg['gather_selection'] == 'even'
+    assert vis_cfg['overlays']['window'] is False
+    assert vis_cfg['overlays']['final_pick'] is False
+    assert vis_cfg['overlays']['coarse_pmax'] is True
 
 
 def test_load_vis_cfg_allows_null_max_traces() -> None:
@@ -167,6 +173,12 @@ def test_load_vis_cfg_allows_null_max_traces() -> None:
         {'clip_percentile': 100.1},
         {'clip_percentile': True},
         {'clip_percentile': '99.0'},
+        {'gather_selection': 1},
+        {'gather_selection': 'middle'},
+        {'overlays': []},
+        {'overlays': {1: True}},
+        {'overlays': {'window': 1}},
+        {'overlays': {'unknown': True}},
     ],
 )
 def test_load_vis_cfg_rejects_invalid_new_fields(vis: dict[str, object]) -> None:
@@ -230,6 +242,24 @@ def test_iter_vis_gathers_skips_oversized_gather(
         'skip oversized gather: file=/data/line.sgy '
         'primary=ffid key=1 traces=5 limit=3'
     ) in captured.out
+
+
+def test_iter_vis_gathers_can_select_evenly_spaced_keys() -> None:
+    info = _ffid_info({key: [pos] for pos, key in enumerate(range(1, 301))})
+
+    yielded = list(
+        physics_qc_cli._iter_vis_gathers(
+            info,
+            primary_keys=['ffid'],
+            max_gathers=3,
+            skip_gather_keys={},
+            max_traces_per_gather=None,
+            segy_path='line.sgy',
+            gather_selection='even',
+        )
+    )
+
+    assert [gather_key for _, gather_key, _ in yielded] == [1, 150, 300]
 
 
 def test_save_vis_pngs_skips_oversized_before_mmap_access(
@@ -372,6 +402,73 @@ def test_save_vis_pngs_passes_optional_physical_overlay_arrays(
         captured['physical_model_status'],
         np.asarray([0, 2], dtype=np.uint8),
     )
+
+
+def test_save_vis_pngs_omits_disabled_overlay_arrays(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def _save(out_png: Path, **kwargs: object) -> Path:
+        captured.update(kwargs)
+        return out_png
+
+    segy_path = tmp_path / 'line' / 'disabled.sgy'
+    segy_path.parent.mkdir()
+    info = _ffid_info({1: [0, 1]})
+    info['mmap'] = [
+        np.asarray([0.0, 1.0, -1.0], dtype=np.float32),
+        np.asarray([0.0, 2.0, -2.0], dtype=np.float32),
+    ]
+    runtime = SimpleNamespace(save_fbpick_physics_qc_gather_png=_save)
+    overlays = {
+        'coarse_pmax': False,
+        'trend_center': False,
+        'physical_center': False,
+        'fine_center': False,
+        'window': False,
+        'final_pick': False,
+        'physical_model_status': False,
+    }
+
+    out_paths = physics_qc_cli._save_vis_pngs(
+        info=info,
+        segy_path=str(segy_path),
+        out_dir=tmp_path / 'out',
+        gt_pick_i=np.asarray([1, 1], dtype=np.int64),
+        coarse_pick_i=np.asarray([10, 20], dtype=np.int64),
+        robust_pick_i=np.asarray([11, 21], dtype=np.int64),
+        coarse_pmax=np.asarray([0.2, 0.4], dtype=np.float32),
+        trend_center_i=np.asarray([12, 22], dtype=np.int32),
+        physical_center_i=np.asarray([13, 23], dtype=np.int32),
+        fine_center_i=np.asarray([14, 24], dtype=np.int32),
+        window_start_i=np.asarray([5, 15], dtype=np.int32),
+        window_end_i=np.asarray([25, 35], dtype=np.int32),
+        final_pick_i=np.asarray([16, 26], dtype=np.int32),
+        physical_model_status=np.asarray([0, 1], dtype=np.uint8),
+        dataset_cfg={'primary_keys': ['ffid']},
+        vis_cfg={
+            'max_gathers_per_file': 1,
+            'skip_gather_keys': {},
+            'max_traces_per_gather': None,
+            'waveform_norm': 'global',
+            'clip_percentile': 99.0,
+            'overlays': overlays,
+        },
+        runtime=runtime,
+    )
+
+    assert len(out_paths) == 1
+    for key in (
+        'coarse_pmax',
+        'trend_center_i',
+        'physical_center_i',
+        'fine_center_i',
+        'window_start_i',
+        'window_end_i',
+        'final_pick_i',
+        'physical_model_status',
+    ):
+        assert captured[key] is None
+    assert captured['show_window'] is False
 
 
 def test_run_pipeline_without_final_artifact_passes_none_to_vis(

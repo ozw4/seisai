@@ -899,6 +899,7 @@ def save_fbpick_physics_qc_gather_png(
 	dpi: int = 150,
 	clip_percentile: float = 99.0,
 	waveform_norm: str = 'global',
+	show_window: bool = True,
 ) -> Path:
 	import matplotlib.pyplot as plt
 
@@ -1072,34 +1073,35 @@ def save_fbpick_physics_qc_gather_png(
 			alpha=0.95,
 			label='fine center',
 		)
-	plot_window_start = window_start
-	plot_window_end = window_end
-	window_start_label = 'window start'
-	window_end_label = 'window end'
-	if plot_window_start is None:
-		plot_window_start = robust_window_start
-		window_start_label = 'robust window start'
-	if plot_window_end is None:
-		plot_window_end = robust_window_end
-		window_end_label = 'robust window end'
-	axes[0].plot(
-		x,
-		np.clip(plot_window_start, 0, n_samples - 1).astype(np.float32),
-		color='yellow',
-		lw=0.8,
-		ls='--',
-		alpha=0.75,
-		label=window_start_label,
-	)
-	axes[0].plot(
-		x,
-		np.clip(plot_window_end, 0, n_samples - 1).astype(np.float32),
-		color='yellow',
-		lw=0.8,
-		ls=':',
-		alpha=0.75,
-		label=window_end_label,
-	)
+	if bool(show_window):
+		plot_window_start = window_start
+		plot_window_end = window_end
+		window_start_label = 'window start'
+		window_end_label = 'window end'
+		if plot_window_start is None:
+			plot_window_start = robust_window_start
+			window_start_label = 'robust window start'
+		if plot_window_end is None:
+			plot_window_end = robust_window_end
+			window_end_label = 'robust window end'
+		axes[0].plot(
+			x,
+			np.clip(plot_window_start, 0, n_samples - 1).astype(np.float32),
+			color='yellow',
+			lw=0.8,
+			ls='--',
+			alpha=0.75,
+			label=window_start_label,
+		)
+		axes[0].plot(
+			x,
+			np.clip(plot_window_end, 0, n_samples - 1).astype(np.float32),
+			color='yellow',
+			lw=0.8,
+			ls=':',
+			alpha=0.75,
+			label=window_end_label,
+		)
 	if final is not None:
 		axes[0].plot(
 			x,

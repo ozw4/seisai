@@ -352,6 +352,46 @@ def test_save_fbpick_physics_qc_gather_png_draws_physical_overlays(
         original_close(fig)
 
 
+def test_save_fbpick_physics_qc_gather_png_can_hide_window_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out_png = tmp_path / 'no_window_gather.png'
+    wave = np.linspace(-1.0, 1.0, 3 * 64, dtype=np.float32).reshape(3, 64)
+    picks = np.asarray([20, 24, 28], dtype=np.int64)
+    closed: list[object | None] = []
+    original_close = plt.close
+
+    def _capture_close(fig: object | None = None) -> None:
+        closed.append(fig)
+
+    monkeypatch.setattr(plt, 'close', _capture_close)
+
+    out_path = save_fbpick_physics_qc_gather_png(
+        out_png,
+        raw_wave_hw=wave,
+        gt_pick_i=picks,
+        coarse_pick_i=picks - 4,
+        robust_pick_i=picks - 2,
+        window_start_i=picks - 8,
+        window_end_i=picks + 7,
+        show_window=False,
+    )
+
+    assert out_path == out_png.resolve()
+    assert out_path.is_file()
+    assert closed
+    fig = closed[0]
+    try:
+        labels = {line.get_label() for line in fig.axes[0].lines}
+        assert 'window start' not in labels
+        assert 'window end' not in labels
+        assert 'robust window start' not in labels
+        assert 'robust window end' not in labels
+    finally:
+        original_close(fig)
+
+
 def test_save_fbpick_fine_qc_gather_png_per_trace_smoke(tmp_path) -> None:
     out_png = tmp_path / 'fine_gather.png'
     wave = np.asarray(
