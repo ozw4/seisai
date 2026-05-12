@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 
@@ -178,6 +179,10 @@ def build_robust_payload_from_coarse(
             physical.physical_model_resid_p90_ms,
             dtype=np.float32,
         ),
+        'physical_runtime_fit_source': np.asarray(
+            physical.physical_runtime_fit_source,
+            dtype=np.uint8,
+        ),
         'lineage': build_lineage_payload(
             canonical_cfg,
             repo_root=repo_root,
@@ -185,7 +190,10 @@ def build_robust_payload_from_coarse(
             iter_id=iter_id,
         ),
     }
-    if bool(typed_cfg.physical_runtime.anchor_selection.enabled):
+    if (
+        bool(typed_cfg.physical_runtime.anchor_selection.enabled)
+        or typed_cfg.physical_runtime.fit_policy == 'anchor_source_xy'
+    ):
         payload.update(
             {
                 'physical_anchor_group_id': np.asarray(

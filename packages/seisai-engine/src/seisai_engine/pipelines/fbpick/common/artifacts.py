@@ -90,6 +90,7 @@ ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS = (
     'physical_anchor_is_anchor',
     'physical_anchor_nearest_anchor_group_id',
     'physical_anchor_source_distance_m',
+    'physical_runtime_fit_source',
 )
 
 ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS = (
@@ -97,11 +98,16 @@ ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS = (
     'physical_center_total_sec',
     'ransac_fit_total_sec',
     'n_fit_calls',
+    'n_anchor_fit_calls',
     'n_cache_hits',
     'n_cache_misses',
     'cache_hit_rate',
     'n_source_groups',
+    'n_non_anchor_groups',
+    'n_reused_predictions',
+    'n_fallback_full_fit_no_compatible_anchor',
     'n_unique_fit_contexts',
+    'fit_call_reduction_rate_vs_full',
     'ransac_fit_time_p50_sec',
     'ransac_fit_time_p90_sec',
     'ransac_fit_time_p99_sec',

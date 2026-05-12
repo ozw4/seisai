@@ -22,7 +22,10 @@ from .geometry import (
 from .merge import MergeResult
 from .pick_table import CoarsePickTable
 from .runtime_diagnostics import PhysicalRuntimeDiagnostics
-from .runtime_policy import select_source_xy_stride_anchors
+from .runtime_policy import (
+    SourceXYAnchorSelectionResult,
+    select_source_xy_stride_anchors,
+)
 from .trend import TrendResult
 
 PHYSICAL_MODEL_STATUS_TWO_PIECE_OK = 0
@@ -73,11 +76,25 @@ PHYSICAL_OFFSET_SOURCE_LABELS = {
     PHYSICAL_OFFSET_SOURCE_HEADER: 'header_offset',
 }
 
+PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT = 0
+PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT = 1
+PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE = 2
+PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR = 3
+PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND = 4
+PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST = 5
+
+PHYSICAL_RUNTIME_FIT_SOURCE_LABELS = {
+    PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT: 'full_fit',
+    PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT: 'anchor_fit',
+    PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE: 'nearest_anchor_reuse',
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR: (
+        'fallback_full_fit_no_compatible_anchor'
+    ),
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND: 'fallback_existing_trend',
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST: 'fallback_robust',
+}
+
 __all__ = [
-    'PHYSICAL_OFFSET_SOURCE_GEOMETRY',
-    'PHYSICAL_OFFSET_SOURCE_HEADER',
-    'PHYSICAL_OFFSET_SOURCE_LABELS',
-    'PHYSICAL_OFFSET_SOURCE_NONE',
     'PHYSICAL_MODEL_FAILURE_FIT_FAILED',
     'PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID',
     'PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS',
@@ -95,6 +112,17 @@ __all__ = [
     'PHYSICAL_MODEL_STATUS_LABELS',
     'PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED',
     'PHYSICAL_MODEL_STATUS_TWO_PIECE_OK',
+    'PHYSICAL_OFFSET_SOURCE_GEOMETRY',
+    'PHYSICAL_OFFSET_SOURCE_HEADER',
+    'PHYSICAL_OFFSET_SOURCE_LABELS',
+    'PHYSICAL_OFFSET_SOURCE_NONE',
+    'PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT',
+    'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND',
+    'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR',
+    'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST',
+    'PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT',
+    'PHYSICAL_RUNTIME_FIT_SOURCE_LABELS',
+    'PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE',
     'PhysicalCenterResult',
     'build_geometry_two_piece_physical_center',
 ]
@@ -124,6 +152,7 @@ class PhysicalCenterResult:
     physical_anchor_is_anchor: np.ndarray
     physical_anchor_nearest_anchor_group_id: np.ndarray
     physical_anchor_source_distance_m: np.ndarray
+    physical_runtime_fit_source: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -142,6 +171,21 @@ class _FitCacheEntry:
     diagnostics: tuple[float, float, float, float, float, float, float] | None
     fit_failed: bool
     diagnostics_computed: bool = False
+
+
+@dataclass(frozen=True)
+class _TraceFitResult:
+    plan: _ObservationPlan | None
+    trend_model: object | None
+    diagnostics: tuple[float, float, float, float, float, float, float] | None
+    fit_call_delta: int
+    assigned_from_model: bool
+
+
+@dataclass(frozen=True)
+class _AnchorModelContext:
+    trend_model: object
+    diagnostics: tuple[float, float, float, float, float, float, float] | None
 
 
 def _validate_table(table: CoarsePickTable) -> None:
@@ -246,6 +290,7 @@ def _allocate_result_arrays(table: CoarsePickTable) -> dict[str, np.ndarray]:
         'physical_anchor_is_anchor': np.zeros((n,), dtype=np.bool_),
         'physical_anchor_nearest_anchor_group_id': np.full((n,), -1, dtype=np.int32),
         'physical_anchor_source_distance_m': np.full((n,), np.nan, dtype=np.float32),
+        'physical_runtime_fit_source': np.zeros((n,), dtype=np.uint8),
     }
 
 
@@ -260,6 +305,7 @@ def _assign_fallback(
     trace_idx: int,
     *,
     failure_reason: int,
+    runtime_fit_source: int = PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
@@ -276,6 +322,33 @@ def _assign_fallback(
     arrays['physical_center_t_sec'][trace_idx] = np.float32(center_t)
     arrays['physical_model_status'][trace_idx] = np.uint8(fallback_status)
     arrays['physical_model_failure_reason'][trace_idx] = np.uint8(failure_reason)
+    source = int(runtime_fit_source)
+    if fallback_status == PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST:
+        source = PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST
+    arrays['physical_runtime_fit_source'][trace_idx] = np.uint8(source)
+
+
+def _assign_robust_fallback(
+    arrays: dict[str, np.ndarray],
+    trace_idx: int,
+    *,
+    failure_reason: int,
+    table: CoarsePickTable,
+    merged: MergeResult,
+) -> None:
+    n_samples = int(table.n_samples_orig)
+    dt = float(table.dt_scalar_sec)
+    robust_i = int(np.asarray(merged.robust_pick_i, dtype=np.int64)[int(trace_idx)])
+    robust_i = int(np.clip(robust_i, 0, n_samples - 1))
+    arrays['physical_center_i'][trace_idx] = np.int32(robust_i)
+    arrays['physical_center_t_sec'][trace_idx] = np.float32(robust_i * dt)
+    arrays['physical_model_status'][trace_idx] = np.uint8(
+        PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST
+    )
+    arrays['physical_model_failure_reason'][trace_idx] = np.uint8(failure_reason)
+    arrays['physical_runtime_fit_source'][trace_idx] = np.uint8(
+        PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST
+    )
 
 
 def _assign_fallback_all(
@@ -292,6 +365,7 @@ def _assign_fallback_all(
             arrays,
             trace_idx,
             failure_reason=failure_reason,
+            runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
             table=table,
             feasible=feasible,
             trend=trend,
@@ -325,6 +399,9 @@ def _build_disabled_result(
     arrays['physical_model_failure_reason'][:] = np.uint8(
         PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED
     )
+    arrays['physical_runtime_fit_source'][:] = np.uint8(
+        PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
+    )
     return _finalize_result(arrays)
 
 
@@ -334,10 +411,13 @@ def _apply_anchor_selection_diagnostics(
     groups: tuple[SourceGroup, ...],
     cfg: PhysicsLiteConfig,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
-) -> None:
+) -> SourceXYAnchorSelectionResult | None:
     anchor_cfg = cfg.physical_runtime.anchor_selection
-    if not bool(anchor_cfg.enabled):
-        return
+    if not (
+        bool(anchor_cfg.enabled)
+        or cfg.physical_runtime.fit_policy == 'anchor_source_xy'
+    ):
+        return None
     result = select_source_xy_stride_anchors(
         groups,
         anchor_stride_source_groups=int(anchor_cfg.anchor_stride_source_groups),
@@ -368,6 +448,7 @@ def _apply_anchor_selection_diagnostics(
             anchor_selection_mode=str(anchor_cfg.mode),
             source_distance_m=result.source_distance_m,
         )
+    return result
 
 
 def _stable_unique(indices: np.ndarray) -> np.ndarray:
@@ -816,6 +897,280 @@ def _diagnostics_for_plan(
     return diagnostics
 
 
+def _assign_model_diagnostics(
+    arrays: dict[str, np.ndarray],
+    trace_idx: int,
+    diagnostics: tuple[float, float, float, float, float, float, float] | None,
+) -> None:
+    if diagnostics is None:
+        return
+    (
+        break_offset,
+        slope_near,
+        slope_far,
+        velocity_near,
+        velocity_far,
+        resid_p50,
+        resid_p90,
+    ) = diagnostics
+    arrays['physical_model_break_offset_m'][trace_idx] = np.float32(break_offset)
+    arrays['physical_model_slope_near_s_per_m'][trace_idx] = np.float32(slope_near)
+    arrays['physical_model_slope_far_s_per_m'][trace_idx] = np.float32(slope_far)
+    arrays['physical_model_velocity_near_m_s'][trace_idx] = np.float32(velocity_near)
+    arrays['physical_model_velocity_far_m_s'][trace_idx] = np.float32(velocity_far)
+    arrays['physical_model_resid_p50_ms'][trace_idx] = np.float32(resid_p50)
+    arrays['physical_model_resid_p90_ms'][trace_idx] = np.float32(resid_p90)
+
+
+def _assign_model_prediction(
+    arrays: dict[str, np.ndarray],
+    trace_idx: int,
+    *,
+    trend_model,
+    diagnostics: tuple[float, float, float, float, float, float, float] | None,
+    plan: _ObservationPlan,
+    offset_abs_m: np.ndarray,
+    dt: float,
+    n_samples: int,
+    runtime_fit_source: int,
+) -> bool:
+    try:
+        physical_t_sec = _predict_model_sec(
+            trend_model,
+            float(offset_abs_m[int(trace_idx)]),
+        )
+    except (TypeError, ValueError, RuntimeError):
+        physical_t_sec = np.nan
+
+    if not np.isfinite(physical_t_sec):
+        return False
+
+    center_i = int(np.rint(physical_t_sec / float(dt)))
+    center_i = int(np.clip(center_i, 0, int(n_samples) - 1))
+    arrays['physical_center_i'][trace_idx] = np.int32(center_i)
+    arrays['physical_center_t_sec'][trace_idx] = np.float32(center_i * float(dt))
+    arrays['physical_model_status'][trace_idx] = np.uint8(
+        PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT
+        if bool(plan.relaxed)
+        else PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
+    )
+    arrays['physical_model_failure_reason'][trace_idx] = np.uint8(
+        PHYSICAL_MODEL_FAILURE_NONE
+    )
+    arrays['physical_runtime_fit_source'][trace_idx] = np.uint8(runtime_fit_source)
+    _assign_model_diagnostics(arrays, trace_idx, diagnostics)
+    return True
+
+
+def _fit_and_assign_trace(
+    *,
+    arrays: dict[str, np.ndarray],
+    trace_idx: int,
+    group_id_by_trace: np.ndarray,
+    groups: tuple[SourceGroup, ...],
+    groups_by_id: Mapping[int, SourceGroup],
+    geometry: CoarseGeometry | None,
+    offset_abs_m: np.ndarray,
+    offset_signed_m: np.ndarray | None,
+    offset_source: int,
+    valid_for_fit: np.ndarray,
+    pick_t_sec: np.ndarray,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    cfg: PhysicsLiteConfig,
+    strategy: TwoPieceRansacAutoBreakStrategy,
+    fit_cache: dict[tuple[int, ...], _FitCacheEntry],
+    min_fit_obs: int,
+    use_neighbor_context: bool,
+    runtime_fit_source: int,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+) -> _TraceFitResult:
+    arrays['physical_offset_source'][trace_idx] = np.uint8(offset_source)
+    fit_calls_before = (
+        int(runtime_diagnostics.n_fit_calls)
+        if runtime_diagnostics is not None
+        else 0
+    )
+    if (
+        not np.isfinite(offset_abs_m[trace_idx])
+        or int(group_id_by_trace[trace_idx]) < 0
+    ):
+        _assign_fallback(
+            arrays,
+            trace_idx,
+            failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+        return _TraceFitResult(None, None, None, 0, False)
+
+    plan = _build_observation_plan(
+        trace_idx=trace_idx,
+        target_group_id=int(group_id_by_trace[trace_idx]),
+        groups=groups,
+        groups_by_id=groups_by_id,
+        geometry=geometry,
+        offset_abs_m=offset_abs_m,
+        offset_signed_m=offset_signed_m,
+        valid_for_fit=valid_for_fit,
+        cfg=cfg,
+        use_neighbor_context=use_neighbor_context,
+    )
+    if plan is None:
+        _assign_fallback(
+            arrays,
+            trace_idx,
+            failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+        return _TraceFitResult(None, None, None, 0, False)
+
+    arrays['physical_model_neighbor_count'][trace_idx] = np.int32(plan.neighbor_count)
+    arrays['physical_prefilter_valid_count'][trace_idx] = np.int32(
+        plan.prefilter_valid_count
+    )
+    arrays['physical_model_segment_id'][trace_idx] = np.int32(plan.segment_id)
+    arrays['physical_model_side'][trace_idx] = np.int8(plan.side)
+
+    if int(plan.obs_indices.size) < int(min_fit_obs):
+        _assign_fallback(
+            arrays,
+            trace_idx,
+            failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+        return _TraceFitResult(plan, None, None, 0, False)
+
+    obs_indices = np.asarray(plan.obs_indices, dtype=np.int64)
+    x_obs = np.asarray(offset_abs_m[obs_indices], dtype=np.float32)
+    y_obs = np.asarray(pick_t_sec[obs_indices], dtype=np.float32)
+    trend_model, diagnostics, fit_failure_reason = _fit_model_for_plan(
+        strategy=strategy,
+        plan=plan,
+        x_obs=x_obs,
+        y_obs=y_obs,
+        min_pts=int(cfg.two_piece_ransac.min_pts),
+        min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
+        cache=fit_cache,
+        runtime_diagnostics=runtime_diagnostics,
+    )
+    fit_calls_after = (
+        int(runtime_diagnostics.n_fit_calls)
+        if runtime_diagnostics is not None
+        else 0
+    )
+    fit_call_delta = max(0, fit_calls_after - fit_calls_before)
+
+    if fit_failure_reason is not None:
+        _assign_fallback(
+            arrays,
+            trace_idx,
+            failure_reason=fit_failure_reason,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+        return _TraceFitResult(plan, None, None, fit_call_delta, False)
+
+    if not _assign_model_prediction(
+        arrays,
+        trace_idx,
+        trend_model=trend_model,
+        diagnostics=diagnostics,
+        plan=plan,
+        offset_abs_m=offset_abs_m,
+        dt=float(table.dt_scalar_sec),
+        n_samples=int(table.n_samples_orig),
+        runtime_fit_source=runtime_fit_source,
+    ):
+        _assign_fallback(
+            arrays,
+            trace_idx,
+            failure_reason=PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+        return _TraceFitResult(plan, trend_model, diagnostics, fit_call_delta, False)
+
+    if diagnostics is None:
+        diagnostics = _diagnostics_for_plan(
+            plan=plan,
+            x_obs=x_obs,
+            y_obs=y_obs,
+            cache=fit_cache,
+        )
+        _assign_model_diagnostics(arrays, trace_idx, diagnostics)
+
+    return _TraceFitResult(plan, trend_model, diagnostics, fit_call_delta, True)
+
+
+def _anchor_model_key(
+    group_id: int,
+    plan: _ObservationPlan,
+) -> tuple[int, int, int, bool]:
+    return (int(group_id), int(plan.side), int(plan.segment_id), bool(plan.relaxed))
+
+
+def _selection_group_maps(
+    selection: SourceXYAnchorSelectionResult,
+) -> tuple[dict[int, bool], dict[int, int], dict[int, float]]:
+    is_anchor_by_id: dict[int, bool] = {}
+    nearest_by_id: dict[int, int] = {}
+    distance_by_id: dict[int, float] = {}
+    group_ids = np.asarray(selection.group_ids, dtype=np.int64)
+    for pos, group_id in enumerate(group_ids.tolist()):
+        gid = int(group_id)
+        is_anchor_by_id[gid] = bool(np.asarray(selection.is_anchor)[pos])
+        nearest_by_id[gid] = int(np.asarray(selection.nearest_anchor_group_id)[pos])
+        distance_by_id[gid] = float(np.asarray(selection.source_distance_m)[pos])
+    return is_anchor_by_id, nearest_by_id, distance_by_id
+
+
+def _fallback_no_compatible_anchor(
+    *,
+    arrays: dict[str, np.ndarray],
+    trace_idx: int,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    cfg: PhysicsLiteConfig,
+) -> None:
+    fallback = str(cfg.physical_runtime.anchor_reuse.fallback_if_no_compatible_segment)
+    if fallback == 'robust':
+        _assign_robust_fallback(
+            arrays,
+            trace_idx,
+            failure_reason=PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
+            table=table,
+            merged=merged,
+        )
+        return
+    _assign_fallback(
+        arrays,
+        trace_idx,
+        failure_reason=PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
+        runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+    )
+
+
 def _compute_physical_prefilter_mask(
     *,
     offset_abs_m: np.ndarray,
@@ -1120,7 +1475,7 @@ def build_geometry_two_piece_physical_center(
     )
 
     arrays = _allocate_result_arrays(table)
-    _apply_anchor_selection_diagnostics(
+    anchor_selection = _apply_anchor_selection_diagnostics(
         arrays,
         groups=groups,
         cfg=cfg,
@@ -1130,158 +1485,240 @@ def build_geometry_two_piece_physical_center(
     fit_cache: dict[tuple[int, ...], _FitCacheEntry] = {}
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
 
-    for trace_idx in range(n):
-        arrays['physical_offset_source'][trace_idx] = np.uint8(offset_source)
-        if (
-            not np.isfinite(offset_abs_m[trace_idx])
-            or int(group_id_by_trace[trace_idx]) < 0
-        ):
-            _assign_fallback(
-                arrays,
-                trace_idx,
-                failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
-                table=table,
-                feasible=feasible,
-                trend=trend,
-                merged=merged,
+    if cfg.physical_runtime.fit_policy == 'anchor_source_xy':
+        if anchor_selection is None:
+            anchor_selection = select_source_xy_stride_anchors(
+                groups,
+                anchor_stride_source_groups=int(
+                    cfg.physical_runtime.anchor_selection.anchor_stride_source_groups
+                ),
+                include_first=bool(
+                    cfg.physical_runtime.anchor_selection.include_first
+                ),
+                include_last=bool(cfg.physical_runtime.anchor_selection.include_last),
             )
-            continue
+        is_anchor_by_id, nearest_by_id, distance_by_id = _selection_group_maps(
+            anchor_selection
+        )
+        anchor_models: dict[tuple[int, int, int, bool], _AnchorModelContext] = {}
+        n_reused_predictions = 0
+        fallback_full_group_ids: set[int] = set()
 
-        plan = _build_observation_plan(
+        for group in groups:
+            group_id = int(group.group_id)
+            if not bool(is_anchor_by_id.get(group_id, False)):
+                continue
+            for trace_idx in np.asarray(group.trace_indices, dtype=np.int64).tolist():
+                result = _fit_and_assign_trace(
+                    arrays=arrays,
+                    trace_idx=int(trace_idx),
+                    group_id_by_trace=group_id_by_trace,
+                    groups=groups,
+                    groups_by_id=groups_by_id,
+                    geometry=geometry,
+                    offset_abs_m=offset_abs_m,
+                    offset_signed_m=offset_signed_m,
+                    offset_source=offset_source,
+                    valid_for_fit=valid_for_fit,
+                    pick_t_sec=pick_t_sec,
+                    table=table,
+                    feasible=feasible,
+                    trend=trend,
+                    merged=merged,
+                    cfg=cfg,
+                    strategy=strategy,
+                    fit_cache=fit_cache,
+                    min_fit_obs=min_fit_obs,
+                    use_neighbor_context=source_groups_from_geometry,
+                    runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+                    runtime_diagnostics=runtime_diagnostics,
+                )
+                if runtime_diagnostics is not None and result.fit_call_delta > 0:
+                    runtime_diagnostics.record_anchor_fit_calls(
+                        result.fit_call_delta
+                    )
+                if (
+                    result.assigned_from_model
+                    and result.plan is not None
+                    and result.trend_model is not None
+                ):
+                    key = _anchor_model_key(group_id, result.plan)
+                    anchor_models.setdefault(
+                        key,
+                        _AnchorModelContext(
+                            trend_model=result.trend_model,
+                            diagnostics=result.diagnostics,
+                        ),
+                    )
+
+        for group in groups:
+            group_id = int(group.group_id)
+            if bool(is_anchor_by_id.get(group_id, False)):
+                continue
+            for trace_idx in np.asarray(group.trace_indices, dtype=np.int64).tolist():
+                trace_idx = int(trace_idx)
+                arrays['physical_offset_source'][trace_idx] = np.uint8(offset_source)
+                if (
+                    not np.isfinite(offset_abs_m[trace_idx])
+                    or int(group_id_by_trace[trace_idx]) < 0
+                ):
+                    _assign_fallback(
+                        arrays,
+                        trace_idx,
+                        failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+                        table=table,
+                        feasible=feasible,
+                        trend=trend,
+                        merged=merged,
+                    )
+                    continue
+
+                plan = _build_observation_plan(
+                    trace_idx=trace_idx,
+                    target_group_id=group_id,
+                    groups=groups,
+                    groups_by_id=groups_by_id,
+                    geometry=geometry,
+                    offset_abs_m=offset_abs_m,
+                    offset_signed_m=offset_signed_m,
+                    valid_for_fit=valid_for_fit,
+                    cfg=cfg,
+                    use_neighbor_context=source_groups_from_geometry,
+                )
+                if plan is not None:
+                    arrays['physical_model_neighbor_count'][trace_idx] = np.int32(
+                        plan.neighbor_count
+                    )
+                    arrays['physical_prefilter_valid_count'][trace_idx] = np.int32(
+                        plan.prefilter_valid_count
+                    )
+                    arrays['physical_model_segment_id'][trace_idx] = np.int32(
+                        plan.segment_id
+                    )
+                    arrays['physical_model_side'][trace_idx] = np.int8(plan.side)
+
+                nearest_anchor_id = int(nearest_by_id.get(group_id, -1))
+                anchor_distance_m = float(distance_by_id.get(group_id, np.nan))
+                max_distance_m = cfg.physical_runtime.anchor_reuse.max_anchor_distance_m
+                distance_ok = (
+                    nearest_anchor_id >= 0
+                    and np.isfinite(anchor_distance_m)
+                    and (
+                        max_distance_m is None
+                        or anchor_distance_m <= float(max_distance_m)
+                    )
+                )
+                context = None
+                if (
+                    bool(cfg.physical_runtime.anchor_reuse.enabled)
+                    and plan is not None
+                    and distance_ok
+                ):
+                    context = anchor_models.get(
+                        _anchor_model_key(nearest_anchor_id, plan)
+                    )
+
+                if context is not None and _assign_model_prediction(
+                    arrays,
+                    trace_idx,
+                    trend_model=context.trend_model,
+                    diagnostics=context.diagnostics,
+                    plan=plan,
+                    offset_abs_m=offset_abs_m,
+                    dt=dt,
+                    n_samples=n_samples,
+                    runtime_fit_source=(
+                        PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE
+                    ),
+                ):
+                    n_reused_predictions += 1
+                    continue
+
+                fallback = str(
+                    cfg.physical_runtime.anchor_reuse.fallback_if_no_compatible_segment
+                )
+                if fallback == 'full_fit':
+                    fallback_full_group_ids.add(group_id)
+                    _fit_and_assign_trace(
+                        arrays=arrays,
+                        trace_idx=trace_idx,
+                        group_id_by_trace=group_id_by_trace,
+                        groups=groups,
+                        groups_by_id=groups_by_id,
+                        geometry=geometry,
+                        offset_abs_m=offset_abs_m,
+                        offset_signed_m=offset_signed_m,
+                        offset_source=offset_source,
+                        valid_for_fit=valid_for_fit,
+                        pick_t_sec=pick_t_sec,
+                        table=table,
+                        feasible=feasible,
+                        trend=trend,
+                        merged=merged,
+                        cfg=cfg,
+                        strategy=strategy,
+                        fit_cache=fit_cache,
+                        min_fit_obs=min_fit_obs,
+                        use_neighbor_context=source_groups_from_geometry,
+                        runtime_fit_source=(
+                            PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR
+                        ),
+                        runtime_diagnostics=runtime_diagnostics,
+                    )
+                else:
+                    _fallback_no_compatible_anchor(
+                        arrays=arrays,
+                        trace_idx=trace_idx,
+                        table=table,
+                        feasible=feasible,
+                        trend=trend,
+                        merged=merged,
+                        cfg=cfg,
+                    )
+
+        if runtime_diagnostics is not None:
+            runtime_diagnostics.record_reused_predictions(n_reused_predictions)
+            runtime_diagnostics.record_fallback_full_fit_no_compatible_anchor(
+                len(fallback_full_group_ids)
+            )
+            runtime_diagnostics.set_anchor_reuse_groups(
+                n_non_anchor_groups=sum(
+                    1
+                    for group in groups
+                    if not bool(is_anchor_by_id.get(int(group.group_id), False))
+                )
+            )
+            runtime_diagnostics.set_fit_call_reduction_rate_vs_full(
+                full_fit_call_count_estimate=len(groups)
+            )
+            runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))
+        return _finalize_result(arrays)
+
+    for trace_idx in range(n):
+        _fit_and_assign_trace(
+            arrays=arrays,
             trace_idx=trace_idx,
-            target_group_id=int(group_id_by_trace[trace_idx]),
+            group_id_by_trace=group_id_by_trace,
             groups=groups,
             groups_by_id=groups_by_id,
             geometry=geometry,
             offset_abs_m=offset_abs_m,
             offset_signed_m=offset_signed_m,
+            offset_source=offset_source,
             valid_for_fit=valid_for_fit,
+            pick_t_sec=pick_t_sec,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
             cfg=cfg,
-            use_neighbor_context=source_groups_from_geometry,
-        )
-        if plan is None:
-            _assign_fallback(
-                arrays,
-                trace_idx,
-                failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
-                table=table,
-                feasible=feasible,
-                trend=trend,
-                merged=merged,
-            )
-            continue
-
-        arrays['physical_model_neighbor_count'][trace_idx] = np.int32(
-            plan.neighbor_count
-        )
-        arrays['physical_prefilter_valid_count'][trace_idx] = np.int32(
-            plan.prefilter_valid_count
-        )
-        arrays['physical_model_segment_id'][trace_idx] = np.int32(plan.segment_id)
-        arrays['physical_model_side'][trace_idx] = np.int8(plan.side)
-
-        if int(plan.obs_indices.size) < min_fit_obs:
-            _assign_fallback(
-                arrays,
-                trace_idx,
-                failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
-                table=table,
-                feasible=feasible,
-                trend=trend,
-                merged=merged,
-            )
-            continue
-
-        obs_indices = np.asarray(plan.obs_indices, dtype=np.int64)
-        x_obs = np.asarray(offset_abs_m[obs_indices], dtype=np.float32)
-        y_obs = np.asarray(pick_t_sec[obs_indices], dtype=np.float32)
-        trend_model, diagnostics, fit_failure_reason = _fit_model_for_plan(
             strategy=strategy,
-            plan=plan,
-            x_obs=x_obs,
-            y_obs=y_obs,
-            min_pts=int(cfg.two_piece_ransac.min_pts),
-            min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
-            cache=fit_cache,
+            fit_cache=fit_cache,
+            min_fit_obs=min_fit_obs,
+            use_neighbor_context=source_groups_from_geometry,
+            runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT,
             runtime_diagnostics=runtime_diagnostics,
         )
-
-        if fit_failure_reason is not None:
-            _assign_fallback(
-                arrays,
-                trace_idx,
-                failure_reason=fit_failure_reason,
-                table=table,
-                feasible=feasible,
-                trend=trend,
-                merged=merged,
-            )
-            continue
-
-        try:
-            physical_t_sec = _predict_model_sec(
-                trend_model,
-                float(offset_abs_m[trace_idx]),
-            )
-        except (TypeError, ValueError, RuntimeError):
-            physical_t_sec = np.nan
-
-        if not np.isfinite(physical_t_sec):
-            _assign_fallback(
-                arrays,
-                trace_idx,
-                failure_reason=PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
-                table=table,
-                feasible=feasible,
-                trend=trend,
-                merged=merged,
-            )
-            continue
-
-        center_i = int(np.rint(physical_t_sec / dt))
-        center_i = int(np.clip(center_i, 0, n_samples - 1))
-        arrays['physical_center_i'][trace_idx] = np.int32(center_i)
-        arrays['physical_center_t_sec'][trace_idx] = np.float32(center_i * dt)
-        arrays['physical_model_status'][trace_idx] = np.uint8(
-            PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT
-            if bool(plan.relaxed)
-            else PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
-        )
-
-        if diagnostics is None:
-            diagnostics = _diagnostics_for_plan(
-                plan=plan,
-                x_obs=x_obs,
-                y_obs=y_obs,
-                cache=fit_cache,
-            )
-        if diagnostics is not None:
-            (
-                break_offset,
-                slope_near,
-                slope_far,
-                velocity_near,
-                velocity_far,
-                resid_p50,
-                resid_p90,
-            ) = diagnostics
-            arrays['physical_model_break_offset_m'][trace_idx] = np.float32(
-                break_offset
-            )
-            arrays['physical_model_slope_near_s_per_m'][trace_idx] = np.float32(
-                slope_near
-            )
-            arrays['physical_model_slope_far_s_per_m'][trace_idx] = np.float32(
-                slope_far
-            )
-            arrays['physical_model_velocity_near_m_s'][trace_idx] = np.float32(
-                velocity_near
-            )
-            arrays['physical_model_velocity_far_m_s'][trace_idx] = np.float32(
-                velocity_far
-            )
-            arrays['physical_model_resid_p50_ms'][trace_idx] = np.float32(resid_p50)
-            arrays['physical_model_resid_p90_ms'][trace_idx] = np.float32(resid_p90)
 
     if runtime_diagnostics is not None:
         runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))

@@ -29,11 +29,16 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'physical_center_total_sec',
     'ransac_fit_total_sec',
     'n_fit_calls',
+    'n_anchor_fit_calls',
     'n_cache_hits',
     'n_cache_misses',
     'cache_hit_rate',
     'n_source_groups',
+    'n_non_anchor_groups',
+    'n_reused_predictions',
+    'n_fallback_full_fit_no_compatible_anchor',
     'n_unique_fit_contexts',
+    'fit_call_reduction_rate_vs_full',
     'ransac_fit_time_p50_sec',
     'ransac_fit_time_p90_sec',
     'ransac_fit_time_p99_sec',
@@ -68,10 +73,15 @@ class PhysicalRuntimeDiagnostics:
     physical_center_total_sec: float = 0.0
     ransac_fit_total_sec: float = 0.0
     n_fit_calls: int = 0
+    n_anchor_fit_calls: int = 0
     n_cache_hits: int = 0
     n_cache_misses: int = 0
     n_source_groups: int = 0
+    n_non_anchor_groups: int = 0
+    n_reused_predictions: int = 0
+    n_fallback_full_fit_no_compatible_anchor: int = 0
     n_unique_fit_contexts: int = 0
+    fit_call_reduction_rate_vs_full: float = 0.0
     _anchor_summary: dict[str, float | int | str] | None = field(
         default=None,
         repr=False,
@@ -120,11 +130,35 @@ class PhysicalRuntimeDiagnostics:
     def record_cache_miss(self) -> None:
         self.n_cache_misses += 1
 
+    def record_anchor_fit_calls(self, value: int) -> None:
+        self.n_anchor_fit_calls += int(value)
+
+    def record_reused_predictions(self, value: int) -> None:
+        self.n_reused_predictions += int(value)
+
+    def record_fallback_full_fit_no_compatible_anchor(self, value: int) -> None:
+        self.n_fallback_full_fit_no_compatible_anchor += int(value)
+
     def set_source_groups(self, value: int) -> None:
         self.n_source_groups = int(value)
 
+    def set_anchor_reuse_groups(self, *, n_non_anchor_groups: int) -> None:
+        self.n_non_anchor_groups = int(n_non_anchor_groups)
+
     def set_unique_fit_contexts(self, value: int) -> None:
         self.n_unique_fit_contexts = int(value)
+
+    def set_fit_call_reduction_rate_vs_full(
+        self,
+        *,
+        full_fit_call_count_estimate: int,
+    ) -> None:
+        full_count = int(full_fit_call_count_estimate)
+        if full_count <= 0:
+            self.fit_call_reduction_rate_vs_full = 0.0
+            return
+        reduction = (float(full_count) - float(self.n_fit_calls)) / float(full_count)
+        self.fit_call_reduction_rate_vs_full = float(max(0.0, reduction))
 
     def set_anchor_selection(
         self,
@@ -153,11 +187,20 @@ class PhysicalRuntimeDiagnostics:
             'physical_center_total_sec': float(self.physical_center_total_sec),
             'ransac_fit_total_sec': float(self.ransac_fit_total_sec),
             'n_fit_calls': int(self.n_fit_calls),
+            'n_anchor_fit_calls': int(self.n_anchor_fit_calls),
             'n_cache_hits': int(self.n_cache_hits),
             'n_cache_misses': int(self.n_cache_misses),
             'cache_hit_rate': float(self.cache_hit_rate),
             'n_source_groups': int(self.n_source_groups),
+            'n_non_anchor_groups': int(self.n_non_anchor_groups),
+            'n_reused_predictions': int(self.n_reused_predictions),
+            'n_fallback_full_fit_no_compatible_anchor': int(
+                self.n_fallback_full_fit_no_compatible_anchor
+            ),
             'n_unique_fit_contexts': int(self.n_unique_fit_contexts),
+            'fit_call_reduction_rate_vs_full': float(
+                self.fit_call_reduction_rate_vs_full
+            ),
             'ransac_fit_time_p50_sec': _percentile(self._fit_times_sec, 50.0),
             'ransac_fit_time_p90_sec': _percentile(self._fit_times_sec, 90.0),
             'ransac_fit_time_p99_sec': _percentile(self._fit_times_sec, 99.0),
@@ -173,9 +216,13 @@ class PhysicalRuntimeDiagnostics:
         summary = self.to_summary()
         int_keys = {
             'n_fit_calls',
+            'n_anchor_fit_calls',
             'n_cache_hits',
             'n_cache_misses',
             'n_source_groups',
+            'n_non_anchor_groups',
+            'n_reused_predictions',
+            'n_fallback_full_fit_no_compatible_anchor',
             'n_unique_fit_contexts',
             'n_anchor_groups',
             'anchor_stride_source_groups',
@@ -200,9 +247,13 @@ def runtime_summary_from_npz_fields(
     summary: dict[str, float | int | str] = {}
     int_keys = {
         'n_fit_calls',
+        'n_anchor_fit_calls',
         'n_cache_hits',
         'n_cache_misses',
         'n_source_groups',
+        'n_non_anchor_groups',
+        'n_reused_predictions',
+        'n_fallback_full_fit_no_compatible_anchor',
         'n_unique_fit_contexts',
         'n_anchor_groups',
         'anchor_stride_source_groups',

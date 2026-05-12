@@ -8,7 +8,6 @@ from seisai_engine.pipelines.fbpick.physics.config import load_physics_lite_conf
 from seisai_engine.pipelines.fbpick.physics.feasible import FeasibleBandResult
 from seisai_engine.pipelines.fbpick.physics.merge import MergeResult
 from seisai_engine.pipelines.fbpick.physics.physical_center import (
-    PHYSICAL_OFFSET_SOURCE_HEADER,
     PHYSICAL_MODEL_FAILURE_FIT_FAILED,
     PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
     PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
@@ -21,6 +20,10 @@ from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
+    PHYSICAL_OFFSET_SOURCE_HEADER,
+    PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR,
+    PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE,
     build_geometry_two_piece_physical_center,
 )
 from seisai_engine.pipelines.fbpick.physics.pick_table import CoarsePickTable
@@ -176,6 +179,23 @@ def _fake_piecewise_model() -> PiecewiseLinearTrend:
             dtype=torch.float32,
         ),
     )
+
+
+class _ConstantTrendModel:
+    def __init__(self, value_sec: float) -> None:
+        self.value_sec = float(value_sec)
+        self.edges = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float32)
+        self.coef = torch.tensor(
+            [[0.001, self.value_sec], [0.001, self.value_sec]],
+            dtype=torch.float32,
+        )
+
+    def predict(self, x_abs: torch.Tensor) -> torch.Tensor:
+        return torch.full(
+            (int(x_abs.numel()),),
+            self.value_sec,
+            dtype=torch.float32,
+        )
 
 
 def _with_invalid_trend_centers(trend: TrendResult) -> TrendResult:
@@ -1108,6 +1128,198 @@ def test_segment_relaxation_path_uses_relaxed_fit(monkeypatch) -> None:
     assert np.all(result.physical_model_failure_reason == PHYSICAL_MODEL_FAILURE_NONE)
 
 
+def test_anchor_source_xy_reuses_nearest_anchor_without_non_anchor_fit(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        x_np = x_abs.detach().cpu().numpy().copy()
+        y_np = y_sec.detach().cpu().numpy().copy()
+        calls.append((x_np, y_np))
+        return _ConstantTrendModel(float(y_np[0]))
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+
+    n_groups = 4
+    traces_per_group = 4
+    dt_sec = 0.001
+    group_offsets = np.asarray([100.0, 200.0, 300.0, 400.0], dtype=np.float32)
+    offsets = np.tile(group_offsets, n_groups).astype(np.float32)
+    source_x = np.repeat(
+        np.arange(n_groups, dtype=np.float32) * np.float32(100.0),
+        traces_per_group,
+    )
+    group_base_i = np.repeat(
+        np.asarray([100, 200, 300, 400], dtype=np.int32),
+        traces_per_group,
+    )
+    pick_i = group_base_i + np.tile(
+        np.arange(traces_per_group, dtype=np.int32),
+        n_groups,
+    )
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        dt_sec=dt_sec,
+        n_samples_orig=1000,
+    )
+    coarse_npz['source_x_m'] = source_x.astype(np.float32)
+    coarse_npz['source_y_m'] = np.zeros_like(source_x, dtype=np.float32)
+    coarse_npz['receiver_x_m'] = (source_x + offsets).astype(np.float32)
+    coarse_npz['receiver_y_m'] = np.zeros_like(source_x, dtype=np.float32)
+    coarse_npz['offset_abs_geom_m'] = offsets.astype(np.float32)
+    coarse_npz['geometry_valid_mask'] = np.ones_like(offsets, dtype=np.bool_)
+
+    diagnostics = PhysicalRuntimeDiagnostics()
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'segment_by_offset_sign': False,
+                    'split_by_offset_gap': False,
+                },
+                'neighbor_context': {'enabled': False},
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 2},
+                'physical_runtime': {
+                    'fit_policy': 'anchor_source_xy',
+                    'anchor_selection': {
+                        'enabled': True,
+                        'anchor_stride_source_groups': 2,
+                        'include_first': True,
+                        'include_last': False,
+                    },
+                    'anchor_reuse': {'enabled': True},
+                },
+            }
+        ),
+        runtime_diagnostics=diagnostics,
+    )
+
+    assert len(calls) == 2
+    assert diagnostics.n_fit_calls == 2
+    assert diagnostics.n_anchor_fit_calls == 2
+    assert diagnostics.n_reused_predictions == 2 * traces_per_group
+    assert diagnostics.n_fallback_full_fit_no_compatible_anchor == 0
+    np.testing.assert_array_equal(
+        result.physical_runtime_fit_source.reshape(n_groups, traces_per_group)[:, 0],
+        np.asarray([1, 2, 1, 2], dtype=np.uint8),
+    )
+    assert np.all(
+        result.physical_runtime_fit_source[:traces_per_group]
+        == np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT)
+    )
+    assert np.all(
+        result.physical_runtime_fit_source[traces_per_group : 2 * traces_per_group]
+        == np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE)
+    )
+    np.testing.assert_array_equal(
+        result.physical_center_i[traces_per_group : 2 * traces_per_group],
+        np.full((traces_per_group,), pick_i[0], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        result.physical_center_i[3 * traces_per_group : 4 * traces_per_group],
+        np.full((traces_per_group,), pick_i[2 * traces_per_group], dtype=np.int32),
+    )
+
+
+def test_anchor_source_xy_full_fit_fallback_when_anchor_side_missing(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        y_np = y_sec.detach().cpu().numpy().copy()
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _ConstantTrendModel(float(y_np[0]))
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+
+    traces_per_group = 4
+    offsets = np.tile(
+        np.asarray([100.0, 200.0, 300.0, 400.0], dtype=np.float32),
+        2,
+    )
+    pick_i = np.asarray([100, 101, 102, 103, 300, 301, 302, 303], dtype=np.int32)
+    source_x = np.repeat(np.asarray([0.0, 100.0], dtype=np.float32), traces_per_group)
+    signed_offset = np.asarray([-1.0] * traces_per_group + [1.0] * traces_per_group)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        dt_sec=0.001,
+        n_samples_orig=1000,
+    )
+    coarse_npz['source_x_m'] = source_x.astype(np.float32)
+    coarse_npz['source_y_m'] = np.zeros_like(source_x, dtype=np.float32)
+    coarse_npz['receiver_x_m'] = (source_x + signed_offset * offsets).astype(
+        np.float32
+    )
+    coarse_npz['receiver_y_m'] = np.zeros_like(source_x, dtype=np.float32)
+    coarse_npz['offset_abs_geom_m'] = offsets.astype(np.float32)
+    coarse_npz['offset_signed_geom_m'] = (signed_offset * offsets).astype(np.float32)
+    coarse_npz['geometry_valid_mask'] = np.ones_like(offsets, dtype=np.bool_)
+
+    diagnostics = PhysicalRuntimeDiagnostics()
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'segment_by_offset_sign': True,
+                    'split_by_offset_gap': False,
+                },
+                'neighbor_context': {'enabled': False},
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 2},
+                'physical_runtime': {
+                    'fit_policy': 'anchor_source_xy',
+                    'anchor_selection': {
+                        'enabled': True,
+                        'anchor_stride_source_groups': 2,
+                        'include_first': True,
+                        'include_last': False,
+                    },
+                    'anchor_reuse': {
+                        'enabled': True,
+                        'fallback_if_no_compatible_segment': 'full_fit',
+                    },
+                },
+            }
+        ),
+        runtime_diagnostics=diagnostics,
+    )
+
+    assert len(calls) == 2
+    assert diagnostics.n_fit_calls == 2
+    assert diagnostics.n_anchor_fit_calls == 1
+    assert diagnostics.n_reused_predictions == 0
+    assert diagnostics.n_fallback_full_fit_no_compatible_anchor == 1
+    assert np.all(
+        result.physical_runtime_fit_source[:traces_per_group]
+        == np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT)
+    )
+    assert np.all(
+        result.physical_runtime_fit_source[traces_per_group:]
+        == np.uint8(
+            PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR
+        )
+    )
+    np.testing.assert_array_equal(
+        result.physical_center_i[traces_per_group:],
+        np.full((traces_per_group,), pick_i[traces_per_group], dtype=np.int32),
+    )
+
+
 def test_physical_center_diagnostic_arrays_are_save_friendly() -> None:
     offsets = np.linspace(50.0, 2000.0, 20, dtype=np.float32)
     coarse_npz, table, feasible, trend, merged = _make_inputs(offsets_m=offsets)
@@ -1143,6 +1355,7 @@ def test_physical_center_diagnostic_arrays_are_save_friendly() -> None:
         'physical_anchor_is_anchor': np.bool_,
         'physical_anchor_nearest_anchor_group_id': np.int32,
         'physical_anchor_source_distance_m': np.float32,
+        'physical_runtime_fit_source': np.uint8,
     }
     for field, dtype in expected_dtypes.items():
         arr = getattr(result, field)

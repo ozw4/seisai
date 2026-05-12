@@ -40,12 +40,12 @@ from seisai_engine.pipelines.fbpick.physics.feasible import (
 )
 from seisai_engine.pipelines.fbpick.physics.merge import apply_keep_reject_fill
 from seisai_engine.pipelines.fbpick.physics.physical_center import (
-    PHYSICAL_OFFSET_SOURCE_HEADER,
     PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
     PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
+    PHYSICAL_OFFSET_SOURCE_HEADER,
 )
 from seisai_engine.pipelines.fbpick.physics.pick_table import (
     normalize_coarse_pick_table,
@@ -216,15 +216,21 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
             [0.0, 10.0, 0.0],
             dtype=np.float32,
         ),
+        'physical_runtime_fit_source': np.array([1, 2, 3], dtype=np.uint8),
         'physics_total_sec': np.asarray(1.0, dtype=np.float64),
         'physical_center_total_sec': np.asarray(0.7, dtype=np.float64),
         'ransac_fit_total_sec': np.asarray(0.3, dtype=np.float64),
         'n_fit_calls': np.asarray(4, dtype=np.int64),
+        'n_anchor_fit_calls': np.asarray(2, dtype=np.int64),
         'n_cache_hits': np.asarray(2, dtype=np.int64),
         'n_cache_misses': np.asarray(4, dtype=np.int64),
         'cache_hit_rate': np.asarray(2.0 / 6.0, dtype=np.float64),
         'n_source_groups': np.asarray(1, dtype=np.int64),
+        'n_non_anchor_groups': np.asarray(1, dtype=np.int64),
+        'n_reused_predictions': np.asarray(3, dtype=np.int64),
+        'n_fallback_full_fit_no_compatible_anchor': np.asarray(0, dtype=np.int64),
         'n_unique_fit_contexts': np.asarray(4, dtype=np.int64),
+        'fit_call_reduction_rate_vs_full': np.asarray(0.5, dtype=np.float64),
         'ransac_fit_time_p50_sec': np.asarray(0.05, dtype=np.float64),
         'ransac_fit_time_p90_sec': np.asarray(0.09, dtype=np.float64),
         'ransac_fit_time_p99_sec': np.asarray(0.099, dtype=np.float64),
@@ -341,6 +347,15 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.physical_runtime.anchor_selection.anchor_spacing_m is None
     assert cfg.physical_runtime.anchor_selection.include_first is True
     assert cfg.physical_runtime.anchor_selection.include_last is True
+    assert cfg.physical_runtime.anchor_reuse.enabled is True
+    assert cfg.physical_runtime.anchor_reuse.non_anchor_mode == 'nearest_anchor'
+    assert cfg.physical_runtime.anchor_reuse.max_anchor_distance_m is None
+    assert cfg.physical_runtime.anchor_reuse.reuse_segment_policy == (
+        'same_side_and_gap'
+    )
+    assert cfg.physical_runtime.anchor_reuse.fallback_if_no_compatible_segment == (
+        'full_fit'
+    )
 
 
 def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
@@ -375,6 +390,13 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
                     'include_first': False,
                     'include_last': True,
                 },
+                'anchor_reuse': {
+                    'enabled': True,
+                    'non_anchor_mode': 'nearest_anchor',
+                    'max_anchor_distance_m': 250.0,
+                    'reuse_segment_policy': 'same_side_and_gap',
+                    'fallback_if_no_compatible_segment': 'existing_trend',
+                },
             },
         }
     )
@@ -384,6 +406,10 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
     assert cfg.physical_runtime.anchor_selection.anchor_stride_source_groups == 3
     assert cfg.physical_runtime.anchor_selection.include_first is False
     assert cfg.physical_runtime.anchor_selection.include_last is True
+    assert cfg.physical_runtime.anchor_reuse.max_anchor_distance_m == 250.0
+    assert cfg.physical_runtime.anchor_reuse.fallback_if_no_compatible_segment == (
+        'existing_trend'
+    )
 
 
 def test_physical_center_example_config_enables_physical_trend() -> None:
@@ -490,6 +516,40 @@ def test_physical_center_example_config_enables_physical_trend() -> None:
             },
             'physical_runtime.anchor_selection.anchor_spacing_m',
         ),
+        (
+            {
+                'physical_runtime': {
+                    'anchor_reuse': {'non_anchor_mode': 'all_anchors'}
+                }
+            },
+            'physical_runtime.anchor_reuse.non_anchor_mode',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'anchor_reuse': {'max_anchor_distance_m': -1.0}
+                }
+            },
+            'physical_runtime.anchor_reuse.max_anchor_distance_m',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'anchor_reuse': {'reuse_segment_policy': 'any_segment'}
+                }
+            },
+            'physical_runtime.anchor_reuse.reuse_segment_policy',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'anchor_reuse': {
+                        'fallback_if_no_compatible_segment': 'skip',
+                    }
+                }
+            },
+            'physical_runtime.anchor_reuse.fallback_if_no_compatible_segment',
+        ),
     ],
 )
 def test_load_physics_lite_config_rejects_invalid_physical_trend_blocks(
@@ -520,6 +580,7 @@ def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
     assert out['physical_runtime']['diagnostics_enabled'] is True
     assert out['physical_runtime']['fit_policy'] == 'full'
     assert out['physical_runtime']['anchor_selection']['enabled'] is False
+    assert out['physical_runtime']['anchor_reuse']['enabled'] is True
 
 
 def test_normalize_coarse_pick_table_preserves_contract(tmp_path: Path) -> None:
@@ -1112,6 +1173,7 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
             [0.0, 10.0, 0.0],
             dtype=np.float32,
         ),
+        'physical_runtime_fit_source': np.array([1, 2, 3], dtype=np.uint8),
     }
 
     out_path = save_robust_npz(tmp_path / 'physical.robust.npz', **payload)

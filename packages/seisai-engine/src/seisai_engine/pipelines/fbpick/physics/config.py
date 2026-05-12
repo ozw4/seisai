@@ -14,6 +14,7 @@ from seisai_utils.config import (
 __all__ = [
     'DEFAULT_PHYSICS_LITE_CONFIG',
     'NeighborContextCfg',
+    'PhysicalAnchorReuseCfg',
     'PhysicalAnchorSelectionCfg',
     'PhysicalPrefilterCfg',
     'PhysicalProjectionCfg',
@@ -149,11 +150,21 @@ class PhysicalAnchorSelectionCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalAnchorReuseCfg:
+    enabled: bool = True
+    non_anchor_mode: str = 'nearest_anchor'
+    max_anchor_distance_m: float | None = None
+    reuse_segment_policy: str = 'same_side_and_gap'
+    fallback_if_no_compatible_segment: str = 'full_fit'
+
+
+@dataclass(frozen=True)
 class PhysicalRuntimeCfg:
     fit_policy: str = 'full'
     diagnostics_enabled: bool = True
     write_runtime_summary: bool = True
     anchor_selection: PhysicalAnchorSelectionCfg = PhysicalAnchorSelectionCfg()
+    anchor_reuse: PhysicalAnchorReuseCfg = PhysicalAnchorReuseCfg()
 
 
 @dataclass(frozen=True)
@@ -419,6 +430,30 @@ def _load_physical_anchor_selection_cfg(
     )
 
 
+def _load_physical_anchor_reuse_cfg(
+    cfg: dict[str, Any],
+) -> PhysicalAnchorReuseCfg:
+    return PhysicalAnchorReuseCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=True)),
+        non_anchor_mode=optional_str(cfg, 'non_anchor_mode', 'nearest_anchor'),
+        max_anchor_distance_m=_optional_float_or_none(
+            cfg,
+            'max_anchor_distance_m',
+            None,
+        ),
+        reuse_segment_policy=optional_str(
+            cfg,
+            'reuse_segment_policy',
+            'same_side_and_gap',
+        ),
+        fallback_if_no_compatible_segment=optional_str(
+            cfg,
+            'fallback_if_no_compatible_segment',
+            'full_fit',
+        ),
+    )
+
+
 def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
     return PhysicalRuntimeCfg(
         fit_policy=optional_str(cfg, 'fit_policy', 'full'),
@@ -432,6 +467,12 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
             _require_dict(
                 cfg.get('anchor_selection'),
                 key='physical_runtime.anchor_selection',
+            )
+        ),
+        anchor_reuse=_load_physical_anchor_reuse_cfg(
+            _require_dict(
+                cfg.get('anchor_reuse'),
+                key='physical_runtime.anchor_reuse',
             )
         ),
     )
@@ -539,6 +580,35 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
     )
     if anchor.anchor_spacing_m is not None:
         msg = 'physical_runtime.anchor_selection.anchor_spacing_m must be null'
+        raise ValueError(msg)
+    reuse = cfg.anchor_reuse
+    if reuse.non_anchor_mode != 'nearest_anchor':
+        msg = (
+            "physical_runtime.anchor_reuse.non_anchor_mode must be "
+            f"'nearest_anchor', got {reuse.non_anchor_mode!r}"
+        )
+        raise ValueError(msg)
+    if reuse.max_anchor_distance_m is not None:
+        _validate_nonnegative_float(
+            'physical_runtime.anchor_reuse.max_anchor_distance_m',
+            reuse.max_anchor_distance_m,
+        )
+    if reuse.reuse_segment_policy != 'same_side_and_gap':
+        msg = (
+            "physical_runtime.anchor_reuse.reuse_segment_policy must be "
+            f"'same_side_and_gap', got {reuse.reuse_segment_policy!r}"
+        )
+        raise ValueError(msg)
+    if reuse.fallback_if_no_compatible_segment not in {
+        'full_fit',
+        'existing_trend',
+        'robust',
+    }:
+        msg = (
+            'physical_runtime.anchor_reuse.fallback_if_no_compatible_segment '
+            "must be one of 'full_fit', 'existing_trend', or 'robust', "
+            f'got {reuse.fallback_if_no_compatible_segment!r}'
+        )
         raise ValueError(msg)
 
 

@@ -263,8 +263,8 @@ def _validate_runtime_diagnostic_scalar(name: str, arr: np.ndarray) -> None:
     if (not np.isfinite(value)) or value < 0.0:
         msg = f'{name} must be finite and >= 0'
         raise ValueError(msg)
-    if name == 'cache_hit_rate' and value > 1.0:
-        msg = 'cache_hit_rate must lie in [0, 1]'
+    if name in {'cache_hit_rate', 'fit_call_reduction_rate_vs_full'} and value > 1.0:
+        msg = f'{name} must lie in [0, 1]'
         raise ValueError(msg)
 
 
@@ -348,6 +348,7 @@ _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
     'physical_anchor_is_anchor': np.bool_,
     'physical_anchor_nearest_anchor_group_id': np.int32,
     'physical_anchor_source_distance_m': np.float32,
+    'physical_runtime_fit_source': np.uint8,
 }
 
 _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = tuple(
@@ -360,11 +361,16 @@ _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES = {
     'physical_center_total_sec': np.float64,
     'ransac_fit_total_sec': np.float64,
     'n_fit_calls': np.int64,
+    'n_anchor_fit_calls': np.int64,
     'n_cache_hits': np.int64,
     'n_cache_misses': np.int64,
     'cache_hit_rate': np.float64,
     'n_source_groups': np.int64,
+    'n_non_anchor_groups': np.int64,
+    'n_reused_predictions': np.int64,
+    'n_fallback_full_fit_no_compatible_anchor': np.int64,
     'n_unique_fit_contexts': np.int64,
+    'fit_call_reduction_rate_vs_full': np.float64,
     'ransac_fit_time_p50_sec': np.float64,
     'ransac_fit_time_p90_sec': np.float64,
     'ransac_fit_time_p99_sec': np.float64,
@@ -609,15 +615,21 @@ def save_robust_npz(
     physical_anchor_is_anchor=None,
     physical_anchor_nearest_anchor_group_id=None,
     physical_anchor_source_distance_m=None,
+    physical_runtime_fit_source=None,
     physics_total_sec=None,
     physical_center_total_sec=None,
     ransac_fit_total_sec=None,
     n_fit_calls=None,
+    n_anchor_fit_calls=None,
     n_cache_hits=None,
     n_cache_misses=None,
     cache_hit_rate=None,
     n_source_groups=None,
+    n_non_anchor_groups=None,
+    n_reused_predictions=None,
+    n_fallback_full_fit_no_compatible_anchor=None,
     n_unique_fit_contexts=None,
+    fit_call_reduction_rate_vs_full=None,
     ransac_fit_time_p50_sec=None,
     ransac_fit_time_p90_sec=None,
     ransac_fit_time_p99_sec=None,
@@ -789,6 +801,7 @@ def save_robust_npz(
             physical_anchor_nearest_anchor_group_id
         ),
         'physical_anchor_source_distance_m': physical_anchor_source_distance_m,
+        'physical_runtime_fit_source': physical_runtime_fit_source,
     }
     for key, dtype in _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS:
         value = physical_diagnostic_values[key]
@@ -808,11 +821,18 @@ def save_robust_npz(
         'physical_center_total_sec': physical_center_total_sec,
         'ransac_fit_total_sec': ransac_fit_total_sec,
         'n_fit_calls': n_fit_calls,
+        'n_anchor_fit_calls': n_anchor_fit_calls,
         'n_cache_hits': n_cache_hits,
         'n_cache_misses': n_cache_misses,
         'cache_hit_rate': cache_hit_rate,
         'n_source_groups': n_source_groups,
+        'n_non_anchor_groups': n_non_anchor_groups,
+        'n_reused_predictions': n_reused_predictions,
+        'n_fallback_full_fit_no_compatible_anchor': (
+            n_fallback_full_fit_no_compatible_anchor
+        ),
         'n_unique_fit_contexts': n_unique_fit_contexts,
+        'fit_call_reduction_rate_vs_full': fit_call_reduction_rate_vs_full,
         'ransac_fit_time_p50_sec': ransac_fit_time_p50_sec,
         'ransac_fit_time_p90_sec': ransac_fit_time_p90_sec,
         'ransac_fit_time_p99_sec': ransac_fit_time_p99_sec,

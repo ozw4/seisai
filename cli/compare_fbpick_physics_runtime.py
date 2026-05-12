@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_MODEL_FAILURE_LABELS,
     PHYSICAL_MODEL_STATUS_LABELS,
@@ -47,12 +46,17 @@ RUNTIME_TOTAL_KEYS = (
 )
 RUNTIME_COUNT_KEYS = (
     'n_fit_calls',
+    'n_anchor_fit_calls',
     'n_source_groups',
+    'n_non_anchor_groups',
+    'n_reused_predictions',
+    'n_fallback_full_fit_no_compatible_anchor',
     'n_anchor_groups',
     'anchor_stride_source_groups',
 )
 RUNTIME_RATE_KEYS = (
     'cache_hit_rate',
+    'fit_call_reduction_rate_vs_full',
 )
 RUNTIME_ANCHOR_VALUE_KEYS = (
     'anchor_selection_mode',
