@@ -16,6 +16,7 @@ __all__ = [
     'NeighborContextCfg',
     'PhysicalPrefilterCfg',
     'PhysicalProjectionCfg',
+    'PhysicalRuntimeCfg',
     'PhysicalTrendCfg',
     'PhysicsFeasibleBandCfg',
     'PhysicsKeepRejectCfg',
@@ -137,6 +138,12 @@ class PhysicalProjectionCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalRuntimeCfg:
+    diagnostics_enabled: bool = True
+    write_runtime_summary: bool = True
+
+
+@dataclass(frozen=True)
 class PhysicsLiteConfig:
     feasible_band: PhysicsFeasibleBandCfg = PhysicsFeasibleBandCfg()
     trend: PhysicsTrendCfg = PhysicsTrendCfg()
@@ -148,6 +155,7 @@ class PhysicsLiteConfig:
     physical_prefilter: PhysicalPrefilterCfg = PhysicalPrefilterCfg()
     two_piece_ransac: TwoPieceRansacCfg = TwoPieceRansacCfg()
     physical_projection: PhysicalProjectionCfg = PhysicalProjectionCfg()
+    physical_runtime: PhysicalRuntimeCfg = PhysicalRuntimeCfg()
 
 
 DEFAULT_PHYSICS_LITE_CONFIG = PhysicsLiteConfig()
@@ -383,6 +391,17 @@ def _load_physical_projection_cfg(cfg: dict[str, Any]) -> PhysicalProjectionCfg:
     return PhysicalProjectionCfg(mode=str(mode))
 
 
+def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
+    return PhysicalRuntimeCfg(
+        diagnostics_enabled=bool(
+            optional_bool(cfg, 'diagnostics_enabled', default=True)
+        ),
+        write_runtime_summary=bool(
+            optional_bool(cfg, 'write_runtime_summary', default=True)
+        ),
+    )
+
+
 def _validate_physical_trend_cfg(cfg: PhysicalTrendCfg) -> None:
     if cfg.fit_kind != 'two_piece_ransac_autobreak':
         msg = (
@@ -596,6 +615,9 @@ def load_physics_lite_config(cfg: dict[str, Any] | None) -> PhysicsLiteConfig:
         ),
         physical_projection=_load_physical_projection_cfg(
             _require_dict(raw.get('physical_projection'), key='physical_projection')
+        ),
+        physical_runtime=_load_physical_runtime_cfg(
+            _require_dict(raw.get('physical_runtime'), key='physical_runtime')
         ),
     )
     return _validate_physics_lite_config(typed)

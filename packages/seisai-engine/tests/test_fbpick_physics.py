@@ -19,6 +19,7 @@ from seisai_engine.pipelines.fbpick.common import (
     ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
     ROBUST_PHYSICAL_OPTIONAL_KEYS,
     ROBUST_REQUIRED_KEYS,
+    ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
     ROBUST_SOURCE_TREND_FILL,
     build_lineage_payload,
@@ -51,7 +52,11 @@ from seisai_engine.pipelines.fbpick.physics.pick_table import (
 )
 from seisai_engine.pipelines.fbpick.physics.run import (
     build_robust_payload_from_coarse,
+    derive_physics_runtime_summary_path,
     run_physics_lite,
+)
+from seisai_engine.pipelines.fbpick.physics.runtime_diagnostics import (
+    PhysicalRuntimeDiagnostics,
 )
 from seisai_engine.pipelines.fbpick.physics.trend import TrendResult, build_trend_result
 
@@ -187,6 +192,21 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
             [3.0, np.nan, 4.0],
             dtype=np.float32,
         ),
+        'physics_total_sec': np.asarray(1.0, dtype=np.float64),
+        'physical_center_total_sec': np.asarray(0.7, dtype=np.float64),
+        'ransac_fit_total_sec': np.asarray(0.3, dtype=np.float64),
+        'n_fit_calls': np.asarray(4, dtype=np.int64),
+        'n_cache_hits': np.asarray(2, dtype=np.int64),
+        'n_cache_misses': np.asarray(4, dtype=np.int64),
+        'cache_hit_rate': np.asarray(2.0 / 6.0, dtype=np.float64),
+        'n_source_groups': np.asarray(1, dtype=np.int64),
+        'n_unique_fit_contexts': np.asarray(4, dtype=np.int64),
+        'ransac_fit_time_p50_sec': np.asarray(0.05, dtype=np.float64),
+        'ransac_fit_time_p90_sec': np.asarray(0.09, dtype=np.float64),
+        'ransac_fit_time_p99_sec': np.asarray(0.099, dtype=np.float64),
+        'obs_count_for_fit_p50': np.asarray(8.0, dtype=np.float64),
+        'obs_count_for_fit_p90': np.asarray(10.0, dtype=np.float64),
+        'obs_count_for_fit_p99': np.asarray(11.0, dtype=np.float64),
     }
 
 
@@ -243,6 +263,30 @@ def _physical_trend_blocks() -> dict[str, object]:
     }
 
 
+def test_physical_runtime_diagnostics_initializes_with_zero_counts() -> None:
+    diagnostics = PhysicalRuntimeDiagnostics()
+    summary = diagnostics.to_summary()
+
+    assert summary['n_fit_calls'] == 0
+    assert summary['n_cache_hits'] == 0
+    assert summary['n_cache_misses'] == 0
+    assert summary['cache_hit_rate'] == 0.0
+    assert summary['n_source_groups'] == 0
+    assert summary['n_unique_fit_contexts'] == 0
+
+
+def test_physical_runtime_diagnostics_fit_timer_increments_counts() -> None:
+    diagnostics = PhysicalRuntimeDiagnostics()
+
+    with diagnostics.time_ransac_fit(obs_count=12):
+        pass
+
+    summary = diagnostics.to_summary()
+    assert summary['n_fit_calls'] == 1
+    assert summary['ransac_fit_total_sec'] >= 0.0
+    assert summary['obs_count_for_fit_p50'] == 12.0
+
+
 def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> None:
     cfg = load_physics_lite_config({})
 
@@ -258,6 +302,8 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.two_piece_ransac.q_lo == 0.15
     assert cfg.two_piece_ransac.q_hi == 0.85
     assert cfg.physical_projection.mode == 'model'
+    assert cfg.physical_runtime.diagnostics_enabled is True
+    assert cfg.physical_runtime.write_runtime_summary is True
 
 
 def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
@@ -374,11 +420,13 @@ def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
             'physical_prefilter',
             'two_piece_ransac',
             'physical_projection',
+            'physical_runtime',
         }
     )
     assert out['physical_trend']['enabled'] is True
     assert out['neighbor_context']['max_source_distance_m'] == 1000.0
     assert out['physical_projection']['mode'] == 'model'
+    assert out['physical_runtime']['diagnostics_enabled'] is True
 
 
 def test_normalize_coarse_pick_table_preserves_contract(tmp_path: Path) -> None:
@@ -862,10 +910,11 @@ def test_robust_optional_schema_constants_match_io_fields() -> None:
 
     assert 'fine_center_i' in ROBUST_CENTER_OPTIONAL_KEYS
     assert 'fine_center_t_sec' in ROBUST_CENTER_OPTIONAL_KEYS
-    assert ROBUST_OPTIONAL_KEYS == (
+    assert (
         *ROBUST_CENTER_OPTIONAL_KEYS,
         *ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
-    )
+        *ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS,
+    ) == ROBUST_OPTIONAL_KEYS
     assert set(ROBUST_OPTIONAL_KEYS) == handled_optional
     assert ROBUST_PHYSICAL_OPTIONAL_KEYS == ROBUST_OPTIONAL_KEYS
 
@@ -1039,10 +1088,23 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     )
     robust = load_robust_npz(out_path)
     lineage = json.loads(np.asarray(robust['lineage']).item())
+    summary_path = derive_physics_runtime_summary_path(out_path)
+    summary = json.loads(summary_path.read_text(encoding='utf-8'))
 
     assert lineage['git_sha'] is None
 
     assert out_path.name == 'synthetic.robust.npz'
+    assert summary_path.name == 'synthetic.physics_runtime_summary.json'
+    assert 'physics_total_sec' in robust
+    assert 'physical_center_total_sec' in robust
+    assert 'ransac_fit_total_sec' in robust
+    assert 'n_fit_calls' in robust
+    assert 'n_cache_hits' in robust
+    assert 'n_cache_misses' in robust
+    assert 'cache_hit_rate' in robust
+    assert summary['physics_total_sec'] == pytest.approx(
+        float(np.asarray(robust['physics_total_sec']).item())
+    )
     assert robust['robust_pick_i'].shape == (n_traces,)
     assert robust['robust_pick_t_sec'].shape == (n_traces,)
     assert robust['trend_center_i'].shape == (n_traces,)
@@ -1091,6 +1153,33 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     assert np.any(robust['robust_source'][18:24] == np.uint8(ROBUST_SOURCE_TREND_FILL))
     assert np.any(robust['reason_mask'][18:24] & np.uint8(REASON_MASK_FILLED_FROM_TREND))
     assert np.all(np.isfinite(robust['robust_pick_t_sec']))
+
+
+def test_run_physics_lite_allows_disabling_runtime_diagnostics(
+    tmp_path: Path,
+) -> None:
+    n_traces = 8
+    coarse_path = save_coarse_npz(
+        tmp_path / 'disabled_runtime.coarse.npz',
+        **_make_coarse_payload(
+            coarse_pick_i=np.arange(100, 108, dtype=np.int32),
+            coarse_pmax=np.full((n_traces,), 0.95, dtype=np.float32),
+            offsets_m=np.linspace(50.0, 400.0, n_traces, dtype=np.float32),
+        ),
+    )
+
+    out_path = run_physics_lite(
+        coarse_path,
+        cfg={'physical_runtime': {'diagnostics_enabled': False}},
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+    robust = load_robust_npz(out_path)
+
+    assert 'physics_total_sec' not in robust
+    assert not derive_physics_runtime_summary_path(out_path).exists()
+    assert robust['physical_center_i'].shape == (n_traces,)
 
 
 def test_build_robust_payload_from_coarse_returns_required_keys(tmp_path: Path) -> None:
@@ -1189,6 +1278,57 @@ def test_build_robust_payload_from_coarse_uses_physical_center_with_geometry(
         payload['fine_center_t_sec'],
         payload['physical_center_t_sec'],
     )
+
+
+def test_runtime_diagnostics_do_not_change_physical_center_outputs(
+    tmp_path: Path,
+) -> None:
+    offsets_m = np.linspace(50.0, 1200.0, 24, dtype=np.float32)
+    pick_t_sec = np.float32(0.02) + offsets_m / np.float32(3000.0)
+    coarse_pick_i = np.rint(pick_t_sec / np.float32(0.004)).astype(np.int32)
+    coarse_npz = {
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full((24,), 0.95, dtype=np.float32),
+            offsets_m=offsets_m,
+        ),
+        **_make_physical_geometry(offsets_m),
+    }
+    base_cfg = {
+        'physical_trend': {
+            'enabled': True,
+            'segment_by_offset_sign': False,
+            'split_by_offset_gap': False,
+        },
+        'neighbor_context': {'enabled': False},
+        'physical_prefilter': {'enabled': False},
+        'two_piece_ransac': {'min_pts': 3, 'seed': 7},
+    }
+
+    baseline = build_robust_payload_from_coarse(
+        coarse_npz,
+        cfg={**base_cfg, 'physical_runtime': {'diagnostics_enabled': False}},
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+    diagnostic = build_robust_payload_from_coarse(
+        coarse_npz,
+        cfg={**base_cfg, 'physical_runtime': {'diagnostics_enabled': True}},
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+
+    for key in (
+        'physical_center_i',
+        'fine_center_i',
+        'physical_model_status',
+        'physical_model_failure_reason',
+    ):
+        np.testing.assert_array_equal(diagnostic[key], baseline[key])
+    assert 'physics_total_sec' in diagnostic
+    assert 'physics_total_sec' not in baseline
 
 
 def test_run_physics_lite_with_enabled_physical_and_no_geometry_saves_fallback_status(

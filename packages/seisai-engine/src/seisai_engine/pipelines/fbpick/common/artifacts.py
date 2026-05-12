@@ -88,9 +88,28 @@ ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS = (
     'physical_model_resid_p90_ms',
 )
 
+ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS = (
+    'physics_total_sec',
+    'physical_center_total_sec',
+    'ransac_fit_total_sec',
+    'n_fit_calls',
+    'n_cache_hits',
+    'n_cache_misses',
+    'cache_hit_rate',
+    'n_source_groups',
+    'n_unique_fit_contexts',
+    'ransac_fit_time_p50_sec',
+    'ransac_fit_time_p90_sec',
+    'ransac_fit_time_p99_sec',
+    'obs_count_for_fit_p50',
+    'obs_count_for_fit_p90',
+    'obs_count_for_fit_p99',
+)
+
 ROBUST_OPTIONAL_KEYS = (
     *ROBUST_CENTER_OPTIONAL_KEYS,
     *ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
+    *ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS,
 )
 
 ROBUST_PHYSICAL_OPTIONAL_KEYS = ROBUST_OPTIONAL_KEYS
@@ -170,8 +189,9 @@ __all__ = [
     'ROBUST_CENTER_OPTIONAL_KEYS',
     'ROBUST_OPTIONAL_KEYS',
     'ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS',
-    'ROBUST_REQUIRED_KEYS',
     'ROBUST_PHYSICAL_OPTIONAL_KEYS',
+    'ROBUST_REQUIRED_KEYS',
+    'ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS',
     'ROBUST_SOURCE_COARSE_OBSERVED',
     'ROBUST_SOURCE_LABELS',
     'ROBUST_SOURCE_THEORETICAL',

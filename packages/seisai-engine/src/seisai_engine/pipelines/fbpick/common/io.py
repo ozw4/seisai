@@ -16,6 +16,7 @@ from .artifacts import (
     ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
     ROBUST_PHYSICAL_OPTIONAL_KEYS,
     ROBUST_REQUIRED_KEYS,
+    ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
     ROBUST_SOURCE_THEORETICAL,
     ROBUST_SOURCE_TREND_FILL,
@@ -33,6 +34,7 @@ __all__ = [
     'ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS',
     'ROBUST_PHYSICAL_OPTIONAL_KEYS',
     'ROBUST_REQUIRED_KEYS',
+    'ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS',
     'build_fbpick_final_payload',
     'load_coarse_npz',
     'load_fbpick_final_npz',
@@ -236,6 +238,23 @@ def _validate_finite_or_nan(name: str, arr: np.ndarray) -> None:
         raise ValueError(msg)
 
 
+def _validate_runtime_diagnostic_scalar(name: str, arr: np.ndarray) -> None:
+    scalar = arr.item()
+    if np.issubdtype(arr.dtype, np.integer):
+        if int(scalar) < 0:
+            msg = f'{name} must be >= 0'
+            raise ValueError(msg)
+        return
+
+    value = float(scalar)
+    if (not np.isfinite(value)) or value < 0.0:
+        msg = f'{name} must be finite and >= 0'
+        raise ValueError(msg)
+    if name == 'cache_hit_rate' and value > 1.0:
+        msg = 'cache_hit_rate must lie in [0, 1]'
+        raise ValueError(msg)
+
+
 def _validate_pick_time_pair(
     *,
     pick_key: str,
@@ -317,6 +336,29 @@ _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
 _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = tuple(
     (key, _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES[key])
     for key in ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS
+)
+
+_ROBUST_RUNTIME_DIAGNOSTIC_DTYPES = {
+    'physics_total_sec': np.float64,
+    'physical_center_total_sec': np.float64,
+    'ransac_fit_total_sec': np.float64,
+    'n_fit_calls': np.int64,
+    'n_cache_hits': np.int64,
+    'n_cache_misses': np.int64,
+    'cache_hit_rate': np.float64,
+    'n_source_groups': np.int64,
+    'n_unique_fit_contexts': np.int64,
+    'ransac_fit_time_p50_sec': np.float64,
+    'ransac_fit_time_p90_sec': np.float64,
+    'ransac_fit_time_p99_sec': np.float64,
+    'obs_count_for_fit_p50': np.float64,
+    'obs_count_for_fit_p90': np.float64,
+    'obs_count_for_fit_p99': np.float64,
+}
+
+_ROBUST_RUNTIME_DIAGNOSTIC_SPECS = tuple(
+    (key, _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES[key])
+    for key in ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS
 )
 
 
@@ -539,6 +581,21 @@ def save_robust_npz(
     physical_model_side=None,
     physical_model_resid_p50_ms=None,
     physical_model_resid_p90_ms=None,
+    physics_total_sec=None,
+    physical_center_total_sec=None,
+    ransac_fit_total_sec=None,
+    n_fit_calls=None,
+    n_cache_hits=None,
+    n_cache_misses=None,
+    cache_hit_rate=None,
+    n_source_groups=None,
+    n_unique_fit_contexts=None,
+    ransac_fit_time_p50_sec=None,
+    ransac_fit_time_p90_sec=None,
+    ransac_fit_time_p99_sec=None,
+    obs_count_for_fit_p50=None,
+    obs_count_for_fit_p90=None,
+    obs_count_for_fit_p99=None,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -706,6 +763,30 @@ def save_robust_npz(
         if np.dtype(dtype) == np.dtype(np.float32):
             _validate_finite_or_nan(key, arrays[key])
 
+    runtime_diagnostic_values = {
+        'physics_total_sec': physics_total_sec,
+        'physical_center_total_sec': physical_center_total_sec,
+        'ransac_fit_total_sec': ransac_fit_total_sec,
+        'n_fit_calls': n_fit_calls,
+        'n_cache_hits': n_cache_hits,
+        'n_cache_misses': n_cache_misses,
+        'cache_hit_rate': cache_hit_rate,
+        'n_source_groups': n_source_groups,
+        'n_unique_fit_contexts': n_unique_fit_contexts,
+        'ransac_fit_time_p50_sec': ransac_fit_time_p50_sec,
+        'ransac_fit_time_p90_sec': ransac_fit_time_p90_sec,
+        'ransac_fit_time_p99_sec': ransac_fit_time_p99_sec,
+        'obs_count_for_fit_p50': obs_count_for_fit_p50,
+        'obs_count_for_fit_p90': obs_count_for_fit_p90,
+        'obs_count_for_fit_p99': obs_count_for_fit_p99,
+    }
+    for key, dtype in _ROBUST_RUNTIME_DIAGNOSTIC_SPECS:
+        value = runtime_diagnostic_values[key]
+        if value is None:
+            continue
+        arrays[key] = _coerce_scalar(key, value, dtype=dtype)
+        _validate_runtime_diagnostic_scalar(key, arrays[key])
+
     robust_pick_i_arr = arrays['robust_pick_i']
     if np.any(robust_pick_i_arr < 0) or np.any(robust_pick_i_arr >= n_samples_orig_int):
         msg = 'robust_pick_i must lie in [0, n_samples_orig)'
@@ -824,6 +905,16 @@ def load_robust_npz(path: str | Path) -> dict[str, np.ndarray]:
         _require_exact_dtype(key, arr, dtype=dtype)
         if np.dtype(dtype) == np.dtype(np.float32):
             _validate_finite_or_nan(key, arr)
+
+    for key, dtype in _ROBUST_RUNTIME_DIAGNOSTIC_SPECS:
+        if key not in out:
+            continue
+        arr = np.asarray(out[key])
+        if arr.ndim != 0:
+            msg = f'{key} must be scalar'
+            raise ValueError(msg)
+        _require_exact_dtype(key, arr, dtype=dtype)
+        _validate_runtime_diagnostic_scalar(key, arr)
 
     if np.any(np.asarray(out['robust_pick_i']) < 0) or np.any(
         np.asarray(out['robust_pick_i']) >= n_samples_orig

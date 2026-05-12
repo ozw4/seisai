@@ -3,6 +3,7 @@ from .config import (
     NeighborContextCfg,
     PhysicalPrefilterCfg,
     PhysicalProjectionCfg,
+    PhysicalRuntimeCfg,
     PhysicalTrendCfg,
     PhysicsFeasibleBandCfg,
     PhysicsKeepRejectCfg,
@@ -54,9 +55,11 @@ from .physical_center import (
 from .pick_table import CoarsePickTable, normalize_coarse_pick_table
 from .run import (
     build_robust_payload_from_coarse,
+    derive_physics_runtime_summary_path,
     derive_robust_npz_path,
     run_physics_lite,
 )
+from .runtime_diagnostics import PhysicalRuntimeDiagnostics
 
 __all__ = [
     'DEFAULT_PHYSICS_LITE_CONFIG',
@@ -87,6 +90,8 @@ __all__ = [
     'PhysicalCenterResult',
     'PhysicalPrefilterCfg',
     'PhysicalProjectionCfg',
+    'PhysicalRuntimeCfg',
+    'PhysicalRuntimeDiagnostics',
     'PhysicalTrendCfg',
     'PhysicsFeasibleBandCfg',
     'PhysicsKeepRejectCfg',
@@ -100,6 +105,7 @@ __all__ = [
     'build_geometry_two_piece_physical_center',
     'build_robust_payload_from_coarse',
     'build_source_groups',
+    'derive_physics_runtime_summary_path',
     'derive_robust_npz_path',
     'estimate_signed_offset_side',
     'is_source_xy_degenerate',

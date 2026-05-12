@@ -15,11 +15,22 @@ from .confidence import compute_confidence_terms
 from .config import load_physics_lite_config, physics_lite_config_to_dict
 from .feasible import compute_feasible_band
 from .merge import apply_keep_reject_fill
-from .pick_table import normalize_coarse_pick_table
 from .physical_center import build_geometry_two_piece_physical_center
+from .pick_table import normalize_coarse_pick_table
+from .runtime_diagnostics import (
+    PhysicalRuntimeDiagnostics,
+    derive_physics_runtime_summary_path,
+    runtime_summary_from_npz_fields,
+    write_physics_runtime_summary,
+)
 from .trend import build_trend_result
 
-__all__ = ['build_robust_payload_from_coarse', 'derive_robust_npz_path', 'run_physics_lite']
+__all__ = [
+    'build_robust_payload_from_coarse',
+    'derive_physics_runtime_summary_path',
+    'derive_robust_npz_path',
+    'run_physics_lite',
+]
 
 
 def derive_robust_npz_path(coarse_npz_path: str | Path) -> Path:
@@ -41,22 +52,51 @@ def build_robust_payload_from_coarse(
 ) -> dict[str, np.ndarray]:
     typed_cfg = load_physics_lite_config(cfg)
     canonical_cfg = physics_lite_config_to_dict(typed_cfg)
-
-    table = normalize_coarse_pick_table(coarse_npz)
-    feasible = compute_feasible_band(table, typed_cfg.feasible_band)
-    trend = build_trend_result(table, feasible, typed_cfg)
-    confidence = compute_confidence_terms(table, feasible, trend, typed_cfg)
-    merged = apply_keep_reject_fill(table, feasible, trend, confidence, typed_cfg)
-    physical = build_geometry_two_piece_physical_center(
-        coarse_npz=coarse_npz,
-        table=table,
-        feasible=feasible,
-        trend=trend,
-        merged=merged,
-        cfg=typed_cfg,
+    runtime_diagnostics = (
+        PhysicalRuntimeDiagnostics()
+        if bool(typed_cfg.physical_runtime.diagnostics_enabled)
+        else None
     )
 
-    return {
+    if runtime_diagnostics is None:
+        table = normalize_coarse_pick_table(coarse_npz)
+        feasible = compute_feasible_band(table, typed_cfg.feasible_band)
+        trend = build_trend_result(table, feasible, typed_cfg)
+        confidence = compute_confidence_terms(table, feasible, trend, typed_cfg)
+        merged = apply_keep_reject_fill(table, feasible, trend, confidence, typed_cfg)
+        physical = build_geometry_two_piece_physical_center(
+            coarse_npz=coarse_npz,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+            cfg=typed_cfg,
+        )
+    else:
+        with runtime_diagnostics.time_physics():
+            table = normalize_coarse_pick_table(coarse_npz)
+            feasible = compute_feasible_band(table, typed_cfg.feasible_band)
+            trend = build_trend_result(table, feasible, typed_cfg)
+            confidence = compute_confidence_terms(table, feasible, trend, typed_cfg)
+            merged = apply_keep_reject_fill(
+                table,
+                feasible,
+                trend,
+                confidence,
+                typed_cfg,
+            )
+            with runtime_diagnostics.time_physical_center():
+                physical = build_geometry_two_piece_physical_center(
+                    coarse_npz=coarse_npz,
+                    table=table,
+                    feasible=feasible,
+                    trend=trend,
+                    merged=merged,
+                    cfg=typed_cfg,
+                    runtime_diagnostics=runtime_diagnostics,
+                )
+
+    payload = {
         'dt_sec': np.asarray(table.dt_scalar_sec, dtype=np.float32),
         'n_samples_orig': np.asarray(table.n_samples_orig, dtype=np.int32),
         'n_traces': np.asarray(table.n_traces, dtype=np.int32),
@@ -145,6 +185,9 @@ def build_robust_payload_from_coarse(
             iter_id=iter_id,
         ),
     }
+    if runtime_diagnostics is not None:
+        payload.update(runtime_diagnostics.to_npz_fields())
+    return payload
 
 
 def run_physics_lite(
@@ -157,6 +200,7 @@ def run_physics_lite(
     repo_root: Path | None = None,
 ) -> Path:
     coarse_path = Path(coarse_npz_path).expanduser().resolve()
+    typed_cfg = load_physics_lite_config(cfg)
     payload = build_robust_payload_from_coarse(
         load_coarse_npz(coarse_path),
         cfg=cfg,
@@ -164,5 +208,11 @@ def run_physics_lite(
         iter_id=iter_id,
         repo_root=repo_root,
     )
-    target_path = derive_robust_npz_path(coarse_path) if out_path is None else Path(out_path)
-    return save_robust_npz(target_path, **payload)
+    target_path = (
+        derive_robust_npz_path(coarse_path) if out_path is None else Path(out_path)
+    )
+    saved_path = save_robust_npz(target_path, **payload)
+    summary = runtime_summary_from_npz_fields(payload)
+    if summary is not None and bool(typed_cfg.physical_runtime.write_runtime_summary):
+        write_physics_runtime_summary(saved_path, summary)
+    return saved_path

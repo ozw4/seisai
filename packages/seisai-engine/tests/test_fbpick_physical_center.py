@@ -24,6 +24,9 @@ from seisai_engine.pipelines.fbpick.physics.physical_center import (
     build_geometry_two_piece_physical_center,
 )
 from seisai_engine.pipelines.fbpick.physics.pick_table import CoarsePickTable
+from seisai_engine.pipelines.fbpick.physics.runtime_diagnostics import (
+    PhysicalRuntimeDiagnostics,
+)
 from seisai_engine.pipelines.fbpick.physics.trend import TrendResult
 from seisai_pick.trend.trend_fit_strategy import (
     PiecewiseLinearTrend,
@@ -232,6 +235,7 @@ def test_physical_center_calls_existing_two_piece_ransac(monkeypatch) -> None:
     monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
     inputs = _make_inputs(offsets_m=np.linspace(50.0, 1600.0, 12, dtype=np.float32))
     coarse_npz, table, feasible, trend, merged = inputs
+    diagnostics = PhysicalRuntimeDiagnostics()
 
     result = build_geometry_two_piece_physical_center(
         coarse_npz=coarse_npz,
@@ -240,9 +244,13 @@ def test_physical_center_calls_existing_two_piece_ransac(monkeypatch) -> None:
         trend=trend,
         merged=merged,
         cfg=_physical_cfg({'two_piece_ransac': {'min_pts': 3}}),
+        runtime_diagnostics=diagnostics,
     )
 
     assert len(calls) == 1
+    assert diagnostics.n_fit_calls == 1
+    assert diagnostics.n_cache_misses == 1
+    assert diagnostics.n_cache_hits == int(table.n_traces) - 1
     assert model.predict_call_sizes.count(1) == int(table.n_traces)
     assert model.predict_call_sizes.count(int(table.n_traces)) == 1
     assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)

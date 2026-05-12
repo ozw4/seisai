@@ -21,6 +21,7 @@ from .geometry import (
 )
 from .merge import MergeResult
 from .pick_table import CoarsePickTable
+from .runtime_diagnostics import PhysicalRuntimeDiagnostics
 from .trend import TrendResult
 
 PHYSICAL_MODEL_STATUS_TWO_PIECE_OK = 0
@@ -684,6 +685,7 @@ def _fit_model_for_plan(
     min_pts: int,
     min_offset_spread_m: float,
     cache: dict[tuple[int, ...], _FitCacheEntry],
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> tuple[
     object | None,
     tuple[float, float, float, float, float, float, float] | None,
@@ -700,11 +702,18 @@ def _fit_model_for_plan(
     cache_key = _fit_cache_key(plan)
     entry = cache.get(cache_key)
     if entry is None:
+        if runtime_diagnostics is not None:
+            runtime_diagnostics.record_cache_miss()
         try:
-            trend_model = strategy.fit(
-                torch.as_tensor(x_obs, dtype=torch.float32),
-                torch.as_tensor(y_obs, dtype=torch.float32),
-            )
+            x_tensor = torch.as_tensor(x_obs, dtype=torch.float32)
+            y_tensor = torch.as_tensor(y_obs, dtype=torch.float32)
+            if runtime_diagnostics is None:
+                trend_model = strategy.fit(x_tensor, y_tensor)
+            else:
+                with runtime_diagnostics.time_ransac_fit(
+                    obs_count=int(np.asarray(x_obs).size)
+                ):
+                    trend_model = strategy.fit(x_tensor, y_tensor)
         except (TypeError, ValueError, RuntimeError):
             trend_model = None
 
@@ -717,6 +726,8 @@ def _fit_model_for_plan(
                 fit_failed=False,
             )
         cache[cache_key] = entry
+    elif runtime_diagnostics is not None:
+        runtime_diagnostics.record_cache_hit()
 
     if bool(entry.fit_failed):
         return None, None, PHYSICAL_MODEL_FAILURE_FIT_FAILED
@@ -918,6 +929,7 @@ def build_geometry_two_piece_physical_center(
     trend: TrendResult,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> PhysicalCenterResult:
     _validate_table(table)
     n = int(table.n_traces)
@@ -1033,6 +1045,9 @@ def build_geometry_two_piece_physical_center(
             merged=merged,
         )
 
+    if runtime_diagnostics is not None:
+        runtime_diagnostics.set_source_groups(len(groups))
+
     groups_by_id = {int(group.group_id): group for group in groups}
     group_id_by_trace = np.full((n,), -1, dtype=np.int32)
     for group in groups:
@@ -1131,6 +1146,7 @@ def build_geometry_two_piece_physical_center(
             min_pts=int(cfg.two_piece_ransac.min_pts),
             min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
             cache=fit_cache,
+            runtime_diagnostics=runtime_diagnostics,
         )
 
         if fit_failure_reason is not None:
@@ -1209,5 +1225,8 @@ def build_geometry_two_piece_physical_center(
             )
             arrays['physical_model_resid_p50_ms'][trace_idx] = np.float32(resid_p50)
             arrays['physical_model_resid_p90_ms'][trace_idx] = np.float32(resid_p90)
+
+    if runtime_diagnostics is not None:
+        runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))
 
     return _finalize_result(arrays)
