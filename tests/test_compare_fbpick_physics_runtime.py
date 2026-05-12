@@ -100,6 +100,54 @@ def test_missing_optional_runtime_json_does_not_crash(tmp_path: Path) -> None:
     assert result['runtime']['candidate_available'] is False
 
 
+def test_runtime_compare_reports_anchor_summary_values(tmp_path: Path) -> None:
+    baseline = _write_robust_npz(
+        tmp_path / 'baseline.robust.npz',
+        physical_center_i=np.asarray([1, 2, 3]),
+    )
+    candidate = _write_robust_npz(
+        tmp_path / 'candidate.robust.npz',
+        physical_center_i=np.asarray([1, 2, 3]),
+    )
+    baseline_runtime = tmp_path / 'baseline.physics_runtime_summary.json'
+    candidate_runtime = tmp_path / 'candidate.physics_runtime_summary.json'
+    baseline_runtime.write_text(
+        json.dumps({'physics_total_sec': 10.0, 'n_fit_calls': 11}),
+        encoding='utf-8',
+    )
+    candidate_runtime.write_text(
+        json.dumps(
+            {
+                'physics_total_sec': 10.5,
+                'n_fit_calls': 11,
+                'n_source_groups': 11,
+                'n_anchor_groups': 3,
+                'anchor_stride_source_groups': 5,
+                'anchor_selection_mode': 'source_xy_stride',
+                'anchor_source_distance_p50_m': 100.0,
+                'anchor_source_distance_p90_m': 200.0,
+                'anchor_source_distance_max_m': 200.0,
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    result = compare_paths(
+        baseline_robust=baseline,
+        candidate_robust=candidate,
+        baseline_runtime_json=baseline_runtime,
+        candidate_runtime_json=candidate_runtime,
+    )
+
+    runtime = result['runtime']
+    assert runtime['available'] is True
+    assert runtime['n_fit_calls_candidate'] == 11
+    assert runtime['n_anchor_groups_candidate'] == 3
+    assert runtime['anchor_stride_source_groups_candidate'] == 5
+    assert runtime['anchor_selection_mode_candidate'] == 'source_xy_stride'
+    assert runtime['anchor_source_distance_p90_m_candidate'] == 200.0
+
+
 def test_status_count_comparison_works(tmp_path: Path) -> None:
     baseline = _write_robust_npz(
         tmp_path / 'baseline.robust.npz',

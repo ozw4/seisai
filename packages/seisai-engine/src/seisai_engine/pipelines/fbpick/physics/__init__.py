@@ -1,6 +1,7 @@
 from .config import (
     DEFAULT_PHYSICS_LITE_CONFIG,
     NeighborContextCfg,
+    PhysicalAnchorSelectionCfg,
     PhysicalPrefilterCfg,
     PhysicalProjectionCfg,
     PhysicalRuntimeCfg,
@@ -60,6 +61,11 @@ from .run import (
     run_physics_lite,
 )
 from .runtime_diagnostics import PhysicalRuntimeDiagnostics
+from .runtime_policy import (
+    SourceXYAnchorSelectionResult,
+    order_source_groups_source_xy,
+    select_source_xy_stride_anchors,
+)
 
 __all__ = [
     'DEFAULT_PHYSICS_LITE_CONFIG',
@@ -87,6 +93,7 @@ __all__ = [
     'CoarseGeometry',
     'CoarsePickTable',
     'NeighborContextCfg',
+    'PhysicalAnchorSelectionCfg',
     'PhysicalCenterResult',
     'PhysicalPrefilterCfg',
     'PhysicalProjectionCfg',
@@ -101,6 +108,7 @@ __all__ = [
     'PhysicsTrendCfg',
     'SignedOffsetResult',
     'SourceGroup',
+    'SourceXYAnchorSelectionResult',
     'TwoPieceRansacCfg',
     'build_geometry_two_piece_physical_center',
     'build_robust_payload_from_coarse',
@@ -112,9 +120,11 @@ __all__ = [
     'load_coarse_geometry_from_npz',
     'load_physics_lite_config',
     'normalize_coarse_pick_table',
+    'order_source_groups_source_xy',
     'physics_lite_config_to_dict',
     'run_physics_lite',
     'select_nearest_source_groups',
+    'select_source_xy_stride_anchors',
     'signed_offset_side_from_geometry',
     'split_offset_gap_segments',
 ]

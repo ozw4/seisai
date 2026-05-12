@@ -17,6 +17,7 @@ from seisai_engine.pipelines.fbpick.physics.physical_center import (
 )
 from seisai_engine.pipelines.fbpick.physics.runtime_diagnostics import (
     PHYSICS_RUNTIME_DIAGNOSTIC_KEYS,
+    PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS,
     derive_physics_runtime_summary_path,
     runtime_summary_from_npz_fields,
 )
@@ -46,9 +47,18 @@ RUNTIME_TOTAL_KEYS = (
 )
 RUNTIME_COUNT_KEYS = (
     'n_fit_calls',
+    'n_source_groups',
+    'n_anchor_groups',
+    'anchor_stride_source_groups',
 )
 RUNTIME_RATE_KEYS = (
     'cache_hit_rate',
+)
+RUNTIME_ANCHOR_VALUE_KEYS = (
+    'anchor_selection_mode',
+    'anchor_source_distance_p50_m',
+    'anchor_source_distance_p90_m',
+    'anchor_source_distance_max_m',
 )
 
 
@@ -227,7 +237,7 @@ def _status_counts(
     }
 
 
-def _load_runtime_json(path: Path) -> dict[str, float | int] | None:
+def _load_runtime_json(path: Path) -> dict[str, float | int | str] | None:
     if not path.is_file():
         return None
     payload = json.loads(path.read_text(encoding='utf-8'))
@@ -235,11 +245,17 @@ def _load_runtime_json(path: Path) -> dict[str, float | int] | None:
         msg = f'runtime summary must be a JSON object: {path}'
         raise TypeError(msg)
 
-    out: dict[str, float | int] = {}
+    out: dict[str, float | int | str] = {}
     for key in PHYSICS_RUNTIME_DIAGNOSTIC_KEYS:
         if key not in payload:
             continue
         value = payload[key]
+        if key in PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS:
+            if not isinstance(value, str):
+                msg = f'runtime summary key {key} must be string: {path}'
+                raise TypeError(msg)
+            out[key] = value
+            continue
         if not isinstance(value, int | float):
             msg = f'runtime summary key {key} must be numeric: {path}'
             raise TypeError(msg)
@@ -255,7 +271,7 @@ def _load_runtime_summary(
     robust_path: Path,
     robust_payload: dict[str, np.ndarray],
     runtime_json_path: str | Path | None,
-) -> tuple[dict[str, float | int] | None, Path | None, str | None]:
+) -> tuple[dict[str, float | int | str] | None, Path | None, str | None]:
     path = (
         Path(runtime_json_path).expanduser().resolve()
         if runtime_json_path is not None
@@ -272,8 +288,8 @@ def _load_runtime_summary(
 
 
 def _runtime_speedup(
-    baseline: dict[str, float | int],
-    candidate: dict[str, float | int],
+    baseline: dict[str, float | int | str],
+    candidate: dict[str, float | int | str],
     key: str,
 ) -> float | None:
     base = baseline.get(key)
@@ -287,8 +303,8 @@ def _runtime_speedup(
 
 
 def _fit_call_reduction_rate(
-    baseline: dict[str, float | int],
-    candidate: dict[str, float | int],
+    baseline: dict[str, float | int | str],
+    candidate: dict[str, float | int | str],
 ) -> float | None:
     base = baseline.get('n_fit_calls')
     cand = candidate.get('n_fit_calls')
@@ -324,8 +340,12 @@ def _runtime_compare(
         'available': baseline_summary is not None and candidate_summary is not None,
         'baseline_available': baseline_summary is not None,
         'candidate_available': candidate_summary is not None,
-        'baseline_runtime_json': str(baseline_path) if baseline_path is not None else None,
-        'candidate_runtime_json': str(candidate_path) if candidate_path is not None else None,
+        'baseline_runtime_json': (
+            str(baseline_path) if baseline_path is not None else None
+        ),
+        'candidate_runtime_json': (
+            str(candidate_path) if candidate_path is not None else None
+        ),
         'baseline_source': baseline_source,
         'candidate_source': candidate_source,
     }
@@ -350,6 +370,13 @@ def _runtime_compare(
             candidate_summary.get(key) if candidate_summary is not None else None
         )
     for key in RUNTIME_RATE_KEYS:
+        out[f'{key}_baseline'] = (
+            baseline_summary.get(key) if baseline_summary is not None else None
+        )
+        out[f'{key}_candidate'] = (
+            candidate_summary.get(key) if candidate_summary is not None else None
+        )
+    for key in RUNTIME_ANCHOR_VALUE_KEYS:
         out[f'{key}_baseline'] = (
             baseline_summary.get(key) if baseline_summary is not None else None
         )
@@ -449,7 +476,9 @@ def compare_paths(
                 str(baseline_export_path) if baseline_export_path is not None else None
             ),
             'candidate_export': (
-                str(candidate_export_path) if candidate_export_path is not None else None
+                str(candidate_export_path)
+                if candidate_export_path is not None
+                else None
             ),
             'center_diffs': center_diffs,
             'status_counts': status_counts,
@@ -482,8 +511,12 @@ def _flatten_rows(result: dict[str, Any]) -> list[tuple[str, str, Any]]:
                 )
             )
             continue
-        rows.append(('status_counts', f'{field_name}_counts_match', group['counts_match']))
-        rows.append(('status_counts', f'{field_name}_arrays_match', group['arrays_match']))
+        rows.append(
+            ('status_counts', f'{field_name}_counts_match', group['counts_match'])
+        )
+        rows.append(
+            ('status_counts', f'{field_name}_arrays_match', group['arrays_match'])
+        )
         for side in ('baseline', 'candidate'):
             for label, count in group[side].items():
                 rows.append(('status_counts', f'{side}_{label}', count))

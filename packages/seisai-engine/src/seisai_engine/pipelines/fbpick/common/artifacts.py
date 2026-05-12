@@ -86,6 +86,10 @@ ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS = (
     'physical_model_side',
     'physical_model_resid_p50_ms',
     'physical_model_resid_p90_ms',
+    'physical_anchor_group_id',
+    'physical_anchor_is_anchor',
+    'physical_anchor_nearest_anchor_group_id',
+    'physical_anchor_source_distance_m',
 )
 
 ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS = (
@@ -104,6 +108,12 @@ ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS = (
     'obs_count_for_fit_p50',
     'obs_count_for_fit_p90',
     'obs_count_for_fit_p99',
+    'n_anchor_groups',
+    'anchor_stride_source_groups',
+    'anchor_selection_mode',
+    'anchor_source_distance_p50_m',
+    'anchor_source_distance_p90_m',
+    'anchor_source_distance_max_m',
 )
 
 ROBUST_OPTIONAL_KEYS = (

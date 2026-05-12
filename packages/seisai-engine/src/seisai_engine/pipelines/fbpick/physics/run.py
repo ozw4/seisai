@@ -185,6 +185,27 @@ def build_robust_payload_from_coarse(
             iter_id=iter_id,
         ),
     }
+    if bool(typed_cfg.physical_runtime.anchor_selection.enabled):
+        payload.update(
+            {
+                'physical_anchor_group_id': np.asarray(
+                    physical.physical_anchor_group_id,
+                    dtype=np.int32,
+                ),
+                'physical_anchor_is_anchor': np.asarray(
+                    physical.physical_anchor_is_anchor,
+                    dtype=np.bool_,
+                ),
+                'physical_anchor_nearest_anchor_group_id': np.asarray(
+                    physical.physical_anchor_nearest_anchor_group_id,
+                    dtype=np.int32,
+                ),
+                'physical_anchor_source_distance_m': np.asarray(
+                    physical.physical_anchor_source_distance_m,
+                    dtype=np.float32,
+                ),
+            }
+        )
     if runtime_diagnostics is not None:
         payload.update(runtime_diagnostics.to_npz_fields())
     return payload

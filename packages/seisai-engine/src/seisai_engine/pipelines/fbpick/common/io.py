@@ -223,6 +223,19 @@ def _coerce_lineage(lineage) -> np.ndarray:
     return arr
 
 
+def _coerce_string_scalar(name: str, value) -> np.ndarray:
+    arr = value if isinstance(value, np.ndarray) else np.asarray(value)
+    if arr.ndim != 0:
+        msg = f'{name} must be scalar'
+        raise ValueError(msg)
+    scalar = arr.item()
+    if not isinstance(scalar, str | bytes):
+        msg = f'{name} must be string scalar'
+        raise TypeError(msg)
+    text = scalar.decode('utf-8') if isinstance(scalar, bytes) else scalar
+    return np.asarray(text)
+
+
 def _validate_unit_interval(name: str, arr: np.ndarray) -> None:
     if not np.all(np.isfinite(arr)):
         msg = f'{name} must be finite'
@@ -331,6 +344,10 @@ _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
     'physical_model_side': np.int8,
     'physical_model_resid_p50_ms': np.float32,
     'physical_model_resid_p90_ms': np.float32,
+    'physical_anchor_group_id': np.int32,
+    'physical_anchor_is_anchor': np.bool_,
+    'physical_anchor_nearest_anchor_group_id': np.int32,
+    'physical_anchor_source_distance_m': np.float32,
 }
 
 _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = tuple(
@@ -354,11 +371,18 @@ _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES = {
     'obs_count_for_fit_p50': np.float64,
     'obs_count_for_fit_p90': np.float64,
     'obs_count_for_fit_p99': np.float64,
+    'n_anchor_groups': np.int64,
+    'anchor_stride_source_groups': np.int64,
+    'anchor_source_distance_p50_m': np.float64,
+    'anchor_source_distance_p90_m': np.float64,
+    'anchor_source_distance_max_m': np.float64,
 }
+_ROBUST_RUNTIME_DIAGNOSTIC_STRING_KEYS = frozenset({'anchor_selection_mode'})
 
 _ROBUST_RUNTIME_DIAGNOSTIC_SPECS = tuple(
     (key, _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES[key])
     for key in ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS
+    if key in _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES
 )
 
 
@@ -581,6 +605,10 @@ def save_robust_npz(
     physical_model_side=None,
     physical_model_resid_p50_ms=None,
     physical_model_resid_p90_ms=None,
+    physical_anchor_group_id=None,
+    physical_anchor_is_anchor=None,
+    physical_anchor_nearest_anchor_group_id=None,
+    physical_anchor_source_distance_m=None,
     physics_total_sec=None,
     physical_center_total_sec=None,
     ransac_fit_total_sec=None,
@@ -596,6 +624,12 @@ def save_robust_npz(
     obs_count_for_fit_p50=None,
     obs_count_for_fit_p90=None,
     obs_count_for_fit_p99=None,
+    n_anchor_groups=None,
+    anchor_stride_source_groups=None,
+    anchor_selection_mode=None,
+    anchor_source_distance_p50_m=None,
+    anchor_source_distance_p90_m=None,
+    anchor_source_distance_max_m=None,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -749,6 +783,12 @@ def save_robust_npz(
         'physical_model_side': physical_model_side,
         'physical_model_resid_p50_ms': physical_model_resid_p50_ms,
         'physical_model_resid_p90_ms': physical_model_resid_p90_ms,
+        'physical_anchor_group_id': physical_anchor_group_id,
+        'physical_anchor_is_anchor': physical_anchor_is_anchor,
+        'physical_anchor_nearest_anchor_group_id': (
+            physical_anchor_nearest_anchor_group_id
+        ),
+        'physical_anchor_source_distance_m': physical_anchor_source_distance_m,
     }
     for key, dtype in _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS:
         value = physical_diagnostic_values[key]
@@ -779,6 +819,11 @@ def save_robust_npz(
         'obs_count_for_fit_p50': obs_count_for_fit_p50,
         'obs_count_for_fit_p90': obs_count_for_fit_p90,
         'obs_count_for_fit_p99': obs_count_for_fit_p99,
+        'n_anchor_groups': n_anchor_groups,
+        'anchor_stride_source_groups': anchor_stride_source_groups,
+        'anchor_source_distance_p50_m': anchor_source_distance_p50_m,
+        'anchor_source_distance_p90_m': anchor_source_distance_p90_m,
+        'anchor_source_distance_max_m': anchor_source_distance_max_m,
     }
     for key, dtype in _ROBUST_RUNTIME_DIAGNOSTIC_SPECS:
         value = runtime_diagnostic_values[key]
@@ -786,6 +831,11 @@ def save_robust_npz(
             continue
         arrays[key] = _coerce_scalar(key, value, dtype=dtype)
         _validate_runtime_diagnostic_scalar(key, arrays[key])
+    if anchor_selection_mode is not None:
+        arrays['anchor_selection_mode'] = _coerce_string_scalar(
+            'anchor_selection_mode',
+            anchor_selection_mode,
+        )
 
     robust_pick_i_arr = arrays['robust_pick_i']
     if np.any(robust_pick_i_arr < 0) or np.any(robust_pick_i_arr >= n_samples_orig_int):
@@ -915,6 +965,16 @@ def load_robust_npz(path: str | Path) -> dict[str, np.ndarray]:
             raise ValueError(msg)
         _require_exact_dtype(key, arr, dtype=dtype)
         _validate_runtime_diagnostic_scalar(key, arr)
+    for key in _ROBUST_RUNTIME_DIAGNOSTIC_STRING_KEYS:
+        if key not in out:
+            continue
+        arr = np.asarray(out[key])
+        if arr.ndim != 0:
+            msg = f'{key} must be scalar'
+            raise ValueError(msg)
+        if arr.dtype.kind not in {'U', 'S'}:
+            msg = f'{key} dtype must be string, got {arr.dtype}'
+            raise ValueError(msg)
 
     if np.any(np.asarray(out['robust_pick_i']) < 0) or np.any(
         np.asarray(out['robust_pick_i']) >= n_samples_orig

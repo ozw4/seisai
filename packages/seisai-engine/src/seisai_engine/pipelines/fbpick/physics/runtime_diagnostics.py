@@ -14,14 +14,17 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 __all__ = [
+    'PHYSICS_RUNTIME_ANCHOR_DIAGNOSTIC_KEYS',
+    'PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS',
     'PHYSICS_RUNTIME_DIAGNOSTIC_KEYS',
+    'PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS',
     'PhysicalRuntimeDiagnostics',
     'derive_physics_runtime_summary_path',
     'runtime_summary_from_npz_fields',
     'write_physics_runtime_summary',
 ]
 
-PHYSICS_RUNTIME_DIAGNOSTIC_KEYS = (
+PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'physics_total_sec',
     'physical_center_total_sec',
     'ransac_fit_total_sec',
@@ -38,6 +41,19 @@ PHYSICS_RUNTIME_DIAGNOSTIC_KEYS = (
     'obs_count_for_fit_p90',
     'obs_count_for_fit_p99',
 )
+PHYSICS_RUNTIME_ANCHOR_DIAGNOSTIC_KEYS = (
+    'n_anchor_groups',
+    'anchor_stride_source_groups',
+    'anchor_selection_mode',
+    'anchor_source_distance_p50_m',
+    'anchor_source_distance_p90_m',
+    'anchor_source_distance_max_m',
+)
+PHYSICS_RUNTIME_DIAGNOSTIC_KEYS = (
+    *PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS,
+    *PHYSICS_RUNTIME_ANCHOR_DIAGNOSTIC_KEYS,
+)
+PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS = frozenset({'anchor_selection_mode'})
 
 
 def _percentile(values: list[float] | list[int], q: float) -> float:
@@ -56,6 +72,10 @@ class PhysicalRuntimeDiagnostics:
     n_cache_misses: int = 0
     n_source_groups: int = 0
     n_unique_fit_contexts: int = 0
+    _anchor_summary: dict[str, float | int | str] | None = field(
+        default=None,
+        repr=False,
+    )
     _fit_times_sec: list[float] = field(default_factory=list, repr=False)
     _fit_obs_counts: list[int] = field(default_factory=list, repr=False)
 
@@ -106,8 +126,29 @@ class PhysicalRuntimeDiagnostics:
     def set_unique_fit_contexts(self, value: int) -> None:
         self.n_unique_fit_contexts = int(value)
 
-    def to_summary(self) -> dict[str, float | int]:
-        return {
+    def set_anchor_selection(
+        self,
+        *,
+        n_anchor_groups: int,
+        anchor_stride_source_groups: int,
+        anchor_selection_mode: str,
+        source_distance_m: np.ndarray,
+    ) -> None:
+        distances = np.asarray(source_distance_m, dtype=np.float64)
+        distances = distances[np.isfinite(distances)]
+        self._anchor_summary = {
+            'n_anchor_groups': int(n_anchor_groups),
+            'anchor_stride_source_groups': int(anchor_stride_source_groups),
+            'anchor_selection_mode': str(anchor_selection_mode),
+            'anchor_source_distance_p50_m': _percentile(distances.tolist(), 50.0),
+            'anchor_source_distance_p90_m': _percentile(distances.tolist(), 90.0),
+            'anchor_source_distance_max_m': (
+                0.0 if distances.size == 0 else float(np.max(distances))
+            ),
+        }
+
+    def to_summary(self) -> dict[str, float | int | str]:
+        summary: dict[str, float | int | str] = {
             'physics_total_sec': float(self.physics_total_sec),
             'physical_center_total_sec': float(self.physical_center_total_sec),
             'ransac_fit_total_sec': float(self.ransac_fit_total_sec),
@@ -124,6 +165,9 @@ class PhysicalRuntimeDiagnostics:
             'obs_count_for_fit_p90': _percentile(self._fit_obs_counts, 90.0),
             'obs_count_for_fit_p99': _percentile(self._fit_obs_counts, 99.0),
         }
+        if self._anchor_summary is not None:
+            summary.update(self._anchor_summary)
+        return summary
 
     def to_npz_fields(self) -> dict[str, np.ndarray]:
         summary = self.to_summary()
@@ -133,31 +177,56 @@ class PhysicalRuntimeDiagnostics:
             'n_cache_misses',
             'n_source_groups',
             'n_unique_fit_contexts',
+            'n_anchor_groups',
+            'anchor_stride_source_groups',
         }
-        return {
-            key: np.asarray(value, dtype=np.int64 if key in int_keys else np.float64)
-            for key, value in summary.items()
-        }
+        out: dict[str, np.ndarray] = {}
+        for key, value in summary.items():
+            if key in PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS:
+                out[key] = np.asarray(str(value))
+            else:
+                out[key] = np.asarray(
+                    value,
+                    dtype=np.int64 if key in int_keys else np.float64,
+                )
+        return out
 
 
 def runtime_summary_from_npz_fields(
     payload: dict[str, np.ndarray],
-) -> dict[str, float | int] | None:
+) -> dict[str, float | int | str] | None:
     if 'physics_total_sec' not in payload:
         return None
-    summary: dict[str, float | int] = {}
+    summary: dict[str, float | int | str] = {}
     int_keys = {
         'n_fit_calls',
         'n_cache_hits',
         'n_cache_misses',
         'n_source_groups',
         'n_unique_fit_contexts',
+        'n_anchor_groups',
+        'anchor_stride_source_groups',
     }
-    for key in PHYSICS_RUNTIME_DIAGNOSTIC_KEYS:
+    for key in PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS:
         if key not in payload:
             return None
         value = np.asarray(payload[key]).item()
         summary[key] = int(value) if key in int_keys else float(value)
+    anchor_present = [
+        key for key in PHYSICS_RUNTIME_ANCHOR_DIAGNOSTIC_KEYS if key in payload
+    ]
+    if anchor_present:
+        missing = [
+            key for key in PHYSICS_RUNTIME_ANCHOR_DIAGNOSTIC_KEYS if key not in payload
+        ]
+        if missing:
+            return None
+        for key in PHYSICS_RUNTIME_ANCHOR_DIAGNOSTIC_KEYS:
+            value = np.asarray(payload[key]).item()
+            if key in PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS:
+                summary[key] = str(value)
+            else:
+                summary[key] = int(value) if key in int_keys else float(value)
     return summary
 
 
@@ -170,7 +239,7 @@ def derive_physics_runtime_summary_path(robust_npz_path: str | Path) -> Path:
 
 def write_physics_runtime_summary(
     robust_npz_path: str | Path,
-    summary: dict[str, float | int],
+    summary: dict[str, float | int | str],
 ) -> Path:
     out_path = derive_physics_runtime_summary_path(robust_npz_path)
     out_path.write_text(

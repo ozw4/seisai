@@ -22,6 +22,7 @@ from .geometry import (
 from .merge import MergeResult
 from .pick_table import CoarsePickTable
 from .runtime_diagnostics import PhysicalRuntimeDiagnostics
+from .runtime_policy import select_source_xy_stride_anchors
 from .trend import TrendResult
 
 PHYSICAL_MODEL_STATUS_TWO_PIECE_OK = 0
@@ -119,6 +120,10 @@ class PhysicalCenterResult:
     physical_model_side: np.ndarray
     physical_model_resid_p50_ms: np.ndarray
     physical_model_resid_p90_ms: np.ndarray
+    physical_anchor_group_id: np.ndarray
+    physical_anchor_is_anchor: np.ndarray
+    physical_anchor_nearest_anchor_group_id: np.ndarray
+    physical_anchor_source_distance_m: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -237,6 +242,10 @@ def _allocate_result_arrays(table: CoarsePickTable) -> dict[str, np.ndarray]:
         'physical_model_side': np.zeros((n,), dtype=np.int8),
         'physical_model_resid_p50_ms': np.full((n,), np.nan, dtype=np.float32),
         'physical_model_resid_p90_ms': np.full((n,), np.nan, dtype=np.float32),
+        'physical_anchor_group_id': np.full((n,), -1, dtype=np.int32),
+        'physical_anchor_is_anchor': np.zeros((n,), dtype=np.bool_),
+        'physical_anchor_nearest_anchor_group_id': np.full((n,), -1, dtype=np.int32),
+        'physical_anchor_source_distance_m': np.full((n,), np.nan, dtype=np.float32),
     }
 
 
@@ -317,6 +326,48 @@ def _build_disabled_result(
         PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED
     )
     return _finalize_result(arrays)
+
+
+def _apply_anchor_selection_diagnostics(
+    arrays: dict[str, np.ndarray],
+    *,
+    groups: tuple[SourceGroup, ...],
+    cfg: PhysicsLiteConfig,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+) -> None:
+    anchor_cfg = cfg.physical_runtime.anchor_selection
+    if not bool(anchor_cfg.enabled):
+        return
+    result = select_source_xy_stride_anchors(
+        groups,
+        anchor_stride_source_groups=int(anchor_cfg.anchor_stride_source_groups),
+        include_first=bool(anchor_cfg.include_first),
+        include_last=bool(anchor_cfg.include_last),
+    )
+    group_pos_by_id = {
+        int(group_id): int(pos)
+        for pos, group_id in enumerate(np.asarray(result.group_ids).tolist())
+    }
+    for group in groups:
+        pos = group_pos_by_id[int(group.group_id)]
+        trace_indices = np.asarray(group.trace_indices, dtype=np.int64)
+        arrays['physical_anchor_group_id'][trace_indices] = np.int32(group.group_id)
+        arrays['physical_anchor_is_anchor'][trace_indices] = np.bool_(
+            result.is_anchor[pos]
+        )
+        arrays['physical_anchor_nearest_anchor_group_id'][trace_indices] = np.int32(
+            result.nearest_anchor_group_id[pos]
+        )
+        arrays['physical_anchor_source_distance_m'][trace_indices] = np.float32(
+            result.source_distance_m[pos]
+        )
+    if runtime_diagnostics is not None:
+        runtime_diagnostics.set_anchor_selection(
+            n_anchor_groups=len(result.anchor_group_ids),
+            anchor_stride_source_groups=int(anchor_cfg.anchor_stride_source_groups),
+            anchor_selection_mode=str(anchor_cfg.mode),
+            source_distance_m=result.source_distance_m,
+        )
 
 
 def _stable_unique(indices: np.ndarray) -> np.ndarray:
@@ -1069,6 +1120,12 @@ def build_geometry_two_piece_physical_center(
     )
 
     arrays = _allocate_result_arrays(table)
+    _apply_anchor_selection_diagnostics(
+        arrays,
+        groups=groups,
+        cfg=cfg,
+        runtime_diagnostics=runtime_diagnostics,
+    )
     strategy = _fit_strategy(cfg)
     fit_cache: dict[tuple[int, ...], _FitCacheEntry] = {}
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)

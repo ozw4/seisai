@@ -9,6 +9,7 @@ from seisai_engine.pipelines.fbpick.physics import (
     estimate_signed_offset_side,
     load_coarse_geometry_from_npz,
     select_nearest_source_groups,
+    select_source_xy_stride_anchors,
     signed_offset_side_from_geometry,
     split_offset_gap_segments,
 )
@@ -140,6 +141,92 @@ def test_build_source_groups_uses_coordinate_tolerance_and_excludes_invalid() ->
     np.testing.assert_array_equal(
         groups[1].trace_indices, np.array([2], dtype=np.int64)
     )
+
+
+def test_source_xy_stride_anchor_selection_uses_sorted_source_line() -> None:
+    groups = tuple(
+        SourceGroup(
+            group_id=group_id,
+            source_key_x=0,
+            source_key_y=0,
+            source_x_m=float(source_x),
+            source_y_m=0.0,
+            trace_indices=np.array([group_id], dtype=np.int64),
+        )
+        for group_id, source_x in enumerate(
+            [50, 0, 100, 20, 70, 40, 10, 90, 30, 80, 60]
+        )
+    )
+
+    result = select_source_xy_stride_anchors(
+        groups,
+        anchor_stride_source_groups=5,
+        include_first=True,
+        include_last=True,
+    )
+
+    assert result.ordered_group_ids == (1, 6, 3, 8, 5, 0, 10, 4, 9, 7, 2)
+    assert result.anchor_group_ids == (1, 0, 2)
+
+
+def test_source_xy_stride_anchor_selection_counts_and_include_flags() -> None:
+    groups = tuple(
+        SourceGroup(
+            group_id=idx,
+            source_key_x=0,
+            source_key_y=0,
+            source_x_m=float(idx * 10),
+            source_y_m=0.0,
+            trace_indices=np.array([idx], dtype=np.int64),
+        )
+        for idx in range(11)
+    )
+
+    stride_5 = select_source_xy_stride_anchors(
+        groups,
+        anchor_stride_source_groups=5,
+        include_first=True,
+        include_last=True,
+    )
+    stride_3 = select_source_xy_stride_anchors(
+        groups,
+        anchor_stride_source_groups=3,
+        include_first=True,
+        include_last=True,
+    )
+    without_first_or_last = select_source_xy_stride_anchors(
+        groups,
+        anchor_stride_source_groups=5,
+        include_first=False,
+        include_last=False,
+    )
+    without_last = select_source_xy_stride_anchors(
+        groups[:10],
+        anchor_stride_source_groups=5,
+        include_first=True,
+        include_last=False,
+    )
+
+    assert stride_5.anchor_group_ids == (0, 5, 10)
+    assert len(stride_5.anchor_group_ids) == 3
+    assert stride_3.anchor_group_ids == (0, 3, 6, 9, 10)
+    assert len(stride_3.anchor_group_ids) == 5
+    assert without_first_or_last.anchor_group_ids == (5, 10)
+    assert without_last.anchor_group_ids == (0, 5)
+
+
+def test_source_xy_stride_anchor_selection_rejects_invalid_stride() -> None:
+    groups = (
+        SourceGroup(0, 0, 0, 0.0, 0.0, np.array([0], dtype=np.int64)),
+    )
+
+    with pytest.raises(ValueError, match='anchor_stride_source_groups'):
+        select_source_xy_stride_anchors(
+            groups,
+            anchor_stride_source_groups=0,
+            include_first=True,
+            include_last=True,
+        )
 
 
 def test_select_nearest_source_groups_respects_self_max_distance_and_order() -> None:

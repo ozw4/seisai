@@ -14,6 +14,7 @@ from seisai_utils.config import (
 __all__ = [
     'DEFAULT_PHYSICS_LITE_CONFIG',
     'NeighborContextCfg',
+    'PhysicalAnchorSelectionCfg',
     'PhysicalPrefilterCfg',
     'PhysicalProjectionCfg',
     'PhysicalRuntimeCfg',
@@ -138,9 +139,21 @@ class PhysicalProjectionCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalAnchorSelectionCfg:
+    enabled: bool = False
+    mode: str = 'source_xy_stride'
+    anchor_stride_source_groups: int = 5
+    anchor_spacing_m: float | None = None
+    include_first: bool = True
+    include_last: bool = True
+
+
+@dataclass(frozen=True)
 class PhysicalRuntimeCfg:
+    fit_policy: str = 'full'
     diagnostics_enabled: bool = True
     write_runtime_summary: bool = True
+    anchor_selection: PhysicalAnchorSelectionCfg = PhysicalAnchorSelectionCfg()
 
 
 @dataclass(frozen=True)
@@ -391,13 +404,35 @@ def _load_physical_projection_cfg(cfg: dict[str, Any]) -> PhysicalProjectionCfg:
     return PhysicalProjectionCfg(mode=str(mode))
 
 
+def _load_physical_anchor_selection_cfg(
+    cfg: dict[str, Any],
+) -> PhysicalAnchorSelectionCfg:
+    return PhysicalAnchorSelectionCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=False)),
+        mode=optional_str(cfg, 'mode', 'source_xy_stride'),
+        anchor_stride_source_groups=int(
+            optional_int(cfg, 'anchor_stride_source_groups', 5)
+        ),
+        anchor_spacing_m=_optional_float_or_none(cfg, 'anchor_spacing_m', None),
+        include_first=bool(optional_bool(cfg, 'include_first', default=True)),
+        include_last=bool(optional_bool(cfg, 'include_last', default=True)),
+    )
+
+
 def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
     return PhysicalRuntimeCfg(
+        fit_policy=optional_str(cfg, 'fit_policy', 'full'),
         diagnostics_enabled=bool(
             optional_bool(cfg, 'diagnostics_enabled', default=True)
         ),
         write_runtime_summary=bool(
             optional_bool(cfg, 'write_runtime_summary', default=True)
+        ),
+        anchor_selection=_load_physical_anchor_selection_cfg(
+            _require_dict(
+                cfg.get('anchor_selection'),
+                key='physical_runtime.anchor_selection',
+            )
         ),
     )
 
@@ -484,6 +519,29 @@ def _validate_physical_projection_cfg(cfg: PhysicalProjectionCfg) -> None:
         raise ValueError(msg)
 
 
+def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
+    if cfg.fit_policy not in {'full', 'anchor_source_xy'}:
+        msg = (
+            "physical_runtime.fit_policy must be 'full' or 'anchor_source_xy', "
+            f'got {cfg.fit_policy!r}'
+        )
+        raise ValueError(msg)
+    anchor = cfg.anchor_selection
+    if anchor.mode != 'source_xy_stride':
+        msg = (
+            "physical_runtime.anchor_selection.mode must be 'source_xy_stride', "
+            f'got {anchor.mode!r}'
+        )
+        raise ValueError(msg)
+    _validate_positive_int(
+        'physical_runtime.anchor_selection.anchor_stride_source_groups',
+        anchor.anchor_stride_source_groups,
+    )
+    if anchor.anchor_spacing_m is not None:
+        msg = 'physical_runtime.anchor_selection.anchor_spacing_m must be null'
+        raise ValueError(msg)
+
+
 def _validate_robust_center_cfg(cfg: PhysicsRobustCenterCfg) -> None:
     _validate_positive_int('robust_center.half_win', cfg.half_win)
     _validate_nonnegative_int(
@@ -516,6 +574,7 @@ def _validate_physical_cfg(cfg: PhysicsLiteConfig) -> None:
     _validate_physical_prefilter_cfg(cfg.physical_prefilter)
     _validate_two_piece_ransac_cfg(cfg.two_piece_ransac)
     _validate_physical_projection_cfg(cfg.physical_projection)
+    _validate_physical_runtime_cfg(cfg.physical_runtime)
 
 
 def _validate_physics_lite_config(cfg: PhysicsLiteConfig) -> PhysicsLiteConfig:

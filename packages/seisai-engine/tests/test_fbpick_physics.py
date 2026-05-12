@@ -57,8 +57,22 @@ from seisai_engine.pipelines.fbpick.physics.run import (
 )
 from seisai_engine.pipelines.fbpick.physics.runtime_diagnostics import (
     PhysicalRuntimeDiagnostics,
+    runtime_summary_from_npz_fields,
 )
 from seisai_engine.pipelines.fbpick.physics.trend import TrendResult, build_trend_result
+
+_ANCHOR_OPTIONAL_KEYS = {
+    'physical_anchor_group_id',
+    'physical_anchor_is_anchor',
+    'physical_anchor_nearest_anchor_group_id',
+    'physical_anchor_source_distance_m',
+    'n_anchor_groups',
+    'anchor_stride_source_groups',
+    'anchor_selection_mode',
+    'anchor_source_distance_p50_m',
+    'anchor_source_distance_p90_m',
+    'anchor_source_distance_max_m',
+}
 
 
 def _make_coarse_payload(
@@ -192,6 +206,16 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
             [3.0, np.nan, 4.0],
             dtype=np.float32,
         ),
+        'physical_anchor_group_id': np.array([0, 1, 2], dtype=np.int32),
+        'physical_anchor_is_anchor': np.array([True, False, True], dtype=np.bool_),
+        'physical_anchor_nearest_anchor_group_id': np.array(
+            [0, 0, 2],
+            dtype=np.int32,
+        ),
+        'physical_anchor_source_distance_m': np.array(
+            [0.0, 10.0, 0.0],
+            dtype=np.float32,
+        ),
         'physics_total_sec': np.asarray(1.0, dtype=np.float64),
         'physical_center_total_sec': np.asarray(0.7, dtype=np.float64),
         'ransac_fit_total_sec': np.asarray(0.3, dtype=np.float64),
@@ -207,6 +231,12 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
         'obs_count_for_fit_p50': np.asarray(8.0, dtype=np.float64),
         'obs_count_for_fit_p90': np.asarray(10.0, dtype=np.float64),
         'obs_count_for_fit_p99': np.asarray(11.0, dtype=np.float64),
+        'n_anchor_groups': np.asarray(2, dtype=np.int64),
+        'anchor_stride_source_groups': np.asarray(2, dtype=np.int64),
+        'anchor_selection_mode': np.asarray('source_xy_stride'),
+        'anchor_source_distance_p50_m': np.asarray(0.0, dtype=np.float64),
+        'anchor_source_distance_p90_m': np.asarray(8.0, dtype=np.float64),
+        'anchor_source_distance_max_m': np.asarray(10.0, dtype=np.float64),
     }
 
 
@@ -302,8 +332,15 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.two_piece_ransac.q_lo == 0.15
     assert cfg.two_piece_ransac.q_hi == 0.85
     assert cfg.physical_projection.mode == 'model'
+    assert cfg.physical_runtime.fit_policy == 'full'
     assert cfg.physical_runtime.diagnostics_enabled is True
     assert cfg.physical_runtime.write_runtime_summary is True
+    assert cfg.physical_runtime.anchor_selection.enabled is False
+    assert cfg.physical_runtime.anchor_selection.mode == 'source_xy_stride'
+    assert cfg.physical_runtime.anchor_selection.anchor_stride_source_groups == 5
+    assert cfg.physical_runtime.anchor_selection.anchor_spacing_m is None
+    assert cfg.physical_runtime.anchor_selection.include_first is True
+    assert cfg.physical_runtime.anchor_selection.include_last is True
 
 
 def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
@@ -321,6 +358,32 @@ def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
     assert cfg.physical_prefilter.use_existing_feasible_mask is True
     assert cfg.two_piece_ransac.n_iter == 300
     assert cfg.two_piece_ransac.sort_offsets is False
+    assert cfg.physical_runtime.fit_policy == 'full'
+    assert cfg.physical_runtime.anchor_selection.enabled is False
+
+
+def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_runtime': {
+                'fit_policy': 'anchor_source_xy',
+                'anchor_selection': {
+                    'enabled': True,
+                    'mode': 'source_xy_stride',
+                    'anchor_stride_source_groups': 3,
+                    'anchor_spacing_m': None,
+                    'include_first': False,
+                    'include_last': True,
+                },
+            },
+        }
+    )
+
+    assert cfg.physical_runtime.fit_policy == 'anchor_source_xy'
+    assert cfg.physical_runtime.anchor_selection.enabled is True
+    assert cfg.physical_runtime.anchor_selection.anchor_stride_source_groups == 3
+    assert cfg.physical_runtime.anchor_selection.include_first is False
+    assert cfg.physical_runtime.anchor_selection.include_last is True
 
 
 def test_physical_center_example_config_enables_physical_trend() -> None:
@@ -399,6 +462,34 @@ def test_physical_center_example_config_enables_physical_trend() -> None:
             {'physical_projection': {'mode': 'observed'}},
             'physical_projection.mode',
         ),
+        (
+            {'physical_runtime': {'fit_policy': 'cached'}},
+            'physical_runtime.fit_policy',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'anchor_selection': {'mode': 'source_distance'}
+                }
+            },
+            'physical_runtime.anchor_selection.mode',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'anchor_selection': {'anchor_stride_source_groups': 0}
+                }
+            },
+            'physical_runtime.anchor_selection.anchor_stride_source_groups',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'anchor_selection': {'anchor_spacing_m': 100.0}
+                }
+            },
+            'physical_runtime.anchor_selection.anchor_spacing_m',
+        ),
     ],
 )
 def test_load_physics_lite_config_rejects_invalid_physical_trend_blocks(
@@ -427,6 +518,8 @@ def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
     assert out['neighbor_context']['max_source_distance_m'] == 1000.0
     assert out['physical_projection']['mode'] == 'model'
     assert out['physical_runtime']['diagnostics_enabled'] is True
+    assert out['physical_runtime']['fit_policy'] == 'full'
+    assert out['physical_runtime']['anchor_selection']['enabled'] is False
 
 
 def test_normalize_coarse_pick_table_preserves_contract(tmp_path: Path) -> None:
@@ -1009,6 +1102,16 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
         'physical_model_side': np.array([1, 0, 1], dtype=np.int8),
         'physical_model_resid_p50_ms': np.array([1.0, np.nan, 2.0], dtype=np.float32),
         'physical_model_resid_p90_ms': np.array([3.0, np.nan, 4.0], dtype=np.float32),
+        'physical_anchor_group_id': np.array([0, 1, 2], dtype=np.int32),
+        'physical_anchor_is_anchor': np.array([True, False, True], dtype=np.bool_),
+        'physical_anchor_nearest_anchor_group_id': np.array(
+            [0, 0, 2],
+            dtype=np.int32,
+        ),
+        'physical_anchor_source_distance_m': np.array(
+            [0.0, 10.0, 0.0],
+            dtype=np.float32,
+        ),
     }
 
     out_path = save_robust_npz(tmp_path / 'physical.robust.npz', **payload)
@@ -1265,7 +1368,9 @@ def test_build_robust_payload_from_coarse_uses_physical_center_with_geometry(
         repo_root=tmp_path,
     )
 
-    assert set(ROBUST_PHYSICAL_OPTIONAL_KEYS).issubset(payload.keys())
+    assert (set(ROBUST_PHYSICAL_OPTIONAL_KEYS) - _ANCHOR_OPTIONAL_KEYS).issubset(
+        payload.keys()
+    )
     assert np.any(
         payload['physical_model_status']
         == np.uint8(PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
@@ -1331,6 +1436,107 @@ def test_runtime_diagnostics_do_not_change_physical_center_outputs(
     assert 'physics_total_sec' not in baseline
 
 
+def test_anchor_selection_dry_run_does_not_change_physical_outputs(
+    tmp_path: Path,
+) -> None:
+    n_groups = 11
+    traces_per_group = 6
+    group_source_x = np.arange(n_groups, dtype=np.float32) * np.float32(100.0)
+    group_offsets = np.linspace(50.0, 550.0, traces_per_group, dtype=np.float32)
+    source_x_m = np.repeat(group_source_x, traces_per_group).astype(np.float32)
+    source_y_m = np.zeros((n_groups * traces_per_group,), dtype=np.float32)
+    offsets_m = np.tile(group_offsets, n_groups).astype(np.float32)
+    receiver_x_m = source_x_m + offsets_m
+    pick_t_sec = np.float32(0.02) + offsets_m / np.float32(2500.0)
+    coarse_pick_i = np.rint(pick_t_sec / np.float32(0.004)).astype(np.int32)
+    coarse_npz = {
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full_like(offsets_m, 0.95, dtype=np.float32),
+            offsets_m=offsets_m,
+            ffid_values=np.repeat(
+                np.arange(n_groups, dtype=np.int32),
+                traces_per_group,
+            ),
+        ),
+        'source_x_m': source_x_m,
+        'source_y_m': source_y_m,
+        'receiver_x_m': receiver_x_m.astype(np.float32),
+        'receiver_y_m': np.zeros_like(receiver_x_m, dtype=np.float32),
+        'offset_abs_geom_m': offsets_m.astype(np.float32),
+        'geometry_valid_mask': np.ones_like(offsets_m, dtype=np.bool_),
+    }
+    base_cfg = {
+        'physical_trend': {
+            'enabled': True,
+            'segment_by_offset_sign': False,
+            'split_by_offset_gap': False,
+        },
+        'neighbor_context': {'enabled': False},
+        'physical_prefilter': {'enabled': False},
+        'two_piece_ransac': {'min_pts': 2, 'seed': 7},
+    }
+
+    baseline = build_robust_payload_from_coarse(
+        coarse_npz,
+        cfg={**base_cfg, 'physical_runtime': {'diagnostics_enabled': True}},
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+    dry_run = build_robust_payload_from_coarse(
+        coarse_npz,
+        cfg={
+            **base_cfg,
+            'physical_runtime': {
+                'fit_policy': 'full',
+                'diagnostics_enabled': True,
+                'anchor_selection': {
+                    'enabled': True,
+                    'mode': 'source_xy_stride',
+                    'anchor_stride_source_groups': 5,
+                    'include_first': True,
+                    'include_last': True,
+                },
+            },
+        },
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+
+    for key in (
+        'physical_center_i',
+        'fine_center_i',
+        'physical_model_status',
+        'physical_model_failure_reason',
+    ):
+        np.testing.assert_array_equal(dry_run[key], baseline[key])
+    assert int(np.asarray(dry_run['n_fit_calls']).item()) == int(
+        np.asarray(baseline['n_fit_calls']).item()
+    )
+    assert int(np.asarray(dry_run['n_source_groups']).item()) == n_groups
+    assert int(np.asarray(dry_run['n_anchor_groups']).item()) == 3
+    assert int(np.asarray(dry_run['anchor_stride_source_groups']).item()) == 5
+    assert np.asarray(dry_run['anchor_selection_mode']).item() == 'source_xy_stride'
+    summary = runtime_summary_from_npz_fields(dry_run)
+    assert summary is not None
+    assert summary['n_anchor_groups'] == 3
+    assert summary['anchor_selection_mode'] == 'source_xy_stride'
+    assert float(np.asarray(dry_run['anchor_source_distance_p50_m']).item()) == 100.0
+    assert float(np.asarray(dry_run['anchor_source_distance_p90_m']).item()) == 200.0
+    assert float(np.asarray(dry_run['anchor_source_distance_max_m']).item()) == 200.0
+    assert 'physical_anchor_group_id' in dry_run
+    assert 'physical_anchor_group_id' not in baseline
+    np.testing.assert_array_equal(
+        dry_run['physical_anchor_is_anchor'][::traces_per_group],
+        np.array(
+            [True, False, False, False, False, True, False, False, False, False, True],
+            dtype=np.bool_,
+        ),
+    )
+
+
 def test_run_physics_lite_with_enabled_physical_and_no_geometry_saves_fallback_status(
     tmp_path: Path,
 ) -> None:
@@ -1360,7 +1566,9 @@ def test_run_physics_lite_with_enabled_physical_and_no_geometry_saves_fallback_s
     )
     robust = load_robust_npz(out_path)
 
-    assert set(ROBUST_PHYSICAL_OPTIONAL_KEYS).issubset(robust.keys())
+    assert (set(ROBUST_PHYSICAL_OPTIONAL_KEYS) - _ANCHOR_OPTIONAL_KEYS).issubset(
+        robust.keys()
+    )
     assert np.all(
         robust['physical_model_status']
         == np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND)

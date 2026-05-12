@@ -1139,6 +1139,10 @@ def test_physical_center_diagnostic_arrays_are_save_friendly() -> None:
         'physical_model_side': np.int8,
         'physical_model_resid_p50_ms': np.float32,
         'physical_model_resid_p90_ms': np.float32,
+        'physical_anchor_group_id': np.int32,
+        'physical_anchor_is_anchor': np.bool_,
+        'physical_anchor_nearest_anchor_group_id': np.int32,
+        'physical_anchor_source_distance_m': np.float32,
     }
     for field, dtype in expected_dtypes.items():
         arr = getattr(result, field)
