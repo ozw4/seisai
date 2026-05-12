@@ -179,6 +179,26 @@ def build_robust_payload_from_coarse(
             physical.physical_model_resid_p90_ms,
             dtype=np.float32,
         ),
+        'physical_runtime_t0_shift_ms': np.asarray(
+            physical.physical_runtime_t0_shift_ms,
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_resid_p50_ms': np.asarray(
+            physical.physical_runtime_reuse_resid_p50_ms,
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_resid_p90_ms': np.asarray(
+            physical.physical_runtime_reuse_resid_p90_ms,
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_valid_count': np.asarray(
+            physical.physical_runtime_reuse_valid_count,
+            dtype=np.int32,
+        ),
+        'physical_runtime_refit_mask': np.asarray(
+            physical.physical_runtime_refit_mask,
+            dtype=np.bool_,
+        ),
         'physical_runtime_fit_source': np.asarray(
             physical.physical_runtime_fit_source,
             dtype=np.uint8,

@@ -16,9 +16,11 @@ __all__ = [
     'NeighborContextCfg',
     'PhysicalAnchorReuseCfg',
     'PhysicalAnchorSelectionCfg',
+    'PhysicalAdaptiveRefitCfg',
     'PhysicalPrefilterCfg',
     'PhysicalProjectionCfg',
     'PhysicalRuntimeCfg',
+    'PhysicalT0ShiftCfg',
     'PhysicalTrendCfg',
     'PhysicsFeasibleBandCfg',
     'PhysicsKeepRejectCfg',
@@ -159,12 +161,33 @@ class PhysicalAnchorReuseCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalT0ShiftCfg:
+    enabled: bool = True
+    estimator: str = 'median'
+    min_valid_for_t0_shift: int = 8
+    t0_shift_clip_ms: float = 60.0
+    use_physical_prefilter_mask: bool = True
+    use_pmax_min: bool = True
+
+
+@dataclass(frozen=True)
+class PhysicalAdaptiveRefitCfg:
+    enabled: bool = False
+    resid_p90_ms_gt: float = 50.0
+    median_abs_shift_ms_gt: float = 40.0
+    min_valid_for_resid_check: int = 8
+    fallback_if_refit_fails: str = 'nearest_anchor_plus_t0_shift'
+
+
+@dataclass(frozen=True)
 class PhysicalRuntimeCfg:
     fit_policy: str = 'full'
     diagnostics_enabled: bool = True
     write_runtime_summary: bool = True
     anchor_selection: PhysicalAnchorSelectionCfg = PhysicalAnchorSelectionCfg()
     anchor_reuse: PhysicalAnchorReuseCfg = PhysicalAnchorReuseCfg()
+    t0_shift: PhysicalT0ShiftCfg = PhysicalT0ShiftCfg()
+    adaptive_refit: PhysicalAdaptiveRefitCfg = PhysicalAdaptiveRefitCfg()
 
 
 @dataclass(frozen=True)
@@ -454,6 +477,39 @@ def _load_physical_anchor_reuse_cfg(
     )
 
 
+def _load_physical_t0_shift_cfg(cfg: dict[str, Any]) -> PhysicalT0ShiftCfg:
+    return PhysicalT0ShiftCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=True)),
+        estimator=optional_str(cfg, 'estimator', 'median'),
+        min_valid_for_t0_shift=int(optional_int(cfg, 'min_valid_for_t0_shift', 8)),
+        t0_shift_clip_ms=float(optional_float(cfg, 't0_shift_clip_ms', 60.0)),
+        use_physical_prefilter_mask=bool(
+            optional_bool(cfg, 'use_physical_prefilter_mask', default=True)
+        ),
+        use_pmax_min=bool(optional_bool(cfg, 'use_pmax_min', default=True)),
+    )
+
+
+def _load_physical_adaptive_refit_cfg(
+    cfg: dict[str, Any],
+) -> PhysicalAdaptiveRefitCfg:
+    return PhysicalAdaptiveRefitCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=False)),
+        resid_p90_ms_gt=float(optional_float(cfg, 'resid_p90_ms_gt', 50.0)),
+        median_abs_shift_ms_gt=float(
+            optional_float(cfg, 'median_abs_shift_ms_gt', 40.0)
+        ),
+        min_valid_for_resid_check=int(
+            optional_int(cfg, 'min_valid_for_resid_check', 8)
+        ),
+        fallback_if_refit_fails=optional_str(
+            cfg,
+            'fallback_if_refit_fails',
+            'nearest_anchor_plus_t0_shift',
+        ),
+    )
+
+
 def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
     return PhysicalRuntimeCfg(
         fit_policy=optional_str(cfg, 'fit_policy', 'full'),
@@ -473,6 +529,18 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
             _require_dict(
                 cfg.get('anchor_reuse'),
                 key='physical_runtime.anchor_reuse',
+            )
+        ),
+        t0_shift=_load_physical_t0_shift_cfg(
+            _require_dict(
+                cfg.get('t0_shift'),
+                key='physical_runtime.t0_shift',
+            )
+        ),
+        adaptive_refit=_load_physical_adaptive_refit_cfg(
+            _require_dict(
+                cfg.get('adaptive_refit'),
+                key='physical_runtime.adaptive_refit',
             )
         ),
     )
@@ -582,10 +650,14 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
         msg = 'physical_runtime.anchor_selection.anchor_spacing_m must be null'
         raise ValueError(msg)
     reuse = cfg.anchor_reuse
-    if reuse.non_anchor_mode != 'nearest_anchor':
+    if reuse.non_anchor_mode not in {
+        'nearest_anchor',
+        'nearest_anchor_plus_t0_shift',
+    }:
         msg = (
             "physical_runtime.anchor_reuse.non_anchor_mode must be "
-            f"'nearest_anchor', got {reuse.non_anchor_mode!r}"
+            "'nearest_anchor' or 'nearest_anchor_plus_t0_shift', "
+            f'got {reuse.non_anchor_mode!r}'
         )
         raise ValueError(msg)
     if reuse.max_anchor_distance_m is not None:
@@ -597,6 +669,47 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
         msg = (
             "physical_runtime.anchor_reuse.reuse_segment_policy must be "
             f"'same_side_and_gap', got {reuse.reuse_segment_policy!r}"
+        )
+        raise ValueError(msg)
+    t0_shift = cfg.t0_shift
+    if t0_shift.estimator != 'median':
+        msg = (
+            "physical_runtime.t0_shift.estimator must be 'median', "
+            f'got {t0_shift.estimator!r}'
+        )
+        raise ValueError(msg)
+    _validate_positive_int(
+        'physical_runtime.t0_shift.min_valid_for_t0_shift',
+        t0_shift.min_valid_for_t0_shift,
+    )
+    _validate_nonnegative_float(
+        'physical_runtime.t0_shift.t0_shift_clip_ms',
+        t0_shift.t0_shift_clip_ms,
+    )
+    adaptive = cfg.adaptive_refit
+    _validate_nonnegative_float(
+        'physical_runtime.adaptive_refit.resid_p90_ms_gt',
+        adaptive.resid_p90_ms_gt,
+    )
+    _validate_nonnegative_float(
+        'physical_runtime.adaptive_refit.median_abs_shift_ms_gt',
+        adaptive.median_abs_shift_ms_gt,
+    )
+    _validate_positive_int(
+        'physical_runtime.adaptive_refit.min_valid_for_resid_check',
+        adaptive.min_valid_for_resid_check,
+    )
+    if adaptive.fallback_if_refit_fails not in {
+        'nearest_anchor_plus_t0_shift',
+        'nearest_anchor',
+        'existing_trend',
+        'robust',
+    }:
+        msg = (
+            'physical_runtime.adaptive_refit.fallback_if_refit_fails must be one '
+            "of 'nearest_anchor_plus_t0_shift', 'nearest_anchor', "
+            "'existing_trend', or 'robust', "
+            f'got {adaptive.fallback_if_refit_fails!r}'
         )
         raise ValueError(msg)
     if reuse.fallback_if_no_compatible_segment not in {

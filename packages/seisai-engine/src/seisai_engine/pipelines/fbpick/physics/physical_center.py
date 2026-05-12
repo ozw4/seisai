@@ -82,6 +82,7 @@ PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE = 2
 PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR = 3
 PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND = 4
 PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST = 5
+PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT = 6
 
 PHYSICAL_RUNTIME_FIT_SOURCE_LABELS = {
     PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT: 'full_fit',
@@ -92,6 +93,7 @@ PHYSICAL_RUNTIME_FIT_SOURCE_LABELS = {
     ),
     PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND: 'fallback_existing_trend',
     PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST: 'fallback_robust',
+    PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT: 'adaptive_refit',
 }
 
 __all__ = [
@@ -117,6 +119,7 @@ __all__ = [
     'PHYSICAL_OFFSET_SOURCE_LABELS',
     'PHYSICAL_OFFSET_SOURCE_NONE',
     'PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT',
+    'PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT',
     'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND',
     'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR',
     'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST',
@@ -152,6 +155,11 @@ class PhysicalCenterResult:
     physical_anchor_is_anchor: np.ndarray
     physical_anchor_nearest_anchor_group_id: np.ndarray
     physical_anchor_source_distance_m: np.ndarray
+    physical_runtime_t0_shift_ms: np.ndarray
+    physical_runtime_reuse_resid_p50_ms: np.ndarray
+    physical_runtime_reuse_resid_p90_ms: np.ndarray
+    physical_runtime_reuse_valid_count: np.ndarray
+    physical_runtime_refit_mask: np.ndarray
     physical_runtime_fit_source: np.ndarray
 
 
@@ -186,6 +194,15 @@ class _TraceFitResult:
 class _AnchorModelContext:
     trend_model: object
     diagnostics: tuple[float, float, float, float, float, float, float] | None
+
+
+@dataclass(frozen=True)
+class _ReuseShiftStats:
+    t0_shift_sec: float
+    shift_valid: bool
+    valid_count: int
+    resid_p50_ms: float
+    resid_p90_ms: float
 
 
 def _validate_table(table: CoarsePickTable) -> None:
@@ -290,6 +307,19 @@ def _allocate_result_arrays(table: CoarsePickTable) -> dict[str, np.ndarray]:
         'physical_anchor_is_anchor': np.zeros((n,), dtype=np.bool_),
         'physical_anchor_nearest_anchor_group_id': np.full((n,), -1, dtype=np.int32),
         'physical_anchor_source_distance_m': np.full((n,), np.nan, dtype=np.float32),
+        'physical_runtime_t0_shift_ms': np.full((n,), np.nan, dtype=np.float32),
+        'physical_runtime_reuse_resid_p50_ms': np.full(
+            (n,),
+            np.nan,
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_resid_p90_ms': np.full(
+            (n,),
+            np.nan,
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_valid_count': np.zeros((n,), dtype=np.int32),
+        'physical_runtime_refit_mask': np.zeros((n,), dtype=np.bool_),
         'physical_runtime_fit_source': np.zeros((n,), dtype=np.uint8),
     }
 
@@ -742,6 +772,24 @@ def _predict_model_sec(trend_model, offset_m: float) -> float:
     return float(pred_np[0])
 
 
+def _predict_model_array_sec(trend_model, offset_m: np.ndarray) -> np.ndarray:
+    offsets = np.asarray(offset_m, dtype=np.float32)
+    if offsets.ndim != 1:
+        msg = 'offset_m must be 1D'
+        raise ValueError(msg)
+    if offsets.size == 0:
+        return np.zeros((0,), dtype=np.float64)
+    pred = trend_model.predict(torch.as_tensor(offsets, dtype=torch.float32))
+    pred_np = _tensor_to_numpy(pred).astype(np.float64, copy=False)
+    if pred_np.shape != offsets.shape:
+        msg = (
+            'trend model prediction must have shape '
+            f'{offsets.shape}, got {pred_np.shape}'
+        )
+        raise ValueError(msg)
+    return pred_np
+
+
 def _model_diagnostics(
     trend_model,
     *,
@@ -933,12 +981,14 @@ def _assign_model_prediction(
     dt: float,
     n_samples: int,
     runtime_fit_source: int,
+    t0_shift_sec: float = 0.0,
 ) -> bool:
     try:
         physical_t_sec = _predict_model_sec(
             trend_model,
             float(offset_abs_m[int(trace_idx)]),
         )
+        physical_t_sec += float(t0_shift_sec)
     except (TypeError, ValueError, RuntimeError):
         physical_t_sec = np.nan
 
@@ -1231,6 +1281,182 @@ def _compute_physical_prefilter_mask(
             n_traces=n,
         )
     return valid.astype(np.bool_, copy=False)
+
+
+def _compute_t0_shift_physical_mask(
+    *,
+    trace_indices: np.ndarray,
+    offset_abs_m: np.ndarray,
+    pick_t_sec: np.ndarray,
+    feasible: FeasibleBandResult,
+    cfg: PhysicsLiteConfig,
+) -> np.ndarray:
+    indices = np.asarray(trace_indices, dtype=np.int64)
+    offsets = np.asarray(offset_abs_m, dtype=np.float32)[indices]
+    picks = np.asarray(pick_t_sec, dtype=np.float32)[indices]
+    finite = np.isfinite(offsets) & np.isfinite(picks)
+    physical = np.zeros((indices.size,), dtype=np.bool_)
+    if bool(cfg.physical_prefilter.enabled):
+        finite_pos = np.flatnonzero(finite)
+        if finite_pos.size > 0:
+            physical_feasible = compute_velocity_t0_band_from_arrays(
+                offset_m=offsets[finite_pos],
+                pick_t_sec=picks[finite_pos],
+                vmin_m_s=float(cfg.physical_prefilter.vmin_m_s),
+                vmax_m_s=float(cfg.physical_prefilter.vmax_m_s),
+                t0_lo_ms=float(cfg.physical_prefilter.t0_lo_ms),
+                t0_hi_ms=float(cfg.physical_prefilter.t0_hi_ms),
+            )
+            physical[finite_pos] = np.asarray(
+                physical_feasible.feasible_mask,
+                dtype=np.bool_,
+            )
+    else:
+        physical[finite] = True
+
+    if bool(cfg.physical_prefilter.use_existing_feasible_mask):
+        feasible_mask = _as_bool_vector(
+            'feasible.feasible_mask',
+            feasible.feasible_mask,
+            n_traces=int(np.asarray(offset_abs_m).shape[0]),
+        )
+        physical &= feasible_mask[indices]
+    return physical.astype(np.bool_, copy=False)
+
+
+def _compute_reuse_t0_shift_stats(
+    *,
+    trend_model,
+    trace_indices: np.ndarray,
+    offset_abs_m: np.ndarray,
+    pick_t_sec: np.ndarray,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    cfg: PhysicsLiteConfig,
+) -> _ReuseShiftStats:
+    indices = np.asarray(trace_indices, dtype=np.int64)
+    if indices.size == 0:
+        return _ReuseShiftStats(
+            t0_shift_sec=0.0,
+            shift_valid=False,
+            valid_count=0,
+            resid_p50_ms=np.nan,
+            resid_p90_ms=np.nan,
+        )
+
+    offsets = np.asarray(offset_abs_m, dtype=np.float32)[indices]
+    picks = np.asarray(pick_t_sec, dtype=np.float32)[indices]
+    valid = np.isfinite(offsets) & np.isfinite(picks)
+    t0_cfg = cfg.physical_runtime.t0_shift
+    if bool(t0_cfg.use_physical_prefilter_mask):
+        valid &= _compute_t0_shift_physical_mask(
+            trace_indices=indices,
+            offset_abs_m=offset_abs_m,
+            pick_t_sec=pick_t_sec,
+            feasible=feasible,
+            cfg=cfg,
+        )
+    if bool(t0_cfg.use_pmax_min):
+        pmax = _as_vector(
+            'table.coarse_pmax',
+            table.coarse_pmax,
+            n_traces=table.n_traces,
+            dtype=np.float32,
+        )[indices]
+        valid &= np.isfinite(pmax) & (
+            pmax >= np.float32(cfg.physical_prefilter.pmax_min)
+        )
+
+    try:
+        pred = _predict_model_array_sec(trend_model, offsets)
+    except (TypeError, ValueError, RuntimeError):
+        return _ReuseShiftStats(
+            t0_shift_sec=0.0,
+            shift_valid=False,
+            valid_count=0,
+            resid_p50_ms=np.nan,
+            resid_p90_ms=np.nan,
+        )
+    valid &= np.isfinite(pred)
+    residual = picks.astype(np.float64, copy=False) - pred
+    residual = residual[valid & np.isfinite(residual)]
+    valid_count = int(residual.size)
+
+    shift_valid = (
+        bool(t0_cfg.enabled)
+        and valid_count >= int(t0_cfg.min_valid_for_t0_shift)
+    )
+    if shift_valid:
+        shift_sec = float(np.median(residual))
+        clip_sec = float(t0_cfg.t0_shift_clip_ms) * 1.0e-3
+        shift_sec = float(np.clip(shift_sec, -clip_sec, clip_sec))
+    else:
+        shift_sec = 0.0
+
+    if valid_count == 0:
+        resid_p50 = np.nan
+        resid_p90 = np.nan
+    else:
+        residual_ms = np.abs(residual - float(shift_sec)) * 1000.0
+        resid_p50 = float(np.percentile(residual_ms, 50.0))
+        resid_p90 = float(np.percentile(residual_ms, 90.0))
+
+    return _ReuseShiftStats(
+        t0_shift_sec=shift_sec,
+        shift_valid=shift_valid,
+        valid_count=valid_count,
+        resid_p50_ms=resid_p50,
+        resid_p90_ms=resid_p90,
+    )
+
+
+def _assign_reuse_runtime_diagnostics(
+    arrays: dict[str, np.ndarray],
+    trace_indices: np.ndarray,
+    stats: _ReuseShiftStats,
+) -> None:
+    indices = np.asarray(trace_indices, dtype=np.int64)
+    if indices.size == 0:
+        return
+    if bool(stats.shift_valid):
+        arrays['physical_runtime_t0_shift_ms'][indices] = np.float32(
+            float(stats.t0_shift_sec) * 1000.0
+        )
+    arrays['physical_runtime_reuse_resid_p50_ms'][indices] = np.float32(
+        stats.resid_p50_ms
+    )
+    arrays['physical_runtime_reuse_resid_p90_ms'][indices] = np.float32(
+        stats.resid_p90_ms
+    )
+    arrays['physical_runtime_reuse_valid_count'][indices] = np.int32(
+        stats.valid_count
+    )
+
+
+def _adaptive_refit_triggered(
+    *,
+    stats: _ReuseShiftStats,
+    plan: _ObservationPlan,
+    cfg: PhysicsLiteConfig,
+    min_fit_obs: int,
+) -> bool:
+    adaptive = cfg.physical_runtime.adaptive_refit
+    if not bool(adaptive.enabled):
+        return False
+    resid_trigger = (
+        np.isfinite(stats.resid_p90_ms)
+        and float(stats.resid_p90_ms) > float(adaptive.resid_p90_ms_gt)
+    )
+    shift_trigger = (
+        bool(stats.shift_valid)
+        and abs(float(stats.t0_shift_sec) * 1000.0)
+        > float(adaptive.median_abs_shift_ms_gt)
+    )
+    insufficient_trigger = (
+        int(stats.valid_count) < int(adaptive.min_valid_for_resid_check)
+        and int(plan.obs_indices.size) >= int(min_fit_obs)
+    )
+    return bool(resid_trigger or shift_trigger or insufficient_trigger)
 
 
 def _table_offset_abs_m(table: CoarsePickTable, *, n_traces: int) -> np.ndarray:
@@ -1555,6 +1781,22 @@ def build_geometry_two_piece_physical_center(
             group_id = int(group.group_id)
             if bool(is_anchor_by_id.get(group_id, False)):
                 continue
+            group_trace_indices = np.asarray(group.trace_indices, dtype=np.int64)
+            nearest_anchor_id = int(nearest_by_id.get(group_id, -1))
+            anchor_distance_m = float(distance_by_id.get(group_id, np.nan))
+            max_distance_m = cfg.physical_runtime.anchor_reuse.max_anchor_distance_m
+            distance_ok = (
+                nearest_anchor_id >= 0
+                and np.isfinite(anchor_distance_m)
+                and (
+                    max_distance_m is None
+                    or anchor_distance_m <= float(max_distance_m)
+                )
+            )
+            reuse_items: dict[
+                tuple[int, int, int, bool],
+                list[tuple[int, _ObservationPlan, _AnchorModelContext]],
+            ] = {}
             for trace_idx in np.asarray(group.trace_indices, dtype=np.int64).tolist():
                 trace_idx = int(trace_idx)
                 arrays['physical_offset_source'][trace_idx] = np.uint8(offset_source)
@@ -1597,41 +1839,18 @@ def build_geometry_two_piece_physical_center(
                     )
                     arrays['physical_model_side'][trace_idx] = np.int8(plan.side)
 
-                nearest_anchor_id = int(nearest_by_id.get(group_id, -1))
-                anchor_distance_m = float(distance_by_id.get(group_id, np.nan))
-                max_distance_m = cfg.physical_runtime.anchor_reuse.max_anchor_distance_m
-                distance_ok = (
-                    nearest_anchor_id >= 0
-                    and np.isfinite(anchor_distance_m)
-                    and (
-                        max_distance_m is None
-                        or anchor_distance_m <= float(max_distance_m)
-                    )
-                )
                 context = None
+                key = None
                 if (
                     bool(cfg.physical_runtime.anchor_reuse.enabled)
                     and plan is not None
                     and distance_ok
                 ):
-                    context = anchor_models.get(
-                        _anchor_model_key(nearest_anchor_id, plan)
-                    )
+                    key = _anchor_model_key(nearest_anchor_id, plan)
+                    context = anchor_models.get(key)
 
-                if context is not None and _assign_model_prediction(
-                    arrays,
-                    trace_idx,
-                    trend_model=context.trend_model,
-                    diagnostics=context.diagnostics,
-                    plan=plan,
-                    offset_abs_m=offset_abs_m,
-                    dt=dt,
-                    n_samples=n_samples,
-                    runtime_fit_source=(
-                        PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE
-                    ),
-                ):
-                    n_reused_predictions += 1
+                if context is not None and plan is not None and key is not None:
+                    reuse_items.setdefault(key, []).append((trace_idx, plan, context))
                     continue
 
                 fallback = str(
@@ -1675,6 +1894,196 @@ def build_geometry_two_piece_physical_center(
                         merged=merged,
                         cfg=cfg,
                     )
+
+            non_anchor_mode = str(cfg.physical_runtime.anchor_reuse.non_anchor_mode)
+            if non_anchor_mode == 'nearest_anchor':
+                for items in reuse_items.values():
+                    for trace_idx, plan, context in items:
+                        if _assign_model_prediction(
+                            arrays,
+                            trace_idx,
+                            trend_model=context.trend_model,
+                            diagnostics=context.diagnostics,
+                            plan=plan,
+                            offset_abs_m=offset_abs_m,
+                            dt=dt,
+                            n_samples=n_samples,
+                            runtime_fit_source=(
+                                PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE
+                            ),
+                        ):
+                            n_reused_predictions += 1
+                        else:
+                            _assign_fallback(
+                                arrays,
+                                trace_idx,
+                                failure_reason=(
+                                    PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID
+                                ),
+                                table=table,
+                                feasible=feasible,
+                                trend=trend,
+                                merged=merged,
+                            )
+                continue
+
+            stats_by_key: dict[tuple[int, int, int, bool], _ReuseShiftStats] = {}
+            adaptive_refit = False
+            for key, items in reuse_items.items():
+                key_trace_indices = np.asarray(
+                    [trace_idx for trace_idx, _plan, _context in items],
+                    dtype=np.int64,
+                )
+                context = items[0][2]
+                stats = _compute_reuse_t0_shift_stats(
+                    trend_model=context.trend_model,
+                    trace_indices=key_trace_indices,
+                    offset_abs_m=offset_abs_m,
+                    pick_t_sec=pick_t_sec,
+                    table=table,
+                    feasible=feasible,
+                    cfg=cfg,
+                )
+                stats_by_key[key] = stats
+                _assign_reuse_runtime_diagnostics(
+                    arrays,
+                    key_trace_indices,
+                    stats,
+                )
+                adaptive_refit = adaptive_refit or _adaptive_refit_triggered(
+                    stats=stats,
+                    plan=items[0][1],
+                    cfg=cfg,
+                    min_fit_obs=min_fit_obs,
+                )
+
+            refit_failed = False
+            if adaptive_refit:
+                arrays['physical_runtime_refit_mask'][group_trace_indices] = True
+                assigned_count = 0
+                for trace_idx in group_trace_indices.tolist():
+                    result = _fit_and_assign_trace(
+                        arrays=arrays,
+                        trace_idx=int(trace_idx),
+                        group_id_by_trace=group_id_by_trace,
+                        groups=groups,
+                        groups_by_id=groups_by_id,
+                        geometry=geometry,
+                        offset_abs_m=offset_abs_m,
+                        offset_signed_m=offset_signed_m,
+                        offset_source=offset_source,
+                        valid_for_fit=valid_for_fit,
+                        pick_t_sec=pick_t_sec,
+                        table=table,
+                        feasible=feasible,
+                        trend=trend,
+                        merged=merged,
+                        cfg=cfg,
+                        strategy=strategy,
+                        fit_cache=fit_cache,
+                        min_fit_obs=min_fit_obs,
+                        use_neighbor_context=source_groups_from_geometry,
+                        runtime_fit_source=(
+                            PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT
+                        ),
+                        runtime_diagnostics=runtime_diagnostics,
+                    )
+                    if result.assigned_from_model:
+                        assigned_count += 1
+                success = assigned_count > 0
+                refit_failed = not success
+                if runtime_diagnostics is not None:
+                    runtime_diagnostics.record_adaptive_refit(success=success)
+                if success:
+                    continue
+
+            fallback_mode = (
+                str(cfg.physical_runtime.adaptive_refit.fallback_if_refit_fails)
+                if refit_failed
+                else 'nearest_anchor_plus_t0_shift'
+            )
+            group_shifted_count = 0
+            group_shift_ms_values: list[float] = []
+            group_reuse_resid_p90_values: list[float] = []
+            for key, items in reuse_items.items():
+                stats = stats_by_key[key]
+                if fallback_mode == 'robust':
+                    for trace_idx, _plan, _context in items:
+                        _assign_robust_fallback(
+                            arrays,
+                            trace_idx,
+                            failure_reason=PHYSICAL_MODEL_FAILURE_FIT_FAILED,
+                            table=table,
+                            merged=merged,
+                        )
+                    continue
+                if fallback_mode == 'existing_trend':
+                    for trace_idx, _plan, _context in items:
+                        _assign_fallback(
+                            arrays,
+                            trace_idx,
+                            failure_reason=PHYSICAL_MODEL_FAILURE_FIT_FAILED,
+                            table=table,
+                            feasible=feasible,
+                            trend=trend,
+                            merged=merged,
+                        )
+                    continue
+
+                use_shift = (
+                    fallback_mode == 'nearest_anchor_plus_t0_shift'
+                    and bool(stats.shift_valid)
+                )
+                shift_sec = float(stats.t0_shift_sec) if use_shift else 0.0
+                for trace_idx, plan, context in items:
+                    if _assign_model_prediction(
+                        arrays,
+                        trace_idx,
+                        trend_model=context.trend_model,
+                        diagnostics=context.diagnostics,
+                        plan=plan,
+                        offset_abs_m=offset_abs_m,
+                        dt=dt,
+                        n_samples=n_samples,
+                        runtime_fit_source=(
+                            PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE
+                        ),
+                        t0_shift_sec=shift_sec,
+                    ):
+                        n_reused_predictions += 1
+                        if use_shift:
+                            group_shifted_count += 1
+                    else:
+                        _assign_fallback(
+                            arrays,
+                            trace_idx,
+                            failure_reason=(
+                                PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID
+                            ),
+                            table=table,
+                            feasible=feasible,
+                            trend=trend,
+                            merged=merged,
+                        )
+                if use_shift:
+                    group_shift_ms_values.append(float(stats.t0_shift_sec) * 1000.0)
+                    if np.isfinite(stats.resid_p90_ms):
+                        group_reuse_resid_p90_values.append(float(stats.resid_p90_ms))
+
+            if runtime_diagnostics is not None and group_shifted_count > 0:
+                resid_values = np.asarray(
+                    group_reuse_resid_p90_values,
+                    dtype=np.float64,
+                )
+                runtime_diagnostics.record_t0_shifted_group(
+                    t0_shift_ms=float(np.median(group_shift_ms_values)),
+                    prediction_count=group_shifted_count,
+                    reuse_resid_p90_ms=(
+                        float(np.median(resid_values))
+                        if resid_values.size > 0
+                        else np.nan
+                    ),
+                )
 
         if runtime_diagnostics is not None:
             runtime_diagnostics.record_reused_predictions(n_reused_predictions)

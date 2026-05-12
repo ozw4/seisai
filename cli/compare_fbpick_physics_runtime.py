@@ -50,6 +50,11 @@ RUNTIME_COUNT_KEYS = (
     'n_source_groups',
     'n_non_anchor_groups',
     'n_reused_predictions',
+    'n_t0_shifted_groups',
+    'n_t0_shifted_predictions',
+    'n_adaptive_refit_calls',
+    'n_adaptive_refit_success',
+    'n_adaptive_refit_failed',
     'n_fallback_full_fit_no_compatible_anchor',
     'n_anchor_groups',
     'anchor_stride_source_groups',
@@ -57,12 +62,18 @@ RUNTIME_COUNT_KEYS = (
 RUNTIME_RATE_KEYS = (
     'cache_hit_rate',
     'fit_call_reduction_rate_vs_full',
+    'adaptive_refit_rate',
 )
 RUNTIME_ANCHOR_VALUE_KEYS = (
     'anchor_selection_mode',
     'anchor_source_distance_p50_m',
     'anchor_source_distance_p90_m',
     'anchor_source_distance_max_m',
+    't0_shift_ms_p50',
+    't0_shift_ms_p90',
+    't0_shift_ms_p99',
+    'reuse_resid_p90_ms_p50',
+    'reuse_resid_p90_ms_p90',
 )
 
 

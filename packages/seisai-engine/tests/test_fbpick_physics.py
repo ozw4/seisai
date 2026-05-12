@@ -216,6 +216,20 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
             [0.0, 10.0, 0.0],
             dtype=np.float32,
         ),
+        'physical_runtime_t0_shift_ms': np.array(
+            [10.0, np.nan, 20.0],
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_resid_p50_ms': np.array(
+            [1.0, np.nan, 2.0],
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_resid_p90_ms': np.array(
+            [2.0, np.nan, 3.0],
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_valid_count': np.array([3, 0, 4], dtype=np.int32),
+        'physical_runtime_refit_mask': np.array([False, True, False], dtype=np.bool_),
         'physical_runtime_fit_source': np.array([1, 2, 3], dtype=np.uint8),
         'physics_total_sec': np.asarray(1.0, dtype=np.float64),
         'physical_center_total_sec': np.asarray(0.7, dtype=np.float64),
@@ -228,6 +242,17 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
         'n_source_groups': np.asarray(1, dtype=np.int64),
         'n_non_anchor_groups': np.asarray(1, dtype=np.int64),
         'n_reused_predictions': np.asarray(3, dtype=np.int64),
+        'n_t0_shifted_groups': np.asarray(1, dtype=np.int64),
+        'n_t0_shifted_predictions': np.asarray(3, dtype=np.int64),
+        't0_shift_ms_p50': np.asarray(10.0, dtype=np.float64),
+        't0_shift_ms_p90': np.asarray(10.0, dtype=np.float64),
+        't0_shift_ms_p99': np.asarray(10.0, dtype=np.float64),
+        'reuse_resid_p90_ms_p50': np.asarray(2.0, dtype=np.float64),
+        'reuse_resid_p90_ms_p90': np.asarray(2.0, dtype=np.float64),
+        'n_adaptive_refit_calls': np.asarray(1, dtype=np.int64),
+        'adaptive_refit_rate': np.asarray(1.0, dtype=np.float64),
+        'n_adaptive_refit_success': np.asarray(1, dtype=np.int64),
+        'n_adaptive_refit_failed': np.asarray(0, dtype=np.int64),
         'n_fallback_full_fit_no_compatible_anchor': np.asarray(0, dtype=np.int64),
         'n_unique_fit_contexts': np.asarray(4, dtype=np.int64),
         'fit_call_reduction_rate_vs_full': np.asarray(0.5, dtype=np.float64),
@@ -309,6 +334,8 @@ def test_physical_runtime_diagnostics_initializes_with_zero_counts() -> None:
     assert summary['cache_hit_rate'] == 0.0
     assert summary['n_source_groups'] == 0
     assert summary['n_unique_fit_contexts'] == 0
+    assert summary['n_t0_shifted_groups'] == 0
+    assert summary['n_adaptive_refit_calls'] == 0
 
 
 def test_physical_runtime_diagnostics_fit_timer_increments_counts() -> None:
@@ -356,6 +383,19 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.physical_runtime.anchor_reuse.fallback_if_no_compatible_segment == (
         'full_fit'
     )
+    assert cfg.physical_runtime.t0_shift.enabled is True
+    assert cfg.physical_runtime.t0_shift.estimator == 'median'
+    assert cfg.physical_runtime.t0_shift.min_valid_for_t0_shift == 8
+    assert cfg.physical_runtime.t0_shift.t0_shift_clip_ms == 60.0
+    assert cfg.physical_runtime.t0_shift.use_physical_prefilter_mask is True
+    assert cfg.physical_runtime.t0_shift.use_pmax_min is True
+    assert cfg.physical_runtime.adaptive_refit.enabled is False
+    assert cfg.physical_runtime.adaptive_refit.resid_p90_ms_gt == 50.0
+    assert cfg.physical_runtime.adaptive_refit.median_abs_shift_ms_gt == 40.0
+    assert cfg.physical_runtime.adaptive_refit.min_valid_for_resid_check == 8
+    assert cfg.physical_runtime.adaptive_refit.fallback_if_refit_fails == (
+        'nearest_anchor_plus_t0_shift'
+    )
 
 
 def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
@@ -392,10 +432,25 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
                 },
                 'anchor_reuse': {
                     'enabled': True,
-                    'non_anchor_mode': 'nearest_anchor',
+                    'non_anchor_mode': 'nearest_anchor_plus_t0_shift',
                     'max_anchor_distance_m': 250.0,
                     'reuse_segment_policy': 'same_side_and_gap',
                     'fallback_if_no_compatible_segment': 'existing_trend',
+                },
+                't0_shift': {
+                    'enabled': True,
+                    'estimator': 'median',
+                    'min_valid_for_t0_shift': 6,
+                    't0_shift_clip_ms': 45.0,
+                    'use_physical_prefilter_mask': False,
+                    'use_pmax_min': False,
+                },
+                'adaptive_refit': {
+                    'enabled': True,
+                    'resid_p90_ms_gt': 35.0,
+                    'median_abs_shift_ms_gt': 25.0,
+                    'min_valid_for_resid_check': 6,
+                    'fallback_if_refit_fails': 'nearest_anchor',
                 },
             },
         }
@@ -406,9 +461,21 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
     assert cfg.physical_runtime.anchor_selection.anchor_stride_source_groups == 3
     assert cfg.physical_runtime.anchor_selection.include_first is False
     assert cfg.physical_runtime.anchor_selection.include_last is True
+    assert cfg.physical_runtime.anchor_reuse.non_anchor_mode == (
+        'nearest_anchor_plus_t0_shift'
+    )
     assert cfg.physical_runtime.anchor_reuse.max_anchor_distance_m == 250.0
     assert cfg.physical_runtime.anchor_reuse.fallback_if_no_compatible_segment == (
         'existing_trend'
+    )
+    assert cfg.physical_runtime.t0_shift.min_valid_for_t0_shift == 6
+    assert cfg.physical_runtime.t0_shift.t0_shift_clip_ms == 45.0
+    assert cfg.physical_runtime.t0_shift.use_physical_prefilter_mask is False
+    assert cfg.physical_runtime.t0_shift.use_pmax_min is False
+    assert cfg.physical_runtime.adaptive_refit.enabled is True
+    assert cfg.physical_runtime.adaptive_refit.resid_p90_ms_gt == 35.0
+    assert cfg.physical_runtime.adaptive_refit.fallback_if_refit_fails == (
+        'nearest_anchor'
     )
 
 
@@ -549,6 +616,46 @@ def test_physical_center_example_config_enables_physical_trend() -> None:
                 }
             },
             'physical_runtime.anchor_reuse.fallback_if_no_compatible_segment',
+        ),
+        (
+            {'physical_runtime': {'t0_shift': {'estimator': 'mean'}}},
+            'physical_runtime.t0_shift.estimator',
+        ),
+        (
+            {'physical_runtime': {'t0_shift': {'min_valid_for_t0_shift': 0}}},
+            'physical_runtime.t0_shift.min_valid_for_t0_shift',
+        ),
+        (
+            {'physical_runtime': {'t0_shift': {'t0_shift_clip_ms': -1.0}}},
+            'physical_runtime.t0_shift.t0_shift_clip_ms',
+        ),
+        (
+            {'physical_runtime': {'adaptive_refit': {'resid_p90_ms_gt': -1.0}}},
+            'physical_runtime.adaptive_refit.resid_p90_ms_gt',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'adaptive_refit': {'median_abs_shift_ms_gt': math.inf}
+                }
+            },
+            'physical_runtime.adaptive_refit.median_abs_shift_ms_gt',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'adaptive_refit': {'min_valid_for_resid_check': 0}
+                }
+            },
+            'physical_runtime.adaptive_refit.min_valid_for_resid_check',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'adaptive_refit': {'fallback_if_refit_fails': 'full_fit'}
+                }
+            },
+            'physical_runtime.adaptive_refit.fallback_if_refit_fails',
         ),
     ],
 )
@@ -1173,6 +1280,20 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
             [0.0, 10.0, 0.0],
             dtype=np.float32,
         ),
+        'physical_runtime_t0_shift_ms': np.array(
+            [10.0, np.nan, 20.0],
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_resid_p50_ms': np.array(
+            [1.0, np.nan, 2.0],
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_resid_p90_ms': np.array(
+            [2.0, np.nan, 3.0],
+            dtype=np.float32,
+        ),
+        'physical_runtime_reuse_valid_count': np.array([3, 0, 4], dtype=np.int32),
+        'physical_runtime_refit_mask': np.array([False, True, False], dtype=np.bool_),
         'physical_runtime_fit_source': np.array([1, 2, 3], dtype=np.uint8),
     }
 

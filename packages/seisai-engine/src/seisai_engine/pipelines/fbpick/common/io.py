@@ -263,7 +263,11 @@ def _validate_runtime_diagnostic_scalar(name: str, arr: np.ndarray) -> None:
     if (not np.isfinite(value)) or value < 0.0:
         msg = f'{name} must be finite and >= 0'
         raise ValueError(msg)
-    if name in {'cache_hit_rate', 'fit_call_reduction_rate_vs_full'} and value > 1.0:
+    if (
+        name
+        in {'cache_hit_rate', 'fit_call_reduction_rate_vs_full', 'adaptive_refit_rate'}
+        and value > 1.0
+    ):
         msg = f'{name} must lie in [0, 1]'
         raise ValueError(msg)
 
@@ -348,6 +352,11 @@ _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
     'physical_anchor_is_anchor': np.bool_,
     'physical_anchor_nearest_anchor_group_id': np.int32,
     'physical_anchor_source_distance_m': np.float32,
+    'physical_runtime_t0_shift_ms': np.float32,
+    'physical_runtime_reuse_resid_p50_ms': np.float32,
+    'physical_runtime_reuse_resid_p90_ms': np.float32,
+    'physical_runtime_reuse_valid_count': np.int32,
+    'physical_runtime_refit_mask': np.bool_,
     'physical_runtime_fit_source': np.uint8,
 }
 
@@ -368,6 +377,17 @@ _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES = {
     'n_source_groups': np.int64,
     'n_non_anchor_groups': np.int64,
     'n_reused_predictions': np.int64,
+    'n_t0_shifted_groups': np.int64,
+    'n_t0_shifted_predictions': np.int64,
+    't0_shift_ms_p50': np.float64,
+    't0_shift_ms_p90': np.float64,
+    't0_shift_ms_p99': np.float64,
+    'reuse_resid_p90_ms_p50': np.float64,
+    'reuse_resid_p90_ms_p90': np.float64,
+    'n_adaptive_refit_calls': np.int64,
+    'adaptive_refit_rate': np.float64,
+    'n_adaptive_refit_success': np.int64,
+    'n_adaptive_refit_failed': np.int64,
     'n_fallback_full_fit_no_compatible_anchor': np.int64,
     'n_unique_fit_contexts': np.int64,
     'fit_call_reduction_rate_vs_full': np.float64,
@@ -615,6 +635,11 @@ def save_robust_npz(
     physical_anchor_is_anchor=None,
     physical_anchor_nearest_anchor_group_id=None,
     physical_anchor_source_distance_m=None,
+    physical_runtime_t0_shift_ms=None,
+    physical_runtime_reuse_resid_p50_ms=None,
+    physical_runtime_reuse_resid_p90_ms=None,
+    physical_runtime_reuse_valid_count=None,
+    physical_runtime_refit_mask=None,
     physical_runtime_fit_source=None,
     physics_total_sec=None,
     physical_center_total_sec=None,
@@ -627,6 +652,17 @@ def save_robust_npz(
     n_source_groups=None,
     n_non_anchor_groups=None,
     n_reused_predictions=None,
+    n_t0_shifted_groups=None,
+    n_t0_shifted_predictions=None,
+    t0_shift_ms_p50=None,
+    t0_shift_ms_p90=None,
+    t0_shift_ms_p99=None,
+    reuse_resid_p90_ms_p50=None,
+    reuse_resid_p90_ms_p90=None,
+    n_adaptive_refit_calls=None,
+    adaptive_refit_rate=None,
+    n_adaptive_refit_success=None,
+    n_adaptive_refit_failed=None,
     n_fallback_full_fit_no_compatible_anchor=None,
     n_unique_fit_contexts=None,
     fit_call_reduction_rate_vs_full=None,
@@ -801,6 +837,11 @@ def save_robust_npz(
             physical_anchor_nearest_anchor_group_id
         ),
         'physical_anchor_source_distance_m': physical_anchor_source_distance_m,
+        'physical_runtime_t0_shift_ms': physical_runtime_t0_shift_ms,
+        'physical_runtime_reuse_resid_p50_ms': physical_runtime_reuse_resid_p50_ms,
+        'physical_runtime_reuse_resid_p90_ms': physical_runtime_reuse_resid_p90_ms,
+        'physical_runtime_reuse_valid_count': physical_runtime_reuse_valid_count,
+        'physical_runtime_refit_mask': physical_runtime_refit_mask,
         'physical_runtime_fit_source': physical_runtime_fit_source,
     }
     for key, dtype in _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS:
@@ -828,6 +869,17 @@ def save_robust_npz(
         'n_source_groups': n_source_groups,
         'n_non_anchor_groups': n_non_anchor_groups,
         'n_reused_predictions': n_reused_predictions,
+        'n_t0_shifted_groups': n_t0_shifted_groups,
+        'n_t0_shifted_predictions': n_t0_shifted_predictions,
+        't0_shift_ms_p50': t0_shift_ms_p50,
+        't0_shift_ms_p90': t0_shift_ms_p90,
+        't0_shift_ms_p99': t0_shift_ms_p99,
+        'reuse_resid_p90_ms_p50': reuse_resid_p90_ms_p50,
+        'reuse_resid_p90_ms_p90': reuse_resid_p90_ms_p90,
+        'n_adaptive_refit_calls': n_adaptive_refit_calls,
+        'adaptive_refit_rate': adaptive_refit_rate,
+        'n_adaptive_refit_success': n_adaptive_refit_success,
+        'n_adaptive_refit_failed': n_adaptive_refit_failed,
         'n_fallback_full_fit_no_compatible_anchor': (
             n_fallback_full_fit_no_compatible_anchor
         ),

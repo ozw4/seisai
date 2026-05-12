@@ -36,6 +36,17 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'n_source_groups',
     'n_non_anchor_groups',
     'n_reused_predictions',
+    'n_t0_shifted_groups',
+    'n_t0_shifted_predictions',
+    't0_shift_ms_p50',
+    't0_shift_ms_p90',
+    't0_shift_ms_p99',
+    'reuse_resid_p90_ms_p50',
+    'reuse_resid_p90_ms_p90',
+    'n_adaptive_refit_calls',
+    'adaptive_refit_rate',
+    'n_adaptive_refit_success',
+    'n_adaptive_refit_failed',
     'n_fallback_full_fit_no_compatible_anchor',
     'n_unique_fit_contexts',
     'fit_call_reduction_rate_vs_full',
@@ -79,6 +90,11 @@ class PhysicalRuntimeDiagnostics:
     n_source_groups: int = 0
     n_non_anchor_groups: int = 0
     n_reused_predictions: int = 0
+    n_t0_shifted_groups: int = 0
+    n_t0_shifted_predictions: int = 0
+    n_adaptive_refit_calls: int = 0
+    n_adaptive_refit_success: int = 0
+    n_adaptive_refit_failed: int = 0
     n_fallback_full_fit_no_compatible_anchor: int = 0
     n_unique_fit_contexts: int = 0
     fit_call_reduction_rate_vs_full: float = 0.0
@@ -88,6 +104,8 @@ class PhysicalRuntimeDiagnostics:
     )
     _fit_times_sec: list[float] = field(default_factory=list, repr=False)
     _fit_obs_counts: list[int] = field(default_factory=list, repr=False)
+    _t0_shift_abs_ms: list[float] = field(default_factory=list, repr=False)
+    _reuse_resid_p90_ms: list[float] = field(default_factory=list, repr=False)
 
     @contextmanager
     def time_physics(self) -> Iterator[None]:
@@ -124,6 +142,12 @@ class PhysicalRuntimeDiagnostics:
             return 0.0
         return float(self.n_cache_hits) / float(total)
 
+    @property
+    def adaptive_refit_rate(self) -> float:
+        if int(self.n_non_anchor_groups) <= 0:
+            return 0.0
+        return float(self.n_adaptive_refit_calls) / float(self.n_non_anchor_groups)
+
     def record_cache_hit(self) -> None:
         self.n_cache_hits += 1
 
@@ -135,6 +159,29 @@ class PhysicalRuntimeDiagnostics:
 
     def record_reused_predictions(self, value: int) -> None:
         self.n_reused_predictions += int(value)
+
+    def record_t0_shifted_group(
+        self,
+        *,
+        t0_shift_ms: float,
+        prediction_count: int,
+        reuse_resid_p90_ms: float,
+    ) -> None:
+        self.n_t0_shifted_groups += 1
+        self.n_t0_shifted_predictions += int(prediction_count)
+        shift_abs = abs(float(t0_shift_ms))
+        if np.isfinite(shift_abs):
+            self._t0_shift_abs_ms.append(shift_abs)
+        resid_p90 = float(reuse_resid_p90_ms)
+        if np.isfinite(resid_p90):
+            self._reuse_resid_p90_ms.append(resid_p90)
+
+    def record_adaptive_refit(self, *, success: bool) -> None:
+        self.n_adaptive_refit_calls += 1
+        if bool(success):
+            self.n_adaptive_refit_success += 1
+        else:
+            self.n_adaptive_refit_failed += 1
 
     def record_fallback_full_fit_no_compatible_anchor(self, value: int) -> None:
         self.n_fallback_full_fit_no_compatible_anchor += int(value)
@@ -194,6 +241,23 @@ class PhysicalRuntimeDiagnostics:
             'n_source_groups': int(self.n_source_groups),
             'n_non_anchor_groups': int(self.n_non_anchor_groups),
             'n_reused_predictions': int(self.n_reused_predictions),
+            'n_t0_shifted_groups': int(self.n_t0_shifted_groups),
+            'n_t0_shifted_predictions': int(self.n_t0_shifted_predictions),
+            't0_shift_ms_p50': _percentile(self._t0_shift_abs_ms, 50.0),
+            't0_shift_ms_p90': _percentile(self._t0_shift_abs_ms, 90.0),
+            't0_shift_ms_p99': _percentile(self._t0_shift_abs_ms, 99.0),
+            'reuse_resid_p90_ms_p50': _percentile(
+                self._reuse_resid_p90_ms,
+                50.0,
+            ),
+            'reuse_resid_p90_ms_p90': _percentile(
+                self._reuse_resid_p90_ms,
+                90.0,
+            ),
+            'n_adaptive_refit_calls': int(self.n_adaptive_refit_calls),
+            'adaptive_refit_rate': float(self.adaptive_refit_rate),
+            'n_adaptive_refit_success': int(self.n_adaptive_refit_success),
+            'n_adaptive_refit_failed': int(self.n_adaptive_refit_failed),
             'n_fallback_full_fit_no_compatible_anchor': int(
                 self.n_fallback_full_fit_no_compatible_anchor
             ),
@@ -222,6 +286,11 @@ class PhysicalRuntimeDiagnostics:
             'n_source_groups',
             'n_non_anchor_groups',
             'n_reused_predictions',
+            'n_t0_shifted_groups',
+            'n_t0_shifted_predictions',
+            'n_adaptive_refit_calls',
+            'n_adaptive_refit_success',
+            'n_adaptive_refit_failed',
             'n_fallback_full_fit_no_compatible_anchor',
             'n_unique_fit_contexts',
             'n_anchor_groups',
@@ -253,6 +322,11 @@ def runtime_summary_from_npz_fields(
         'n_source_groups',
         'n_non_anchor_groups',
         'n_reused_predictions',
+        'n_t0_shifted_groups',
+        'n_t0_shifted_predictions',
+        'n_adaptive_refit_calls',
+        'n_adaptive_refit_success',
+        'n_adaptive_refit_failed',
         'n_fallback_full_fit_no_compatible_anchor',
         'n_unique_fit_contexts',
         'n_anchor_groups',

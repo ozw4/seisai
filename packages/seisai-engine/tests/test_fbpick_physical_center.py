@@ -21,6 +21,7 @@ from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
     PHYSICAL_OFFSET_SOURCE_HEADER,
+    PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT,
     PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
     PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR,
     PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE,
@@ -196,6 +197,33 @@ class _ConstantTrendModel:
             self.value_sec,
             dtype=torch.float32,
         )
+
+
+class _LinearTrendModel:
+    def __init__(self, slope_sec_per_m: float, intercept_sec: float) -> None:
+        self.slope_sec_per_m = float(slope_sec_per_m)
+        self.intercept_sec = float(intercept_sec)
+        self.edges = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float32)
+        self.coef = torch.tensor(
+            [
+                [self.slope_sec_per_m, self.intercept_sec],
+                [self.slope_sec_per_m, self.intercept_sec],
+            ],
+            dtype=torch.float32,
+        )
+
+    def predict(self, x_abs: torch.Tensor) -> torch.Tensor:
+        return (
+            x_abs.to(dtype=torch.float32) * np.float32(self.slope_sec_per_m)
+            + np.float32(self.intercept_sec)
+        )
+
+
+def _fit_linear_model(x_abs: torch.Tensor, y_sec: torch.Tensor) -> _LinearTrendModel:
+    x_np = x_abs.detach().cpu().numpy().astype(np.float64, copy=False)
+    y_np = y_sec.detach().cpu().numpy().astype(np.float64, copy=False)
+    slope, intercept = np.polyfit(x_np, y_np, deg=1)
+    return _LinearTrendModel(float(slope), float(intercept))
 
 
 def _with_invalid_trend_centers(trend: TrendResult) -> TrendResult:
@@ -1229,6 +1257,326 @@ def test_anchor_source_xy_reuses_nearest_anchor_without_non_anchor_fit(
     )
 
 
+def test_anchor_source_xy_t0_shift_estimates_constant_target_shift(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fit_linear_model(x_abs, y_sec)
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+
+    traces_per_group = 4
+    offsets = np.tile(
+        np.asarray([100.0, 200.0, 300.0, 400.0], dtype=np.float32),
+        2,
+    )
+    anchor_pick_i = np.asarray([100, 200, 300, 400], dtype=np.int32)
+    pick_i = np.concatenate([anchor_pick_i, anchor_pick_i + 10]).astype(np.int32)
+    source_x = np.repeat(np.asarray([0.0, 100.0], dtype=np.float32), traces_per_group)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        dt_sec=0.001,
+        n_samples_orig=1000,
+    )
+    coarse_npz['source_x_m'] = source_x.astype(np.float32)
+    coarse_npz['receiver_x_m'] = (source_x + offsets).astype(np.float32)
+
+    diagnostics = PhysicalRuntimeDiagnostics()
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'segment_by_offset_sign': False,
+                    'split_by_offset_gap': False,
+                },
+                'neighbor_context': {'enabled': False},
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 2},
+                'physical_runtime': {
+                    'fit_policy': 'anchor_source_xy',
+                    'anchor_selection': {
+                        'enabled': True,
+                        'anchor_stride_source_groups': 2,
+                        'include_first': True,
+                        'include_last': False,
+                    },
+                    'anchor_reuse': {
+                        'enabled': True,
+                        'non_anchor_mode': 'nearest_anchor_plus_t0_shift',
+                    },
+                    't0_shift': {'min_valid_for_t0_shift': 4},
+                },
+            }
+        ),
+        runtime_diagnostics=diagnostics,
+    )
+
+    assert len(calls) == 1
+    assert diagnostics.n_fit_calls == 1
+    assert diagnostics.n_t0_shifted_groups == 1
+    assert diagnostics.n_t0_shifted_predictions == traces_per_group
+    assert diagnostics.n_reused_predictions == traces_per_group
+    np.testing.assert_array_equal(result.physical_center_i, pick_i)
+    np.testing.assert_allclose(
+        result.physical_runtime_t0_shift_ms[traces_per_group:],
+        np.full((traces_per_group,), 10.0, dtype=np.float32),
+        atol=1.0e-4,
+    )
+    np.testing.assert_array_equal(
+        result.physical_runtime_reuse_valid_count[traces_per_group:],
+        np.full((traces_per_group,), traces_per_group, dtype=np.int32),
+    )
+
+
+def test_anchor_source_xy_t0_shift_clipping_limits_reuse_shift(
+    monkeypatch,
+) -> None:
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        return _fit_linear_model(x_abs, y_sec)
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+
+    traces_per_group = 4
+    offsets = np.tile(
+        np.asarray([100.0, 200.0, 300.0, 400.0], dtype=np.float32),
+        2,
+    )
+    anchor_pick_i = np.asarray([100, 200, 300, 400], dtype=np.int32)
+    pick_i = np.concatenate([anchor_pick_i, anchor_pick_i + 100]).astype(np.int32)
+    source_x = np.repeat(np.asarray([0.0, 100.0], dtype=np.float32), traces_per_group)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        dt_sec=0.001,
+        n_samples_orig=1000,
+    )
+    coarse_npz['source_x_m'] = source_x.astype(np.float32)
+    coarse_npz['receiver_x_m'] = (source_x + offsets).astype(np.float32)
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'segment_by_offset_sign': False,
+                    'split_by_offset_gap': False,
+                },
+                'neighbor_context': {'enabled': False},
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 2},
+                'physical_runtime': {
+                    'fit_policy': 'anchor_source_xy',
+                    'anchor_selection': {
+                        'enabled': True,
+                        'anchor_stride_source_groups': 2,
+                        'include_first': True,
+                        'include_last': False,
+                    },
+                    'anchor_reuse': {
+                        'enabled': True,
+                        'non_anchor_mode': 'nearest_anchor_plus_t0_shift',
+                    },
+                    't0_shift': {
+                        'min_valid_for_t0_shift': 4,
+                        't0_shift_clip_ms': 60.0,
+                    },
+                },
+            }
+        ),
+    )
+
+    expected = np.concatenate([anchor_pick_i, anchor_pick_i + 60]).astype(np.int32)
+    np.testing.assert_array_equal(result.physical_center_i, expected)
+    np.testing.assert_allclose(
+        result.physical_runtime_t0_shift_ms[traces_per_group:],
+        np.full((traces_per_group,), 60.0, dtype=np.float32),
+        atol=1.0e-4,
+    )
+
+
+def test_anchor_source_xy_adaptive_refit_reduces_bad_reuse_tail(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fit_linear_model(x_abs, y_sec)
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+
+    traces_per_group = 4
+    offsets = np.tile(
+        np.asarray([100.0, 200.0, 300.0, 400.0], dtype=np.float32),
+        2,
+    )
+    anchor_pick_i = np.asarray([100, 200, 300, 400], dtype=np.int32)
+    target_pick_i = np.asarray([120, 240, 360, 480], dtype=np.int32)
+    pick_i = np.concatenate([anchor_pick_i, target_pick_i]).astype(np.int32)
+    source_x = np.repeat(np.asarray([0.0, 100.0], dtype=np.float32), traces_per_group)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        dt_sec=0.001,
+        n_samples_orig=1000,
+    )
+    coarse_npz['source_x_m'] = source_x.astype(np.float32)
+    coarse_npz['receiver_x_m'] = (source_x + offsets).astype(np.float32)
+
+    diagnostics = PhysicalRuntimeDiagnostics()
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'segment_by_offset_sign': False,
+                    'split_by_offset_gap': False,
+                },
+                'neighbor_context': {'enabled': False},
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 2},
+                'physical_runtime': {
+                    'fit_policy': 'anchor_source_xy',
+                    'anchor_selection': {
+                        'enabled': True,
+                        'anchor_stride_source_groups': 2,
+                        'include_first': True,
+                        'include_last': False,
+                    },
+                    'anchor_reuse': {
+                        'enabled': True,
+                        'non_anchor_mode': 'nearest_anchor_plus_t0_shift',
+                    },
+                    't0_shift': {'min_valid_for_t0_shift': 4},
+                    'adaptive_refit': {
+                        'enabled': True,
+                        'resid_p90_ms_gt': 5.0,
+                        'median_abs_shift_ms_gt': 1000.0,
+                        'min_valid_for_resid_check': 4,
+                    },
+                },
+            }
+        ),
+        runtime_diagnostics=diagnostics,
+    )
+
+    assert len(calls) == 2
+    assert diagnostics.n_adaptive_refit_calls == 1
+    assert diagnostics.n_adaptive_refit_success == 1
+    assert diagnostics.n_adaptive_refit_failed == 0
+    assert diagnostics.n_reused_predictions == 0
+    np.testing.assert_array_equal(result.physical_center_i, pick_i)
+    assert np.all(result.physical_runtime_refit_mask[traces_per_group:])
+    assert np.all(
+        result.physical_runtime_fit_source[traces_per_group:]
+        == np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT)
+    )
+
+
+def test_anchor_source_xy_adaptive_refit_failure_falls_back_to_t0_shift(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        if len(calls) == 1:
+            return _fit_linear_model(x_abs, y_sec)
+        raise RuntimeError('synthetic refit failure')
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+
+    traces_per_group = 4
+    offsets = np.tile(
+        np.asarray([100.0, 200.0, 300.0, 400.0], dtype=np.float32),
+        2,
+    )
+    anchor_pick_i = np.asarray([100, 200, 300, 400], dtype=np.int32)
+    pick_i = np.concatenate([anchor_pick_i, anchor_pick_i + 10]).astype(np.int32)
+    source_x = np.repeat(np.asarray([0.0, 100.0], dtype=np.float32), traces_per_group)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        dt_sec=0.001,
+        n_samples_orig=1000,
+    )
+    coarse_npz['source_x_m'] = source_x.astype(np.float32)
+    coarse_npz['receiver_x_m'] = (source_x + offsets).astype(np.float32)
+
+    diagnostics = PhysicalRuntimeDiagnostics()
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {
+                    'segment_by_offset_sign': False,
+                    'split_by_offset_gap': False,
+                },
+                'neighbor_context': {'enabled': False},
+                'physical_prefilter': {'enabled': False},
+                'two_piece_ransac': {'min_pts': 2},
+                'physical_runtime': {
+                    'fit_policy': 'anchor_source_xy',
+                    'anchor_selection': {
+                        'enabled': True,
+                        'anchor_stride_source_groups': 2,
+                        'include_first': True,
+                        'include_last': False,
+                    },
+                    'anchor_reuse': {
+                        'enabled': True,
+                        'non_anchor_mode': 'nearest_anchor_plus_t0_shift',
+                    },
+                    't0_shift': {'min_valid_for_t0_shift': 4},
+                    'adaptive_refit': {
+                        'enabled': True,
+                        'resid_p90_ms_gt': 1000.0,
+                        'median_abs_shift_ms_gt': 5.0,
+                        'min_valid_for_resid_check': 4,
+                        'fallback_if_refit_fails': 'nearest_anchor_plus_t0_shift',
+                    },
+                },
+            }
+        ),
+        runtime_diagnostics=diagnostics,
+    )
+
+    assert len(calls) == 2
+    assert diagnostics.n_adaptive_refit_calls == 1
+    assert diagnostics.n_adaptive_refit_success == 0
+    assert diagnostics.n_adaptive_refit_failed == 1
+    assert diagnostics.n_t0_shifted_groups == 1
+    assert diagnostics.n_t0_shifted_predictions == traces_per_group
+    assert diagnostics.n_reused_predictions == traces_per_group
+    np.testing.assert_array_equal(result.physical_center_i, pick_i)
+    assert np.all(result.physical_runtime_refit_mask[traces_per_group:])
+    assert np.all(
+        result.physical_runtime_fit_source[traces_per_group:]
+        == np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE)
+    )
+
+
 def test_anchor_source_xy_full_fit_fallback_when_anchor_side_missing(
     monkeypatch,
 ) -> None:
@@ -1355,6 +1703,11 @@ def test_physical_center_diagnostic_arrays_are_save_friendly() -> None:
         'physical_anchor_is_anchor': np.bool_,
         'physical_anchor_nearest_anchor_group_id': np.int32,
         'physical_anchor_source_distance_m': np.float32,
+        'physical_runtime_t0_shift_ms': np.float32,
+        'physical_runtime_reuse_resid_p50_ms': np.float32,
+        'physical_runtime_reuse_resid_p90_ms': np.float32,
+        'physical_runtime_reuse_valid_count': np.int32,
+        'physical_runtime_refit_mask': np.bool_,
         'physical_runtime_fit_source': np.uint8,
     }
     for field, dtype in expected_dtypes.items():
