@@ -118,8 +118,8 @@ __all__ = [
     'PHYSICAL_OFFSET_SOURCE_HEADER',
     'PHYSICAL_OFFSET_SOURCE_LABELS',
     'PHYSICAL_OFFSET_SOURCE_NONE',
-    'PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT',
     'PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT',
+    'PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT',
     'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND',
     'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR',
     'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST',
@@ -763,6 +763,190 @@ def _fit_strategy(cfg: PhysicsLiteConfig) -> TwoPieceRansacAutoBreakStrategy:
     )
 
 
+def _median_time_position(local_positions: np.ndarray, y_obs: np.ndarray) -> int:
+    positions = np.asarray(local_positions, dtype=np.int64)
+    if positions.size == 0:
+        msg = 'local_positions must be non-empty'
+        raise ValueError(msg)
+    y_values = np.asarray(y_obs, dtype=np.float32)[positions]
+    finite = np.isfinite(y_values)
+    if not np.any(finite):
+        return int(positions[0])
+    finite_positions = positions[finite]
+    finite_y = y_values[finite]
+    median_y = float(np.median(finite_y.astype(np.float64, copy=False)))
+    return int(finite_positions[int(np.argmin(np.abs(finite_y - median_y)))])
+
+
+def _stable_observation_seed(seed: int, values: np.ndarray, *, bin_id: int) -> int:
+    acc = int(seed) & 0xFFFFFFFF
+    for value in np.asarray(values, dtype=np.int64).tolist():
+        acc = (acc * 1664525 + int(value) + 1013904223) & 0xFFFFFFFF
+    return int((acc + int(bin_id) * 374761393) & 0xFFFFFFFF)
+
+
+def _bin_representative_position(
+    *,
+    local_positions: np.ndarray,
+    obs_indices: np.ndarray,
+    y_obs: np.ndarray,
+    p_obs: np.ndarray | None,
+    bin_pick: str,
+    random_seed: int,
+    bin_id: int,
+) -> int:
+    positions = np.asarray(local_positions, dtype=np.int64)
+    if positions.size == 0:
+        msg = 'local_positions must be non-empty'
+        raise ValueError(msg)
+    if bin_pick == 'median_time':
+        return _median_time_position(positions, y_obs)
+    if bin_pick == 'random':
+        seed = _stable_observation_seed(
+            random_seed,
+            np.asarray(obs_indices, dtype=np.int64)[positions],
+            bin_id=int(bin_id),
+        )
+        rng = np.random.default_rng(seed)
+        return int(positions[int(rng.integers(0, int(positions.size)))])
+
+    if p_obs is not None:
+        p_values = np.asarray(p_obs, dtype=np.float32)[positions]
+        finite = np.isfinite(p_values)
+        if np.any(finite):
+            finite_positions = positions[finite]
+            finite_p = p_values[finite]
+            return int(finite_positions[int(np.argmax(finite_p))])
+    return _median_time_position(positions, y_obs)
+
+
+def _evenly_spaced_positions(length: int, count: int) -> np.ndarray:
+    n = int(length)
+    k = int(count)
+    if k <= 0:
+        return np.zeros((0,), dtype=np.int64)
+    if k >= n:
+        return np.arange(n, dtype=np.int64)
+    raw = np.linspace(0.0, float(n - 1), num=k)
+    used: set[int] = set()
+    out: list[int] = []
+    for value in raw.tolist():
+        pos = int(np.rint(float(value)))
+        if pos in used:
+            for delta in range(1, n):
+                left = pos - delta
+                right = pos + delta
+                if left >= 0 and left not in used:
+                    pos = left
+                    break
+                if right < n and right not in used:
+                    pos = right
+                    break
+        used.add(pos)
+        out.append(pos)
+    return np.asarray(sorted(out), dtype=np.int64)
+
+
+def _limit_selected_positions(
+    selected_count: int,
+    *,
+    max_count: int,
+    preserve_edge_bins: bool,
+) -> np.ndarray:
+    n = int(selected_count)
+    max_n = int(max_count)
+    if n <= max_n:
+        return np.arange(n, dtype=np.int64)
+    if bool(preserve_edge_bins) and max_n >= 2 and n >= 2:
+        interior_count = max_n - 2
+        interior = _evenly_spaced_positions(n - 2, interior_count) + 1
+        return np.concatenate(
+            [
+                np.asarray([0], dtype=np.int64),
+                interior,
+                np.asarray([n - 1], dtype=np.int64),
+            ]
+        )
+    return _evenly_spaced_positions(n, max_n)
+
+
+def _sample_observation_indices_for_fit(
+    *,
+    obs_indices: np.ndarray,
+    offset_abs_m: np.ndarray,
+    pick_t_sec: np.ndarray,
+    coarse_pmax: np.ndarray | None,
+    cfg: PhysicsLiteConfig,
+    min_required_obs: int = 0,
+) -> np.ndarray:
+    sampling = cfg.physical_runtime.observation_sampling
+    obs = np.asarray(obs_indices, dtype=np.int64)
+    insufficient = np.zeros((0,), dtype=np.int64)
+    if not bool(sampling.enabled):
+        return obs
+    max_obs = int(sampling.max_obs_per_fit)
+    if int(obs.size) <= max_obs:
+        return obs
+
+    x_obs = np.asarray(offset_abs_m, dtype=np.float32)[obs]
+    y_obs = np.asarray(pick_t_sec, dtype=np.float32)[obs]
+    finite = np.isfinite(x_obs) & np.isfinite(y_obs)
+    finite_positions = np.flatnonzero(finite).astype(np.int64, copy=False)
+    if int(finite_positions.size) == 0:
+        return obs
+
+    finite_x = x_obs[finite_positions]
+    x_min = float(np.min(finite_x))
+    x_max = float(np.max(finite_x))
+    if (not np.isfinite(x_min)) or (not np.isfinite(x_max)) or x_max <= x_min:
+        return obs
+
+    n_bins = min(int(sampling.n_offset_bins), int(finite_positions.size))
+    edges = np.linspace(x_min, x_max, num=n_bins + 1, dtype=np.float64)
+    bin_ids = np.searchsorted(edges, finite_x.astype(np.float64), side='right') - 1
+    bin_ids = np.clip(bin_ids, 0, n_bins - 1).astype(np.int64, copy=False)
+
+    p_obs = (
+        None
+        if coarse_pmax is None
+        else np.asarray(coarse_pmax, dtype=np.float32)[obs]
+    )
+    selected_positions: list[int] = []
+    for bin_id in range(n_bins):
+        in_bin = finite_positions[bin_ids == int(bin_id)]
+        if int(in_bin.size) == 0:
+            continue
+        selected_positions.append(
+            _bin_representative_position(
+                local_positions=in_bin,
+                obs_indices=obs,
+                y_obs=y_obs,
+                p_obs=p_obs,
+                bin_pick=str(sampling.bin_pick),
+                random_seed=int(cfg.two_piece_ransac.seed),
+                bin_id=int(bin_id),
+            )
+        )
+
+    selected = obs[np.asarray(selected_positions, dtype=np.int64)]
+    min_after = max(
+        int(sampling.min_obs_per_fit_after_sampling),
+        int(min_required_obs),
+    )
+    if int(selected.size) < min_after:
+        return insufficient
+    if int(selected.size) > max_obs:
+        keep = _limit_selected_positions(
+            int(selected.size),
+            max_count=max_obs,
+            preserve_edge_bins=bool(sampling.preserve_edge_bins),
+        )
+        selected = selected[keep]
+    if int(selected.size) < min_after:
+        return insufficient
+    return np.asarray(selected, dtype=np.int64)
+
+
 def _predict_model_sec(trend_model, offset_m: float) -> float:
     pred = trend_model.predict(torch.tensor([float(offset_m)], dtype=torch.float32))
     pred_np = _tensor_to_numpy(pred).astype(np.float64, copy=False)
@@ -866,6 +1050,7 @@ def _fit_model_for_plan(
     min_offset_spread_m: float,
     cache: dict[tuple[int, ...], _FitCacheEntry],
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+    obs_count_before_sampling: int | None = None,
 ) -> tuple[
     object | None,
     tuple[float, float, float, float, float, float, float] | None,
@@ -891,7 +1076,8 @@ def _fit_model_for_plan(
                 trend_model = strategy.fit(x_tensor, y_tensor)
             else:
                 with runtime_diagnostics.time_ransac_fit(
-                    obs_count=int(np.asarray(x_obs).size)
+                    obs_count=int(np.asarray(x_obs).size),
+                    obs_count_before=obs_count_before_sampling,
                 ):
                     trend_model = strategy.fit(x_tensor, y_tensor)
         except (TypeError, ValueError, RuntimeError):
@@ -1101,18 +1287,35 @@ def _fit_and_assign_trace(
         )
         return _TraceFitResult(plan, None, None, 0, False)
 
-    obs_indices = np.asarray(plan.obs_indices, dtype=np.int64)
+    obs_count_before_sampling = int(np.asarray(plan.obs_indices).size)
+    obs_indices = _sample_observation_indices_for_fit(
+        obs_indices=plan.obs_indices,
+        offset_abs_m=offset_abs_m,
+        pick_t_sec=pick_t_sec,
+        coarse_pmax=table.coarse_pmax,
+        cfg=cfg,
+        min_required_obs=int(min_fit_obs),
+    )
+    fit_plan = _ObservationPlan(
+        obs_indices=obs_indices,
+        neighbor_count=plan.neighbor_count,
+        prefilter_valid_count=plan.prefilter_valid_count,
+        segment_id=plan.segment_id,
+        side=plan.side,
+        relaxed=plan.relaxed,
+    )
     x_obs = np.asarray(offset_abs_m[obs_indices], dtype=np.float32)
     y_obs = np.asarray(pick_t_sec[obs_indices], dtype=np.float32)
     trend_model, diagnostics, fit_failure_reason = _fit_model_for_plan(
         strategy=strategy,
-        plan=plan,
+        plan=fit_plan,
         x_obs=x_obs,
         y_obs=y_obs,
         min_pts=int(cfg.two_piece_ransac.min_pts),
         min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
         cache=fit_cache,
         runtime_diagnostics=runtime_diagnostics,
+        obs_count_before_sampling=obs_count_before_sampling,
     )
     fit_calls_after = (
         int(runtime_diagnostics.n_fit_calls)
@@ -1131,14 +1334,14 @@ def _fit_and_assign_trace(
             trend=trend,
             merged=merged,
         )
-        return _TraceFitResult(plan, None, None, fit_call_delta, False)
+        return _TraceFitResult(fit_plan, None, None, fit_call_delta, False)
 
     if not _assign_model_prediction(
         arrays,
         trace_idx,
         trend_model=trend_model,
         diagnostics=diagnostics,
-        plan=plan,
+        plan=fit_plan,
         offset_abs_m=offset_abs_m,
         dt=float(table.dt_scalar_sec),
         n_samples=int(table.n_samples_orig),
@@ -1153,18 +1356,24 @@ def _fit_and_assign_trace(
             trend=trend,
             merged=merged,
         )
-        return _TraceFitResult(plan, trend_model, diagnostics, fit_call_delta, False)
+        return _TraceFitResult(
+            fit_plan,
+            trend_model,
+            diagnostics,
+            fit_call_delta,
+            False,
+        )
 
     if diagnostics is None:
         diagnostics = _diagnostics_for_plan(
-            plan=plan,
+            plan=fit_plan,
             x_obs=x_obs,
             y_obs=y_obs,
             cache=fit_cache,
         )
         _assign_model_diagnostics(arrays, trace_idx, diagnostics)
 
-    return _TraceFitResult(plan, trend_model, diagnostics, fit_call_delta, True)
+    return _TraceFitResult(fit_plan, trend_model, diagnostics, fit_call_delta, True)
 
 
 def _anchor_model_key(
@@ -1598,6 +1807,15 @@ def build_geometry_two_piece_physical_center(
         n_traces=n,
         dtype=np.int32,
     )
+
+    if runtime_diagnostics is not None:
+        sampling = cfg.physical_runtime.observation_sampling
+        runtime_diagnostics.set_observation_sampling(
+            enabled=bool(sampling.enabled),
+            method=str(sampling.method),
+            max_obs_per_fit=int(sampling.max_obs_per_fit),
+            n_offset_bins=int(sampling.n_offset_bins),
+        )
 
     if not bool(cfg.physical_trend.enabled):
         return _build_disabled_result(table, trend)

@@ -53,6 +53,18 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'ransac_fit_time_p50_sec',
     'ransac_fit_time_p90_sec',
     'ransac_fit_time_p99_sec',
+    'observation_sampling_enabled',
+    'observation_sampling_method',
+    'max_obs_per_fit',
+    'n_offset_bins',
+    'obs_count_before_p50',
+    'obs_count_before_p90',
+    'obs_count_before_p99',
+    'obs_count_after_p50',
+    'obs_count_after_p90',
+    'obs_count_after_p99',
+    'obs_downsample_rate_p50',
+    'obs_downsample_rate_p90',
     'obs_count_for_fit_p50',
     'obs_count_for_fit_p90',
     'obs_count_for_fit_p99',
@@ -69,7 +81,9 @@ PHYSICS_RUNTIME_DIAGNOSTIC_KEYS = (
     *PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS,
     *PHYSICS_RUNTIME_ANCHOR_DIAGNOSTIC_KEYS,
 )
-PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS = frozenset({'anchor_selection_mode'})
+PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS = frozenset(
+    {'anchor_selection_mode', 'observation_sampling_method'}
+)
 
 
 def _percentile(values: list[float] | list[int], q: float) -> float:
@@ -98,12 +112,19 @@ class PhysicalRuntimeDiagnostics:
     n_fallback_full_fit_no_compatible_anchor: int = 0
     n_unique_fit_contexts: int = 0
     fit_call_reduction_rate_vs_full: float = 0.0
+    observation_sampling_enabled: int = 0
+    observation_sampling_method: str = 'offset_bin'
+    max_obs_per_fit: int = 0
+    n_offset_bins: int = 0
     _anchor_summary: dict[str, float | int | str] | None = field(
         default=None,
         repr=False,
     )
     _fit_times_sec: list[float] = field(default_factory=list, repr=False)
     _fit_obs_counts: list[int] = field(default_factory=list, repr=False)
+    _fit_obs_counts_before: list[int] = field(default_factory=list, repr=False)
+    _fit_obs_counts_after: list[int] = field(default_factory=list, repr=False)
+    _fit_obs_downsample_rates: list[float] = field(default_factory=list, repr=False)
     _t0_shift_abs_ms: list[float] = field(default_factory=list, repr=False)
     _reuse_resid_p90_ms: list[float] = field(default_factory=list, repr=False)
 
@@ -124,16 +145,31 @@ class PhysicalRuntimeDiagnostics:
             self.physical_center_total_sec += time.perf_counter() - start
 
     @contextmanager
-    def time_ransac_fit(self, *, obs_count: int) -> Iterator[None]:
+    def time_ransac_fit(
+        self,
+        *,
+        obs_count: int,
+        obs_count_before: int | None = None,
+    ) -> Iterator[None]:
         start = time.perf_counter()
         try:
             yield
         finally:
             elapsed = time.perf_counter() - start
+            before_count = (
+                int(obs_count) if obs_count_before is None else int(obs_count_before)
+            )
+            after_count = int(obs_count)
             self.n_fit_calls += 1
             self.ransac_fit_total_sec += elapsed
             self._fit_times_sec.append(float(elapsed))
-            self._fit_obs_counts.append(int(obs_count))
+            self._fit_obs_counts.append(after_count)
+            self._fit_obs_counts_before.append(before_count)
+            self._fit_obs_counts_after.append(after_count)
+            rate = 0.0
+            if before_count > 0:
+                rate = max(0.0, 1.0 - (float(after_count) / float(before_count)))
+            self._fit_obs_downsample_rates.append(float(rate))
 
     @property
     def cache_hit_rate(self) -> float:
@@ -207,6 +243,19 @@ class PhysicalRuntimeDiagnostics:
         reduction = (float(full_count) - float(self.n_fit_calls)) / float(full_count)
         self.fit_call_reduction_rate_vs_full = float(max(0.0, reduction))
 
+    def set_observation_sampling(
+        self,
+        *,
+        enabled: bool,
+        method: str,
+        max_obs_per_fit: int,
+        n_offset_bins: int,
+    ) -> None:
+        self.observation_sampling_enabled = int(bool(enabled))
+        self.observation_sampling_method = str(method)
+        self.max_obs_per_fit = int(max_obs_per_fit)
+        self.n_offset_bins = int(n_offset_bins)
+
     def set_anchor_selection(
         self,
         *,
@@ -268,6 +317,35 @@ class PhysicalRuntimeDiagnostics:
             'ransac_fit_time_p50_sec': _percentile(self._fit_times_sec, 50.0),
             'ransac_fit_time_p90_sec': _percentile(self._fit_times_sec, 90.0),
             'ransac_fit_time_p99_sec': _percentile(self._fit_times_sec, 99.0),
+            'observation_sampling_enabled': int(
+                self.observation_sampling_enabled
+            ),
+            'observation_sampling_method': str(self.observation_sampling_method),
+            'max_obs_per_fit': int(self.max_obs_per_fit),
+            'n_offset_bins': int(self.n_offset_bins),
+            'obs_count_before_p50': _percentile(
+                self._fit_obs_counts_before,
+                50.0,
+            ),
+            'obs_count_before_p90': _percentile(
+                self._fit_obs_counts_before,
+                90.0,
+            ),
+            'obs_count_before_p99': _percentile(
+                self._fit_obs_counts_before,
+                99.0,
+            ),
+            'obs_count_after_p50': _percentile(self._fit_obs_counts_after, 50.0),
+            'obs_count_after_p90': _percentile(self._fit_obs_counts_after, 90.0),
+            'obs_count_after_p99': _percentile(self._fit_obs_counts_after, 99.0),
+            'obs_downsample_rate_p50': _percentile(
+                self._fit_obs_downsample_rates,
+                50.0,
+            ),
+            'obs_downsample_rate_p90': _percentile(
+                self._fit_obs_downsample_rates,
+                90.0,
+            ),
             'obs_count_for_fit_p50': _percentile(self._fit_obs_counts, 50.0),
             'obs_count_for_fit_p90': _percentile(self._fit_obs_counts, 90.0),
             'obs_count_for_fit_p99': _percentile(self._fit_obs_counts, 99.0),
@@ -293,6 +371,9 @@ class PhysicalRuntimeDiagnostics:
             'n_adaptive_refit_failed',
             'n_fallback_full_fit_no_compatible_anchor',
             'n_unique_fit_contexts',
+            'observation_sampling_enabled',
+            'max_obs_per_fit',
+            'n_offset_bins',
             'n_anchor_groups',
             'anchor_stride_source_groups',
         }
@@ -329,6 +410,9 @@ def runtime_summary_from_npz_fields(
         'n_adaptive_refit_failed',
         'n_fallback_full_fit_no_compatible_anchor',
         'n_unique_fit_contexts',
+        'observation_sampling_enabled',
+        'max_obs_per_fit',
+        'n_offset_bins',
         'n_anchor_groups',
         'anchor_stride_source_groups',
     }
@@ -336,7 +420,10 @@ def runtime_summary_from_npz_fields(
         if key not in payload:
             return None
         value = np.asarray(payload[key]).item()
-        summary[key] = int(value) if key in int_keys else float(value)
+        if key in PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS:
+            summary[key] = str(value)
+        else:
+            summary[key] = int(value) if key in int_keys else float(value)
     anchor_present = [
         key for key in PHYSICS_RUNTIME_ANCHOR_DIAGNOSTIC_KEYS if key in payload
     ]

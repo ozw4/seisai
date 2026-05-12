@@ -259,6 +259,18 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
         'ransac_fit_time_p50_sec': np.asarray(0.05, dtype=np.float64),
         'ransac_fit_time_p90_sec': np.asarray(0.09, dtype=np.float64),
         'ransac_fit_time_p99_sec': np.asarray(0.099, dtype=np.float64),
+        'observation_sampling_enabled': np.asarray(1, dtype=np.int64),
+        'observation_sampling_method': np.asarray('offset_bin'),
+        'max_obs_per_fit': np.asarray(256, dtype=np.int64),
+        'n_offset_bins': np.asarray(64, dtype=np.int64),
+        'obs_count_before_p50': np.asarray(12.0, dtype=np.float64),
+        'obs_count_before_p90': np.asarray(16.0, dtype=np.float64),
+        'obs_count_before_p99': np.asarray(19.0, dtype=np.float64),
+        'obs_count_after_p50': np.asarray(8.0, dtype=np.float64),
+        'obs_count_after_p90': np.asarray(10.0, dtype=np.float64),
+        'obs_count_after_p99': np.asarray(11.0, dtype=np.float64),
+        'obs_downsample_rate_p50': np.asarray(0.25, dtype=np.float64),
+        'obs_downsample_rate_p90': np.asarray(0.5, dtype=np.float64),
         'obs_count_for_fit_p50': np.asarray(8.0, dtype=np.float64),
         'obs_count_for_fit_p90': np.asarray(10.0, dtype=np.float64),
         'obs_count_for_fit_p99': np.asarray(11.0, dtype=np.float64),
@@ -332,6 +344,9 @@ def test_physical_runtime_diagnostics_initializes_with_zero_counts() -> None:
     assert summary['n_cache_hits'] == 0
     assert summary['n_cache_misses'] == 0
     assert summary['cache_hit_rate'] == 0.0
+    assert summary['observation_sampling_enabled'] == 0
+    assert summary['obs_count_before_p50'] == 0.0
+    assert summary['obs_count_after_p50'] == 0.0
     assert summary['n_source_groups'] == 0
     assert summary['n_unique_fit_contexts'] == 0
     assert summary['n_t0_shifted_groups'] == 0
@@ -341,13 +356,16 @@ def test_physical_runtime_diagnostics_initializes_with_zero_counts() -> None:
 def test_physical_runtime_diagnostics_fit_timer_increments_counts() -> None:
     diagnostics = PhysicalRuntimeDiagnostics()
 
-    with diagnostics.time_ransac_fit(obs_count=12):
+    with diagnostics.time_ransac_fit(obs_count=8, obs_count_before=12):
         pass
 
     summary = diagnostics.to_summary()
     assert summary['n_fit_calls'] == 1
     assert summary['ransac_fit_total_sec'] >= 0.0
-    assert summary['obs_count_for_fit_p50'] == 12.0
+    assert summary['obs_count_for_fit_p50'] == 8.0
+    assert summary['obs_count_before_p50'] == 12.0
+    assert summary['obs_count_after_p50'] == 8.0
+    assert summary['obs_downsample_rate_p50'] == pytest.approx(1.0 / 3.0)
 
 
 def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> None:
@@ -396,6 +414,15 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.physical_runtime.adaptive_refit.fallback_if_refit_fails == (
         'nearest_anchor_plus_t0_shift'
     )
+    assert cfg.physical_runtime.observation_sampling.enabled is False
+    assert cfg.physical_runtime.observation_sampling.method == 'offset_bin'
+    assert cfg.physical_runtime.observation_sampling.max_obs_per_fit == 256
+    assert cfg.physical_runtime.observation_sampling.n_offset_bins == 64
+    assert cfg.physical_runtime.observation_sampling.bin_pick == 'pmax_max'
+    assert (
+        cfg.physical_runtime.observation_sampling.min_obs_per_fit_after_sampling == 8
+    )
+    assert cfg.physical_runtime.observation_sampling.preserve_edge_bins is True
 
 
 def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
@@ -452,6 +479,15 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
                     'min_valid_for_resid_check': 6,
                     'fallback_if_refit_fails': 'nearest_anchor',
                 },
+                'observation_sampling': {
+                    'enabled': True,
+                    'method': 'offset_bin',
+                    'max_obs_per_fit': 100,
+                    'n_offset_bins': 20,
+                    'bin_pick': 'median_time',
+                    'min_obs_per_fit_after_sampling': 6,
+                    'preserve_edge_bins': False,
+                },
             },
         }
     )
@@ -477,6 +513,11 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
     assert cfg.physical_runtime.adaptive_refit.fallback_if_refit_fails == (
         'nearest_anchor'
     )
+    assert cfg.physical_runtime.observation_sampling.enabled is True
+    assert cfg.physical_runtime.observation_sampling.max_obs_per_fit == 100
+    assert cfg.physical_runtime.observation_sampling.n_offset_bins == 20
+    assert cfg.physical_runtime.observation_sampling.bin_pick == 'median_time'
+    assert cfg.physical_runtime.observation_sampling.preserve_edge_bins is False
 
 
 def test_physical_center_example_config_enables_physical_trend() -> None:
@@ -656,6 +697,41 @@ def test_physical_center_example_config_enables_physical_trend() -> None:
                 }
             },
             'physical_runtime.adaptive_refit.fallback_if_refit_fails',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'observation_sampling': {'max_obs_per_fit': 0}
+                }
+            },
+            'physical_runtime.observation_sampling.max_obs_per_fit',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'observation_sampling': {'method': 'trace_stride'}
+                }
+            },
+            'physical_runtime.observation_sampling.method',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'observation_sampling': {'bin_pick': 'first'}
+                }
+            },
+            'physical_runtime.observation_sampling.bin_pick',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'observation_sampling': {
+                        'max_obs_per_fit': 8,
+                        'min_obs_per_fit_after_sampling': 9,
+                    }
+                }
+            },
+            'min_obs_per_fit_after_sampling',
         ),
     ],
 )

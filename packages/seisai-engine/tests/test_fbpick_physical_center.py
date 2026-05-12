@@ -4,6 +4,9 @@ from dataclasses import replace
 
 import numpy as np
 import torch
+from seisai_engine.pipelines.fbpick.physics import (
+    physical_center as physical_center_mod,
+)
 from seisai_engine.pipelines.fbpick.physics.config import load_physics_lite_config
 from seisai_engine.pipelines.fbpick.physics.feasible import FeasibleBandResult
 from seisai_engine.pipelines.fbpick.physics.merge import MergeResult
@@ -302,6 +305,219 @@ def test_physical_center_calls_existing_two_piece_ransac(monkeypatch) -> None:
     assert model.predict_call_sizes.count(1) == int(table.n_traces)
     assert model.predict_call_sizes.count(int(table.n_traces)) == 1
     assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+
+
+def test_observation_sampling_limits_observations_before_ransac(monkeypatch) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    inputs = _make_inputs(offsets_m=np.linspace(50.0, 2500.0, 1000, dtype=np.float32))
+    coarse_npz, table, feasible, trend, merged = inputs
+    diagnostics = PhysicalRuntimeDiagnostics()
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_runtime': {
+                    'observation_sampling': {
+                        'enabled': True,
+                        'max_obs_per_fit': 100,
+                        'n_offset_bins': 200,
+                        'bin_pick': 'pmax_max',
+                        'min_obs_per_fit_after_sampling': 8,
+                        'preserve_edge_bins': True,
+                    }
+                },
+                'two_piece_ransac': {'min_pts': 4},
+            }
+        ),
+        runtime_diagnostics=diagnostics,
+    )
+
+    assert len(calls) == 1
+    assert int(calls[0].size) <= 100
+    summary = diagnostics.to_summary()
+    assert summary['observation_sampling_enabled'] == 1
+    assert summary['obs_count_before_p50'] == 1000.0
+    assert summary['obs_count_after_p50'] <= 100.0
+    assert summary['obs_downsample_rate_p50'] > 0.0
+    assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+
+
+def test_observation_sampling_does_not_use_unsampled_fallback_for_ransac(
+    monkeypatch,
+) -> None:
+    calls: list[np.ndarray] = []
+
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        calls.append(x_abs.detach().cpu().numpy().copy())
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    inputs = _make_inputs(offsets_m=np.linspace(50.0, 2500.0, 1000, dtype=np.float32))
+    coarse_npz, table, feasible, trend, merged = inputs
+    diagnostics = PhysicalRuntimeDiagnostics()
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_runtime': {
+                    'observation_sampling': {
+                        'enabled': True,
+                        'max_obs_per_fit': 100,
+                        'n_offset_bins': 4,
+                        'min_obs_per_fit_after_sampling': 8,
+                    }
+                },
+                'two_piece_ransac': {'min_pts': 3},
+            }
+        ),
+        runtime_diagnostics=diagnostics,
+    )
+
+    assert calls == []
+    assert diagnostics.n_fit_calls == 0
+    assert np.all(
+        result.physical_model_failure_reason
+        == np.uint8(PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS)
+    )
+
+
+def test_observation_sampling_is_deterministic_for_pmax_max() -> None:
+    obs_indices = np.arange(1000, dtype=np.int64)
+    offsets = np.linspace(10.0, 5000.0, obs_indices.size, dtype=np.float32)
+    pmax = np.linspace(0.1, 0.9, obs_indices.size, dtype=np.float32)
+    cfg = _physical_cfg(
+        {
+            'physical_runtime': {
+                'observation_sampling': {
+                    'enabled': True,
+                    'max_obs_per_fit': 100,
+                    'n_offset_bins': 200,
+                    'bin_pick': 'pmax_max',
+                }
+            }
+        }
+    )
+
+    first = physical_center_mod._sample_observation_indices_for_fit(
+        obs_indices=obs_indices,
+        offset_abs_m=offsets,
+        pick_t_sec=_two_piece_time_sec(offsets),
+        coarse_pmax=pmax,
+        cfg=cfg,
+    )
+    second = physical_center_mod._sample_observation_indices_for_fit(
+        obs_indices=obs_indices,
+        offset_abs_m=offsets,
+        pick_t_sec=_two_piece_time_sec(offsets),
+        coarse_pmax=pmax,
+        cfg=cfg,
+    )
+
+    assert int(first.size) <= 100
+    np.testing.assert_array_equal(first, second)
+
+
+def test_observation_sampling_preserves_edge_bins() -> None:
+    obs_indices = np.arange(1000, dtype=np.int64)
+    offsets = np.linspace(10.0, 5000.0, obs_indices.size, dtype=np.float32)
+    pmax = np.zeros((obs_indices.size,), dtype=np.float32)
+    pmax[0] = 1.0
+    pmax[-1] = 1.0
+    cfg = _physical_cfg(
+        {
+            'physical_runtime': {
+                'observation_sampling': {
+                    'enabled': True,
+                    'max_obs_per_fit': 20,
+                    'n_offset_bins': 100,
+                    'bin_pick': 'pmax_max',
+                    'preserve_edge_bins': True,
+                }
+            }
+        }
+    )
+
+    sampled = physical_center_mod._sample_observation_indices_for_fit(
+        obs_indices=obs_indices,
+        offset_abs_m=offsets,
+        pick_t_sec=_two_piece_time_sec(offsets),
+        coarse_pmax=pmax,
+        cfg=cfg,
+    )
+
+    assert int(sampled.size) <= 20
+    assert int(sampled[0]) == 0
+    assert int(sampled[-1]) == int(obs_indices[-1])
+
+
+def test_observation_sampling_keeps_small_observation_sets_unchanged() -> None:
+    obs_indices = np.arange(50, dtype=np.int64)
+    offsets = np.linspace(10.0, 500.0, obs_indices.size, dtype=np.float32)
+    cfg = _physical_cfg(
+        {
+            'physical_runtime': {
+                'observation_sampling': {
+                    'enabled': True,
+                    'max_obs_per_fit': 100,
+                    'n_offset_bins': 20,
+                }
+            }
+        }
+    )
+
+    sampled = physical_center_mod._sample_observation_indices_for_fit(
+        obs_indices=obs_indices,
+        offset_abs_m=offsets,
+        pick_t_sec=_two_piece_time_sec(offsets),
+        coarse_pmax=None,
+        cfg=cfg,
+    )
+
+    np.testing.assert_array_equal(sampled, obs_indices)
+
+
+def test_observation_sampling_marks_insufficient_when_too_few_bins() -> None:
+    obs_indices = np.arange(1000, dtype=np.int64)
+    offsets = np.linspace(10.0, 5000.0, obs_indices.size, dtype=np.float32)
+    cfg = _physical_cfg(
+        {
+            'physical_runtime': {
+                'observation_sampling': {
+                    'enabled': True,
+                    'max_obs_per_fit': 100,
+                    'n_offset_bins': 4,
+                    'min_obs_per_fit_after_sampling': 8,
+                }
+            }
+        }
+    )
+
+    sampled = physical_center_mod._sample_observation_indices_for_fit(
+        obs_indices=obs_indices,
+        offset_abs_m=offsets,
+        pick_t_sec=_two_piece_time_sec(offsets),
+        coarse_pmax=None,
+        cfg=cfg,
+    )
+
+    assert sampled.dtype == np.int64
+    assert int(sampled.size) == 0
 
 
 def test_all_zero_geometry_spread_falls_back_before_two_piece_fit(

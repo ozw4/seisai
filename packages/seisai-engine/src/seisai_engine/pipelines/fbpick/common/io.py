@@ -265,7 +265,13 @@ def _validate_runtime_diagnostic_scalar(name: str, arr: np.ndarray) -> None:
         raise ValueError(msg)
     if (
         name
-        in {'cache_hit_rate', 'fit_call_reduction_rate_vs_full', 'adaptive_refit_rate'}
+        in {
+            'cache_hit_rate',
+            'fit_call_reduction_rate_vs_full',
+            'adaptive_refit_rate',
+            'obs_downsample_rate_p50',
+            'obs_downsample_rate_p90',
+        }
         and value > 1.0
     ):
         msg = f'{name} must lie in [0, 1]'
@@ -394,6 +400,17 @@ _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES = {
     'ransac_fit_time_p50_sec': np.float64,
     'ransac_fit_time_p90_sec': np.float64,
     'ransac_fit_time_p99_sec': np.float64,
+    'observation_sampling_enabled': np.int64,
+    'max_obs_per_fit': np.int64,
+    'n_offset_bins': np.int64,
+    'obs_count_before_p50': np.float64,
+    'obs_count_before_p90': np.float64,
+    'obs_count_before_p99': np.float64,
+    'obs_count_after_p50': np.float64,
+    'obs_count_after_p90': np.float64,
+    'obs_count_after_p99': np.float64,
+    'obs_downsample_rate_p50': np.float64,
+    'obs_downsample_rate_p90': np.float64,
     'obs_count_for_fit_p50': np.float64,
     'obs_count_for_fit_p90': np.float64,
     'obs_count_for_fit_p99': np.float64,
@@ -403,7 +420,9 @@ _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES = {
     'anchor_source_distance_p90_m': np.float64,
     'anchor_source_distance_max_m': np.float64,
 }
-_ROBUST_RUNTIME_DIAGNOSTIC_STRING_KEYS = frozenset({'anchor_selection_mode'})
+_ROBUST_RUNTIME_DIAGNOSTIC_STRING_KEYS = frozenset(
+    {'anchor_selection_mode', 'observation_sampling_method'}
+)
 
 _ROBUST_RUNTIME_DIAGNOSTIC_SPECS = tuple(
     (key, _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES[key])
@@ -669,6 +688,18 @@ def save_robust_npz(
     ransac_fit_time_p50_sec=None,
     ransac_fit_time_p90_sec=None,
     ransac_fit_time_p99_sec=None,
+    observation_sampling_enabled=None,
+    observation_sampling_method=None,
+    max_obs_per_fit=None,
+    n_offset_bins=None,
+    obs_count_before_p50=None,
+    obs_count_before_p90=None,
+    obs_count_before_p99=None,
+    obs_count_after_p50=None,
+    obs_count_after_p90=None,
+    obs_count_after_p99=None,
+    obs_downsample_rate_p50=None,
+    obs_downsample_rate_p90=None,
     obs_count_for_fit_p50=None,
     obs_count_for_fit_p90=None,
     obs_count_for_fit_p99=None,
@@ -888,6 +919,17 @@ def save_robust_npz(
         'ransac_fit_time_p50_sec': ransac_fit_time_p50_sec,
         'ransac_fit_time_p90_sec': ransac_fit_time_p90_sec,
         'ransac_fit_time_p99_sec': ransac_fit_time_p99_sec,
+        'observation_sampling_enabled': observation_sampling_enabled,
+        'max_obs_per_fit': max_obs_per_fit,
+        'n_offset_bins': n_offset_bins,
+        'obs_count_before_p50': obs_count_before_p50,
+        'obs_count_before_p90': obs_count_before_p90,
+        'obs_count_before_p99': obs_count_before_p99,
+        'obs_count_after_p50': obs_count_after_p50,
+        'obs_count_after_p90': obs_count_after_p90,
+        'obs_count_after_p99': obs_count_after_p99,
+        'obs_downsample_rate_p50': obs_downsample_rate_p50,
+        'obs_downsample_rate_p90': obs_downsample_rate_p90,
         'obs_count_for_fit_p50': obs_count_for_fit_p50,
         'obs_count_for_fit_p90': obs_count_for_fit_p90,
         'obs_count_for_fit_p99': obs_count_for_fit_p99,
@@ -907,6 +949,11 @@ def save_robust_npz(
         arrays['anchor_selection_mode'] = _coerce_string_scalar(
             'anchor_selection_mode',
             anchor_selection_mode,
+        )
+    if observation_sampling_method is not None:
+        arrays['observation_sampling_method'] = _coerce_string_scalar(
+            'observation_sampling_method',
+            observation_sampling_method,
         )
 
     robust_pick_i_arr = arrays['robust_pick_i']

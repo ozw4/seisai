@@ -47,6 +47,9 @@ RUNTIME_TOTAL_KEYS = (
 RUNTIME_COUNT_KEYS = (
     'n_fit_calls',
     'n_anchor_fit_calls',
+    'observation_sampling_enabled',
+    'max_obs_per_fit',
+    'n_offset_bins',
     'n_source_groups',
     'n_non_anchor_groups',
     'n_reused_predictions',
@@ -66,9 +69,18 @@ RUNTIME_RATE_KEYS = (
 )
 RUNTIME_ANCHOR_VALUE_KEYS = (
     'anchor_selection_mode',
+    'observation_sampling_method',
     'anchor_source_distance_p50_m',
     'anchor_source_distance_p90_m',
     'anchor_source_distance_max_m',
+    'obs_count_before_p50',
+    'obs_count_before_p90',
+    'obs_count_before_p99',
+    'obs_count_after_p50',
+    'obs_count_after_p90',
+    'obs_count_after_p99',
+    'obs_downsample_rate_p50',
+    'obs_downsample_rate_p90',
     't0_shift_ms_p50',
     't0_shift_ms_p90',
     't0_shift_ms_p99',
@@ -274,7 +286,10 @@ def _load_runtime_json(path: Path) -> dict[str, float | int | str] | None:
         if not isinstance(value, int | float):
             msg = f'runtime summary key {key} must be numeric: {path}'
             raise TypeError(msg)
-        if key.startswith('n_'):
+        if key.startswith('n_') or key in {
+            'observation_sampling_enabled',
+            'max_obs_per_fit',
+        }:
             out[key] = int(value)
         else:
             out[key] = float(value)

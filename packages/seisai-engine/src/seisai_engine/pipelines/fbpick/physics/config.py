@@ -14,9 +14,10 @@ from seisai_utils.config import (
 __all__ = [
     'DEFAULT_PHYSICS_LITE_CONFIG',
     'NeighborContextCfg',
+    'PhysicalAdaptiveRefitCfg',
     'PhysicalAnchorReuseCfg',
     'PhysicalAnchorSelectionCfg',
-    'PhysicalAdaptiveRefitCfg',
+    'PhysicalObservationSamplingCfg',
     'PhysicalPrefilterCfg',
     'PhysicalProjectionCfg',
     'PhysicalRuntimeCfg',
@@ -180,6 +181,17 @@ class PhysicalAdaptiveRefitCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalObservationSamplingCfg:
+    enabled: bool = False
+    method: str = 'offset_bin'
+    max_obs_per_fit: int = 256
+    n_offset_bins: int = 64
+    bin_pick: str = 'pmax_max'
+    min_obs_per_fit_after_sampling: int = 8
+    preserve_edge_bins: bool = True
+
+
+@dataclass(frozen=True)
 class PhysicalRuntimeCfg:
     fit_policy: str = 'full'
     diagnostics_enabled: bool = True
@@ -188,6 +200,9 @@ class PhysicalRuntimeCfg:
     anchor_reuse: PhysicalAnchorReuseCfg = PhysicalAnchorReuseCfg()
     t0_shift: PhysicalT0ShiftCfg = PhysicalT0ShiftCfg()
     adaptive_refit: PhysicalAdaptiveRefitCfg = PhysicalAdaptiveRefitCfg()
+    observation_sampling: PhysicalObservationSamplingCfg = (
+        PhysicalObservationSamplingCfg()
+    )
 
 
 @dataclass(frozen=True)
@@ -510,6 +525,32 @@ def _load_physical_adaptive_refit_cfg(
     )
 
 
+def _load_physical_observation_sampling_cfg(
+    cfg: dict[str, Any],
+) -> PhysicalObservationSamplingCfg:
+    method = optional_str(cfg, 'method', 'offset_bin')
+    bin_pick = optional_str(cfg, 'bin_pick', 'pmax_max')
+    if method is None:
+        msg = 'physical_runtime.observation_sampling.method must not be null'
+        raise TypeError(msg)
+    if bin_pick is None:
+        msg = 'physical_runtime.observation_sampling.bin_pick must not be null'
+        raise TypeError(msg)
+    return PhysicalObservationSamplingCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=False)),
+        method=str(method),
+        max_obs_per_fit=int(optional_int(cfg, 'max_obs_per_fit', 256)),
+        n_offset_bins=int(optional_int(cfg, 'n_offset_bins', 64)),
+        bin_pick=str(bin_pick),
+        min_obs_per_fit_after_sampling=int(
+            optional_int(cfg, 'min_obs_per_fit_after_sampling', 8)
+        ),
+        preserve_edge_bins=bool(
+            optional_bool(cfg, 'preserve_edge_bins', default=True)
+        ),
+    )
+
+
 def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
     return PhysicalRuntimeCfg(
         fit_policy=optional_str(cfg, 'fit_policy', 'full'),
@@ -541,6 +582,12 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
             _require_dict(
                 cfg.get('adaptive_refit'),
                 key='physical_runtime.adaptive_refit',
+            )
+        ),
+        observation_sampling=_load_physical_observation_sampling_cfg(
+            _require_dict(
+                cfg.get('observation_sampling'),
+                key='physical_runtime.observation_sampling',
             )
         ),
     )
@@ -721,6 +768,38 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
             'physical_runtime.anchor_reuse.fallback_if_no_compatible_segment '
             "must be one of 'full_fit', 'existing_trend', or 'robust', "
             f'got {reuse.fallback_if_no_compatible_segment!r}'
+        )
+        raise ValueError(msg)
+    sampling = cfg.observation_sampling
+    if sampling.method != 'offset_bin':
+        msg = (
+            "physical_runtime.observation_sampling.method must be 'offset_bin', "
+            f'got {sampling.method!r}'
+        )
+        raise ValueError(msg)
+    _validate_positive_int(
+        'physical_runtime.observation_sampling.max_obs_per_fit',
+        sampling.max_obs_per_fit,
+    )
+    _validate_positive_int(
+        'physical_runtime.observation_sampling.n_offset_bins',
+        sampling.n_offset_bins,
+    )
+    _validate_positive_int(
+        'physical_runtime.observation_sampling.min_obs_per_fit_after_sampling',
+        sampling.min_obs_per_fit_after_sampling,
+    )
+    if int(sampling.min_obs_per_fit_after_sampling) > int(sampling.max_obs_per_fit):
+        msg = (
+            'physical_runtime.observation_sampling.'
+            'min_obs_per_fit_after_sampling must be <= max_obs_per_fit'
+        )
+        raise ValueError(msg)
+    if sampling.bin_pick not in {'pmax_max', 'median_time', 'random'}:
+        msg = (
+            'physical_runtime.observation_sampling.bin_pick must be one of '
+            "'pmax_max', 'median_time', or 'random', "
+            f'got {sampling.bin_pick!r}'
         )
         raise ValueError(msg)
 
