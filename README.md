@@ -330,6 +330,7 @@ pytest -q -m integration
 - MLflow tracking 仕様: `docs/spec/mlflow_tracking_spec.md`
 - `run_psn_train.py` スモークテスト手順: `docs/testing/smoke_run_train_psn.md`
 - FBPick physics runtime diagnostics 計測メモ: `docs/testing/fbpick_physics_runtime_diagnostics_issue_90.md`
+- Arakawa runtime speedup benchmark 手順: `proc/arakawa/readme_runtime_speedup.md`
 - `SegyGatherPairDataset` 例外系テスト技術メモ: `docs/testing/test_segy_gather_pair_dataset_exceptions.md`
 - `SegyGatherPairDataset` Pair整合性テスト技術メモ: `docs/testing/test_segy_gather_pair_dataset_pair_consistency.md`
 

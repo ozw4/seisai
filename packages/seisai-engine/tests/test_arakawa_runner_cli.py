@@ -57,6 +57,13 @@ def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
                     'out_path': '/old/robust.npz',
                 },
                 'physical_trend': {'enabled': True},
+                'physical_runtime': {
+                    'diagnostics_enabled': True,
+                    'anchor_selection': {
+                        'include_first': False,
+                        'include_last': False,
+                    },
+                },
             },
             sort_keys=False,
         ),
@@ -65,7 +72,20 @@ def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
 
     cfg_path = tmp_path / 'runner.yaml'
     cfg_path.write_text(
-        yaml.safe_dump({'paths': {'segy': str(segy)}}),
+        yaml.safe_dump(
+            {
+                'paths': {'segy': str(segy)},
+                'physical_runtime': {
+                    'fit_policy': 'anchor_source_xy',
+                    'anchor_selection': {
+                        'enabled': True,
+                        'anchor_stride_source_groups': 3,
+                        'include_last': True,
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
         encoding='utf-8',
     )
 
@@ -133,6 +153,27 @@ def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
     assert calls['coarse_cfg']['model']['pre_stages'] == 3
     assert calls['physics_cfg']['paths']['coarse_npz_path'] == str(expected_coarse)
     assert calls['physics_cfg']['paths']['out_path'] == str(expected_robust)
+    assert calls['physics_cfg']['physical_runtime']['diagnostics_enabled'] is True
+    assert calls['physics_cfg']['physical_runtime']['fit_policy'] == 'anchor_source_xy'
+    assert (
+        calls['physics_cfg']['physical_runtime']['anchor_selection']['enabled'] is True
+    )
+    assert (
+        calls['physics_cfg']['physical_runtime']['anchor_selection'][
+            'anchor_stride_source_groups'
+        ]
+        == 3
+    )
+    assert (
+        calls['physics_cfg']['physical_runtime']['anchor_selection'][
+            'include_first'
+        ]
+        is False
+    )
+    assert (
+        calls['physics_cfg']['physical_runtime']['anchor_selection']['include_last']
+        is True
+    )
     assert calls['export_kwargs']['robust_npz_path'] == expected_robust
     assert calls['export_kwargs']['out_crd_path'] == expected_crd
     assert calls['export_kwargs']['pick_key'] == 'physical_center_i'

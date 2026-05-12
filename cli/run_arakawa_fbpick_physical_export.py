@@ -228,12 +228,22 @@ def _prepare_physics_config(
     template_path: Path,
     coarse_npz_path: Path,
     robust_npz_path: Path,
+    cfg: dict[str, Any],
 ) -> dict[str, Any]:
+    from seisai_utils.overrides import deep_merge_dict
+
     out = deepcopy(_load_yaml(template_path))
     paths = _as_dict(out.get('paths'), name='physics_template.paths')
     paths['coarse_npz_path'] = str(coarse_npz_path)
     paths['out_path'] = str(robust_npz_path)
     out['paths'] = paths
+    if 'physical_runtime' in cfg:
+        runtime_override = _as_dict(cfg['physical_runtime'], name='physical_runtime')
+        runtime_base = _as_dict(
+            out.get('physical_runtime'),
+            name='physics_template.physical_runtime',
+        )
+        out['physical_runtime'] = deep_merge_dict(runtime_base, runtime_override)
     return out
 
 
@@ -650,6 +660,7 @@ def run_pipeline(
         template_path=physics_template,
         coarse_npz_path=coarse_npz_path,
         robust_npz_path=robust_npz_path,
+        cfg=cfg,
     )
     _write_yaml(physics_cfg_path, physics_cfg)
 
