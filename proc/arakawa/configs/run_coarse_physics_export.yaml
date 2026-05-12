@@ -11,11 +11,19 @@ paths:
   # Optional. When set, export also evaluates against this grstat first-break file.
   # reference_grstat_path: /path/to/reference_first_break.crd
 
+  # Optional. Used by run.eval_only=true when the export .npz is not at the
+  # default grstat output path.
+  # export_npz: /path/to/<TAG>.physical_center.snap_peak.ltcor2.npz
+
   # Optional. Defaults to the existing Arakawa templates below.
   # coarse_template: /workspace/proc/arakawa/configs/coarse_one.yaml
   # physics_template: /workspace/proc/arakawa/configs/physics_one.yaml
 
 run:
+  # true: skip Coarse/Physics/export and rerun only grstat reference evaluation
+  # from an existing export .npz.
+  eval_only: false
+
   # false: reuse existing coarse/robust/export artifacts.
   # true: regenerate existing artifacts.
   force: false
@@ -29,6 +37,8 @@ export:
   max_shift_samples: 2
   endian: big
   duplicate_policy: error
+  grstat_format: recno_channel_range
+  values_per_line: 5
   header_comment: Arakawa physical_center_i snap to phase
 
 # Used only when paths.reference_grstat_path is set.

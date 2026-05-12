@@ -6,20 +6,14 @@ import csv
 import json
 from collections import Counter
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Literal
 
 import numpy as np
+from seisai_pick.pickio.io_grstat import GrstatMatrix
 
 PickMode = Literal['peak', 'trough', 'rising', 'trailing']
 DuplicatePolicy = Literal['error', 'first', 'last']
-
-
-class GrstatMatrix(NamedTuple):
-    """Parsed grstat first-break matrix in sample-index domain."""
-
-    record_numbers: np.ndarray
-    samples: np.ndarray
-    raw_values: np.ndarray
+GrstatOutputFormat = Literal['legacy', 'recno_channel_range']
 
 
 def _load_runtime():
@@ -36,18 +30,6 @@ def _load_runtime():
     }
 
 
-def _parse_int_or_none(s: str) -> int | None:
-    s = s.strip()
-    if not s:
-        return None
-    if s[0] == '-':
-        return int(s) if s[1:].isdigit() else None
-    return int(s) if s.isdigit() else None
-
-
-def _iter_fixed_width(payload: str, width: int) -> list[str]:
-    return [payload[i : i + width] for i in range(0, len(payload), width)]
-
 
 def load_grstat_matrix(
     path: str | Path,
@@ -55,113 +37,19 @@ def load_grstat_matrix(
     dt_multiplier: float,
     strict_blocks: bool = True,
 ) -> GrstatMatrix:
-    """Load grstat CRD text into a 2D sample-index matrix.
+    """Backward-compatible wrapper for grstat matrix parsing.
 
-    This parser preserves ``rec.no.`` so prediction rows can be aligned by FFID
-    during evaluation.
+    The implementation lives in ``seisai_pick.pickio.io_grstat`` so grstat IO
+    has a single source of truth. This wrapper keeps existing engine imports and
+    tests working.
     """
-    if dt_multiplier <= 0:
-        msg = 'dt_multiplier must be > 0'
-        raise ValueError(msg)
+    from seisai_pick.pickio.io_grstat import load_grstat_matrix as _load
 
-    p = Path(path)
-    if not p.is_file():
-        raise FileNotFoundError(p)
-
-    records: list[tuple[int, dict[int, int]]] = []
-    current_rec: int | None = None
-    current_values: dict[int, int] = {}
-    expected_next_start = 1
-
-    def _flush_record() -> None:
-        nonlocal current_rec, current_values
-        if current_rec is not None:
-            records.append((current_rec, dict(current_values)))
-        current_rec = None
-        current_values = {}
-
-    with p.open('r', encoding='utf-8', errors='replace') as fh:
-        for line_no, raw in enumerate(fh, start=1):
-            line = raw.rstrip('\n')
-            if line.startswith('* rec.no.='):
-                _flush_record()
-                rec = _parse_int_or_none(line[len('* rec.no.=') :])
-                if rec is None:
-                    msg = f'invalid rec.no. at line {line_no}: {line!r}'
-                    raise ValueError(msg)
-                current_rec = rec
-                expected_next_start = 1
-                continue
-
-            if not line.startswith('fb'):
-                continue
-
-            if current_rec is None:
-                msg = f'fb line appears before rec.no. at line {line_no}'
-                raise ValueError(msg)
-            if len(line) < 20:
-                msg = f'fb line too short at line {line_no}: {line!r}'
-                raise ValueError(msg)
-
-            start = _parse_int_or_none(line[2:15])
-            end = _parse_int_or_none(line[15:20])
-            if start is None or end is None or end < start:
-                msg = f'invalid fb start/end at line {line_no}: {line!r}'
-                raise ValueError(msg)
-            if strict_blocks and start != expected_next_start:
-                msg = (
-                    f'non-contiguous fb block at line {line_no}: '
-                    f'start={start}, expected={expected_next_start}'
-                )
-                raise ValueError(msg)
-            expected_next_start = end + 1
-
-            chunks = _iter_fixed_width(line[20:], 5)
-            expected_count = end - start + 1
-            if len(chunks) != expected_count:
-                msg = (
-                    f'fb value count mismatch at line {line_no}: '
-                    f'{len(chunks)} != {expected_count}'
-                )
-                raise ValueError(msg)
-
-            for offset, chunk in enumerate(chunks):
-                value = _parse_int_or_none(chunk)
-                if value is None:
-                    msg = f'invalid fb value at line {line_no}: {chunk!r}'
-                    raise ValueError(msg)
-                current_values[start + offset] = value
-
-    _flush_record()
-
-    if not records:
-        msg = f'no records found in grstat file: {p}'
-        raise ValueError(msg)
-
-    max_chno = max((max(vals) if vals else 0) for _, vals in records)
-    record_numbers = np.asarray([rec for rec, _ in records], dtype=np.int32)
-    raw_values = np.zeros((len(records), max_chno), dtype=np.int32)
-
-    for row, (_, values) in enumerate(records):
-        for chno, value in values.items():
-            if chno < 1:
-                msg = f'invalid channel number {chno} in {p}'
-                raise ValueError(msg)
-            raw_values[row, chno - 1] = int(value)
-
-    samples = np.floor(raw_values.astype(np.float64) / float(dt_multiplier)).astype(
-        np.int32
+    return _load(
+        path,
+        dt_multiplier=dt_multiplier,
+        strict_blocks=strict_blocks,
     )
-    samples[raw_values <= 0] = 0
-    samples[raw_values == -9999] = 0
-    samples[samples < 0] = 0
-
-    return GrstatMatrix(
-        record_numbers=record_numbers,
-        samples=samples,
-        raw_values=raw_values,
-    )
-
 
 def _choose_offset(candidates: np.ndarray) -> int:
     if candidates.size == 0:
@@ -357,7 +245,7 @@ def _align_reference_samples(
 
     return (
         aligned.astype(np.int32, copy=False),
-        raw_aligned.astype(np.int32, copy=False),
+        raw_aligned.astype(np.float64, copy=False),
         align_mode,
     )
 
@@ -473,7 +361,7 @@ def evaluate_grstat_matrix(
                     'ffid': int(ffid),
                     'chno': int(col_i + 1),
                     'reference_sample': ref_i,
-                    'reference_grstat_value': int(ref_raw[row_i, col_i]),
+                    'reference_grstat_value': float(ref_raw[row_i, col_i]),
                     'prediction_sample': pred_i,
                     'error_samples': error_i,
                     'abs_error_samples': abs(error_i) if error_i != '' else '',
@@ -516,6 +404,92 @@ def _write_rows_csv(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
+
+def evaluate_export_npz_against_grstat(
+    *,
+    export_npz_path: str | Path,
+    reference_grstat_path: str | Path,
+    prediction_crd_path: str | Path | None = None,
+    eval_summary_json_path: str | Path | None = None,
+    eval_summary_csv_path: str | Path | None = None,
+    eval_per_trace_csv_path: str | Path | None = None,
+    strict_gather_numbers: bool = True,
+    strict_shape: bool = True,
+) -> dict[str, object]:
+    """Re-run grstat evaluation from an existing export ``.npz`` artifact.
+
+    The existing export artifact already contains the snapped prediction matrix
+    and FFID row order, so this path does not reopen the SEG-Y, re-snap picks,
+    or rewrite the grstat ``.crd``. Use it when only the reference grstat file
+    or evaluation outputs need to be refreshed.
+    """
+    export_path = Path(export_npz_path).expanduser().resolve()
+    if not export_path.is_file():
+        raise FileNotFoundError(export_path)
+
+    ref_path = Path(reference_grstat_path).expanduser().resolve()
+    if not ref_path.is_file():
+        raise FileNotFoundError(ref_path)
+
+    z = np.load(export_path, allow_pickle=False)
+    required = {'fb_mat_samples', 'gather_range_ffids'}
+    missing = sorted(required.difference(z.files))
+    if missing:
+        msg = f'export npz missing required keys for eval-only: {missing}'
+        raise KeyError(msg)
+
+    prediction_samples = np.asarray(z['fb_mat_samples'], dtype=np.int32)
+    prediction_ffids = [int(v) for v in np.asarray(z['gather_range_ffids']).tolist()]
+    if 'dt_multiplier' in z.files:
+        dt_mult = float(np.asarray(z['dt_multiplier']).item())
+    elif 'dt_sec' in z.files:
+        dt_mult = float(np.asarray(z['dt_sec']).item()) * 1000.0
+    else:
+        msg = 'export npz missing dt_multiplier or dt_sec'
+        raise KeyError(msg)
+
+    reference = load_grstat_matrix(ref_path, dt_multiplier=dt_mult)
+    eval_summary, eval_rows = evaluate_grstat_matrix(
+        prediction_samples=prediction_samples,
+        prediction_ffids=prediction_ffids,
+        reference=reference,
+        dt_multiplier=dt_mult,
+        strict_gather_numbers=strict_gather_numbers,
+        strict_shape=strict_shape,
+    )
+
+    pred_crd = ''
+    if prediction_crd_path is not None:
+        pred_crd = str(Path(prediction_crd_path).expanduser().resolve())
+    elif 'summary_json' in z.files:
+        try:
+            raw_summary = json.loads(str(np.asarray(z['summary_json']).item()))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw_summary = {}
+        if isinstance(raw_summary, dict) and raw_summary.get('out_crd'):
+            pred_crd = str(raw_summary['out_crd'])
+
+    summary: dict[str, object] = {
+        'reference_grstat': str(ref_path),
+        'prediction_crd': pred_crd,
+        'prediction_npz': str(export_path),
+        **eval_summary,
+    }
+
+    if eval_summary_json_path:
+        path = Path(eval_summary_json_path).expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding='utf-8',
+        )
+    if eval_summary_csv_path:
+        _write_summary_csv(Path(eval_summary_csv_path).expanduser().resolve(), summary)
+    if eval_per_trace_csv_path:
+        _write_rows_csv(Path(eval_per_trace_csv_path).expanduser().resolve(), eval_rows)
+
+    return summary
+
 def export_robust_pick_to_grstat(
     *,
     segy_path: str | Path,
@@ -528,6 +502,8 @@ def export_robust_pick_to_grstat(
     endian: Literal['big', 'little'] = 'big',
     header_comment: str = 'physical_center_i snap to phase',
     duplicate_policy: DuplicatePolicy = 'error',
+    grstat_format: GrstatOutputFormat = 'recno_channel_range',
+    values_per_line: int | None = None,
     dt_multiplier: float | None = None,
     unbounded_zero_crossing: bool = False,
     strict_trace_count: bool = True,
@@ -551,6 +527,12 @@ def export_robust_pick_to_grstat(
         raise ValueError(msg)
     if duplicate_policy not in ('error', 'first', 'last'):
         msg = "duplicate_policy must be one of: 'error', 'first', 'last'"
+        raise ValueError(msg)
+    if grstat_format not in ('legacy', 'recno_channel_range'):
+        msg = "grstat_format must be 'legacy' or 'recno_channel_range'"
+        raise ValueError(msg)
+    if values_per_line is not None and values_per_line <= 0:
+        msg = 'values_per_line must be positive when provided'
         raise ValueError(msg)
 
     rt = _load_runtime()
@@ -649,6 +631,8 @@ def export_robust_pick_to_grstat(
         original=None,
         mode='gather',
         header_comment=header_comment,
+        output_format=grstat_format,
+        values_per_line=values_per_line,
     )
 
     changed = delta != 0
@@ -661,6 +645,10 @@ def export_robust_pick_to_grstat(
         'phase_mode': phase_mode,
         'max_shift_samples': int(max_shift_samples),
         'dt_multiplier': dt_mult,
+        'grstat_format': grstat_format,
+        'values_per_line': values_per_line
+        if values_per_line is not None
+        else (10 if grstat_format == 'legacy' else 5),
         'n_traces': n_traces,
         'changed_count': int(np.count_nonzero(changed)),
         'changed_rate': float(np.mean(changed)) if changed.size else float('nan'),

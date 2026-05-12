@@ -28,10 +28,14 @@ def _load_runtime() -> SimpleNamespace:
 
     from seisai_engine.pipelines.common import load_cfg_with_base_dir, resolve_relpath
     from seisai_engine.pipelines.fbpick.common.path_naming import build_fbpick_tag
-    from seisai_engine.pipelines.fbpick.export.grstat import export_robust_pick_to_grstat
+    from seisai_engine.pipelines.fbpick.export.grstat import (
+        evaluate_export_npz_against_grstat,
+        export_robust_pick_to_grstat,
+    )
 
     return SimpleNamespace(
         build_fbpick_tag=build_fbpick_tag,
+        evaluate_export_npz_against_grstat=evaluate_export_npz_against_grstat,
         export_robust_pick_to_grstat=export_robust_pick_to_grstat,
         load_cfg_with_base_dir=load_cfg_with_base_dir,
         resolve_relpath=resolve_relpath,
@@ -425,13 +429,26 @@ def _prepare_visualization_config(
     )
 
 
-def run_pipeline(config_path: str | Path) -> Path:
+def run_pipeline(
+    config_path: str | Path,
+    *,
+    eval_only: bool | None = None,
+    reference_grstat_path: str | None = None,
+    write_per_trace_csv: bool | None = None,
+) -> Path:
     runtime = _load_runtime()
     cfg, base_dir = runtime.load_cfg_with_base_dir(Path(config_path))
     root = _repo_root()
 
+    run_section = _as_dict(cfg.get('run'), name='run')
+    cfg_eval_only = run_section.get('eval_only', run_section.get('evaluation_only', False))
+    if not isinstance(cfg_eval_only, bool):
+        msg = 'run.eval_only must be bool'
+        raise TypeError(msg)
+    effective_eval_only = cfg_eval_only if eval_only is None else bool(eval_only)
+
     segy_path = _resolve_segy_path(cfg, base_dir=base_dir, runtime=runtime)
-    if not Path(segy_path).is_file():
+    if not Path(segy_path).is_file() and not effective_eval_only:
         raise FileNotFoundError(segy_path)
 
     paths = _as_dict(cfg.get('paths'), name='paths')
@@ -456,7 +473,14 @@ def run_pipeline(config_path: str | Path) -> Path:
     coarse_template = Path(runtime.resolve_relpath(base_dir, coarse_template_value))
     physics_template = Path(runtime.resolve_relpath(base_dir, physics_template_value))
 
-    tag = runtime.build_fbpick_tag(segy_path)
+    tag_value = paths.get('tag')
+    if tag_value is not None:
+        if not isinstance(tag_value, str) or not tag_value:
+            msg = 'paths.tag must be non-empty str when provided'
+            raise TypeError(msg)
+        tag = tag_value
+    else:
+        tag = runtime.build_fbpick_tag(segy_path)
     coarse_dir = Path(
         runtime.resolve_relpath(base_dir, paths.get('coarse_dir', str(work_dir / 'coarse')))
     )
@@ -492,6 +516,109 @@ def run_pipeline(config_path: str | Path) -> Path:
         raise TypeError(msg)
     out_crd = Path(runtime.resolve_relpath(base_dir, out_crd_value))
     out_npz = Path(runtime.resolve_relpath(base_dir, out_npz_value))
+
+    export_npz_value = paths.get(
+        'export_npz', paths.get('prediction_npz', paths.get('out_npz', str(out_npz)))
+    )
+    if not isinstance(export_npz_value, str) or not export_npz_value:
+        msg = 'paths.export_npz must be str when provided'
+        raise TypeError(msg)
+    export_npz = Path(runtime.resolve_relpath(base_dir, export_npz_value))
+
+    reference_grstat_value = reference_grstat_path or _get_first_path_str(
+        cfg,
+        keys=('reference_grstat_path', 'reference_grstat'),
+    )
+    reference_grstat = _resolve_optional_path(
+        reference_grstat_value,
+        base_dir=base_dir,
+        runtime=runtime,
+    )
+    evaluation_cfg = _as_dict(cfg.get('evaluation'), name='evaluation')
+    eval_enabled_raw = evaluation_cfg.get('enabled', reference_grstat is not None)
+    if not isinstance(eval_enabled_raw, bool):
+        msg = 'evaluation.enabled must be bool'
+        raise TypeError(msg)
+    eval_enabled = eval_enabled_raw and reference_grstat is not None
+
+    eval_summary_json = eval_dir / f'{out_label}.eval_summary.json'
+    eval_summary_csv = eval_dir / f'{out_label}.eval_summary.csv'
+    eval_per_trace_csv = eval_dir / f'{out_label}.eval_per_trace.csv'
+    effective_write_per_trace_csv = _get_evaluation_per_trace_flag(cfg)
+    if write_per_trace_csv is not None:
+        effective_write_per_trace_csv = bool(write_per_trace_csv)
+    if 'summary_json' in evaluation_cfg:
+        value = evaluation_cfg['summary_json']
+        if not isinstance(value, str):
+            msg = 'evaluation.summary_json must be str'
+            raise TypeError(msg)
+        eval_summary_json = Path(runtime.resolve_relpath(base_dir, value))
+    if 'summary_csv' in evaluation_cfg:
+        value = evaluation_cfg['summary_csv']
+        if not isinstance(value, str):
+            msg = 'evaluation.summary_csv must be str'
+            raise TypeError(msg)
+        eval_summary_csv = Path(runtime.resolve_relpath(base_dir, value))
+    if 'per_trace_csv' in evaluation_cfg:
+        value = evaluation_cfg['per_trace_csv']
+        if not isinstance(value, str):
+            msg = 'evaluation.per_trace_csv must be str'
+            raise TypeError(msg)
+        eval_per_trace_csv = Path(runtime.resolve_relpath(base_dir, value))
+
+    if effective_eval_only:
+        if reference_grstat is None:
+            msg = (
+                'evaluation-only mode requires paths.reference_grstat_path '
+                'or --reference-grstat-path'
+            )
+            raise ValueError(msg)
+        if not export_npz.is_file():
+            msg = f'evaluation-only mode requires existing export NPZ: {export_npz}'
+            raise FileNotFoundError(msg)
+        print(f'[run] evaluation only: {export_npz} vs {reference_grstat}')
+        eval_summary = runtime.evaluate_export_npz_against_grstat(
+            export_npz_path=export_npz,
+            reference_grstat_path=reference_grstat,
+            prediction_crd_path=out_crd,
+            eval_summary_json_path=eval_summary_json,
+            eval_summary_csv_path=eval_summary_csv,
+            eval_per_trace_csv_path=(
+                eval_per_trace_csv if effective_write_per_trace_csv else None
+            ),
+            strict_gather_numbers=_bool_cfg(
+                cfg, 'evaluation', 'strict_gather_numbers', True
+            ),
+            strict_shape=_bool_cfg(cfg, 'evaluation', 'strict_shape', True),
+        )
+        summary = {
+            'out_crd': str(out_crd),
+            'out_npz': str(export_npz),
+            'eval_only': True,
+            'evaluation': eval_summary,
+        }
+        run_summary = {
+            'tag': tag,
+            'segy': segy_path,
+            'coarse_npz': str(coarse_npz_path),
+            'robust_npz': str(robust_npz_path),
+            'out_crd': str(out_crd),
+            'out_npz': str(export_npz),
+            'coarse_config': str(generated_cfg_dir / f'{tag}.coarse.yaml'),
+            'physics_config': str(generated_cfg_dir / f'{tag}.physics.yaml'),
+            'reference_grstat': reference_grstat or '',
+            'evaluation_enabled': True,
+            'evaluation_only': True,
+            'evaluation_write_per_trace_csv': bool(effective_write_per_trace_csv),
+            'export_summary': summary,
+        }
+        summary_path = work_dir / f'{tag}.arakawa_physical_export_summary.json'
+        summary_path.write_text(
+            json.dumps(run_summary, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding='utf-8',
+        )
+        print(json.dumps(run_summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return out_crd
 
     run_force = _bool_cfg(cfg, 'run', 'force', False)
     force_coarse = _bool_cfg(cfg, 'run', 'force_coarse', run_force)
@@ -535,44 +662,6 @@ def run_pipeline(config_path: str | Path) -> Path:
             msg = f'physics output mismatch: {result} != {robust_npz_path}'
             raise RuntimeError(msg)
 
-    reference_grstat = _resolve_optional_path(
-        _get_first_path_str(
-            cfg,
-            keys=('reference_grstat_path', 'reference_grstat'),
-        ),
-        base_dir=base_dir,
-        runtime=runtime,
-    )
-    evaluation_cfg = _as_dict(cfg.get('evaluation'), name='evaluation')
-    eval_enabled_raw = evaluation_cfg.get('enabled', reference_grstat is not None)
-    if not isinstance(eval_enabled_raw, bool):
-        msg = 'evaluation.enabled must be bool'
-        raise TypeError(msg)
-    eval_enabled = eval_enabled_raw and reference_grstat is not None
-
-    eval_summary_json = eval_dir / f'{out_label}.eval_summary.json'
-    eval_summary_csv = eval_dir / f'{out_label}.eval_summary.csv'
-    eval_per_trace_csv = eval_dir / f'{out_label}.eval_per_trace.csv'
-    write_per_trace_csv = _get_evaluation_per_trace_flag(cfg)
-    if 'summary_json' in evaluation_cfg:
-        value = evaluation_cfg['summary_json']
-        if not isinstance(value, str):
-            msg = 'evaluation.summary_json must be str'
-            raise TypeError(msg)
-        eval_summary_json = Path(runtime.resolve_relpath(base_dir, value))
-    if 'summary_csv' in evaluation_cfg:
-        value = evaluation_cfg['summary_csv']
-        if not isinstance(value, str):
-            msg = 'evaluation.summary_csv must be str'
-            raise TypeError(msg)
-        eval_summary_csv = Path(runtime.resolve_relpath(base_dir, value))
-    if 'per_trace_csv' in evaluation_cfg:
-        value = evaluation_cfg['per_trace_csv']
-        if not isinstance(value, str):
-            msg = 'evaluation.per_trace_csv must be str'
-            raise TypeError(msg)
-        eval_per_trace_csv = Path(runtime.resolve_relpath(base_dir, value))
-
     skip_export = (
         out_crd.is_file()
         and out_npz.is_file()
@@ -597,6 +686,8 @@ def run_pipeline(config_path: str | Path) -> Path:
                 cfg, 'export', 'header_comment', 'Arakawa physical_center_i snap to phase'
             ),
             duplicate_policy=_str_cfg(cfg, 'export', 'duplicate_policy', 'error'),  # type: ignore[arg-type]
+            grstat_format=_str_cfg(cfg, 'export', 'grstat_format', 'recno_channel_range'),  # type: ignore[arg-type]
+            values_per_line=_int_cfg(cfg, 'export', 'values_per_line', 5),
             dt_multiplier=_optional_float_cfg(cfg, 'export', 'dt_multiplier'),
             unbounded_zero_crossing=_bool_cfg(
                 cfg, 'export', 'unbounded_zero_crossing', False
@@ -607,7 +698,7 @@ def run_pipeline(config_path: str | Path) -> Path:
             eval_summary_json_path=eval_summary_json if eval_enabled else None,
             eval_summary_csv_path=eval_summary_csv if eval_enabled else None,
             eval_per_trace_csv_path=(
-                eval_per_trace_csv if eval_enabled and write_per_trace_csv else None
+                eval_per_trace_csv if eval_enabled and effective_write_per_trace_csv else None
             ),
             eval_strict_gather_numbers=_bool_cfg(
                 cfg, 'evaluation', 'strict_gather_numbers', True
@@ -661,7 +752,8 @@ def run_pipeline(config_path: str | Path) -> Path:
         ),
         'reference_grstat': reference_grstat or '',
         'evaluation_enabled': eval_enabled,
-        'evaluation_write_per_trace_csv': bool(write_per_trace_csv),
+        'evaluation_only': False,
+        'evaluation_write_per_trace_csv': bool(effective_write_per_trace_csv),
         'export_summary': summary,
     }
     summary_path = work_dir / f'{tag}.arakawa_physical_export_summary.json'
@@ -676,8 +768,28 @@ def run_pipeline(config_path: str | Path) -> Path:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', required=True)
+    parser.add_argument(
+        '--eval-only',
+        action='store_true',
+        help='Rerun only reference grstat evaluation using an existing exported NPZ.',
+    )
+    parser.add_argument(
+        '--reference-grstat-path',
+        default=None,
+        help='Override paths.reference_grstat_path for this run.',
+    )
+    parser.add_argument(
+        '--write-per-trace-csv',
+        action='store_true',
+        help='Write per-trace evaluation CSV for this run.',
+    )
     args = parser.parse_args(argv)
-    run_pipeline(args.config)
+    run_pipeline(
+        args.config,
+        eval_only=args.eval_only if args.eval_only else None,
+        reference_grstat_path=args.reference_grstat_path,
+        write_per_trace_csv=args.write_per_trace_csv if args.write_per_trace_csv else None,
+    )
 
 
 if __name__ == '__main__':

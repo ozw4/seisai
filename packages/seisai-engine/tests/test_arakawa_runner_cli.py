@@ -137,6 +137,8 @@ def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
     assert calls['export_kwargs']['out_crd_path'] == expected_crd
     assert calls['export_kwargs']['pick_key'] == 'physical_center_i'
     assert calls['export_kwargs']['max_shift_samples'] == 2
+    assert calls['export_kwargs']['grstat_format'] == 'recno_channel_range'
+    assert calls['export_kwargs']['values_per_line'] == 5
 
 
 def test_arakawa_runner_can_run_visualization_with_dummy_fb(
@@ -279,3 +281,76 @@ def test_arakawa_runner_can_run_visualization_with_dummy_fb(
     assert qc_cfg['vis']['overlays']['physical_center'] is True
     assert qc_cfg['vis']['overlays']['fine_center'] is False
     assert qc_cfg['vis']['overlays']['window'] is False
+
+
+def test_arakawa_runner_eval_only_reuses_export_npz_and_skips_pipeline(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.setattr(module, '_repo_root', lambda: tmp_path)
+
+    work_dir = tmp_path / 'proc' / 'arakawa'
+    export_npz = (
+        work_dir
+        / 'grstat'
+        / 'Arakawa2026__line.physical_center.snap_peak.ltcor2.npz'
+    )
+    export_npz.parent.mkdir(parents=True, exist_ok=True)
+    export_npz.touch()
+    ref = tmp_path / 'reference.crd'
+    ref.write_text('dummy\n', encoding='utf-8')
+
+    cfg_path = tmp_path / 'runner_eval_only.yaml'
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                'paths': {
+                    'segy': str(tmp_path / 'Arakawa2026' / 'line.sgy'),
+                    'work_dir': str(work_dir),
+                    'reference_grstat_path': str(ref),
+                },
+                'run': {'eval_only': True},
+                'evaluation': {'write_per_trace_csv': True},
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    calls: dict[str, object] = {}
+
+    def _resolve_relpath(base_dir, value):
+        p = Path(value).expanduser()
+        if not p.is_absolute():
+            p = Path(base_dir) / p
+        return str(p.resolve())
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError('coarse/physics/export must not run in eval-only mode')
+
+    def _fake_eval(**kwargs):
+        calls['eval_kwargs'] = kwargs
+        return {'n_eval': 3, 'R2': 1.0}
+
+    runtime = SimpleNamespace(
+        load_cfg_with_base_dir=lambda path: (
+            yaml.safe_load(Path(path).read_text(encoding='utf-8')),
+            Path(path).parent,
+        ),
+        resolve_relpath=_resolve_relpath,
+        build_fbpick_tag=lambda path: 'Arakawa2026__line',
+        run_coarse_infer=_must_not_run,
+        run_physics=_must_not_run,
+        run_physics_qc=_must_not_run,
+        export_robust_pick_to_grstat=_must_not_run,
+        evaluate_export_npz_against_grstat=_fake_eval,
+    )
+    monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
+
+    result = module.run_pipeline(cfg_path)
+
+    assert result == export_npz.with_suffix('.crd')
+    assert calls['eval_kwargs']['export_npz_path'] == export_npz
+    assert calls['eval_kwargs']['reference_grstat_path'] == str(ref.resolve())
+    assert calls['eval_kwargs']['eval_per_trace_csv_path'] is not None

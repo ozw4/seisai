@@ -116,6 +116,85 @@ physical_center_i を初期 pick とする
 
 `duplicate_policy: error` は、同じ `(FFID, CHNO)` が複数 trace に出た場合に処理を止める安全設定です。通常はこのままで使ってください。
 
+### 新 grstat format
+
+現在の default 出力は新しい grstat format です。
+
+```yaml
+export:
+  grstat_format: recno_channel_range
+  values_per_line: 5
+```
+
+新 format は、各 `fb:` 行が以下の形になります。
+
+```text
+fb: recno start_ch end_ch fb値(start_ch) ... fb値(end_ch)
+```
+
+例:
+
+```text
+fb:          1       1       5    92.000    82.000    72.000    66.000    56.000
+```
+
+旧 format が必要な場合のみ、以下のように変更します。
+
+```yaml
+export:
+  grstat_format: legacy
+```
+
+### 旧 grstat を新 format に変換する
+
+既存の古い grstat 初動ファイルを新 format に直したい場合は、変換 CLI を使います。Arakawa の grstat 値が ms 単位で、サンプリング間隔が 2 ms の場合は `--dt-ms 2.0` を指定します。
+
+```bash
+python -m cli.convert_grstat_format \
+  --input-crd /path/to/old_format.crd \
+  --output-crd /path/to/new_format.crd \
+  --dt-ms 2.0
+```
+
+旧 format へ戻したい場合は、以下を指定します。
+
+```bash
+python -m cli.convert_grstat_format \
+  --input-crd /path/to/new_format.crd \
+  --output-crd /path/to/legacy_format.crd \
+  --dt-ms 2.0 \
+  --output-format legacy
+```
+
+Python から使う場合は、`seisai_pick.pickio.io_grstat` にある IO を使います。
+
+```python
+from pathlib import Path
+
+from seisai_pick.pickio.io_grstat import load_grstat_matrix, numpy2fbcrd
+
+in_path = Path('/path/to/old_format.crd')
+out_path = Path('/path/to/new_format.crd')
+dt_ms = 2.0
+
+parsed = load_grstat_matrix(
+    in_path,
+    dt_multiplier=dt_ms,
+    strict_blocks=True,
+    strict_channel_count=True,
+)
+
+numpy2fbcrd(
+    dt=dt_ms,
+    fbnum=parsed.samples,
+    gather_range=parsed.record_numbers.tolist(),
+    output_name=str(out_path),
+    output_format='recno_channel_range',
+    values_per_line=5,
+    header_comment=f'converted from legacy grstat: {in_path.name}',
+)
+```
+
 ---
 
 ## 5. QC 可視化図
@@ -207,6 +286,52 @@ trace ごとの詳細 CSV が必要な場合は、以下を有効にします。
 ```yaml
 evaluation:
   write_per_trace_csv: true
+```
+
+### 評価だけ再実行する
+
+参照 grstat を差し替えた場合や、trace ごとの詳細 CSV だけ後から出したい場合は、Coarse / Physics / export をやり直さず、評価だけ再実行できます。
+
+config に書く場合:
+
+```yaml
+paths:
+  sgy_file: fdata_hset_ARA26_Vib.sgy
+  reference_grstat_path: /path/to/reference_first_break.crd
+
+run:
+  eval_only: true
+```
+
+CLI option で一時的に指定する場合:
+
+```bash
+python -m cli.run_arakawa_fbpick_physical_export \
+  --config proc/arakawa/configs/run_coarse_physics_export_minimal.yaml \
+  --eval-only \
+  --reference-grstat-path /path/to/reference_first_break.crd
+```
+
+trace ごとの詳細 CSV も出す場合:
+
+```bash
+python -m cli.run_arakawa_fbpick_physical_export \
+  --config proc/arakawa/configs/run_coarse_physics_export_minimal.yaml \
+  --eval-only \
+  --reference-grstat-path /path/to/reference_first_break.crd \
+  --write-per-trace-csv
+```
+
+既存 export `.npz` が default path 以外にある場合は、`paths.export_npz` を指定します。
+
+```yaml
+paths:
+  sgy_file: fdata_hset_ARA26_Vib.sgy
+  reference_grstat_path: /path/to/reference_first_break.crd
+  export_npz: /path/to/<TAG>.physical_center.snap_peak.ltcor2.npz
+
+run:
+  eval_only: true
 ```
 
 ---
