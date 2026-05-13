@@ -1,8 +1,9 @@
 # Arakawa runtime speedup benchmark
 
-This guide runs the same Arakawa physical-center export through a full baseline
-and staged speedup settings, then compares runtime diagnostics and center
-differences against A0.
+This developer guide runs the same Arakawa physical-center export through a
+full baseline and staged speedup settings, then compares runtime diagnostics
+and center differences against A0. For normal Arakawa export usage where only
+`paths.sgy_file` changes, use `proc/arakawa/README.md` instead.
 
 Run commands from the repository root:
 
@@ -169,6 +170,15 @@ in the compare CSV, and under `center_diffs` in the JSON.
 Status counts live under `status_counts`. Check both `counts_match` and the
 per-label counts. A speedup can be fast but still change model-status outcomes;
 that is a quality-risk signal and should be reviewed with center diffs.
+
+## Adoption criteria
+
+Use A0 as the correctness baseline. A candidate is acceptable only when it
+shows a meaningful `speedup_physics_total` improvement and keeps the center
+diff tails small enough for the intended QC tolerance. In practice, review
+`abs_diff_p90_samples`, `abs_diff_p99_samples`, `within_4_sample_rate`,
+`within_16_sample_rate`, and `status_counts` together. If status counts change
+or tail diffs are large, inspect QC PNGs before adopting the setting.
 
 ## Report template
 

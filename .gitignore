@@ -83,10 +83,9 @@ proc/arakawa/reference/*
 !proc/arakawa/reference/README.md
 
 # Keep Arakawa docs/configs/templates tracked
-!proc/arakawa/readme.md
 !proc/arakawa/README.md
-!proc/arakawa/readme_runtime_speedup.md
 !proc/arakawa/README_RUNTIME_SPEEDUP.md
+!proc/arakawa/MIGRATION.md
 !proc/arakawa/README_LAYOUT.md
 !proc/arakawa/configs/
 !proc/arakawa/configs/**
