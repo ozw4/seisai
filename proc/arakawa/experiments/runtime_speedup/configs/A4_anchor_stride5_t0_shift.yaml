@@ -15,6 +15,12 @@ run:
 physical_runtime:
   diagnostics_enabled: true
   write_runtime_summary: true
+  diagnostics:
+    enabled: true
+    detailed_timing: true
+    save_json: true
+    save_npz_scalars: true
+    save_per_trace_context: false
   fit_policy: anchor_source_xy
   anchor_selection:
     enabled: true

@@ -1,0 +1,50 @@
+baseline:
+  name: A0_full
+  config: proc/arakawa/experiments/runtime_speedup/configs/A0_full.yaml
+  robust_npz: proc/arakawa/outputs/runtime_runs/A0_full/robust/${TAG}.robust.npz
+  export_npz: proc/arakawa/outputs/runtime_runs/A0_full/grstat/${TAG}.physical_center.snap_peak.ltcor2.npz
+
+candidates:
+  - name: A0D_downsample_only
+    config: proc/arakawa/experiments/runtime_speedup/configs/A0D_downsample_only.yaml
+  - name: A1_diagnostics_only
+    config: proc/arakawa/experiments/runtime_speedup/configs/A1_diagnostics_only.yaml
+  - name: A2_anchor_selection_dry_run
+    config: proc/arakawa/experiments/runtime_speedup/configs/A2_anchor_selection_dry_run.yaml
+  - name: A3_anchor_stride5_nearest_anchor
+    config: proc/arakawa/experiments/runtime_speedup/configs/A3_anchor_stride5_nearest_anchor.yaml
+  - name: A4_anchor_stride5_t0_shift
+    config: proc/arakawa/experiments/runtime_speedup/configs/A4_anchor_stride5_t0_shift.yaml
+  - name: A5_anchor_stride5_t0_shift_adaptive_refit
+    config: proc/arakawa/experiments/runtime_speedup/configs/A5_anchor_stride5_t0_shift_adaptive_refit.yaml
+  - name: A6_A5_obs_downsample256
+    config: proc/arakawa/experiments/runtime_speedup/configs/A6_A5_obs_downsample256.yaml
+
+checks:
+  exact_keys:
+    - physical_model_status
+    - physical_model_failure_reason
+  diff_keys:
+    - physical_center_i
+    - fine_center_i
+    - physical_model_break_offset_m
+    - physical_model_slope_near_s_per_m
+  runtime_keys:
+    - physics_total_sec
+    - physical_center_total_sec
+    - non_ransac_total_sec
+    - ransac_fit_total_sec
+    - neighbor_plan_sec
+    - side_segment_build_sec
+    - prediction_sec
+    - assignment_sec
+
+gates:
+  max_p90_abs_diff_samples:
+    physical_center_i: 8
+    fine_center_i: 8
+  min_within_16_sample_rate:
+    physical_center_i: 0.97
+    fine_center_i: 0.97
+  min_speedup_physics_total: 1.0
+  allow_status_count_change: true

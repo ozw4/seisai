@@ -16,6 +16,32 @@ proc/arakawa/outputs/runtime_runs/<RUN_NAME>/
 Run `A0_full` first. The other configs point `paths.coarse_dir` at
 `A0_full/coarse` so the comparison focuses on the physics stage.
 
+## Benchmark harness
+
+The checked-in manifest runs the configured candidates, compares each robust
+NPZ against A0, evaluates gates, and writes combined JSON/CSV/Markdown reports.
+
+```bash
+python -m cli.run_fbpick_physics_runtime_benchmark \
+  --manifest proc/arakawa/experiments/runtime_speedup/benchmark_manifest.yaml \
+  --tag Arakawa2026__fdata_hset_ARA26_Vib \
+  --out-dir proc/arakawa/outputs/runtime_benchmark/A0_manifest
+```
+
+To compare already-created artifacts without running the configs, add
+`--artifacts-only`. The command exits non-zero when any gate fails; add
+`--no-fail-on-gate` for exploratory report-only runs.
+
+Report files:
+
+```text
+proc/arakawa/outputs/runtime_benchmark/<RUN>/summary.json
+proc/arakawa/outputs/runtime_benchmark/<RUN>/summary.csv
+proc/arakawa/outputs/runtime_benchmark/<RUN>/summary.md
+proc/arakawa/outputs/runtime_benchmark/<RUN>/comparisons/*.json
+proc/arakawa/outputs/runtime_benchmark/<RUN>/comparisons/*.csv
+```
+
 ## Configs
 
 | config | purpose |

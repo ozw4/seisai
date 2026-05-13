@@ -38,6 +38,34 @@ A0D and A1 through A6 point `paths.coarse_dir` at `A0_full/coarse` so the
 speedup comparison focuses on the physics stage. Run A0 first so the shared
 coarse NPZ is present.
 
+## Run the benchmark harness
+
+The manifest-driven harness runs candidate configs, compares each candidate
+against A0 with `cli.compare_fbpick_physics_runtime`, and writes combined
+JSON/CSV/Markdown reports with gate results.
+
+```bash
+python -m cli.run_fbpick_physics_runtime_benchmark \
+  --manifest proc/arakawa/experiments/runtime_speedup/benchmark_manifest.yaml \
+  --tag Arakawa2026__fdata_hset_ARA26_Vib \
+  --out-dir proc/arakawa/outputs/runtime_benchmark/A0_manifest
+```
+
+Use `--artifacts-only` to skip all runner calls and compare existing robust
+artifacts only. Missing detailed timing keys are reported as `missing`; they
+are not coerced to zero. The command exits non-zero when any gate fails; add
+`--no-fail-on-gate` for exploratory report-only runs.
+
+The harness writes:
+
+```text
+proc/arakawa/outputs/runtime_benchmark/<RUN>/summary.json
+proc/arakawa/outputs/runtime_benchmark/<RUN>/summary.csv
+proc/arakawa/outputs/runtime_benchmark/<RUN>/summary.md
+proc/arakawa/outputs/runtime_benchmark/<RUN>/comparisons/*.json
+proc/arakawa/outputs/runtime_benchmark/<RUN>/comparisons/*.csv
+```
+
 ## Run each stage
 
 ```bash
