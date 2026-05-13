@@ -73,23 +73,88 @@ def test_arakawa_runner_default_template_paths_exist() -> None:
     assert (template_dir / 'physics.yaml').is_file()
 
 
-def test_arakawa_runner_default_template_paths_fall_back_to_legacy_names(
+def test_arakawa_runner_default_template_lookup_finds_canonical_templates(
     tmp_path: Path,
 ) -> None:
     module = _load_module()
-    template_dir = tmp_path / 'proc' / 'arakawa' / 'configs'
-    _write_runner_templates(
-        template_dir,
-        coarse_name='coarse_one.yaml',
-        physics_name='physics_one.yaml',
-    )
+    template_dir = tmp_path / 'proc' / 'arakawa' / 'configs' / 'templates'
+    _write_runner_templates(template_dir)
 
     assert module._default_template_path(tmp_path, name='coarse.yaml') == (
-        template_dir / 'coarse_one.yaml'
+        template_dir / 'coarse.yaml'
     )
     assert module._default_template_path(tmp_path, name='physics.yaml') == (
-        template_dir / 'physics_one.yaml'
+        template_dir / 'physics.yaml'
     )
+
+
+def test_arakawa_runner_missing_default_template_raises_file_not_found(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    legacy_dir = tmp_path / 'proc' / 'arakawa' / 'configs'
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / 'coarse_one.yaml').write_text(
+        '# deprecated stub\n',
+        encoding='utf-8',
+    )
+    (legacy_dir / 'physics_one.yaml').write_text(
+        '# deprecated stub\n',
+        encoding='utf-8',
+    )
+
+    template_dir = legacy_dir / 'templates'
+    expected = {
+        'coarse.yaml': template_dir / 'coarse.yaml',
+        'physics.yaml': template_dir / 'physics.yaml',
+    }
+    legacy_names = {
+        'coarse.yaml': 'coarse_one.yaml',
+        'physics.yaml': 'physics_one.yaml',
+    }
+    for name, expected_path in expected.items():
+        try:
+            module._default_template_path(tmp_path, name=name)
+        except FileNotFoundError as exc:
+            assert str(expected_path) in str(exc)
+            assert legacy_names[name] not in str(exc)
+        else:
+            raise AssertionError(f'missing canonical template must fail: {name}')
+
+
+def test_arakawa_runner_explicit_template_paths_still_work(tmp_path: Path) -> None:
+    module = _load_module()
+    template_dir = tmp_path / 'custom_templates'
+    _write_runner_templates(
+        template_dir,
+        coarse_name='custom_coarse.yaml',
+        physics_name='custom_physics.yaml',
+    )
+
+    def _resolve_relpath(base_dir, value):
+        p = Path(value).expanduser()
+        if not p.is_absolute():
+            p = Path(base_dir) / p
+        return str(p.resolve())
+
+    runtime = SimpleNamespace(resolve_relpath=_resolve_relpath)
+
+    assert module._resolve_template_path(
+        explicit_value='custom_templates/custom_coarse.yaml',
+        field='paths.coarse_template',
+        root=tmp_path,
+        name='coarse.yaml',
+        base_dir=tmp_path,
+        runtime=runtime,
+    ) == template_dir / 'custom_coarse.yaml'
+    assert module._resolve_template_path(
+        explicit_value='custom_templates/custom_physics.yaml',
+        field='paths.physics_template',
+        root=tmp_path,
+        name='physics.yaml',
+        base_dir=tmp_path,
+        runtime=runtime,
+    ) == template_dir / 'custom_physics.yaml'
 
 
 def test_arakawa_runner_force_and_skip_existing_conflict(

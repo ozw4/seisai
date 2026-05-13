@@ -16,11 +16,6 @@ __all__ = ['main', 'run_pipeline']
 
 DEFAULT_ARAKAWA_SEGY_DIR = Path('/home/dcuser/data/ActiveSeisField/Arakawa2026')
 
-_LEGACY_TEMPLATE_NAMES = {
-    'coarse.yaml': 'coarse_one.yaml',
-    'physics.yaml': 'physics_one.yaml',
-}
-
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -32,17 +27,7 @@ def _default_template_path(root: Path, *, name: str) -> Path:
     if path.is_file():
         return path
 
-    tried = [path]
-    legacy_name = _LEGACY_TEMPLATE_NAMES.get(name)
-    if legacy_name is not None:
-        legacy_path = arakawa_dir / 'configs' / legacy_name
-        tried.append(legacy_path)
-        if legacy_path.is_file():
-            return legacy_path
-
-    msg = 'Arakawa template config not found; tried: ' + ', '.join(
-        str(p) for p in tried
-    )
+    msg = f'Arakawa canonical template config not found: {path}'
     raise FileNotFoundError(msg)
 
 
@@ -268,7 +253,6 @@ def _resolve_template_path(
     base_dir: Path,
     runtime: SimpleNamespace,
 ) -> Path:
-    tried: list[Path] = []
     if explicit_value is not None:
         explicit_path = _resolve_path_value(
             explicit_value,
@@ -276,22 +260,12 @@ def _resolve_template_path(
             base_dir=base_dir,
             runtime=runtime,
         )
-        tried.append(explicit_path)
         if explicit_path.is_file():
             return explicit_path
+        msg = f'{field} template config not found: {explicit_path}'
+        raise FileNotFoundError(msg)
 
-    try:
-        return _default_template_path(root, name=name)
-    except FileNotFoundError as exc:
-        arakawa_dir = root / 'proc' / 'arakawa'
-        tried.append(arakawa_dir / 'configs' / 'templates' / name)
-        legacy_name = _LEGACY_TEMPLATE_NAMES.get(name)
-        if legacy_name is not None:
-            tried.append(arakawa_dir / 'configs' / legacy_name)
-        msg = 'Arakawa template config not found; tried: ' + ', '.join(
-            str(p) for p in tried
-        )
-        raise FileNotFoundError(msg) from exc
+    return _default_template_path(root, name=name)
 
 
 def _resolve_coarse_ckpt_path(
