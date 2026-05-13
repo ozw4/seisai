@@ -368,6 +368,21 @@ def test_physical_runtime_diagnostics_fit_timer_increments_counts() -> None:
     assert summary['obs_downsample_rate_p50'] == pytest.approx(1.0 / 3.0)
 
 
+def test_physical_runtime_diagnostics_detailed_timer_and_derived_fields() -> None:
+    diagnostics = PhysicalRuntimeDiagnostics(detailed_timing=True)
+    diagnostics.physical_center_total_sec = 10.0
+    diagnostics.ransac_fit_total_sec = 3.0
+
+    with diagnostics.time_block('neighbor_plan_sec'):
+        pass
+    diagnostics.inc('n_prediction_calls', 2)
+
+    summary = diagnostics.to_summary()
+    assert summary['neighbor_plan_sec'] >= 0.0
+    assert summary['non_ransac_total_sec'] == pytest.approx(7.0)
+    assert summary['n_prediction_calls'] == 2
+
+
 def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> None:
     cfg = load_physics_lite_config({})
 
@@ -386,6 +401,8 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.physical_runtime.fit_policy == 'full'
     assert cfg.physical_runtime.diagnostics_enabled is True
     assert cfg.physical_runtime.write_runtime_summary is True
+    assert cfg.physical_runtime.diagnostics.enabled is True
+    assert cfg.physical_runtime.diagnostics.detailed_timing is False
     assert cfg.physical_runtime.anchor_selection.enabled is False
     assert cfg.physical_runtime.anchor_selection.mode == 'source_xy_stride'
     assert cfg.physical_runtime.anchor_selection.anchor_stride_source_groups == 5
@@ -423,6 +440,26 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
         cfg.physical_runtime.observation_sampling.min_obs_per_fit_after_sampling == 8
     )
     assert cfg.physical_runtime.observation_sampling.preserve_edge_bins is True
+
+
+def test_load_physics_lite_config_accepts_nested_diagnostics_block() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_runtime': {
+                'diagnostics': {
+                    'enabled': True,
+                    'detailed_timing': True,
+                    'save_json': False,
+                    'save_npz_scalars': True,
+                    'save_per_trace_context': False,
+                }
+            }
+        }
+    )
+
+    assert cfg.physical_runtime.diagnostics_enabled is True
+    assert cfg.physical_runtime.write_runtime_summary is False
+    assert cfg.physical_runtime.diagnostics.detailed_timing is True
 
 
 def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
@@ -1268,6 +1305,28 @@ def test_save_and_load_robust_npz_preserve_all_optional_fields(tmp_path: Path) -
     assert set(ROBUST_OPTIONAL_KEYS).issubset(loaded.keys())
     for key in ROBUST_OPTIONAL_KEYS:
         np.testing.assert_array_equal(loaded[key], payload[key])
+
+
+def test_save_and_load_robust_npz_preserve_prefixed_runtime_scalars(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        **_make_robust_payload(),
+        'physical_runtime_n_fit_calls': np.asarray(7, dtype=np.int64),
+        'physical_runtime_ransac_fit_total_sec': np.asarray(1.25, dtype=np.float64),
+        'physical_runtime_non_ransac_total_sec': np.asarray(4.5, dtype=np.float64),
+    }
+
+    out_path = save_robust_npz(tmp_path / 'runtime_scalars.robust.npz', **payload)
+    loaded = load_robust_npz(out_path)
+
+    assert int(np.asarray(loaded['physical_runtime_n_fit_calls']).item()) == 7
+    assert float(
+        np.asarray(loaded['physical_runtime_ransac_fit_total_sec']).item()
+    ) == pytest.approx(1.25)
+    assert float(
+        np.asarray(loaded['physical_runtime_non_ransac_total_sec']).item()
+    ) == pytest.approx(4.5)
 
 
 def test_save_and_load_robust_npz_preserve_optional_center_fields(tmp_path: Path) -> None:

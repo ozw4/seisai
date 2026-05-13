@@ -709,6 +709,7 @@ def save_robust_npz(
     anchor_source_distance_p50_m=None,
     anchor_source_distance_p90_m=None,
     anchor_source_distance_max_m=None,
+    **extra_runtime_diagnostics,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -955,6 +956,35 @@ def save_robust_npz(
             'observation_sampling_method',
             observation_sampling_method,
         )
+    for key, value in extra_runtime_diagnostics.items():
+        is_runtime_scalar = (
+            key in ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS
+            or key.startswith('physical_runtime_')
+            or key.endswith('_sec')
+            or key.startswith('n_')
+            or key.endswith('_rate')
+            or key.endswith('_p50')
+            or key.endswith('_p90')
+            or key.endswith('_p99')
+            or key.endswith('_max')
+        )
+        if not is_runtime_scalar:
+            msg = f'unexpected robust npz field: {key}'
+            raise TypeError(msg)
+        if value is None:
+            continue
+        if key in _ROBUST_RUNTIME_DIAGNOSTIC_STRING_KEYS:
+            arrays[key] = _coerce_string_scalar(key, value)
+            continue
+        arr = np.asarray(value)
+        if arr.ndim != 0:
+            msg = f'{key} must be scalar'
+            raise ValueError(msg)
+        if arr.dtype.kind in {'i', 'u'}:
+            arrays[key] = arr.astype(np.int64, copy=False)
+        else:
+            arrays[key] = arr.astype(np.float64, copy=False)
+        _validate_runtime_diagnostic_scalar(key, arrays[key])
 
     robust_pick_i_arr = arrays['robust_pick_i']
     if np.any(robust_pick_i_arr < 0) or np.any(robust_pick_i_arr >= n_samples_orig_int):

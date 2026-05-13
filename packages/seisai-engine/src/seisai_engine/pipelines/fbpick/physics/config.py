@@ -21,6 +21,7 @@ __all__ = [
     'PhysicalPrefilterCfg',
     'PhysicalProjectionCfg',
     'PhysicalRuntimeCfg',
+    'PhysicalRuntimeDiagnosticsCfg',
     'PhysicalT0ShiftCfg',
     'PhysicalTrendCfg',
     'PhysicsFeasibleBandCfg',
@@ -192,10 +193,20 @@ class PhysicalObservationSamplingCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalRuntimeDiagnosticsCfg:
+    enabled: bool = True
+    detailed_timing: bool = False
+    save_json: bool = True
+    save_npz_scalars: bool = True
+    save_per_trace_context: bool = False
+
+
+@dataclass(frozen=True)
 class PhysicalRuntimeCfg:
     fit_policy: str = 'full'
     diagnostics_enabled: bool = True
     write_runtime_summary: bool = True
+    diagnostics: PhysicalRuntimeDiagnosticsCfg = PhysicalRuntimeDiagnosticsCfg()
     anchor_selection: PhysicalAnchorSelectionCfg = PhysicalAnchorSelectionCfg()
     anchor_reuse: PhysicalAnchorReuseCfg = PhysicalAnchorReuseCfg()
     t0_shift: PhysicalT0ShiftCfg = PhysicalT0ShiftCfg()
@@ -552,14 +563,38 @@ def _load_physical_observation_sampling_cfg(
 
 
 def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
+    diagnostics_raw = _require_dict(
+        cfg.get('diagnostics'),
+        key='physical_runtime.diagnostics',
+    )
+    legacy_enabled = bool(optional_bool(cfg, 'diagnostics_enabled', default=True))
+    legacy_save_json = bool(optional_bool(cfg, 'write_runtime_summary', default=True))
+    diagnostics = PhysicalRuntimeDiagnosticsCfg(
+        enabled=bool(
+            optional_bool(diagnostics_raw, 'enabled', default=legacy_enabled)
+        ),
+        detailed_timing=bool(
+            optional_bool(diagnostics_raw, 'detailed_timing', default=False)
+        ),
+        save_json=bool(
+            optional_bool(diagnostics_raw, 'save_json', default=legacy_save_json)
+        ),
+        save_npz_scalars=bool(
+            optional_bool(diagnostics_raw, 'save_npz_scalars', default=True)
+        ),
+        save_per_trace_context=bool(
+            optional_bool(
+                diagnostics_raw,
+                'save_per_trace_context',
+                default=False,
+            )
+        ),
+    )
     return PhysicalRuntimeCfg(
         fit_policy=optional_str(cfg, 'fit_policy', 'full'),
-        diagnostics_enabled=bool(
-            optional_bool(cfg, 'diagnostics_enabled', default=True)
-        ),
-        write_runtime_summary=bool(
-            optional_bool(cfg, 'write_runtime_summary', default=True)
-        ),
+        diagnostics_enabled=bool(diagnostics.enabled),
+        write_runtime_summary=bool(diagnostics.save_json),
+        diagnostics=diagnostics,
         anchor_selection=_load_physical_anchor_selection_cfg(
             _require_dict(
                 cfg.get('anchor_selection'),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import numpy as np
@@ -649,17 +650,23 @@ def _build_observation_plan(
     valid_for_fit: np.ndarray,
     cfg: PhysicsLiteConfig,
     use_neighbor_context: bool,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> _ObservationPlan | None:
-    group_ids = _select_group_ids(
-        groups=groups,
-        target_group_id=target_group_id,
-        cfg=cfg,
-        use_neighbor_context=use_neighbor_context,
-    )
-    neighbor_indices = _concat_group_traces(group_ids, groups_by_id=groups_by_id)
-    valid_obs = neighbor_indices[
-        np.asarray(valid_for_fit, dtype=np.bool_)[neighbor_indices]
-    ]
+    with (
+        runtime_diagnostics.time_block('neighbor_plan_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        group_ids = _select_group_ids(
+            groups=groups,
+            target_group_id=target_group_id,
+            cfg=cfg,
+            use_neighbor_context=use_neighbor_context,
+        )
+        neighbor_indices = _concat_group_traces(group_ids, groups_by_id=groups_by_id)
+        valid_obs = neighbor_indices[
+            np.asarray(valid_for_fit, dtype=np.bool_)[neighbor_indices]
+        ]
     prefilter_valid_count = int(valid_obs.size)
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
 
@@ -676,29 +683,34 @@ def _build_observation_plan(
     side_obs = valid_obs
     side = 0
     side_reliable = False
-    if bool(cfg.physical_trend.segment_by_offset_sign):
-        if offset_signed_m is not None:
-            side_obs, side, side_reliable = _obs_with_target_signed_offset_side(
-                trace_idx=trace_idx,
-                obs_indices=valid_obs,
-                signed_offset_m=offset_signed_m,
-            )
-        elif geometry is not None:
-            side_obs, side, side_reliable = _obs_with_target_side(
-                trace_idx=trace_idx,
-                obs_indices=valid_obs,
-                geometry=geometry,
-            )
+    with (
+        runtime_diagnostics.time_block('side_segment_build_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        if bool(cfg.physical_trend.segment_by_offset_sign):
+            if offset_signed_m is not None:
+                side_obs, side, side_reliable = _obs_with_target_signed_offset_side(
+                    trace_idx=trace_idx,
+                    obs_indices=valid_obs,
+                    signed_offset_m=offset_signed_m,
+                )
+            elif geometry is not None:
+                side_obs, side, side_reliable = _obs_with_target_side(
+                    trace_idx=trace_idx,
+                    obs_indices=valid_obs,
+                    geometry=geometry,
+                )
 
-    segment_obs = side_obs
-    segment_id = 0
-    if bool(cfg.physical_trend.split_by_offset_gap):
-        segment_obs, segment_id = _obs_with_target_gap_segment(
-            trace_idx=trace_idx,
-            obs_indices=side_obs,
-            offset_abs_m=offset_abs_m,
-            cfg=cfg,
-        )
+        segment_obs = side_obs
+        segment_id = 0
+        if bool(cfg.physical_trend.split_by_offset_gap):
+            segment_obs, segment_id = _obs_with_target_gap_segment(
+                trace_idx=trace_idx,
+                obs_indices=side_obs,
+                offset_abs_m=offset_abs_m,
+                cfg=cfg,
+            )
 
     if int(segment_obs.size) >= min_fit_obs:
         return _ObservationPlan(
@@ -1168,33 +1180,46 @@ def _assign_model_prediction(
     n_samples: int,
     runtime_fit_source: int,
     t0_shift_sec: float = 0.0,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> bool:
-    try:
-        physical_t_sec = _predict_model_sec(
-            trend_model,
-            float(offset_abs_m[int(trace_idx)]),
-        )
-        physical_t_sec += float(t0_shift_sec)
-    except (TypeError, ValueError, RuntimeError):
-        physical_t_sec = np.nan
+    if runtime_diagnostics is not None:
+        runtime_diagnostics.inc('n_prediction_calls')
+    with (
+        runtime_diagnostics.time_block('prediction_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        try:
+            physical_t_sec = _predict_model_sec(
+                trend_model,
+                float(offset_abs_m[int(trace_idx)]),
+            )
+            physical_t_sec += float(t0_shift_sec)
+        except (TypeError, ValueError, RuntimeError):
+            physical_t_sec = np.nan
 
     if not np.isfinite(physical_t_sec):
         return False
 
-    center_i = int(np.rint(physical_t_sec / float(dt)))
-    center_i = int(np.clip(center_i, 0, int(n_samples) - 1))
-    arrays['physical_center_i'][trace_idx] = np.int32(center_i)
-    arrays['physical_center_t_sec'][trace_idx] = np.float32(center_i * float(dt))
-    arrays['physical_model_status'][trace_idx] = np.uint8(
-        PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT
-        if bool(plan.relaxed)
-        else PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
-    )
-    arrays['physical_model_failure_reason'][trace_idx] = np.uint8(
-        PHYSICAL_MODEL_FAILURE_NONE
-    )
-    arrays['physical_runtime_fit_source'][trace_idx] = np.uint8(runtime_fit_source)
-    _assign_model_diagnostics(arrays, trace_idx, diagnostics)
+    with (
+        runtime_diagnostics.time_block('assignment_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        center_i = int(np.rint(physical_t_sec / float(dt)))
+        center_i = int(np.clip(center_i, 0, int(n_samples) - 1))
+        arrays['physical_center_i'][trace_idx] = np.int32(center_i)
+        arrays['physical_center_t_sec'][trace_idx] = np.float32(center_i * float(dt))
+        arrays['physical_model_status'][trace_idx] = np.uint8(
+            PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT
+            if bool(plan.relaxed)
+            else PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
+        )
+        arrays['physical_model_failure_reason'][trace_idx] = np.uint8(
+            PHYSICAL_MODEL_FAILURE_NONE
+        )
+        arrays['physical_runtime_fit_source'][trace_idx] = np.uint8(runtime_fit_source)
+        _assign_model_diagnostics(arrays, trace_idx, diagnostics)
     return True
 
 
@@ -1255,6 +1280,7 @@ def _fit_and_assign_trace(
         valid_for_fit=valid_for_fit,
         cfg=cfg,
         use_neighbor_context=use_neighbor_context,
+        runtime_diagnostics=runtime_diagnostics,
     )
     if plan is None:
         _assign_fallback(
@@ -1288,14 +1314,19 @@ def _fit_and_assign_trace(
         return _TraceFitResult(plan, None, None, 0, False)
 
     obs_count_before_sampling = int(np.asarray(plan.obs_indices).size)
-    obs_indices = _sample_observation_indices_for_fit(
-        obs_indices=plan.obs_indices,
-        offset_abs_m=offset_abs_m,
-        pick_t_sec=pick_t_sec,
-        coarse_pmax=table.coarse_pmax,
-        cfg=cfg,
-        min_required_obs=int(min_fit_obs),
-    )
+    with (
+        runtime_diagnostics.time_block('observation_sampling_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        obs_indices = _sample_observation_indices_for_fit(
+            obs_indices=plan.obs_indices,
+            offset_abs_m=offset_abs_m,
+            pick_t_sec=pick_t_sec,
+            coarse_pmax=table.coarse_pmax,
+            cfg=cfg,
+            min_required_obs=int(min_fit_obs),
+        )
     fit_plan = _ObservationPlan(
         obs_indices=obs_indices,
         neighbor_count=plan.neighbor_count,
@@ -1346,6 +1377,7 @@ def _fit_and_assign_trace(
         dt=float(table.dt_scalar_sec),
         n_samples=int(table.n_samples_orig),
         runtime_fit_source=runtime_fit_source,
+        runtime_diagnostics=runtime_diagnostics,
     ):
         _assign_fallback(
             arrays,
@@ -1809,6 +1841,7 @@ def build_geometry_two_piece_physical_center(
     )
 
     if runtime_diagnostics is not None:
+        runtime_diagnostics.set_traces(n)
         sampling = cfg.physical_runtime.observation_sampling
         runtime_diagnostics.set_observation_sampling(
             enabled=bool(sampling.enabled),
@@ -1820,10 +1853,15 @@ def build_geometry_two_piece_physical_center(
     if not bool(cfg.physical_trend.enabled):
         return _build_disabled_result(table, trend)
 
-    try:
-        geometry = load_coarse_geometry_from_npz(coarse_npz, n_traces=n)
-    except (KeyError, TypeError, ValueError):
-        geometry = None
+    with (
+        runtime_diagnostics.time_block('geometry_load_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        try:
+            geometry = load_coarse_geometry_from_npz(coarse_npz, n_traces=n)
+        except (KeyError, TypeError, ValueError):
+            geometry = None
 
     use_geometry_offset = bool(cfg.physical_trend.use_geometry_offset)
     if use_geometry_offset and geometry is None:
@@ -1854,37 +1892,42 @@ def build_geometry_two_piece_physical_center(
         )
         offset_source = PHYSICAL_OFFSET_SOURCE_HEADER
 
-    source_groups_from_geometry = False
-    groups: tuple[SourceGroup, ...] = ()
-    source_group_geometry = geometry
-    if source_group_geometry is None and not use_geometry_offset:
-        source_group_geometry = _load_source_group_geometry_from_npz(
-            coarse_npz,
-            n_traces=n,
-        )
-    if source_group_geometry is not None:
-        coord_group_tol_m = float(cfg.physical_trend.coord_group_tol_m)
-        source_xy_degenerate = is_source_xy_degenerate(
-            source_group_geometry,
-            table=table,
-            coord_group_tol_m=coord_group_tol_m,
-        )
-        if source_xy_degenerate and use_geometry_offset:
-            return _assign_fallback_all(
-                failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
-                table=table,
-                feasible=feasible,
-                trend=trend,
-                merged=merged,
+    with (
+        runtime_diagnostics.time_block('source_grouping_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        source_groups_from_geometry = False
+        groups: tuple[SourceGroup, ...] = ()
+        source_group_geometry = geometry
+        if source_group_geometry is None and not use_geometry_offset:
+            source_group_geometry = _load_source_group_geometry_from_npz(
+                coarse_npz,
+                n_traces=n,
             )
-        if not source_xy_degenerate:
-            groups = build_source_groups(
+        if source_group_geometry is not None:
+            coord_group_tol_m = float(cfg.physical_trend.coord_group_tol_m)
+            source_xy_degenerate = is_source_xy_degenerate(
                 source_group_geometry,
+                table=table,
                 coord_group_tol_m=coord_group_tol_m,
             )
-            source_groups_from_geometry = len(groups) > 0
-    if len(groups) == 0 and not use_geometry_offset:
-        groups = _build_table_source_groups(table, n_traces=n)
+            if source_xy_degenerate and use_geometry_offset:
+                return _assign_fallback_all(
+                    failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+                    table=table,
+                    feasible=feasible,
+                    trend=trend,
+                    merged=merged,
+                )
+            if not source_xy_degenerate:
+                groups = build_source_groups(
+                    source_group_geometry,
+                    coord_group_tol_m=coord_group_tol_m,
+                )
+                source_groups_from_geometry = len(groups) > 0
+        if len(groups) == 0 and not use_geometry_offset:
+            groups = _build_table_source_groups(table, n_traces=n)
 
     if len(groups) == 0:
         return _assign_fallback_all(
@@ -1898,12 +1941,17 @@ def build_geometry_two_piece_physical_center(
     if runtime_diagnostics is not None:
         runtime_diagnostics.set_source_groups(len(groups))
 
-    groups_by_id = {int(group.group_id): group for group in groups}
-    group_id_by_trace = np.full((n,), -1, dtype=np.int32)
-    for group in groups:
-        group_id_by_trace[np.asarray(group.trace_indices, dtype=np.int64)] = np.int32(
-            group.group_id
-        )
+    with (
+        runtime_diagnostics.time_block('source_group_ordering_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        groups_by_id = {int(group.group_id): group for group in groups}
+        group_id_by_trace = np.full((n,), -1, dtype=np.int32)
+        for group in groups:
+            group_id_by_trace[
+                np.asarray(group.trace_indices, dtype=np.int64)
+            ] = np.int32(group.group_id)
 
     pick_t_sec = _as_vector(
         'table.coarse_pick_t_sec',
@@ -1911,36 +1959,58 @@ def build_geometry_two_piece_physical_center(
         n_traces=n,
         dtype=np.float32,
     )
-    valid_for_fit = _compute_physical_prefilter_mask(
-        offset_abs_m=offset_abs_m,
-        table=table,
-        feasible=feasible,
-        cfg=cfg,
-    )
+    with (
+        runtime_diagnostics.time_block('valid_mask_build_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        with (
+            runtime_diagnostics.time_block('velocity_prefilter_sec')
+            if runtime_diagnostics is not None
+            else nullcontext()
+        ):
+            valid_for_fit = _compute_physical_prefilter_mask(
+                offset_abs_m=offset_abs_m,
+                table=table,
+                feasible=feasible,
+                cfg=cfg,
+            )
 
     arrays = _allocate_result_arrays(table)
-    anchor_selection = _apply_anchor_selection_diagnostics(
-        arrays,
-        groups=groups,
-        cfg=cfg,
-        runtime_diagnostics=runtime_diagnostics,
-    )
+    with (
+        runtime_diagnostics.time_block('anchor_selection_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        anchor_selection = _apply_anchor_selection_diagnostics(
+            arrays,
+            groups=groups,
+            cfg=cfg,
+            runtime_diagnostics=runtime_diagnostics,
+        )
     strategy = _fit_strategy(cfg)
     fit_cache: dict[tuple[int, ...], _FitCacheEntry] = {}
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
 
     if cfg.physical_runtime.fit_policy == 'anchor_source_xy':
         if anchor_selection is None:
-            anchor_selection = select_source_xy_stride_anchors(
-                groups,
-                anchor_stride_source_groups=int(
-                    cfg.physical_runtime.anchor_selection.anchor_stride_source_groups
-                ),
-                include_first=bool(
-                    cfg.physical_runtime.anchor_selection.include_first
-                ),
-                include_last=bool(cfg.physical_runtime.anchor_selection.include_last),
-            )
+            with (
+                runtime_diagnostics.time_block('anchor_selection_sec')
+                if runtime_diagnostics is not None
+                else nullcontext()
+            ):
+                anchor_selection = select_source_xy_stride_anchors(
+                    groups,
+                    anchor_stride_source_groups=int(
+                        cfg.physical_runtime.anchor_selection.anchor_stride_source_groups
+                    ),
+                    include_first=bool(
+                        cfg.physical_runtime.anchor_selection.include_first
+                    ),
+                    include_last=bool(
+                        cfg.physical_runtime.anchor_selection.include_last
+                    ),
+                )
         is_anchor_by_id, nearest_by_id, distance_by_id = _selection_group_maps(
             anchor_selection
         )
@@ -2002,6 +2072,8 @@ def build_geometry_two_piece_physical_center(
             group_trace_indices = np.asarray(group.trace_indices, dtype=np.int64)
             nearest_anchor_id = int(nearest_by_id.get(group_id, -1))
             anchor_distance_m = float(distance_by_id.get(group_id, np.nan))
+            if runtime_diagnostics is not None:
+                runtime_diagnostics.record_nearest_anchor_distance(anchor_distance_m)
             max_distance_m = cfg.physical_runtime.anchor_reuse.max_anchor_distance_m
             distance_ok = (
                 nearest_anchor_id >= 0
@@ -2044,6 +2116,7 @@ def build_geometry_two_piece_physical_center(
                     valid_for_fit=valid_for_fit,
                     cfg=cfg,
                     use_neighbor_context=source_groups_from_geometry,
+                    runtime_diagnostics=runtime_diagnostics,
                 )
                 if plan is not None:
                     arrays['physical_model_neighbor_count'][trace_idx] = np.int32(
@@ -2059,17 +2132,33 @@ def build_geometry_two_piece_physical_center(
 
                 context = None
                 key = None
-                if (
-                    bool(cfg.physical_runtime.anchor_reuse.enabled)
-                    and plan is not None
-                    and distance_ok
+                with (
+                    runtime_diagnostics.time_block('compatible_anchor_search_sec')
+                    if runtime_diagnostics is not None
+                    else nullcontext()
                 ):
-                    key = _anchor_model_key(nearest_anchor_id, plan)
-                    context = anchor_models.get(key)
+                    if runtime_diagnostics is not None:
+                        runtime_diagnostics.record_compatible_anchor_search_candidates(
+                            1 if bool(distance_ok) else 0
+                        )
+                    if (
+                        bool(cfg.physical_runtime.anchor_reuse.enabled)
+                        and plan is not None
+                        and distance_ok
+                    ):
+                        key = _anchor_model_key(nearest_anchor_id, plan)
+                        with (
+                            runtime_diagnostics.time_block('anchor_lookup_sec')
+                            if runtime_diagnostics is not None
+                            else nullcontext()
+                        ):
+                            context = anchor_models.get(key)
 
                 if context is not None and plan is not None and key is not None:
                     reuse_items.setdefault(key, []).append((trace_idx, plan, context))
                     continue
+                if runtime_diagnostics is not None:
+                    runtime_diagnostics.record_no_compatible_anchor_context()
 
                 fallback = str(
                     cfg.physical_runtime.anchor_reuse.fallback_if_no_compatible_segment
@@ -2114,6 +2203,8 @@ def build_geometry_two_piece_physical_center(
                     )
 
             non_anchor_mode = str(cfg.physical_runtime.anchor_reuse.non_anchor_mode)
+            if runtime_diagnostics is not None and reuse_items:
+                runtime_diagnostics.record_reuse_contexts(len(reuse_items))
             if non_anchor_mode == 'nearest_anchor':
                 for items in reuse_items.values():
                     for trace_idx, plan, context in items:
@@ -2129,6 +2220,7 @@ def build_geometry_two_piece_physical_center(
                             runtime_fit_source=(
                                 PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE
                             ),
+                            runtime_diagnostics=runtime_diagnostics,
                         ):
                             n_reused_predictions += 1
                         else:
@@ -2153,27 +2245,42 @@ def build_geometry_two_piece_physical_center(
                     dtype=np.int64,
                 )
                 context = items[0][2]
-                stats = _compute_reuse_t0_shift_stats(
-                    trend_model=context.trend_model,
-                    trace_indices=key_trace_indices,
-                    offset_abs_m=offset_abs_m,
-                    pick_t_sec=pick_t_sec,
-                    table=table,
-                    feasible=feasible,
-                    cfg=cfg,
-                )
+                with (
+                    runtime_diagnostics.time_block('t0_shift_sec')
+                    if runtime_diagnostics is not None
+                    else nullcontext()
+                ):
+                    stats = _compute_reuse_t0_shift_stats(
+                        trend_model=context.trend_model,
+                        trace_indices=key_trace_indices,
+                        offset_abs_m=offset_abs_m,
+                        pick_t_sec=pick_t_sec,
+                        table=table,
+                        feasible=feasible,
+                        cfg=cfg,
+                    )
                 stats_by_key[key] = stats
                 _assign_reuse_runtime_diagnostics(
                     arrays,
                     key_trace_indices,
                     stats,
                 )
-                adaptive_refit = adaptive_refit or _adaptive_refit_triggered(
-                    stats=stats,
-                    plan=items[0][1],
-                    cfg=cfg,
-                    min_fit_obs=min_fit_obs,
-                )
+                with (
+                    runtime_diagnostics.time_block('adaptive_refit_decision_sec')
+                    if runtime_diagnostics is not None
+                    else nullcontext()
+                ):
+                    triggered = _adaptive_refit_triggered(
+                        stats=stats,
+                        plan=items[0][1],
+                        cfg=cfg,
+                        min_fit_obs=min_fit_obs,
+                    )
+                if runtime_diagnostics is not None:
+                    runtime_diagnostics.record_adaptive_refit_decision(
+                        triggered=triggered
+                    )
+                adaptive_refit = adaptive_refit or triggered
 
             refit_failed = False
             if adaptive_refit:
@@ -2222,6 +2329,7 @@ def build_geometry_two_piece_physical_center(
             )
             group_shifted_count = 0
             group_shift_ms_values: list[float] = []
+            group_reuse_resid_p50_values: list[float] = []
             group_reuse_resid_p90_values: list[float] = []
             for key, items in reuse_items.items():
                 stats = stats_by_key[key]
@@ -2267,6 +2375,7 @@ def build_geometry_two_piece_physical_center(
                             PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE
                         ),
                         t0_shift_sec=shift_sec,
+                        runtime_diagnostics=runtime_diagnostics,
                     ):
                         n_reused_predictions += 1
                         if use_shift:
@@ -2285,6 +2394,8 @@ def build_geometry_two_piece_physical_center(
                         )
                 if use_shift:
                     group_shift_ms_values.append(float(stats.t0_shift_sec) * 1000.0)
+                    if np.isfinite(stats.resid_p50_ms):
+                        group_reuse_resid_p50_values.append(float(stats.resid_p50_ms))
                     if np.isfinite(stats.resid_p90_ms):
                         group_reuse_resid_p90_values.append(float(stats.resid_p90_ms))
 
@@ -2293,9 +2404,18 @@ def build_geometry_two_piece_physical_center(
                     group_reuse_resid_p90_values,
                     dtype=np.float64,
                 )
+                resid_p50_values = np.asarray(
+                    group_reuse_resid_p50_values,
+                    dtype=np.float64,
+                )
                 runtime_diagnostics.record_t0_shifted_group(
                     t0_shift_ms=float(np.median(group_shift_ms_values)),
                     prediction_count=group_shifted_count,
+                    reuse_resid_p50_ms=(
+                        float(np.median(resid_p50_values))
+                        if resid_p50_values.size > 0
+                        else np.nan
+                    ),
                     reuse_resid_p90_ms=(
                         float(np.median(resid_values))
                         if resid_values.size > 0

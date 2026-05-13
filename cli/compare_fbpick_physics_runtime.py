@@ -43,8 +43,19 @@ RUNTIME_TOTAL_KEYS = (
     'physics_total_sec',
     'physical_center_total_sec',
     'ransac_fit_total_sec',
+    'non_ransac_total_sec',
+    'source_grouping_sec',
+    'neighbor_plan_sec',
+    'valid_mask_build_sec',
+    'compatible_anchor_search_sec',
+    't0_shift_sec',
+    'prediction_sec',
+    'assignment_sec',
+    'diagnostics_aggregate_sec',
+    'save_robust_npz_sec',
 )
 RUNTIME_COUNT_KEYS = (
+    'n_fit_contexts',
     'n_fit_calls',
     'n_anchor_fit_calls',
     'observation_sampling_enabled',
@@ -53,6 +64,7 @@ RUNTIME_COUNT_KEYS = (
     'n_source_groups',
     'n_non_anchor_groups',
     'n_reused_predictions',
+    'n_reuse_contexts',
     'n_t0_shifted_groups',
     'n_t0_shifted_predictions',
     'n_adaptive_refit_calls',
@@ -289,6 +301,7 @@ def _load_runtime_json(path: Path) -> dict[str, float | int | str] | None:
         if key.startswith('n_') or key in {
             'observation_sampling_enabled',
             'max_obs_per_fit',
+            'compatible_anchor_search_candidates_max',
         }:
             out[key] = int(value)
         else:
