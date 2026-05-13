@@ -31,6 +31,10 @@ proc/arakawa/
         A0D_downsample_only.yaml
       README.md
 
+  reference/
+    README.md
+    # user-provided grstat files may live here locally; ignored by git.
+
   scripts/
     # proc-local helpers only when a root cli/ entrypoint is not appropriate.
 
@@ -57,6 +61,8 @@ proc/arakawa/
 - `configs/templates/*.yaml` are runner templates, not per-run generated files.
 - Legacy `configs/*_one.yaml` files are deprecated comment-only stubs.
 - `experiments/runtime_speedup/configs/*.yaml` are development benchmark configs.
+- `reference/` is for local user-provided grstat files. Only
+  `reference/README.md` is tracked.
 - `outputs/` is ignored and owns generated artifacts, including generated
   configs, runtime benchmark runs, QC images, summaries, NPZ, CRD, JSON, and CSV.
 - New README examples should use only the canonical paths above.

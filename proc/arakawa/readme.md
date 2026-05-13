@@ -52,6 +52,29 @@ proc/arakawa/configs/run_coarse_physics_export.yaml
 
 canonical layout は `proc/arakawa/README_LAYOUT.md` を参照してください。
 
+### 生成物と git 管理
+
+runner の生成物は `proc/arakawa/outputs/` 配下に置き、git 管理対象にしません。旧 layout の `proc/arakawa/coarse/`, `proc/arakawa/robust/`, `proc/arakawa/grstat/`, `proc/arakawa/qc/`, `proc/arakawa/eval/`, `proc/arakawa/generated_configs/`, `proc/arakawa/runtime_runs/` も生成物として ignore されます。
+
+過去に生成物を tracking していた clone では、以下で index からだけ外します。作業ファイルは削除されません。
+
+```bash
+git rm --cached -r --ignore-unmatch \
+  proc/arakawa/generated_configs \
+  proc/arakawa/coarse \
+  proc/arakawa/robust \
+  proc/arakawa/fine \
+  proc/arakawa/grstat \
+  proc/arakawa/qc \
+  proc/arakawa/qc_no_fb \
+  proc/arakawa/eval \
+  proc/arakawa/fb_dummy \
+  proc/arakawa/runtime_runs \
+  'proc/arakawa/*arakawa_physical_export_summary.json'
+```
+
+ユーザー提供の参照 grstat `.crd` も source ではありません。repo 内に置く必要がある場合は `proc/arakawa/reference/` を使い、config から `paths.reference_grstat_path` で参照してください。このディレクトリでは説明用 README 以外を commit しません。
+
 ---
 
 ## 2. 最小 config を編集する
@@ -271,6 +294,8 @@ paths:
   reference_grstat_path: /path/to/reference_first_break.crd
 ```
 
+参照 grstat はユーザー提供データとして扱い、git 管理対象にしません。repo 内でパスを揃えたい場合は `proc/arakawa/reference/` に置きます。
+
 この場合、export 後に誤差評価も実行されます。
 
 出力例:
@@ -389,7 +414,7 @@ ls -lh proc/arakawa/outputs/grstat/*.crd
 summary も確認します。
 
 ```bash
-cat proc/arakawa/*arakawa_physical_export_summary.json
+cat proc/arakawa/outputs/*arakawa_physical_export_summary.json
 ```
 
 可視化図も確認します。
