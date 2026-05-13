@@ -32,6 +32,14 @@ runner が追加済みであることを確認します。
 ls cli/run_arakawa_fbpick_physical_export.py
 ```
 
+grstat export のユーザー向け entrypoint は、この runner だけです。
+packaged exporter は runner から呼び出される実装であり、`proc/arakawa`
+配下に別の export script は置きません。
+
+```bash
+python -m cli.run_arakawa_fbpick_physical_export --config <config.yaml>
+```
+
 Arakawa 用 config があることを確認します。
 
 ```bash

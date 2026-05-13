@@ -56,6 +56,9 @@ proc/arakawa/
 
 ## Contract
 
+- User-facing grstat export runs through the root CLI only:
+  `python -m cli.run_arakawa_fbpick_physical_export --config <config.yaml>`.
+  The packaged grstat exporter is implementation code used by that runner.
 - `configs/run_coarse_physics_export_minimal.yaml` is the primary user-edited
   config.
 - `configs/run_coarse_physics_export.yaml` is the full commented user config.
