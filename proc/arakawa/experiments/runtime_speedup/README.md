@@ -20,8 +20,9 @@ Run `A0_full` first. The other configs point `paths.coarse_dir` at
 
 The checked-in manifest runs the configured candidates, compares each robust
 NPZ against A0, evaluates per-candidate gates, and writes combined
-JSON/CSV/Markdown reports. Candidate `gates` are merged over manifest-level
-`gates`. A1/A2 use exact-match gates against A0; anchor reuse and
+JSON/CSV/Markdown reports. Candidate `gates` override manifest-level scalar
+and list gates; dict-valued gates are merged by key. A1/A2 use exact-match
+gates against A0; anchor reuse and
 observation-sampling stages use the looser tolerance gates recorded next to
 those candidate entries.
 

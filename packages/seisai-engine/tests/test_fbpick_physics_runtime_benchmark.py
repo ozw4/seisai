@@ -287,6 +287,7 @@ def test_benchmark_merges_candidate_gates_over_manifest_gates(
                         'name': 'B1',
                         'robust_npz': str(candidate),
                         'gates': {
+                            'exact_match_required': [],
                             'max_abs_diff_samples': {'physical_center_i': 0},
                             'allow_status_count_change': True,
                         },
@@ -312,15 +313,68 @@ def test_benchmark_merges_candidate_gates_over_manifest_gates(
     )
 
     gate_checks = summary['candidates'][0]['gates']['checks']
-    exact_gate = next(
-        gate for gate in gate_checks if gate['gate'] == 'exact_match_required'
-    )
     tolerance_gate = next(
         gate for gate in gate_checks if gate['gate'] == 'max_abs_diff_samples'
     )
-    assert summary['passed'] is False
-    assert exact_gate['passed'] is False
+    assert summary['passed'] is True
+    assert not any(gate['gate'] == 'exact_match_required' for gate in gate_checks)
     assert tolerance_gate['passed'] is True
+
+
+def test_benchmark_artifacts_only_prefers_explicit_artifacts_over_stale_config(
+    tmp_path: Path,
+) -> None:
+    baseline = _write_robust(
+        tmp_path / 'runs' / 'A0' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20],
+    )
+    candidate = _write_robust(
+        tmp_path / 'runs' / 'B1' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20],
+    )
+    baseline_export = tmp_path / 'runs' / 'A0' / 'grstat' / 'T.export.npz'
+    candidate_export = tmp_path / 'runs' / 'B1' / 'grstat' / 'T.export.npz'
+    baseline_export.parent.mkdir(parents=True)
+    candidate_export.parent.mkdir(parents=True)
+    np.savez(baseline_export, out_fb=np.asarray([10, 20], dtype=np.int32))
+    np.savez(candidate_export, out_fb=np.asarray([10, 20], dtype=np.int32))
+    manifest_path = tmp_path / 'manifest.yaml'
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                'baseline': {
+                    'name': 'A0',
+                    'config': str(tmp_path / 'missing-baseline.yaml'),
+                    'robust_npz': str(baseline),
+                    'export_npz': str(baseline_export),
+                },
+                'candidates': [
+                    {
+                        'name': 'B1',
+                        'config': str(tmp_path / 'missing-candidate.yaml'),
+                        'robust_npz': str(candidate),
+                        'export_npz': str(candidate_export),
+                    }
+                ],
+                'gates': {'exact_match_required': ['physical_model_status']},
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    summary = benchmark.run_benchmark(
+        manifest_path=manifest_path,
+        tag=None,
+        out_dir=tmp_path / 'out',
+        artifacts_only=True,
+        repo_root=tmp_path,
+    )
+
+    assert summary['passed'] is True
+    artifacts = summary['candidates'][0]['artifacts']
+    assert artifacts['export_npz'] == str(candidate_export)
+    assert artifacts['comparison_json'] is not None
 
 
 def test_benchmark_derives_repo_root_style_config_artifact_paths(

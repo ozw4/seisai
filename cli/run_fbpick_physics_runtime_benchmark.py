@@ -346,11 +346,11 @@ def _derive_from_config(
     tag: str | None,
     repo_root: Path,
 ) -> tuple[Path, Path | None]:
-    if spec.config is None:
-        if spec.robust_npz is None:
-            msg = f'{spec.name} needs robust_npz when config is absent'
-            raise ValueError(msg)
+    if spec.robust_npz is not None:
         return spec.robust_npz, spec.export_npz
+    if spec.config is None:
+        msg = f'{spec.name} needs robust_npz when config is absent'
+        raise ValueError(msg)
     if tag is None or not tag:
         msg = f'{spec.name} needs --tag to derive artifact paths from config'
         raise ValueError(msg)
@@ -636,7 +636,7 @@ def _candidate_gates(
         if isinstance(existing, dict) and isinstance(value, dict):
             merged[key] = {**existing, **value}
         elif isinstance(existing, list) and isinstance(value, list):
-            merged[key] = list(_ordered_unique([*existing, *value]))
+            merged[key] = list(value)
         else:
             merged[key] = value
     return merged
