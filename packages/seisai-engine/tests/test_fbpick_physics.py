@@ -347,6 +347,11 @@ def test_physical_runtime_diagnostics_initializes_with_zero_counts() -> None:
     assert summary['observation_sampling_enabled'] == 0
     assert summary['obs_count_before_p50'] == 0.0
     assert summary['obs_count_after_p50'] == 0.0
+    assert summary['fit_executor_enabled'] == 0
+    assert summary['fit_executor_backend'] == 'serial'
+    assert summary['fit_executor_max_workers'] == 0
+    assert summary['fit_executor_wall_sec'] == 0.0
+    assert summary['fit_executor_tasks'] == 0
     assert summary['n_source_groups'] == 0
     assert summary['n_unique_fit_contexts'] == 0
     assert summary['n_prediction_batches'] == 0
@@ -378,12 +383,19 @@ def test_physical_runtime_diagnostics_detailed_timer_and_derived_fields() -> Non
         pass
     diagnostics.inc('n_prediction_calls', 2)
     diagnostics.inc('n_prediction_batches')
+    diagnostics.set_fit_executor(enabled=True, backend='thread', max_workers=2)
+    diagnostics.record_fit_executor_run(wall_sec=0.25, tasks=3)
 
     summary = diagnostics.to_summary()
     assert summary['neighbor_plan_sec'] >= 0.0
     assert summary['non_ransac_total_sec'] == pytest.approx(7.0)
     assert summary['n_prediction_calls'] == 2
     assert summary['n_prediction_batches'] == 1
+    assert summary['fit_executor_enabled'] == 1
+    assert summary['fit_executor_backend'] == 'thread'
+    assert summary['fit_executor_max_workers'] == 2
+    assert summary['fit_executor_wall_sec'] == pytest.approx(0.25)
+    assert summary['fit_executor_tasks'] == 3
 
 
 def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> None:
@@ -443,6 +455,11 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
         cfg.physical_runtime.observation_sampling.min_obs_per_fit_after_sampling == 8
     )
     assert cfg.physical_runtime.observation_sampling.preserve_edge_bins is True
+    assert cfg.physical_runtime.fit_executor.enabled is False
+    assert cfg.physical_runtime.fit_executor.backend == 'process'
+    assert cfg.physical_runtime.fit_executor.max_workers is None
+    assert cfg.physical_runtime.fit_executor.torch_num_threads_per_worker == 1
+    assert cfg.physical_runtime.fit_executor.chunksize == 1
 
 
 def test_load_physics_lite_config_accepts_nested_diagnostics_block() -> None:
@@ -528,6 +545,13 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
                     'min_obs_per_fit_after_sampling': 6,
                     'preserve_edge_bins': False,
                 },
+                'fit_executor': {
+                    'enabled': True,
+                    'backend': 'thread',
+                    'max_workers': 2,
+                    'torch_num_threads_per_worker': 1,
+                    'chunksize': 2,
+                },
             },
         }
     )
@@ -558,6 +582,10 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
     assert cfg.physical_runtime.observation_sampling.n_offset_bins == 20
     assert cfg.physical_runtime.observation_sampling.bin_pick == 'median_time'
     assert cfg.physical_runtime.observation_sampling.preserve_edge_bins is False
+    assert cfg.physical_runtime.fit_executor.enabled is True
+    assert cfg.physical_runtime.fit_executor.backend == 'thread'
+    assert cfg.physical_runtime.fit_executor.max_workers == 2
+    assert cfg.physical_runtime.fit_executor.chunksize == 2
 
 
 def test_physical_center_example_config_enables_physical_trend() -> None:
@@ -773,6 +801,26 @@ def test_physical_center_example_config_enables_physical_trend() -> None:
             },
             'min_obs_per_fit_after_sampling',
         ),
+        (
+            {'physical_runtime': {'fit_executor': {'backend': 'fork'}}},
+            'physical_runtime.fit_executor.backend',
+        ),
+        (
+            {'physical_runtime': {'fit_executor': {'max_workers': 0}}},
+            'physical_runtime.fit_executor.max_workers',
+        ),
+        (
+            {
+                'physical_runtime': {
+                    'fit_executor': {'torch_num_threads_per_worker': 0}
+                }
+            },
+            'physical_runtime.fit_executor.torch_num_threads_per_worker',
+        ),
+        (
+            {'physical_runtime': {'fit_executor': {'chunksize': 0}}},
+            'physical_runtime.fit_executor.chunksize',
+        ),
     ],
 )
 def test_load_physics_lite_config_rejects_invalid_physical_trend_blocks(
@@ -804,6 +852,7 @@ def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
     assert out['physical_runtime']['fit_policy'] == 'full'
     assert out['physical_runtime']['anchor_selection']['enabled'] is False
     assert out['physical_runtime']['anchor_reuse']['enabled'] is True
+    assert out['physical_runtime']['fit_executor']['enabled'] is False
 
 
 def test_normalize_coarse_pick_table_preserves_contract(tmp_path: Path) -> None:

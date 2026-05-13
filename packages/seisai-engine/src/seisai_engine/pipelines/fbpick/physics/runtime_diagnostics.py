@@ -87,6 +87,11 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'ransac_fit_time_p50_sec',
     'ransac_fit_time_p90_sec',
     'ransac_fit_time_p99_sec',
+    'fit_executor_enabled',
+    'fit_executor_backend',
+    'fit_executor_max_workers',
+    'fit_executor_wall_sec',
+    'fit_executor_tasks',
     'observation_sampling_enabled',
     'observation_sampling_method',
     'max_obs_per_fit',
@@ -135,7 +140,11 @@ PHYSICS_RUNTIME_DIAGNOSTIC_KEYS = (
     *PHYSICS_RUNTIME_ANCHOR_DIAGNOSTIC_KEYS,
 )
 PHYSICS_RUNTIME_STRING_DIAGNOSTIC_KEYS = frozenset(
-    {'anchor_selection_mode', 'observation_sampling_method'}
+    {
+        'anchor_selection_mode',
+        'fit_executor_backend',
+        'observation_sampling_method',
+    }
 )
 PHYSICS_RUNTIME_PREFIXED_NPZ_KEYS = frozenset(
     {
@@ -192,6 +201,11 @@ class PhysicalRuntimeDiagnostics:
     observation_sampling_method: str = 'offset_bin'
     max_obs_per_fit: int = 0
     n_offset_bins: int = 0
+    fit_executor_enabled: int = 0
+    fit_executor_backend: str = 'serial'
+    fit_executor_max_workers: int = 0
+    fit_executor_wall_sec: float = 0.0
+    fit_executor_tasks: int = 0
     _anchor_summary: dict[str, float | int | str] | None = field(
         default=None,
         repr=False,
@@ -268,20 +282,33 @@ class PhysicalRuntimeDiagnostics:
             yield
         finally:
             elapsed = time.perf_counter() - start
-            before_count = (
-                int(obs_count) if obs_count_before is None else int(obs_count_before)
+            self.record_ransac_fit(
+                elapsed_sec=elapsed,
+                obs_count=obs_count,
+                obs_count_before=obs_count_before,
             )
-            after_count = int(obs_count)
-            self.n_fit_calls += 1
-            self.ransac_fit_total_sec += elapsed
-            self._fit_times_sec.append(float(elapsed))
-            self._fit_obs_counts.append(after_count)
-            self._fit_obs_counts_before.append(before_count)
-            self._fit_obs_counts_after.append(after_count)
-            rate = 0.0
-            if before_count > 0:
-                rate = max(0.0, 1.0 - (float(after_count) / float(before_count)))
-            self._fit_obs_downsample_rates.append(float(rate))
+
+    def record_ransac_fit(
+        self,
+        *,
+        elapsed_sec: float,
+        obs_count: int,
+        obs_count_before: int | None = None,
+    ) -> None:
+        before_count = (
+            int(obs_count) if obs_count_before is None else int(obs_count_before)
+        )
+        after_count = int(obs_count)
+        self.n_fit_calls += 1
+        self.ransac_fit_total_sec += float(elapsed_sec)
+        self._fit_times_sec.append(float(elapsed_sec))
+        self._fit_obs_counts.append(after_count)
+        self._fit_obs_counts_before.append(before_count)
+        self._fit_obs_counts_after.append(after_count)
+        rate = 0.0
+        if before_count > 0:
+            rate = max(0.0, 1.0 - (float(after_count) / float(before_count)))
+        self._fit_obs_downsample_rates.append(float(rate))
 
     @property
     def cache_hit_rate(self) -> float:
@@ -398,6 +425,23 @@ class PhysicalRuntimeDiagnostics:
         self.observation_sampling_method = str(method)
         self.max_obs_per_fit = int(max_obs_per_fit)
         self.n_offset_bins = int(n_offset_bins)
+
+    def set_fit_executor(
+        self,
+        *,
+        enabled: bool,
+        backend: str,
+        max_workers: int | None,
+    ) -> None:
+        self.fit_executor_enabled = int(bool(enabled))
+        self.fit_executor_backend = str(backend) if bool(enabled) else 'serial'
+        self.fit_executor_max_workers = (
+            0 if max_workers is None else int(max_workers)
+        )
+
+    def record_fit_executor_run(self, *, wall_sec: float, tasks: int) -> None:
+        self.fit_executor_wall_sec += float(wall_sec)
+        self.fit_executor_tasks += int(tasks)
 
     def set_anchor_selection(
         self,
@@ -532,6 +576,11 @@ class PhysicalRuntimeDiagnostics:
             'ransac_fit_time_p50_sec': _percentile(self._fit_times_sec, 50.0),
             'ransac_fit_time_p90_sec': _percentile(self._fit_times_sec, 90.0),
             'ransac_fit_time_p99_sec': _percentile(self._fit_times_sec, 99.0),
+            'fit_executor_enabled': int(self.fit_executor_enabled),
+            'fit_executor_backend': str(self.fit_executor_backend),
+            'fit_executor_max_workers': int(self.fit_executor_max_workers),
+            'fit_executor_wall_sec': float(self.fit_executor_wall_sec),
+            'fit_executor_tasks': int(self.fit_executor_tasks),
             'observation_sampling_enabled': int(
                 self.observation_sampling_enabled
             ),
@@ -639,6 +688,9 @@ class PhysicalRuntimeDiagnostics:
             'compatible_anchor_search_candidates_max',
             'n_no_compatible_anchor_contexts',
             'observation_sampling_enabled',
+            'fit_executor_enabled',
+            'fit_executor_max_workers',
+            'fit_executor_tasks',
             'max_obs_per_fit',
             'n_offset_bins',
             'n_anchor_groups',
@@ -693,6 +745,9 @@ def runtime_summary_from_npz_fields(
         'compatible_anchor_search_candidates_max',
         'n_no_compatible_anchor_contexts',
         'observation_sampling_enabled',
+        'fit_executor_enabled',
+        'fit_executor_max_workers',
+        'fit_executor_tasks',
         'max_obs_per_fit',
         'n_offset_bins',
         'n_anchor_groups',
