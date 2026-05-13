@@ -931,6 +931,286 @@ def test_physical_center_falls_back_to_pca_side_when_saved_signed_absent(
     np.testing.assert_array_equal(result.physical_model_side, expected_side)
 
 
+def _legacy_append_index(indices: np.ndarray, trace_idx: int) -> np.ndarray:
+    return physical_center_mod._stable_unique(
+        np.concatenate(
+            [
+                np.asarray(indices, dtype=np.int64),
+                np.asarray([int(trace_idx)], dtype=np.int64),
+            ]
+        )
+    )
+
+
+def _legacy_trace_position_map(indices: np.ndarray) -> dict[int, int]:
+    return {
+        int(trace_idx): int(pos)
+        for pos, trace_idx in enumerate(np.asarray(indices, dtype=np.int64).tolist())
+    }
+
+
+def _legacy_obs_with_target_side(
+    *,
+    trace_idx: int,
+    obs_indices: np.ndarray,
+    geometry,
+) -> tuple[np.ndarray, int, bool]:
+    context_indices = _legacy_append_index(obs_indices, trace_idx)
+    signed = physical_center_mod.signed_offset_side_from_geometry(
+        geometry,
+        context_indices,
+    )
+    obs = np.asarray(obs_indices, dtype=np.int64)
+    if not bool(signed.reliable):
+        return obs, 0, False
+
+    pos = _legacy_trace_position_map(context_indices)
+    target_side = int(signed.side[pos[int(trace_idx)]])
+    obs_side = np.asarray(
+        [int(signed.side[pos[int(obs_idx)]]) for obs_idx in obs.tolist()],
+        dtype=np.int8,
+    )
+    return obs[obs_side == target_side], target_side, True
+
+
+def _legacy_obs_with_target_signed_offset_side(
+    *,
+    trace_idx: int,
+    obs_indices: np.ndarray,
+    signed_offset_m: np.ndarray,
+    zero_tol_m: float = 1.0e-6,
+) -> tuple[np.ndarray, int, bool]:
+    context_indices = _legacy_append_index(obs_indices, trace_idx)
+    signed = np.asarray(signed_offset_m, dtype=np.float32)[context_indices]
+    finite = np.isfinite(signed)
+    obs = np.asarray(obs_indices, dtype=np.int64)
+    if int(np.count_nonzero(finite)) < 2:
+        return obs, 0, False
+
+    zero_tol = float(zero_tol_m)
+    if zero_tol < 0.0 or not np.isfinite(zero_tol):
+        msg = 'zero_tol_m must be finite and >= 0'
+        raise ValueError(msg)
+
+    side = np.zeros((context_indices.size,), dtype=np.int8)
+    signed_valid = np.asarray(signed[finite], dtype=np.float64)
+    if not np.any(np.abs(signed_valid) > zero_tol):
+        return obs, 0, False
+
+    side[finite] = np.where(
+        np.abs(signed_valid) <= zero_tol,
+        0,
+        np.where(signed_valid < 0.0, -1, 1),
+    ).astype(np.int8)
+    pos = _legacy_trace_position_map(context_indices)
+    target_side = int(side[pos[int(trace_idx)]])
+    obs_side = np.asarray(
+        [int(side[pos[int(obs_idx)]]) for obs_idx in obs.tolist()],
+        dtype=np.int8,
+    )
+    return obs[obs_side == target_side], target_side, True
+
+
+def _legacy_obs_with_target_gap_segment(
+    *,
+    trace_idx: int,
+    obs_indices: np.ndarray,
+    offset_abs_m: np.ndarray,
+    cfg,
+) -> tuple[np.ndarray, int]:
+    context_indices = _legacy_append_index(obs_indices, trace_idx)
+    segment_id = physical_center_mod.split_offset_gap_segments(
+        np.asarray(offset_abs_m, dtype=np.float32)[context_indices],
+        split_by_offset_gap=bool(cfg.physical_trend.split_by_offset_gap),
+        gap_ratio=float(cfg.physical_trend.gap_ratio),
+        min_gap_m=cfg.physical_trend.min_gap_m,
+    )
+    pos = _legacy_trace_position_map(context_indices)
+    target_segment_id = int(segment_id[pos[int(trace_idx)]])
+    obs = np.asarray(obs_indices, dtype=np.int64)
+    obs_segment_id = np.asarray(
+        [int(segment_id[pos[int(obs_idx)]]) for obs_idx in obs.tolist()],
+        dtype=np.int64,
+    )
+    return obs[obs_segment_id == target_segment_id], target_segment_id
+
+
+def _legacy_build_observation_plan(
+    *,
+    trace_idx: int,
+    target_group_id: int,
+    group_context_by_id,
+    geometry,
+    offset_abs_m: np.ndarray,
+    offset_signed_m: np.ndarray | None,
+    cfg,
+    runtime_diagnostics=None,
+    plan_cache=None,
+):
+    group_context = group_context_by_id.get(int(target_group_id))
+    if group_context is None:
+        msg = f'observation context not found for group_id={int(target_group_id)}'
+        raise ValueError(msg)
+
+    valid_obs = group_context.valid_obs_indices
+    neighbor_count = int(group_context.neighbor_count)
+    prefilter_valid_count = int(group_context.prefilter_valid_count)
+    min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
+
+    if prefilter_valid_count < min_fit_obs:
+        return physical_center_mod._ObservationPlan(
+            obs_indices=valid_obs,
+            neighbor_count=neighbor_count,
+            prefilter_valid_count=prefilter_valid_count,
+            segment_id=-1,
+            side=0,
+            relaxed=False,
+        )
+
+    side_obs = valid_obs
+    side = 0
+    side_reliable = False
+    if bool(cfg.physical_trend.segment_by_offset_sign):
+        if offset_signed_m is not None:
+            side_obs, side, side_reliable = (
+                _legacy_obs_with_target_signed_offset_side(
+                    trace_idx=trace_idx,
+                    obs_indices=valid_obs,
+                    signed_offset_m=offset_signed_m,
+                )
+            )
+        elif geometry is not None:
+            side_obs, side, side_reliable = _legacy_obs_with_target_side(
+                trace_idx=trace_idx,
+                obs_indices=valid_obs,
+                geometry=geometry,
+            )
+
+    segment_obs = side_obs
+    segment_id = 0
+    if bool(cfg.physical_trend.split_by_offset_gap):
+        segment_obs, segment_id = _legacy_obs_with_target_gap_segment(
+            trace_idx=trace_idx,
+            obs_indices=side_obs,
+            offset_abs_m=offset_abs_m,
+            cfg=cfg,
+        )
+
+    if int(segment_obs.size) >= min_fit_obs:
+        return physical_center_mod._ObservationPlan(
+            obs_indices=segment_obs,
+            neighbor_count=neighbor_count,
+            prefilter_valid_count=prefilter_valid_count,
+            segment_id=segment_id,
+            side=side,
+            relaxed=False,
+        )
+
+    if (
+        bool(cfg.physical_trend.split_by_offset_gap)
+        and int(side_obs.size) >= min_fit_obs
+    ):
+        return physical_center_mod._ObservationPlan(
+            obs_indices=side_obs,
+            neighbor_count=neighbor_count,
+            prefilter_valid_count=prefilter_valid_count,
+            segment_id=0,
+            side=side,
+            relaxed=True,
+        )
+
+    if side_reliable and int(valid_obs.size) >= min_fit_obs:
+        return physical_center_mod._ObservationPlan(
+            obs_indices=valid_obs,
+            neighbor_count=neighbor_count,
+            prefilter_valid_count=prefilter_valid_count,
+            segment_id=0,
+            side=0,
+            relaxed=True,
+        )
+
+    return physical_center_mod._ObservationPlan(
+        obs_indices=segment_obs,
+        neighbor_count=neighbor_count,
+        prefilter_valid_count=prefilter_valid_count,
+        segment_id=segment_id,
+        side=side,
+        relaxed=False,
+    )
+
+
+def test_physical_center_cached_observation_plan_matches_legacy_outputs(
+    monkeypatch,
+) -> None:
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        return _fit_linear_model(x_abs, y_sec)
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    side = np.asarray([-1.0] * 8 + [1.0] * 8, dtype=np.float32)
+    offsets = np.tile(
+        np.asarray(
+            [100.0, 110.0, 120.0, 130.0, 1000.0, 1010.0, 1020.0, 1030.0],
+            dtype=np.float32,
+        ),
+        2,
+    )
+    pick_i = np.rint(_two_piece_time_sec(offsets) / np.float32(0.001)).astype(
+        np.int32
+    )
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+    )
+    coarse_npz['receiver_x_m'] = (side * offsets).astype(np.float32)
+    coarse_npz['offset_abs_geom_m'] = offsets.astype(np.float32)
+    coarse_npz['offset_signed_geom_m'] = (side * offsets).astype(np.float32)
+
+    cfg = _physical_cfg(
+        {
+            'physical_trend': {
+                'segment_by_offset_sign': True,
+                'split_by_offset_gap': True,
+            },
+            'physical_prefilter': {'enabled': False},
+            'neighbor_context': {'enabled': True, 'k_neighbors': 1},
+            'two_piece_ransac': {'min_pts': 2},
+        }
+    )
+
+    cached = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=cfg,
+    )
+
+    monkeypatch.setattr(
+        physical_center_mod,
+        '_build_observation_plan',
+        _legacy_build_observation_plan,
+    )
+    legacy = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=cfg,
+    )
+
+    for field in (
+        'physical_center_i',
+        'physical_model_status',
+        'physical_model_failure_reason',
+        'physical_model_segment_id',
+        'physical_model_side',
+        'physical_prefilter_valid_count',
+    ):
+        np.testing.assert_array_equal(getattr(cached, field), getattr(legacy, field))
+
+
 def test_synthetic_two_piece_trend_predicts_physical_centers() -> None:
     offsets = np.linspace(50.0, 2000.0, 28, dtype=np.float32)
     coarse_npz, table, feasible, trend, merged = _make_inputs(offsets_m=offsets)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import torch
@@ -170,6 +170,7 @@ class _GroupObservationContext:
     neighbor_group_ids: np.ndarray
     neighbor_indices: np.ndarray
     valid_obs_indices: np.ndarray
+    valid_obs_key: tuple[int, ...]
     neighbor_count: int
     prefilter_valid_count: int
 
@@ -182,6 +183,35 @@ class _ObservationPlan:
     segment_id: int
     side: int
     relaxed: bool
+
+
+@dataclass(frozen=True)
+class _SignedOffsetSideLabels:
+    side: np.ndarray
+    finite: np.ndarray
+
+
+@dataclass
+class _ObservationPlanCache:
+    offset_signed_labels: _SignedOffsetSideLabels | None = None
+    index_members: dict[tuple[int, ...], frozenset[int]] = field(
+        default_factory=dict,
+    )
+    signed_context_counts: dict[
+        tuple[int, tuple[int, ...]], tuple[int, int]
+    ] = field(default_factory=dict)
+    signed_side_filter: dict[
+        tuple[int, tuple[int, ...], int],
+        tuple[np.ndarray, tuple[int, ...]],
+    ] = field(default_factory=dict)
+    geometry_side: dict[
+        tuple[tuple[int, ...], int],
+        tuple[np.ndarray, tuple[int, ...], int, bool],
+    ] = field(default_factory=dict)
+    gap_segment: dict[
+        tuple[tuple[int, ...], int, float, float | None],
+        tuple[np.ndarray, tuple[int, ...], int],
+    ] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -519,6 +549,10 @@ def _append_index(indices: np.ndarray, trace_idx: int) -> np.ndarray:
     )
 
 
+def _indices_key(indices: np.ndarray) -> tuple[int, ...]:
+    return tuple(np.asarray(indices, dtype=np.int64).tolist())
+
+
 def _concat_group_traces(
     group_ids: np.ndarray,
     *,
@@ -537,6 +571,139 @@ def _concat_group_traces(
 
 def _trace_position_map(indices: np.ndarray) -> dict[int, int]:
     return {int(trace_idx): int(pos) for pos, trace_idx in enumerate(indices.tolist())}
+
+
+def _obs_key_or_build(
+    obs_indices: np.ndarray,
+    obs_key: tuple[int, ...] | None,
+) -> tuple[int, ...]:
+    if obs_key is not None:
+        return obs_key
+    return _indices_key(obs_indices)
+
+
+def _index_key_contains(
+    *,
+    obs_key: tuple[int, ...],
+    trace_idx: int,
+    cache: _ObservationPlanCache,
+) -> bool:
+    members = cache.index_members.get(obs_key)
+    if members is None:
+        members = frozenset(obs_key)
+        cache.index_members[obs_key] = members
+    return int(trace_idx) in members
+
+
+def _signed_offset_side_labels(
+    signed_offset_m: np.ndarray,
+    *,
+    zero_tol_m: float = 1.0e-6,
+    finite_mask: np.ndarray | None = None,
+) -> _SignedOffsetSideLabels:
+    signed = np.asarray(signed_offset_m, dtype=np.float32)
+    if signed.ndim != 1:
+        msg = 'signed_offset_m must be 1D'
+        raise ValueError(msg)
+
+    zero_tol = float(zero_tol_m)
+    if zero_tol < 0.0 or not np.isfinite(zero_tol):
+        msg = 'zero_tol_m must be finite and >= 0'
+        raise ValueError(msg)
+
+    finite = np.isfinite(signed)
+    if finite_mask is not None:
+        mask = np.asarray(finite_mask, dtype=np.bool_)
+        if mask.shape != signed.shape:
+            msg = 'finite_mask must have the same shape as signed_offset_m'
+            raise ValueError(msg)
+        finite = finite & mask
+
+    side = np.zeros(signed.shape, dtype=np.int8)
+    signed_valid = np.asarray(signed[finite], dtype=np.float64)
+    side[finite] = np.where(
+        np.abs(signed_valid) <= zero_tol,
+        0,
+        np.where(signed_valid < 0.0, -1, 1),
+    ).astype(np.int8)
+    return _SignedOffsetSideLabels(side=side, finite=finite)
+
+
+def _signed_context_counts(
+    *,
+    labels: _SignedOffsetSideLabels,
+    obs_indices: np.ndarray,
+    obs_key: tuple[int, ...],
+    cache: _ObservationPlanCache,
+) -> tuple[int, int]:
+    cache_key = (id(labels.side), obs_key)
+    counts = cache.signed_context_counts.get(cache_key)
+    if counts is not None:
+        return counts
+
+    obs = np.asarray(obs_indices, dtype=np.int64)
+    finite_count = int(np.count_nonzero(labels.finite[obs]))
+    nonzero_count = int(np.count_nonzero(labels.side[obs] != 0))
+    counts = (finite_count, nonzero_count)
+    cache.signed_context_counts[cache_key] = counts
+    return counts
+
+
+def _filtered_obs_key(
+    *,
+    obs_indices: np.ndarray,
+    obs_key: tuple[int, ...],
+    keep_mask: np.ndarray,
+) -> tuple[np.ndarray, tuple[int, ...]]:
+    obs = np.asarray(obs_indices, dtype=np.int64)
+    mask = np.asarray(keep_mask, dtype=np.bool_)
+    if mask.shape != obs.shape:
+        msg = 'keep_mask must match obs_indices shape'
+        raise ValueError(msg)
+    if bool(np.all(mask)):
+        return obs, obs_key
+    filtered = obs[mask]
+    return filtered, _indices_key(filtered)
+
+
+def _obs_with_target_labeled_side(
+    *,
+    trace_idx: int,
+    obs_indices: np.ndarray,
+    obs_key: tuple[int, ...],
+    labels: _SignedOffsetSideLabels,
+    cache: _ObservationPlanCache,
+    min_finite_count: int,
+) -> tuple[np.ndarray, tuple[int, ...], int, bool]:
+    trace = int(trace_idx)
+    obs = np.asarray(obs_indices, dtype=np.int64)
+    finite_count, nonzero_count = _signed_context_counts(
+        labels=labels,
+        obs_indices=obs,
+        obs_key=obs_key,
+        cache=cache,
+    )
+    if not _index_key_contains(obs_key=obs_key, trace_idx=trace, cache=cache):
+        if bool(labels.finite[trace]):
+            finite_count += 1
+        if int(labels.side[trace]) != 0:
+            nonzero_count += 1
+
+    if finite_count < int(min_finite_count) or nonzero_count == 0:
+        return obs, obs_key, 0, False
+
+    target_side = int(labels.side[trace])
+    filter_key = (id(labels.side), obs_key, target_side)
+    cached = cache.signed_side_filter.get(filter_key)
+    if cached is None:
+        cached = _filtered_obs_key(
+            obs_indices=obs,
+            obs_key=obs_key,
+            keep_mask=labels.side[obs] == target_side,
+        )
+        cache.signed_side_filter[filter_key] = cached
+    side_obs, side_obs_key = cached
+    return side_obs, side_obs_key, target_side, True
 
 
 def _select_group_ids(
@@ -580,11 +747,13 @@ def _build_group_observation_contexts(
             groups_by_id=groups_by_id,
         )
         valid_obs_indices = neighbor_indices[valid_mask[neighbor_indices]]
+        valid_obs_key = _indices_key(valid_obs_indices)
         contexts[group_id] = _GroupObservationContext(
             group_id=group_id,
             neighbor_group_ids=neighbor_group_ids,
             neighbor_indices=neighbor_indices,
             valid_obs_indices=valid_obs_indices,
+            valid_obs_key=valid_obs_key,
             neighbor_count=int(neighbor_group_ids.size),
             prefilter_valid_count=int(valid_obs_indices.size),
         )
@@ -596,23 +765,38 @@ def _obs_with_target_side(
     trace_idx: int,
     obs_indices: np.ndarray,
     geometry: CoarseGeometry,
-) -> tuple[np.ndarray, int, bool]:
+    obs_key: tuple[int, ...] | None = None,
+    cache: _ObservationPlanCache | None = None,
+) -> tuple[np.ndarray, tuple[int, ...], int, bool]:
+    plan_cache = cache if cache is not None else _ObservationPlanCache()
+    key = _obs_key_or_build(obs_indices, obs_key)
+    cache_key = (key, int(trace_idx))
+    cached = plan_cache.geometry_side.get(cache_key)
+    if cached is not None:
+        return cached
+
+    obs = np.asarray(obs_indices, dtype=np.int64)
     context_indices = _append_index(obs_indices, trace_idx)
     signed = signed_offset_side_from_geometry(geometry, context_indices)
     if not bool(signed.reliable):
-        return np.asarray(obs_indices, dtype=np.int64), 0, False
+        result = (obs, key, 0, False)
+        plan_cache.geometry_side[cache_key] = result
+        return result
 
     pos = _trace_position_map(context_indices)
     target_side = int(signed.side[pos[int(trace_idx)]])
     obs_side = np.asarray(
-        [int(signed.side[pos[int(obs_idx)]]) for obs_idx in obs_indices.tolist()],
+        [int(signed.side[pos[int(obs_idx)]]) for obs_idx in obs.tolist()],
         dtype=np.int8,
     )
-    return (
-        np.asarray(obs_indices, dtype=np.int64)[obs_side == target_side],
-        target_side,
-        True,
+    side_obs, side_obs_key = _filtered_obs_key(
+        obs_indices=obs,
+        obs_key=key,
+        keep_mask=obs_side == target_side,
     )
+    result = (side_obs, side_obs_key, target_side, True)
+    plan_cache.geometry_side[cache_key] = result
+    return result
 
 
 def _obs_with_target_signed_offset_side(
@@ -621,38 +805,23 @@ def _obs_with_target_signed_offset_side(
     obs_indices: np.ndarray,
     signed_offset_m: np.ndarray,
     zero_tol_m: float = 1.0e-6,
-) -> tuple[np.ndarray, int, bool]:
-    context_indices = _append_index(obs_indices, trace_idx)
-    signed = np.asarray(signed_offset_m, dtype=np.float32)[context_indices]
-    finite = np.isfinite(signed)
-    if int(np.count_nonzero(finite)) < 2:
-        return np.asarray(obs_indices, dtype=np.int64), 0, False
-
-    zero_tol = float(zero_tol_m)
-    if zero_tol < 0.0 or not np.isfinite(zero_tol):
-        msg = 'zero_tol_m must be finite and >= 0'
-        raise ValueError(msg)
-
-    side = np.zeros((context_indices.size,), dtype=np.int8)
-    signed_valid = np.asarray(signed[finite], dtype=np.float64)
-    if not np.any(np.abs(signed_valid) > zero_tol):
-        return np.asarray(obs_indices, dtype=np.int64), 0, False
-
-    side[finite] = np.where(
-        np.abs(signed_valid) <= zero_tol,
-        0,
-        np.where(signed_valid < 0.0, -1, 1),
-    ).astype(np.int8)
-    pos = _trace_position_map(context_indices)
-    target_side = int(side[pos[int(trace_idx)]])
-    obs_side = np.asarray(
-        [int(side[pos[int(obs_idx)]]) for obs_idx in obs_indices.tolist()],
-        dtype=np.int8,
-    )
-    return (
-        np.asarray(obs_indices, dtype=np.int64)[obs_side == target_side],
-        target_side,
-        True,
+    obs_key: tuple[int, ...] | None = None,
+    cache: _ObservationPlanCache | None = None,
+) -> tuple[np.ndarray, tuple[int, ...], int, bool]:
+    plan_cache = cache if cache is not None else _ObservationPlanCache()
+    if plan_cache.offset_signed_labels is None:
+        plan_cache.offset_signed_labels = _signed_offset_side_labels(
+            signed_offset_m,
+            zero_tol_m=zero_tol_m,
+        )
+    key = _obs_key_or_build(obs_indices, obs_key)
+    return _obs_with_target_labeled_side(
+        trace_idx=trace_idx,
+        obs_indices=obs_indices,
+        obs_key=key,
+        labels=plan_cache.offset_signed_labels,
+        cache=plan_cache,
+        min_finite_count=2,
     )
 
 
@@ -662,7 +831,23 @@ def _obs_with_target_gap_segment(
     obs_indices: np.ndarray,
     offset_abs_m: np.ndarray,
     cfg: PhysicsLiteConfig,
-) -> tuple[np.ndarray, int]:
+    obs_key: tuple[int, ...] | None = None,
+    cache: _ObservationPlanCache | None = None,
+) -> tuple[np.ndarray, tuple[int, ...], int]:
+    plan_cache = cache if cache is not None else _ObservationPlanCache()
+    key = _obs_key_or_build(obs_indices, obs_key)
+    min_gap = cfg.physical_trend.min_gap_m
+    gap_key = (
+        key,
+        int(trace_idx),
+        float(cfg.physical_trend.gap_ratio),
+        None if min_gap is None else float(min_gap),
+    )
+    cached = plan_cache.gap_segment.get(gap_key)
+    if cached is not None:
+        return cached
+
+    obs = np.asarray(obs_indices, dtype=np.int64)
     context_indices = _append_index(obs_indices, trace_idx)
     segment_id = split_offset_gap_segments(
         np.asarray(offset_abs_m, dtype=np.float32)[context_indices],
@@ -673,13 +858,17 @@ def _obs_with_target_gap_segment(
     pos = _trace_position_map(context_indices)
     target_segment_id = int(segment_id[pos[int(trace_idx)]])
     obs_segment_id = np.asarray(
-        [int(segment_id[pos[int(obs_idx)]]) for obs_idx in obs_indices.tolist()],
+        [int(segment_id[pos[int(obs_idx)]]) for obs_idx in obs.tolist()],
         dtype=np.int64,
     )
-    return (
-        np.asarray(obs_indices, dtype=np.int64)[obs_segment_id == target_segment_id],
-        target_segment_id,
+    segment_obs, segment_obs_key = _filtered_obs_key(
+        obs_indices=obs,
+        obs_key=key,
+        keep_mask=obs_segment_id == target_segment_id,
     )
+    result = (segment_obs, segment_obs_key, target_segment_id)
+    plan_cache.gap_segment[gap_key] = result
+    return result
 
 
 def _build_observation_plan(
@@ -692,7 +881,11 @@ def _build_observation_plan(
     offset_signed_m: np.ndarray | None,
     cfg: PhysicsLiteConfig,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+    plan_cache: _ObservationPlanCache | None = None,
 ) -> _ObservationPlan | None:
+    observation_cache = (
+        plan_cache if plan_cache is not None else _ObservationPlanCache()
+    )
     with (
         runtime_diagnostics.time_block('neighbor_plan_sec')
         if runtime_diagnostics is not None
@@ -704,6 +897,7 @@ def _build_observation_plan(
         raise ValueError(msg)
 
     valid_obs = group_context.valid_obs_indices
+    valid_obs_key = group_context.valid_obs_key
     neighbor_count = int(group_context.neighbor_count)
     prefilter_valid_count = int(group_context.prefilter_valid_count)
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
@@ -719,6 +913,7 @@ def _build_observation_plan(
         )
 
     side_obs = valid_obs
+    side_obs_key = valid_obs_key
     side = 0
     side_reliable = False
     with (
@@ -728,26 +923,42 @@ def _build_observation_plan(
     ):
         if bool(cfg.physical_trend.segment_by_offset_sign):
             if offset_signed_m is not None:
-                side_obs, side, side_reliable = _obs_with_target_signed_offset_side(
+                (
+                    side_obs,
+                    side_obs_key,
+                    side,
+                    side_reliable,
+                ) = _obs_with_target_signed_offset_side(
                     trace_idx=trace_idx,
                     obs_indices=valid_obs,
                     signed_offset_m=offset_signed_m,
+                    obs_key=valid_obs_key,
+                    cache=observation_cache,
                 )
             elif geometry is not None:
-                side_obs, side, side_reliable = _obs_with_target_side(
+                (
+                    side_obs,
+                    side_obs_key,
+                    side,
+                    side_reliable,
+                ) = _obs_with_target_side(
                     trace_idx=trace_idx,
                     obs_indices=valid_obs,
                     geometry=geometry,
+                    obs_key=valid_obs_key,
+                    cache=observation_cache,
                 )
 
         segment_obs = side_obs
         segment_id = 0
         if bool(cfg.physical_trend.split_by_offset_gap):
-            segment_obs, segment_id = _obs_with_target_gap_segment(
+            segment_obs, _segment_obs_key, segment_id = _obs_with_target_gap_segment(
                 trace_idx=trace_idx,
                 obs_indices=side_obs,
+                obs_key=side_obs_key,
                 offset_abs_m=offset_abs_m,
                 cfg=cfg,
+                cache=observation_cache,
             )
 
     if int(segment_obs.size) >= min_fit_obs:
@@ -1279,6 +1490,7 @@ def _fit_and_assign_trace(
     cfg: PhysicsLiteConfig,
     strategy: TwoPieceRansacAutoBreakStrategy,
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
+    observation_plan_cache: _ObservationPlanCache,
     min_fit_obs: int,
     runtime_fit_source: int,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
@@ -1313,6 +1525,7 @@ def _fit_and_assign_trace(
         offset_signed_m=offset_signed_m,
         cfg=cfg,
         runtime_diagnostics=runtime_diagnostics,
+        plan_cache=observation_plan_cache,
     )
     if plan is None:
         _assign_fallback(
@@ -2035,6 +2248,7 @@ def build_geometry_two_piece_physical_center(
         )
     strategy = _fit_strategy(cfg)
     fit_cache: dict[tuple[int, ...], _FitCacheEntry] = {}
+    observation_plan_cache = _ObservationPlanCache()
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
 
     if cfg.physical_runtime.fit_policy == 'anchor_source_xy':
@@ -2085,6 +2299,7 @@ def build_geometry_two_piece_physical_center(
                     cfg=cfg,
                     strategy=strategy,
                     fit_cache=fit_cache,
+                    observation_plan_cache=observation_plan_cache,
                     min_fit_obs=min_fit_obs,
                     runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
                     runtime_diagnostics=runtime_diagnostics,
@@ -2156,6 +2371,7 @@ def build_geometry_two_piece_physical_center(
                     offset_signed_m=offset_signed_m,
                     cfg=cfg,
                     runtime_diagnostics=runtime_diagnostics,
+                    plan_cache=observation_plan_cache,
                 )
                 if plan is not None:
                     arrays['physical_model_neighbor_count'][trace_idx] = np.int32(
@@ -2221,6 +2437,7 @@ def build_geometry_two_piece_physical_center(
                         cfg=cfg,
                         strategy=strategy,
                         fit_cache=fit_cache,
+                        observation_plan_cache=observation_plan_cache,
                         min_fit_obs=min_fit_obs,
                         runtime_fit_source=(
                             PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR
@@ -2340,6 +2557,7 @@ def build_geometry_two_piece_physical_center(
                         cfg=cfg,
                         strategy=strategy,
                         fit_cache=fit_cache,
+                        observation_plan_cache=observation_plan_cache,
                         min_fit_obs=min_fit_obs,
                         runtime_fit_source=(
                             PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT
@@ -2492,6 +2710,7 @@ def build_geometry_two_piece_physical_center(
             cfg=cfg,
             strategy=strategy,
             fit_cache=fit_cache,
+            observation_plan_cache=observation_plan_cache,
             min_fit_obs=min_fit_obs,
             runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT,
             runtime_diagnostics=runtime_diagnostics,
