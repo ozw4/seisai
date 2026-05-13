@@ -302,11 +302,11 @@ class PhysicalRuntimeDiagnostics:
             return 0.0
         return float(self.n_reused_predictions) / float(self.n_traces)
 
-    def record_cache_hit(self) -> None:
-        self.n_cache_hits += 1
+    def record_cache_hit(self, value: int = 1) -> None:
+        self.n_cache_hits += int(value)
 
-    def record_cache_miss(self) -> None:
-        self.n_cache_misses += 1
+    def record_cache_miss(self, value: int = 1) -> None:
+        self.n_cache_misses += int(value)
 
     def record_anchor_fit_calls(self, value: int) -> None:
         self.n_anchor_fit_calls += int(value)

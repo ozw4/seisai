@@ -953,12 +953,24 @@ def test_single_shot_collapsed_source_xy_still_allows_geometry_fit(
 
 def test_physical_center_fits_once_per_unique_observation_segment(monkeypatch) -> None:
     calls: list[np.ndarray] = []
+    fit_model_calls: list[tuple[int, ...]] = []
 
     def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
         calls.append(x_abs.detach().cpu().numpy().copy())
         return _fake_piecewise_model()
 
+    original_fit_model_for_plan = physical_center_mod._fit_model_for_plan
+
+    def counting_fit_model_for_plan(**kwargs):
+        fit_model_calls.append(physical_center_mod._fit_cache_key(kwargs['plan']))
+        return original_fit_model_for_plan(**kwargs)
+
     monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    monkeypatch.setattr(
+        physical_center_mod,
+        '_fit_model_for_plan',
+        counting_fit_model_for_plan,
+    )
     offsets = np.asarray(
         [
             10.0,
@@ -981,6 +993,7 @@ def test_physical_center_fits_once_per_unique_observation_segment(monkeypatch) -
         offsets_m=offsets,
         pick_i=pick_i,
     )
+    diagnostics = PhysicalRuntimeDiagnostics()
 
     result = build_geometry_two_piece_physical_center(
         coarse_npz=coarse_npz,
@@ -989,10 +1002,16 @@ def test_physical_center_fits_once_per_unique_observation_segment(monkeypatch) -
         trend=trend,
         merged=merged,
         cfg=_physical_cfg({'two_piece_ransac': {'min_pts': 3}}),
+        runtime_diagnostics=diagnostics,
     )
 
+    assert len(fit_model_calls) == 2
     assert len(calls) == 2
     assert sorted(int(call.size) for call in calls) == [6, 6]
+    assert diagnostics.n_fit_calls == 2
+    assert diagnostics.n_cache_misses == 2
+    assert diagnostics.n_cache_hits == 10
+    assert diagnostics.n_unique_fit_contexts == 2
     assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
 
 

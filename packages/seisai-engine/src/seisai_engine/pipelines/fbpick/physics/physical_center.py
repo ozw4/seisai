@@ -234,6 +234,26 @@ class _TraceFitResult:
 
 
 @dataclass(frozen=True)
+class _TracePlanAssignment:
+    trace_idx: int
+    plan: _ObservationPlan
+    fit_key: tuple[int, ...]
+    obs_count_before_sampling: int
+
+
+@dataclass(frozen=True)
+class _FitContextWorkItem:
+    fit_key: tuple[int, ...]
+    fit_plan: _ObservationPlan
+    obs_count_before_sampling: int
+    trace_indices: np.ndarray
+    runtime_fit_source: int
+    assignments: tuple[_TracePlanAssignment, ...]
+    x_obs: np.ndarray
+    y_obs: np.ndarray
+
+
+@dataclass(frozen=True)
 class _AnchorModelContext:
     trend_model: object
     diagnostics: tuple[float, float, float, float, float, float, float] | None
@@ -1587,7 +1607,7 @@ def _assign_model_prediction(
     return bool(valid[0])
 
 
-def _prepare_model_assignment_for_trace(
+def _prepare_trace_plan_assignment(
     *,
     arrays: dict[str, np.ndarray],
     trace_idx: int,
@@ -1603,18 +1623,11 @@ def _prepare_model_assignment_for_trace(
     trend: TrendResult,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
-    strategy: TwoPieceRansacAutoBreakStrategy,
-    fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     observation_plan_cache: _ObservationPlanCache,
     min_fit_obs: int,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
-) -> _TraceFitResult:
+) -> _TracePlanAssignment | None:
     arrays['physical_offset_source'][trace_idx] = np.uint8(offset_source)
-    fit_calls_before = (
-        int(runtime_diagnostics.n_fit_calls)
-        if runtime_diagnostics is not None
-        else 0
-    )
     if (
         not np.isfinite(offset_abs_m[trace_idx])
         or int(group_id_by_trace[trace_idx]) < 0
@@ -1628,13 +1641,7 @@ def _prepare_model_assignment_for_trace(
             trend=trend,
             merged=merged,
         )
-        return _TraceFitResult(
-            plan=None,
-            trend_model=None,
-            diagnostics=None,
-            fit_call_delta=0,
-            assigned_from_model=False,
-        )
+        return None
 
     plan = _build_observation_plan(
         trace_idx=trace_idx,
@@ -1657,13 +1664,7 @@ def _prepare_model_assignment_for_trace(
             trend=trend,
             merged=merged,
         )
-        return _TraceFitResult(
-            plan=None,
-            trend_model=None,
-            diagnostics=None,
-            fit_call_delta=0,
-            assigned_from_model=False,
-        )
+        return None
 
     arrays['physical_model_neighbor_count'][trace_idx] = np.int32(plan.neighbor_count)
     arrays['physical_prefilter_valid_count'][trace_idx] = np.int32(
@@ -1682,13 +1683,7 @@ def _prepare_model_assignment_for_trace(
             trend=trend,
             merged=merged,
         )
-        return _TraceFitResult(
-            plan=plan,
-            trend_model=None,
-            diagnostics=None,
-            fit_call_delta=0,
-            assigned_from_model=False,
-        )
+        return None
 
     obs_count_before_sampling = int(np.asarray(plan.obs_indices).size)
     with (
@@ -1712,6 +1707,71 @@ def _prepare_model_assignment_for_trace(
         side=plan.side,
         relaxed=plan.relaxed,
     )
+    return _TracePlanAssignment(
+        trace_idx=int(trace_idx),
+        plan=fit_plan,
+        fit_key=_fit_cache_key(fit_plan),
+        obs_count_before_sampling=obs_count_before_sampling,
+    )
+
+
+def _prepare_model_assignment_for_trace(
+    *,
+    arrays: dict[str, np.ndarray],
+    trace_idx: int,
+    group_id_by_trace: np.ndarray,
+    group_context_by_id: Mapping[int, _GroupObservationContext],
+    geometry: CoarseGeometry | None,
+    offset_abs_m: np.ndarray,
+    offset_signed_m: np.ndarray | None,
+    offset_source: int,
+    pick_t_sec: np.ndarray,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    cfg: PhysicsLiteConfig,
+    strategy: TwoPieceRansacAutoBreakStrategy,
+    fit_cache: dict[tuple[int, ...], _FitCacheEntry],
+    observation_plan_cache: _ObservationPlanCache,
+    min_fit_obs: int,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+) -> _TraceFitResult:
+    fit_calls_before = (
+        int(runtime_diagnostics.n_fit_calls)
+        if runtime_diagnostics is not None
+        else 0
+    )
+    assignment = _prepare_trace_plan_assignment(
+        arrays=arrays,
+        trace_idx=trace_idx,
+        group_id_by_trace=group_id_by_trace,
+        group_context_by_id=group_context_by_id,
+        geometry=geometry,
+        offset_abs_m=offset_abs_m,
+        offset_signed_m=offset_signed_m,
+        offset_source=offset_source,
+        pick_t_sec=pick_t_sec,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=cfg,
+        observation_plan_cache=observation_plan_cache,
+        min_fit_obs=min_fit_obs,
+        runtime_diagnostics=runtime_diagnostics,
+    )
+    if assignment is None:
+        return _TraceFitResult(
+            plan=None,
+            trend_model=None,
+            diagnostics=None,
+            fit_call_delta=0,
+            assigned_from_model=False,
+        )
+
+    fit_plan = assignment.plan
+    obs_indices = np.asarray(fit_plan.obs_indices, dtype=np.int64)
     x_obs = np.asarray(offset_abs_m[obs_indices], dtype=np.float32)
     y_obs = np.asarray(pick_t_sec[obs_indices], dtype=np.float32)
     trend_model, diagnostics, fit_failure_reason = _fit_model_for_plan(
@@ -1723,7 +1783,7 @@ def _prepare_model_assignment_for_trace(
         min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
         cache=fit_cache,
         runtime_diagnostics=runtime_diagnostics,
-        obs_count_before_sampling=obs_count_before_sampling,
+        obs_count_before_sampling=int(assignment.obs_count_before_sampling),
     )
     fit_calls_after = (
         int(runtime_diagnostics.n_fit_calls)
@@ -1841,13 +1901,145 @@ def _assign_prepared_model_prediction_batch(
     return valid, diagnostics
 
 
-def _prepared_assignment_group_key(
-    result: _TraceFitResult,
-) -> tuple[int, tuple[int, ...]]:
-    if result.plan is None or result.trend_model is None:
-        msg = 'prepared model assignment requires plan and trend_model'
-        raise ValueError(msg)
-    return (id(result.trend_model), _fit_cache_key(result.plan))
+def _build_fit_context_work_items(
+    grouped_assignments: Mapping[tuple[int, ...], list[_TracePlanAssignment]],
+    *,
+    offset_abs_m: np.ndarray,
+    pick_t_sec: np.ndarray,
+    runtime_fit_source: int,
+) -> list[_FitContextWorkItem]:
+    work_items: list[_FitContextWorkItem] = []
+    for fit_key, assignments in grouped_assignments.items():
+        if not assignments:
+            continue
+        first = assignments[0]
+        trace_indices = np.asarray(
+            [item.trace_idx for item in assignments],
+            dtype=np.int64,
+        )
+        obs_indices = np.asarray(first.plan.obs_indices, dtype=np.int64)
+        work_items.append(
+            _FitContextWorkItem(
+                fit_key=fit_key,
+                fit_plan=first.plan,
+                obs_count_before_sampling=first.obs_count_before_sampling,
+                trace_indices=trace_indices,
+                runtime_fit_source=int(runtime_fit_source),
+                assignments=tuple(assignments),
+                x_obs=np.asarray(offset_abs_m[obs_indices], dtype=np.float32),
+                y_obs=np.asarray(pick_t_sec[obs_indices], dtype=np.float32),
+            )
+        )
+    return work_items
+
+
+def _assign_fit_context_fallback(
+    *,
+    arrays: dict[str, np.ndarray],
+    work_item: _FitContextWorkItem,
+    failure_reason: int,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+) -> None:
+    for trace_idx in np.asarray(work_item.trace_indices, dtype=np.int64).tolist():
+        _assign_fallback(
+            arrays,
+            int(trace_idx),
+            failure_reason=int(failure_reason),
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+
+
+def _fit_and_assign_context_work_item(
+    *,
+    arrays: dict[str, np.ndarray],
+    work_item: _FitContextWorkItem,
+    offset_abs_m: np.ndarray,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    cfg: PhysicsLiteConfig,
+    strategy: TwoPieceRansacAutoBreakStrategy,
+    fit_cache: dict[tuple[int, ...], _FitCacheEntry],
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+) -> None:
+    trend_model, diagnostics, fit_failure_reason = _fit_model_for_plan(
+        strategy=strategy,
+        plan=work_item.fit_plan,
+        x_obs=work_item.x_obs,
+        y_obs=work_item.y_obs,
+        min_pts=int(cfg.two_piece_ransac.min_pts),
+        min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
+        cache=fit_cache,
+        runtime_diagnostics=runtime_diagnostics,
+        obs_count_before_sampling=int(work_item.obs_count_before_sampling),
+    )
+    if (
+        runtime_diagnostics is not None
+        and work_item.fit_key in fit_cache
+        and int(work_item.trace_indices.size) > 1
+    ):
+        runtime_diagnostics.record_cache_hit(int(work_item.trace_indices.size) - 1)
+
+    if fit_failure_reason is not None:
+        _assign_fit_context_fallback(
+            arrays=arrays,
+            work_item=work_item,
+            failure_reason=fit_failure_reason,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+        return
+
+    if trend_model is None:
+        _assign_fit_context_fallback(
+            arrays=arrays,
+            work_item=work_item,
+            failure_reason=PHYSICAL_MODEL_FAILURE_FIT_FAILED,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+        return
+
+    items = [
+        (
+            int(item.trace_idx),
+            _TraceFitResult(
+                plan=item.plan,
+                trend_model=trend_model,
+                diagnostics=diagnostics,
+                fit_call_delta=0,
+                assigned_from_model=True,
+                x_obs=work_item.x_obs,
+                y_obs=work_item.y_obs,
+            ),
+        )
+        for item in work_item.assignments
+    ]
+    _assign_prepared_model_prediction_batch(
+        arrays=arrays,
+        items=items,
+        offset_abs_m=offset_abs_m,
+        dt=float(table.dt_scalar_sec),
+        n_samples=int(table.n_samples_orig),
+        runtime_fit_source=int(work_item.runtime_fit_source),
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        fit_cache=fit_cache,
+        runtime_diagnostics=runtime_diagnostics,
+    )
 
 
 def _fit_and_assign_trace(
@@ -2975,12 +3167,9 @@ def build_geometry_two_piece_physical_center(
             runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))
         return _finalize_result(arrays)
 
-    pending_assignments: dict[
-        tuple[int, tuple[int, ...]],
-        list[tuple[int, _TraceFitResult]],
-    ] = {}
+    fit_context_assignments: dict[tuple[int, ...], list[_TracePlanAssignment]] = {}
     for trace_idx in range(n):
-        result = _prepare_model_assignment_for_trace(
+        assignment = _prepare_trace_plan_assignment(
             arrays=arrays,
             trace_idx=trace_idx,
             group_id_by_trace=group_id_by_trace,
@@ -2995,32 +3184,32 @@ def build_geometry_two_piece_physical_center(
             trend=trend,
             merged=merged,
             cfg=cfg,
-            strategy=strategy,
-            fit_cache=fit_cache,
             observation_plan_cache=observation_plan_cache,
             min_fit_obs=min_fit_obs,
             runtime_diagnostics=runtime_diagnostics,
         )
-        if (
-            result.assigned_from_model
-            and result.plan is not None
-            and result.trend_model is not None
-        ):
-            key = _prepared_assignment_group_key(result)
-            pending_assignments.setdefault(key, []).append((trace_idx, result))
+        if assignment is not None:
+            fit_context_assignments.setdefault(assignment.fit_key, []).append(
+                assignment
+            )
 
-    for items in pending_assignments.values():
-        _assign_prepared_model_prediction_batch(
+    work_items = _build_fit_context_work_items(
+        fit_context_assignments,
+        offset_abs_m=offset_abs_m,
+        pick_t_sec=pick_t_sec,
+        runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT,
+    )
+    for work_item in work_items:
+        _fit_and_assign_context_work_item(
             arrays=arrays,
-            items=items,
+            work_item=work_item,
             offset_abs_m=offset_abs_m,
-            dt=dt,
-            n_samples=n_samples,
-            runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT,
             table=table,
             feasible=feasible,
             trend=trend,
             merged=merged,
+            cfg=cfg,
+            strategy=strategy,
             fit_cache=fit_cache,
             runtime_diagnostics=runtime_diagnostics,
         )
