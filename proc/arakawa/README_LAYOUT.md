@@ -5,8 +5,9 @@ configs should use these paths.
 
 ```text
 proc/arakawa/
-  readme.md
-  readme_runtime_speedup.md
+  README.md
+  README_RUNTIME_SPEEDUP.md
+  MIGRATION.md
   README_LAYOUT.md
 
   configs/

@@ -1,6 +1,9 @@
 # Arakawa FBPICK Physical Export Runner 手順書
 
 この手順書は、Arakawa データに対して以下を 1 コマンドで実行するための簡易ガイドです。
+runtime speedup 実験は通常実行とは別の開発者向け手順なので、
+`proc/arakawa/README_RUNTIME_SPEEDUP.md` を参照してください。旧 layout から
+移行する場合は `proc/arakawa/MIGRATION.md` を参照してください。
 
 ```text
 Coarse infer
@@ -50,7 +53,8 @@ proc/arakawa/configs/run_coarse_physics_export.yaml
 
 `proc/arakawa/configs/templates/*.yaml` は runner が読み込む template であり、ユーザーが直接実行・編集する config ではありません。旧 `coarse_one.yaml` / `physics_one.yaml` / `physics_qc_one_no_fb.yaml` / `fine_one.yaml` は deprecated です。
 
-canonical layout は `proc/arakawa/README_LAYOUT.md` を参照してください。
+canonical layout は `proc/arakawa/README_LAYOUT.md`、旧 path からの移行は
+`proc/arakawa/MIGRATION.md` を参照してください。
 
 ### 生成物と git 管理
 

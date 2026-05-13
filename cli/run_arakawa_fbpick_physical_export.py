@@ -16,6 +16,11 @@ __all__ = ['main', 'run_pipeline']
 
 DEFAULT_ARAKAWA_SEGY_DIR = Path('/home/dcuser/data/ActiveSeisField/Arakawa2026')
 
+_LEGACY_TEMPLATE_NAMES = {
+    'coarse.yaml': 'coarse_one.yaml',
+    'physics.yaml': 'physics_one.yaml',
+}
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -27,7 +32,17 @@ def _default_template_path(root: Path, *, name: str) -> Path:
     if path.is_file():
         return path
 
-    msg = f'Arakawa template config not found: {path}'
+    tried = [path]
+    legacy_name = _LEGACY_TEMPLATE_NAMES.get(name)
+    if legacy_name is not None:
+        legacy_path = arakawa_dir / 'configs' / legacy_name
+        tried.append(legacy_path)
+        if legacy_path.is_file():
+            return legacy_path
+
+    msg = 'Arakawa template config not found; tried: ' + ', '.join(
+        str(p) for p in tried
+    )
     raise FileNotFoundError(msg)
 
 
@@ -109,11 +124,15 @@ def _resolve_segy_path(
 
     raw_path = Path(segy_value).expanduser()
     segy_dir_value = paths.get('sgy_dir', paths.get('segy_dir'))
+    if segy_dir_value is not None and (
+        not isinstance(segy_dir_value, str) or not segy_dir_value.strip()
+    ):
+        msg = 'paths.sgy_dir must be non-empty str when provided'
+        raise TypeError(msg)
     if (
         not raw_path.is_absolute()
         and raw_path.parent == Path('.')
-        and isinstance(segy_dir_value, str)
-        and segy_dir_value.strip()
+        and segy_dir_value is not None
     ):
         segy_dir = Path(runtime.resolve_relpath(base_dir, segy_dir_value))
         return str((segy_dir / raw_path.name).resolve())
@@ -147,6 +166,155 @@ def _resolve_optional_path(
     if value is None:
         return None
     return runtime.resolve_relpath(base_dir, value)
+
+
+def _resolve_path_value(
+    value: Any,
+    *,
+    field: str,
+    base_dir: Path,
+    runtime: SimpleNamespace,
+) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        msg = f'{field} must be non-empty str'
+        raise TypeError(msg)
+    return Path(runtime.resolve_relpath(base_dir, value))
+
+
+def _resolve_output_dir(
+    paths: dict[str, Any],
+    *,
+    key: str,
+    default: Path,
+    base_dir: Path,
+    runtime: SimpleNamespace,
+) -> Path:
+    return _resolve_path_value(
+        paths.get(key, str(default)),
+        field=f'paths.{key}',
+        base_dir=base_dir,
+        runtime=runtime,
+    )
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_output_paths(
+    *,
+    output_dirs: dict[str, Path],
+    generated_cfg_dir: Path,
+    arakawa_dir: Path,
+    allow_generated_config_under_source: bool,
+) -> None:
+    source_config_dirs = (
+        arakawa_dir / 'configs',
+        arakawa_dir / 'configs' / 'templates',
+        arakawa_dir / 'experiments' / 'runtime_speedup' / 'configs',
+    )
+    for name, out_dir in output_dirs.items():
+        for config_dir in source_config_dirs:
+            if out_dir.resolve() == config_dir.resolve():
+                msg = (
+                    f'paths.{name} must not be a source config directory: '
+                    f'{out_dir}'
+                )
+                raise ValueError(msg)
+
+    guarded_dirs = (
+        arakawa_dir / 'configs',
+        arakawa_dir / 'experiments' / 'runtime_speedup' / 'configs',
+    )
+    if not allow_generated_config_under_source:
+        for config_dir in guarded_dirs:
+            if _is_relative_to(generated_cfg_dir, config_dir):
+                msg = (
+                    'paths.generated_config_dir must not be under a tracked '
+                    f'source config directory: {generated_cfg_dir}; set '
+                    'run.allow_generated_config_under_source_config_dir=true '
+                    'only for intentional local experiments'
+                )
+                raise ValueError(msg)
+
+
+def _runtime_experiment_run_name(
+    *,
+    config_path: Path,
+    base_dir: Path,
+    arakawa_dir: Path,
+) -> str | None:
+    runtime_config_dir = arakawa_dir / 'experiments' / 'runtime_speedup' / 'configs'
+    if base_dir.resolve() != runtime_config_dir.resolve():
+        return None
+
+    run_name = config_path.stem
+    if not run_name:
+        msg = f'runtime experiment config must have a filename stem: {config_path}'
+        raise ValueError(msg)
+    return run_name
+
+
+def _resolve_template_path(
+    *,
+    explicit_value: Any,
+    field: str,
+    root: Path,
+    name: str,
+    base_dir: Path,
+    runtime: SimpleNamespace,
+) -> Path:
+    tried: list[Path] = []
+    if explicit_value is not None:
+        explicit_path = _resolve_path_value(
+            explicit_value,
+            field=field,
+            base_dir=base_dir,
+            runtime=runtime,
+        )
+        tried.append(explicit_path)
+        if explicit_path.is_file():
+            return explicit_path
+
+    try:
+        return _default_template_path(root, name=name)
+    except FileNotFoundError as exc:
+        arakawa_dir = root / 'proc' / 'arakawa'
+        tried.append(arakawa_dir / 'configs' / 'templates' / name)
+        legacy_name = _LEGACY_TEMPLATE_NAMES.get(name)
+        if legacy_name is not None:
+            tried.append(arakawa_dir / 'configs' / legacy_name)
+        msg = 'Arakawa template config not found; tried: ' + ', '.join(
+            str(p) for p in tried
+        )
+        raise FileNotFoundError(msg) from exc
+
+
+def _resolve_coarse_ckpt_path(
+    coarse_cfg: dict[str, Any],
+    *,
+    template_path: Path,
+    runtime: SimpleNamespace,
+) -> Path:
+    infer_cfg = _as_dict(coarse_cfg.get('infer'), name='coarse_template.infer')
+    ckpt_path = infer_cfg.get('ckpt_path')
+    if not isinstance(ckpt_path, str) or not ckpt_path.strip():
+        msg = f'infer.ckpt_path must be non-empty str in coarse template: {template_path}'
+        raise TypeError(msg)
+    resolved = Path(runtime.resolve_relpath(template_path.parent, ckpt_path))
+    if not resolved.is_file():
+        msg = (
+            f'checkpoint not found for Arakawa coarse template: {resolved} '
+            f'(template: {template_path})'
+        )
+        raise FileNotFoundError(msg)
+    infer_cfg['ckpt_path'] = str(resolved)
+    coarse_cfg['infer'] = infer_cfg
+    return resolved
 
 
 def _write_yaml(path: Path, cfg: dict[str, Any]) -> None:
@@ -332,6 +500,7 @@ def _prepare_visualization_config(
     work_dir: Path,
     coarse_dir: Path,
     robust_dir: Path,
+    qc_dir: Path,
     robust_npz_path: Path,
     coarse_npz_path: Path,
 ) -> tuple[dict[str, Any] | None, Path | None, Path | None]:
@@ -343,12 +512,14 @@ def _prepare_visualization_config(
     if not enabled:
         return None, None, None
 
-    paths_cfg = _as_dict(cfg.get('paths'), name='paths')
-    qc_out_value = vis_runner_cfg.get('out_dir', paths_cfg.get('qc_dir', str(work_dir / 'qc')))
-    if not isinstance(qc_out_value, str) or not qc_out_value:
-        msg = 'visualization.out_dir must be str when provided'
-        raise TypeError(msg)
-    qc_out_dir = Path(runtime.resolve_relpath(base_dir, qc_out_value))
+    qc_out_value = vis_runner_cfg.get('out_dir')
+    if qc_out_value is None:
+        qc_out_dir = qc_dir
+    else:
+        if not isinstance(qc_out_value, str) or not qc_out_value:
+            msg = 'visualization.out_dir must be str when provided'
+            raise TypeError(msg)
+        qc_out_dir = Path(runtime.resolve_relpath(base_dir, qc_out_value))
 
     fb_value = _get_optional_section_path_str(
         cfg,
@@ -469,18 +640,43 @@ def run_pipeline(
         msg = 'run.eval_only must be bool'
         raise TypeError(msg)
     effective_eval_only = cfg_eval_only if eval_only is None else bool(eval_only)
+    run_force = _bool_cfg(cfg, 'run', 'force', False)
+    skip_existing_explicit = 'skip_existing' in run_section
+    skip_existing = _bool_cfg(cfg, 'run', 'skip_existing', True)
+    if run_force and skip_existing_explicit and skip_existing:
+        msg = 'run.force=true conflicts with run.skip_existing=true'
+        raise ValueError(msg)
+    force_coarse = _bool_cfg(cfg, 'run', 'force_coarse', run_force)
+    force_physics = _bool_cfg(cfg, 'run', 'force_physics', run_force)
+    force_export = _bool_cfg(cfg, 'run', 'force_export', True if run_force else False)
+    allow_generated_config_under_source = _bool_cfg(
+        cfg,
+        'run',
+        'allow_generated_config_under_source_config_dir',
+        False,
+    )
 
     segy_path = _resolve_segy_path(cfg, base_dir=base_dir, runtime=runtime)
     if not Path(segy_path).is_file() and not effective_eval_only:
-        raise FileNotFoundError(segy_path)
+        msg = f'paths.sgy_file SEG-Y not found: {segy_path}'
+        raise FileNotFoundError(msg)
 
     paths = _as_dict(cfg.get('paths'), name='paths')
     arakawa_dir = root / 'proc' / 'arakawa'
-    work_dir_value = paths.get('work_dir', str(arakawa_dir / 'outputs'))
-    if not isinstance(work_dir_value, str) or not work_dir_value:
-        msg = 'paths.work_dir must be str when provided'
-        raise TypeError(msg)
-    work_dir = Path(runtime.resolve_relpath(base_dir, work_dir_value))
+    runtime_run_name = _runtime_experiment_run_name(
+        config_path=Path(config_path),
+        base_dir=base_dir,
+        arakawa_dir=arakawa_dir,
+    )
+    default_work_dir = arakawa_dir / 'outputs'
+    if runtime_run_name is not None:
+        default_work_dir = default_work_dir / 'runtime_runs' / runtime_run_name
+    work_dir = _resolve_path_value(
+        paths.get('work_dir', str(default_work_dir)),
+        field='paths.work_dir',
+        base_dir=base_dir,
+        runtime=runtime,
+    )
 
     tag_value = paths.get('tag')
     if tag_value is not None:
@@ -490,25 +686,73 @@ def run_pipeline(
         tag = tag_value
     else:
         tag = runtime.build_fbpick_tag(segy_path)
-    coarse_dir = Path(
-        runtime.resolve_relpath(base_dir, paths.get('coarse_dir', str(work_dir / 'coarse')))
+    coarse_dir = _resolve_output_dir(
+        paths,
+        key='coarse_dir',
+        default=work_dir / 'coarse',
+        base_dir=base_dir,
+        runtime=runtime,
     )
-    robust_dir = Path(
-        runtime.resolve_relpath(base_dir, paths.get('robust_dir', str(work_dir / 'robust')))
+    robust_dir = _resolve_output_dir(
+        paths,
+        key='robust_dir',
+        default=work_dir / 'robust',
+        base_dir=base_dir,
+        runtime=runtime,
     )
-    grstat_dir = Path(
-        runtime.resolve_relpath(base_dir, paths.get('grstat_dir', str(work_dir / 'grstat')))
+    grstat_dir = _resolve_output_dir(
+        paths,
+        key='grstat_dir',
+        default=work_dir / 'grstat',
+        base_dir=base_dir,
+        runtime=runtime,
     )
-    eval_dir = Path(
-        runtime.resolve_relpath(base_dir, paths.get('eval_dir', str(work_dir / 'eval')))
+    qc_dir = _resolve_output_dir(
+        paths,
+        key='qc_dir',
+        default=work_dir / 'qc',
+        base_dir=base_dir,
+        runtime=runtime,
     )
-    generated_cfg_dir = Path(
-        runtime.resolve_relpath(
-            base_dir, paths.get('generated_config_dir', str(work_dir / 'generated_configs'))
-        )
+    eval_dir = _resolve_output_dir(
+        paths,
+        key='eval_dir',
+        default=work_dir / 'eval',
+        base_dir=base_dir,
+        runtime=runtime,
+    )
+    generated_cfg_dir = _resolve_output_dir(
+        paths,
+        key='generated_config_dir',
+        default=work_dir / 'generated_configs',
+        base_dir=base_dir,
+        runtime=runtime,
     )
 
-    for d in (coarse_dir, robust_dir, grstat_dir, eval_dir, generated_cfg_dir):
+    _validate_output_paths(
+        output_dirs={
+            'work_dir': work_dir,
+            'coarse_dir': coarse_dir,
+            'robust_dir': robust_dir,
+            'grstat_dir': grstat_dir,
+            'qc_dir': qc_dir,
+            'eval_dir': eval_dir,
+            'generated_config_dir': generated_cfg_dir,
+        },
+        generated_cfg_dir=generated_cfg_dir,
+        arakawa_dir=arakawa_dir,
+        allow_generated_config_under_source=allow_generated_config_under_source,
+    )
+
+    for d in (
+        work_dir,
+        coarse_dir,
+        robust_dir,
+        grstat_dir,
+        qc_dir,
+        eval_dir,
+        generated_cfg_dir,
+    ):
         d.mkdir(parents=True, exist_ok=True)
 
     coarse_npz_path = coarse_dir / f'{tag}.coarse.npz'
@@ -543,6 +787,9 @@ def run_pipeline(
         base_dir=base_dir,
         runtime=runtime,
     )
+    if reference_grstat is not None and not Path(reference_grstat).is_file():
+        msg = f'paths.reference_grstat_path not found: {reference_grstat}'
+        raise FileNotFoundError(msg)
     evaluation_cfg = _as_dict(cfg.get('evaluation'), name='evaluation')
     eval_enabled_raw = evaluation_cfg.get('enabled', reference_grstat is not None)
     if not isinstance(eval_enabled_raw, bool):
@@ -629,41 +876,26 @@ def run_pipeline(
         print(json.dumps(run_summary, ensure_ascii=False, indent=2, sort_keys=True))
         return out_crd
 
-    run_force = _bool_cfg(cfg, 'run', 'force', False)
-    force_coarse = _bool_cfg(cfg, 'run', 'force_coarse', run_force)
-    force_physics = _bool_cfg(cfg, 'run', 'force_physics', run_force)
-    force_export = _bool_cfg(cfg, 'run', 'force_export', True if run_force else False)
-
     coarse_cfg_path = generated_cfg_dir / f'{tag}.coarse.yaml'
     physics_cfg_path = generated_cfg_dir / f'{tag}.physics.yaml'
     qc_cfg_path = generated_cfg_dir / f'{tag}.physics_qc.yaml'
 
-    coarse_template_value = paths.get('coarse_template')
-    physics_template_value = paths.get('physics_template')
-    if coarse_template_value is not None and (
-        not isinstance(coarse_template_value, str) or not coarse_template_value
-    ):
-        msg = 'paths.coarse_template and paths.physics_template must be str'
-        raise TypeError(msg)
-    if physics_template_value is not None and (
-        not isinstance(physics_template_value, str) or not physics_template_value
-    ):
-        msg = 'paths.coarse_template and paths.physics_template must be str'
-        raise TypeError(msg)
-    if coarse_template_value is not None:
-        coarse_template = Path(runtime.resolve_relpath(base_dir, coarse_template_value))
-    else:
-        coarse_template = _default_template_path(
-            root,
-            name='coarse.yaml',
-        )
-    if physics_template_value is not None:
-        physics_template = Path(runtime.resolve_relpath(base_dir, physics_template_value))
-    else:
-        physics_template = _default_template_path(
-            root,
-            name='physics.yaml',
-        )
+    coarse_template = _resolve_template_path(
+        explicit_value=paths.get('coarse_template'),
+        field='paths.coarse_template',
+        root=root,
+        name='coarse.yaml',
+        base_dir=base_dir,
+        runtime=runtime,
+    )
+    physics_template = _resolve_template_path(
+        explicit_value=paths.get('physics_template'),
+        field='paths.physics_template',
+        root=root,
+        name='physics.yaml',
+        base_dir=base_dir,
+        runtime=runtime,
+    )
 
     coarse_cfg = _prepare_coarse_config(
         template_path=coarse_template,
@@ -671,9 +903,14 @@ def run_pipeline(
         coarse_dir=coarse_dir,
         cfg=cfg,
     )
+    _resolve_coarse_ckpt_path(
+        coarse_cfg,
+        template_path=coarse_template,
+        runtime=runtime,
+    )
     _write_yaml(coarse_cfg_path, coarse_cfg)
 
-    if coarse_npz_path.is_file() and not force_coarse:
+    if coarse_npz_path.is_file() and skip_existing and not force_coarse:
         print(f'[skip] coarse exists: {coarse_npz_path}')
     else:
         print(f'[run] coarse infer: {coarse_cfg_path}')
@@ -690,7 +927,7 @@ def run_pipeline(
     )
     _write_yaml(physics_cfg_path, physics_cfg)
 
-    if robust_npz_path.is_file() and not force_physics:
+    if robust_npz_path.is_file() and skip_existing and not force_physics:
         print(f'[skip] physics exists: {robust_npz_path}')
     else:
         print(f'[run] physics: {physics_cfg_path}')
@@ -702,6 +939,7 @@ def run_pipeline(
     skip_export = (
         out_crd.is_file()
         and out_npz.is_file()
+        and skip_existing
         and not force_export
         and not eval_enabled
     )
@@ -753,6 +991,7 @@ def run_pipeline(
             work_dir=work_dir,
             coarse_dir=coarse_dir,
             robust_dir=robust_dir,
+            qc_dir=qc_dir,
             robust_npz_path=robust_npz_path,
             coarse_npz_path=coarse_npz_path,
         )

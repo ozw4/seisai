@@ -28,6 +28,8 @@ def _write_runner_templates(
     physics_name: str = 'physics.yaml',
 ) -> None:
     template_dir.mkdir(parents=True)
+    ckpt_path = template_dir / 'coarse.pt'
+    ckpt_path.touch()
     (template_dir / coarse_name).write_text(
         yaml.safe_dump(
             {
@@ -35,7 +37,7 @@ def _write_runner_templates(
                     'segy_files': ['/old/input.sgy'],
                     'out_dir': '/old/coarse',
                 },
-                'infer': {'ckpt_path': '/fixed/best.pt'},
+                'infer': {'ckpt_path': str(ckpt_path)},
                 'model': {'pre_stages': 3, 'backbone': 'resnet18'},
                 'dataset': {'coord_unit_scale_to_m': 1.0},
             },
@@ -71,7 +73,7 @@ def test_arakawa_runner_default_template_paths_exist() -> None:
     assert (template_dir / 'physics.yaml').is_file()
 
 
-def test_arakawa_runner_default_template_paths_do_not_use_legacy_names(
+def test_arakawa_runner_default_template_paths_fall_back_to_legacy_names(
     tmp_path: Path,
 ) -> None:
     module = _load_module()
@@ -82,19 +84,98 @@ def test_arakawa_runner_default_template_paths_do_not_use_legacy_names(
         physics_name='physics_one.yaml',
     )
 
-    try:
-        module._default_template_path(tmp_path, name='coarse.yaml')
-    except FileNotFoundError as exc:
-        assert str(template_dir / 'templates' / 'coarse.yaml') in str(exc)
-    else:
-        raise AssertionError('legacy coarse_one.yaml must not be a default template')
+    assert module._default_template_path(tmp_path, name='coarse.yaml') == (
+        template_dir / 'coarse_one.yaml'
+    )
+    assert module._default_template_path(tmp_path, name='physics.yaml') == (
+        template_dir / 'physics_one.yaml'
+    )
+
+
+def test_arakawa_runner_force_and_skip_existing_conflict(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.setattr(module, '_repo_root', lambda: tmp_path)
+
+    cfg_path = tmp_path / 'runner.yaml'
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                'paths': {'sgy_file': 'missing.sgy'},
+                'run': {'force': True, 'skip_existing': True},
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    runtime = SimpleNamespace(
+        load_cfg_with_base_dir=lambda path: (
+            yaml.safe_load(Path(path).read_text(encoding='utf-8')),
+            Path(path).parent,
+        )
+    )
+    monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
 
     try:
-        module._default_template_path(tmp_path, name='physics.yaml')
-    except FileNotFoundError as exc:
-        assert str(template_dir / 'templates' / 'physics.yaml') in str(exc)
+        module.run_pipeline(cfg_path)
+    except ValueError as exc:
+        assert 'run.force=true conflicts with run.skip_existing=true' in str(exc)
     else:
-        raise AssertionError('legacy physics_one.yaml must not be a default template')
+        raise AssertionError('force and skip_existing must conflict')
+
+
+def test_arakawa_runner_rejects_generated_configs_under_source_configs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.setattr(module, '_repo_root', lambda: tmp_path)
+
+    segy = tmp_path / 'Arakawa2026' / 'line.sgy'
+    segy.parent.mkdir()
+    segy.touch()
+
+    cfg_path = tmp_path / 'runner.yaml'
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                'paths': {
+                    'sgy_file': str(segy),
+                    'generated_config_dir': str(
+                        tmp_path / 'proc' / 'arakawa' / 'configs'
+                    ),
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    def _resolve_relpath(base_dir, value):
+        p = Path(value).expanduser()
+        if not p.is_absolute():
+            p = Path(base_dir) / p
+        return str(p.resolve())
+
+    runtime = SimpleNamespace(
+        load_cfg_with_base_dir=lambda path: (
+            yaml.safe_load(Path(path).read_text(encoding='utf-8')),
+            Path(path).parent,
+        ),
+        resolve_relpath=_resolve_relpath,
+        build_fbpick_tag=lambda path: 'Arakawa2026__line',
+    )
+    monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
+
+    try:
+        module.run_pipeline(cfg_path)
+    except ValueError as exc:
+        assert 'paths.generated_config_dir must not be' in str(exc)
+    else:
+        raise AssertionError('generated configs must not be written under configs')
 
 
 def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
@@ -188,9 +269,15 @@ def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
     )
 
     assert result == expected_crd
+    assert calls['coarse_cfg_path'] == str(
+        work_dir / 'generated_configs' / 'Arakawa2026__line.coarse.yaml'
+    )
+    assert calls['physics_cfg_path'] == str(
+        work_dir / 'generated_configs' / 'Arakawa2026__line.physics.yaml'
+    )
     assert calls['coarse_cfg']['paths']['segy_files'] == [str(segy)]
     assert calls['coarse_cfg']['paths']['out_dir'] == str(work_dir / 'coarse')
-    assert calls['coarse_cfg']['infer']['ckpt_path'] == '/fixed/best.pt'
+    assert Path(calls['coarse_cfg']['infer']['ckpt_path']).is_file()
     assert calls['coarse_cfg']['model']['pre_stages'] == 3
     assert calls['physics_cfg']['paths']['coarse_npz_path'] == str(expected_coarse)
     assert calls['physics_cfg']['paths']['out_path'] == str(expected_robust)
@@ -221,6 +308,110 @@ def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
     assert calls['export_kwargs']['max_shift_samples'] == 2
     assert calls['export_kwargs']['grstat_format'] == 'recno_channel_range'
     assert calls['export_kwargs']['values_per_line'] == 5
+
+
+def test_arakawa_runner_runtime_experiment_defaults_to_runtime_run_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.setattr(module, '_repo_root', lambda: tmp_path)
+
+    segy = tmp_path / 'Arakawa2026' / 'line.sgy'
+    segy.parent.mkdir()
+    segy.touch()
+
+    template_dir = tmp_path / 'proc' / 'arakawa' / 'configs' / 'templates'
+    _write_runner_templates(template_dir)
+
+    config_dir = (
+        tmp_path / 'proc' / 'arakawa' / 'experiments' / 'runtime_speedup' / 'configs'
+    )
+    config_dir.mkdir(parents=True)
+    cfg_path = config_dir / 'A9_new_runtime.yaml'
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                'paths': {
+                    'segy': str(segy),
+                    'coarse_template': str(template_dir / 'coarse.yaml'),
+                    'physics_template': str(template_dir / 'physics.yaml'),
+                },
+                'run': {
+                    'force_coarse': True,
+                    'force_physics': True,
+                    'force_export': True,
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    calls: dict[str, object] = {}
+
+    def _resolve_relpath(base_dir, value):
+        p = Path(value).expanduser()
+        if not p.is_absolute():
+            p = Path(base_dir) / p
+        return str(p.resolve())
+
+    def _fake_run_coarse(path):
+        calls['coarse_cfg_path'] = Path(path)
+        cfg = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
+        out = Path(cfg['paths']['out_dir']) / 'Arakawa2026__line.coarse.npz'
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.touch()
+        return out
+
+    def _fake_run_physics(path):
+        calls['physics_cfg_path'] = Path(path)
+        cfg = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
+        out = Path(cfg['paths']['out_path'])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.touch()
+        return out
+
+    def _fake_export(**kwargs):
+        calls['export_kwargs'] = kwargs
+        Path(kwargs['out_crd_path']).parent.mkdir(parents=True, exist_ok=True)
+        Path(kwargs['out_crd_path']).touch()
+        Path(kwargs['out_npz_path']).touch()
+        return {'out_crd': str(kwargs['out_crd_path'])}
+
+    runtime = SimpleNamespace(
+        load_cfg_with_base_dir=lambda path: (
+            yaml.safe_load(Path(path).read_text(encoding='utf-8')),
+            Path(path).parent,
+        ),
+        resolve_relpath=_resolve_relpath,
+        build_fbpick_tag=lambda path: 'Arakawa2026__line',
+        run_coarse_infer=_fake_run_coarse,
+        run_physics=_fake_run_physics,
+        export_robust_pick_to_grstat=_fake_export,
+    )
+    monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
+
+    result = module.run_pipeline(cfg_path)
+
+    run_dir = tmp_path / 'proc' / 'arakawa' / 'outputs' / 'runtime_runs'
+    run_dir = run_dir / 'A9_new_runtime'
+    generated_dir = run_dir / 'generated_configs'
+
+    assert calls['coarse_cfg_path'] == (
+        generated_dir / 'Arakawa2026__line.coarse.yaml'
+    )
+    assert calls['physics_cfg_path'] == (
+        generated_dir / 'Arakawa2026__line.physics.yaml'
+    )
+    assert calls['export_kwargs']['robust_npz_path'] == (
+        run_dir / 'robust' / 'Arakawa2026__line.robust.npz'
+    )
+    assert result == (
+        run_dir
+        / 'grstat'
+        / 'Arakawa2026__line.physical_center.snap_peak.ltcor2.crd'
+    )
 
 
 def test_arakawa_runner_can_run_visualization_with_dummy_fb(
