@@ -165,6 +165,16 @@ class PhysicalCenterResult:
 
 
 @dataclass(frozen=True)
+class _GroupObservationContext:
+    group_id: int
+    neighbor_group_ids: np.ndarray
+    neighbor_indices: np.ndarray
+    valid_obs_indices: np.ndarray
+    neighbor_count: int
+    prefilter_valid_count: int
+
+
+@dataclass(frozen=True)
 class _ObservationPlan:
     obs_indices: np.ndarray
     neighbor_count: int
@@ -547,6 +557,40 @@ def _select_group_ids(
     )
 
 
+def _build_group_observation_contexts(
+    *,
+    groups: tuple[SourceGroup, ...],
+    groups_by_id: Mapping[int, SourceGroup],
+    valid_for_fit: np.ndarray,
+    cfg: PhysicsLiteConfig,
+    use_neighbor_context: bool,
+) -> dict[int, _GroupObservationContext]:
+    valid_mask = np.asarray(valid_for_fit, dtype=np.bool_)
+    contexts: dict[int, _GroupObservationContext] = {}
+    for group in groups:
+        group_id = int(group.group_id)
+        neighbor_group_ids = _select_group_ids(
+            groups=groups,
+            target_group_id=group_id,
+            cfg=cfg,
+            use_neighbor_context=use_neighbor_context,
+        )
+        neighbor_indices = _concat_group_traces(
+            neighbor_group_ids,
+            groups_by_id=groups_by_id,
+        )
+        valid_obs_indices = neighbor_indices[valid_mask[neighbor_indices]]
+        contexts[group_id] = _GroupObservationContext(
+            group_id=group_id,
+            neighbor_group_ids=neighbor_group_ids,
+            neighbor_indices=neighbor_indices,
+            valid_obs_indices=valid_obs_indices,
+            neighbor_count=int(neighbor_group_ids.size),
+            prefilter_valid_count=int(valid_obs_indices.size),
+        )
+    return contexts
+
+
 def _obs_with_target_side(
     *,
     trace_idx: int,
@@ -642,14 +686,11 @@ def _build_observation_plan(
     *,
     trace_idx: int,
     target_group_id: int,
-    groups: tuple[SourceGroup, ...],
-    groups_by_id: Mapping[int, SourceGroup],
+    group_context_by_id: Mapping[int, _GroupObservationContext],
     geometry: CoarseGeometry | None,
     offset_abs_m: np.ndarray,
     offset_signed_m: np.ndarray | None,
-    valid_for_fit: np.ndarray,
     cfg: PhysicsLiteConfig,
-    use_neighbor_context: bool,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> _ObservationPlan | None:
     with (
@@ -657,23 +698,20 @@ def _build_observation_plan(
         if runtime_diagnostics is not None
         else nullcontext()
     ):
-        group_ids = _select_group_ids(
-            groups=groups,
-            target_group_id=target_group_id,
-            cfg=cfg,
-            use_neighbor_context=use_neighbor_context,
-        )
-        neighbor_indices = _concat_group_traces(group_ids, groups_by_id=groups_by_id)
-        valid_obs = neighbor_indices[
-            np.asarray(valid_for_fit, dtype=np.bool_)[neighbor_indices]
-        ]
-    prefilter_valid_count = int(valid_obs.size)
+        group_context = group_context_by_id.get(int(target_group_id))
+    if group_context is None:
+        msg = f'observation context not found for group_id={int(target_group_id)}'
+        raise ValueError(msg)
+
+    valid_obs = group_context.valid_obs_indices
+    neighbor_count = int(group_context.neighbor_count)
+    prefilter_valid_count = int(group_context.prefilter_valid_count)
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
 
     if prefilter_valid_count < min_fit_obs:
         return _ObservationPlan(
             obs_indices=valid_obs,
-            neighbor_count=int(group_ids.size),
+            neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=-1,
             side=0,
@@ -715,7 +753,7 @@ def _build_observation_plan(
     if int(segment_obs.size) >= min_fit_obs:
         return _ObservationPlan(
             obs_indices=segment_obs,
-            neighbor_count=int(group_ids.size),
+            neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=segment_id,
             side=side,
@@ -728,7 +766,7 @@ def _build_observation_plan(
     ):
         return _ObservationPlan(
             obs_indices=side_obs,
-            neighbor_count=int(group_ids.size),
+            neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=0,
             side=side,
@@ -738,7 +776,7 @@ def _build_observation_plan(
     if side_reliable and int(valid_obs.size) >= min_fit_obs:
         return _ObservationPlan(
             obs_indices=valid_obs,
-            neighbor_count=int(group_ids.size),
+            neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=0,
             side=0,
@@ -747,7 +785,7 @@ def _build_observation_plan(
 
     return _ObservationPlan(
         obs_indices=segment_obs,
-        neighbor_count=int(group_ids.size),
+        neighbor_count=neighbor_count,
         prefilter_valid_count=prefilter_valid_count,
         segment_id=segment_id,
         side=side,
@@ -1228,13 +1266,11 @@ def _fit_and_assign_trace(
     arrays: dict[str, np.ndarray],
     trace_idx: int,
     group_id_by_trace: np.ndarray,
-    groups: tuple[SourceGroup, ...],
-    groups_by_id: Mapping[int, SourceGroup],
+    group_context_by_id: Mapping[int, _GroupObservationContext],
     geometry: CoarseGeometry | None,
     offset_abs_m: np.ndarray,
     offset_signed_m: np.ndarray | None,
     offset_source: int,
-    valid_for_fit: np.ndarray,
     pick_t_sec: np.ndarray,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
@@ -1244,7 +1280,6 @@ def _fit_and_assign_trace(
     strategy: TwoPieceRansacAutoBreakStrategy,
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     min_fit_obs: int,
-    use_neighbor_context: bool,
     runtime_fit_source: int,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
 ) -> _TraceFitResult:
@@ -1272,14 +1307,11 @@ def _fit_and_assign_trace(
     plan = _build_observation_plan(
         trace_idx=trace_idx,
         target_group_id=int(group_id_by_trace[trace_idx]),
-        groups=groups,
-        groups_by_id=groups_by_id,
+        group_context_by_id=group_context_by_id,
         geometry=geometry,
         offset_abs_m=offset_abs_m,
         offset_signed_m=offset_signed_m,
-        valid_for_fit=valid_for_fit,
         cfg=cfg,
-        use_neighbor_context=use_neighbor_context,
         runtime_diagnostics=runtime_diagnostics,
     )
     if plan is None:
@@ -1976,6 +2008,19 @@ def build_geometry_two_piece_physical_center(
                 cfg=cfg,
             )
 
+    with (
+        runtime_diagnostics.time_block('neighbor_plan_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        group_context_by_id = _build_group_observation_contexts(
+            groups=groups,
+            groups_by_id=groups_by_id,
+            valid_for_fit=valid_for_fit,
+            cfg=cfg,
+            use_neighbor_context=source_groups_from_geometry,
+        )
+
     arrays = _allocate_result_arrays(table)
     with (
         runtime_diagnostics.time_block('anchor_selection_sec')
@@ -2027,13 +2072,11 @@ def build_geometry_two_piece_physical_center(
                     arrays=arrays,
                     trace_idx=int(trace_idx),
                     group_id_by_trace=group_id_by_trace,
-                    groups=groups,
-                    groups_by_id=groups_by_id,
+                    group_context_by_id=group_context_by_id,
                     geometry=geometry,
                     offset_abs_m=offset_abs_m,
                     offset_signed_m=offset_signed_m,
                     offset_source=offset_source,
-                    valid_for_fit=valid_for_fit,
                     pick_t_sec=pick_t_sec,
                     table=table,
                     feasible=feasible,
@@ -2043,7 +2086,6 @@ def build_geometry_two_piece_physical_center(
                     strategy=strategy,
                     fit_cache=fit_cache,
                     min_fit_obs=min_fit_obs,
-                    use_neighbor_context=source_groups_from_geometry,
                     runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
                     runtime_diagnostics=runtime_diagnostics,
                 )
@@ -2108,14 +2150,11 @@ def build_geometry_two_piece_physical_center(
                 plan = _build_observation_plan(
                     trace_idx=trace_idx,
                     target_group_id=group_id,
-                    groups=groups,
-                    groups_by_id=groups_by_id,
+                    group_context_by_id=group_context_by_id,
                     geometry=geometry,
                     offset_abs_m=offset_abs_m,
                     offset_signed_m=offset_signed_m,
-                    valid_for_fit=valid_for_fit,
                     cfg=cfg,
-                    use_neighbor_context=source_groups_from_geometry,
                     runtime_diagnostics=runtime_diagnostics,
                 )
                 if plan is not None:
@@ -2169,13 +2208,11 @@ def build_geometry_two_piece_physical_center(
                         arrays=arrays,
                         trace_idx=trace_idx,
                         group_id_by_trace=group_id_by_trace,
-                        groups=groups,
-                        groups_by_id=groups_by_id,
+                        group_context_by_id=group_context_by_id,
                         geometry=geometry,
                         offset_abs_m=offset_abs_m,
                         offset_signed_m=offset_signed_m,
                         offset_source=offset_source,
-                        valid_for_fit=valid_for_fit,
                         pick_t_sec=pick_t_sec,
                         table=table,
                         feasible=feasible,
@@ -2185,7 +2222,6 @@ def build_geometry_two_piece_physical_center(
                         strategy=strategy,
                         fit_cache=fit_cache,
                         min_fit_obs=min_fit_obs,
-                        use_neighbor_context=source_groups_from_geometry,
                         runtime_fit_source=(
                             PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR
                         ),
@@ -2291,13 +2327,11 @@ def build_geometry_two_piece_physical_center(
                         arrays=arrays,
                         trace_idx=int(trace_idx),
                         group_id_by_trace=group_id_by_trace,
-                        groups=groups,
-                        groups_by_id=groups_by_id,
+                        group_context_by_id=group_context_by_id,
                         geometry=geometry,
                         offset_abs_m=offset_abs_m,
                         offset_signed_m=offset_signed_m,
                         offset_source=offset_source,
-                        valid_for_fit=valid_for_fit,
                         pick_t_sec=pick_t_sec,
                         table=table,
                         feasible=feasible,
@@ -2307,7 +2341,6 @@ def build_geometry_two_piece_physical_center(
                         strategy=strategy,
                         fit_cache=fit_cache,
                         min_fit_obs=min_fit_obs,
-                        use_neighbor_context=source_groups_from_geometry,
                         runtime_fit_source=(
                             PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT
                         ),
@@ -2446,13 +2479,11 @@ def build_geometry_two_piece_physical_center(
             arrays=arrays,
             trace_idx=trace_idx,
             group_id_by_trace=group_id_by_trace,
-            groups=groups,
-            groups_by_id=groups_by_id,
+            group_context_by_id=group_context_by_id,
             geometry=geometry,
             offset_abs_m=offset_abs_m,
             offset_signed_m=offset_signed_m,
             offset_source=offset_source,
-            valid_for_fit=valid_for_fit,
             pick_t_sec=pick_t_sec,
             table=table,
             feasible=feasible,
@@ -2462,7 +2493,6 @@ def build_geometry_two_piece_physical_center(
             strategy=strategy,
             fit_cache=fit_cache,
             min_fit_obs=min_fit_obs,
-            use_neighbor_context=source_groups_from_geometry,
             runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT,
             runtime_diagnostics=runtime_diagnostics,
         )

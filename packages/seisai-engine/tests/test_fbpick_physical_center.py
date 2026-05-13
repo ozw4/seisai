@@ -172,6 +172,159 @@ def _physical_cfg(extra: dict[str, dict[str, object]] | None = None):
     return load_physics_lite_config(raw)
 
 
+def _source_groups_for_context_tests() -> tuple[
+    physical_center_mod.SourceGroup,
+    ...,
+]:
+    return (
+        physical_center_mod.SourceGroup(
+            group_id=0,
+            source_key_x=0,
+            source_key_y=0,
+            source_x_m=0.0,
+            source_y_m=0.0,
+            trace_indices=np.asarray([0, 1], dtype=np.int64),
+        ),
+        physical_center_mod.SourceGroup(
+            group_id=1,
+            source_key_x=100,
+            source_key_y=0,
+            source_x_m=100.0,
+            source_y_m=0.0,
+            trace_indices=np.asarray([2, 3], dtype=np.int64),
+        ),
+        physical_center_mod.SourceGroup(
+            group_id=2,
+            source_key_x=250,
+            source_key_y=0,
+            source_x_m=250.0,
+            source_y_m=0.0,
+            trace_indices=np.asarray([4, 5], dtype=np.int64),
+        ),
+        physical_center_mod.SourceGroup(
+            group_id=3,
+            source_key_x=600,
+            source_key_y=0,
+            source_x_m=600.0,
+            source_y_m=0.0,
+            trace_indices=np.asarray([6, 7], dtype=np.int64),
+        ),
+    )
+
+
+def test_group_observation_contexts_match_existing_selection_and_filtering() -> None:
+    groups = _source_groups_for_context_tests()
+    groups_by_id = {int(group.group_id): group for group in groups}
+    valid_for_fit = np.asarray(
+        [True, False, True, True, False, True, True, False],
+        dtype=np.bool_,
+    )
+    cfg = _physical_cfg(
+        {
+            'physical_trend': {
+                'segment_by_offset_sign': False,
+                'split_by_offset_gap': False,
+            },
+            'neighbor_context': {
+                'enabled': True,
+                'k_neighbors': 3,
+                'include_self': False,
+                'max_source_distance_m': 260.0,
+            },
+            'two_piece_ransac': {'min_pts': 2},
+        }
+    )
+
+    contexts = physical_center_mod._build_group_observation_contexts(
+        groups=groups,
+        groups_by_id=groups_by_id,
+        valid_for_fit=valid_for_fit,
+        cfg=cfg,
+        use_neighbor_context=True,
+    )
+
+    assert set(contexts) == {0, 1, 2, 3}
+    for group in groups:
+        group_id = int(group.group_id)
+        expected_group_ids = physical_center_mod._select_group_ids(
+            groups=groups,
+            target_group_id=group_id,
+            cfg=cfg,
+            use_neighbor_context=True,
+        )
+        expected_neighbor_indices = physical_center_mod._concat_group_traces(
+            expected_group_ids,
+            groups_by_id=groups_by_id,
+        )
+        expected_valid_obs = expected_neighbor_indices[
+            valid_for_fit[expected_neighbor_indices]
+        ]
+
+        context = contexts[group_id]
+        assert context.group_id == group_id
+        assert context.neighbor_count == int(expected_group_ids.size)
+        assert context.prefilter_valid_count == int(expected_valid_obs.size)
+        np.testing.assert_array_equal(
+            context.neighbor_group_ids,
+            expected_group_ids,
+        )
+        np.testing.assert_array_equal(
+            context.neighbor_indices,
+            expected_neighbor_indices,
+        )
+        np.testing.assert_array_equal(
+            context.valid_obs_indices,
+            expected_valid_obs,
+        )
+
+    plan = physical_center_mod._build_observation_plan(
+        trace_idx=4,
+        target_group_id=2,
+        group_context_by_id=contexts,
+        geometry=None,
+        offset_abs_m=np.arange(8, dtype=np.float32),
+        offset_signed_m=None,
+        cfg=cfg,
+    )
+
+    assert plan is not None
+    np.testing.assert_array_equal(plan.obs_indices, contexts[2].valid_obs_indices)
+    assert plan.neighbor_count == contexts[2].neighbor_count
+    assert plan.prefilter_valid_count == contexts[2].prefilter_valid_count
+
+
+def test_group_observation_contexts_use_self_group_when_neighbor_disabled() -> None:
+    groups = _source_groups_for_context_tests()
+    groups_by_id = {int(group.group_id): group for group in groups}
+    valid_for_fit = np.asarray(
+        [True, False, True, True, False, True, True, False],
+        dtype=np.bool_,
+    )
+    cfg = _physical_cfg({'neighbor_context': {'enabled': False}})
+
+    contexts = physical_center_mod._build_group_observation_contexts(
+        groups=groups,
+        groups_by_id=groups_by_id,
+        valid_for_fit=valid_for_fit,
+        cfg=cfg,
+        use_neighbor_context=True,
+    )
+
+    for group in groups:
+        group_id = int(group.group_id)
+        trace_indices = np.asarray(group.trace_indices, dtype=np.int64)
+        expected_valid_obs = trace_indices[valid_for_fit[trace_indices]]
+        context = contexts[group_id]
+        np.testing.assert_array_equal(
+            context.neighbor_group_ids,
+            np.asarray([group_id], dtype=np.int64),
+        )
+        np.testing.assert_array_equal(context.neighbor_indices, trace_indices)
+        np.testing.assert_array_equal(context.valid_obs_indices, expected_valid_obs)
+        assert context.neighbor_count == 1
+        assert context.prefilter_valid_count == int(expected_valid_obs.size)
+
+
 def _fake_piecewise_model() -> PiecewiseLinearTrend:
     return PiecewiseLinearTrend(
         edges=torch.tensor([0.0, 1000.0, 2500.0], dtype=torch.float32),
