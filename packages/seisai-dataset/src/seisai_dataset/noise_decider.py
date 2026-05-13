@@ -41,6 +41,7 @@ class EventDetectConfig:
     min_on_ms: float = 8.0
     refr_ms: float = 80.0
     win_ms: float = 30.0
+    cluster_count_mode: Literal['trigger', 'unique_trace'] = 'trigger'
 
 
 # ---- 結果オブジェクト ----
@@ -88,6 +89,12 @@ def decide_noise(
     if cfg.thr_on < cfg.thr_off:
         msg = 'thr_on must be >= thr_off'
         raise ValueError(msg)
+    if cfg.cluster_count_mode not in ('trigger', 'unique_trace'):
+        msg = (
+            "cluster_count_mode must be 'trigger' or 'unique_trace', "
+            f'got {cfg.cluster_count_mode!r}'
+        )
+        raise ValueError(msg)
 
     # 1) 前処理(包絡は任意)
     sig = compute_envelope(x, axis=-1) if cfg.use_envelope else x
@@ -106,6 +113,7 @@ def decide_noise(
         win_ms=cfg.win_ms,
         min_traces=M,
         eps=cfg.eps,
+        cluster_count_mode=cfg.cluster_count_mode,
     )
     if is_event_B:
         return NoiseDecision(False, 'reject_B', None, pick_hist, cluster)
