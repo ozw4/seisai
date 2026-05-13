@@ -305,9 +305,65 @@ def test_benchmark_tolerance_gate_fails_on_one_sided_missing_pick(
     diff = summary['candidates'][0]['diff_checks']['physical_center_i']
     assert diff['n_one_sided_missing'] == 1
     assert diff['within_16_sample_rate'] == 2 / 3
+    tolerance_gates = {
+        'max_abs_diff_samples',
+        'max_p90_abs_diff_samples',
+        'min_within_16_sample_rate',
+    }
     for gate in summary['candidates'][0]['gates']['checks']:
+        if gate['gate'] not in tolerance_gates:
+            continue
         assert gate['passed'] is False
         assert gate['reason'] == 'one-sided missing values are present'
+
+
+def test_benchmark_tolerance_gate_defaults_to_status_count_stability(
+    tmp_path: Path,
+) -> None:
+    baseline = _write_robust(
+        tmp_path / 'runs' / 'A0' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20, 30, 40],
+        status=[0, 0, 1, 1],
+    )
+    candidate = _write_robust(
+        tmp_path / 'runs' / 'B1' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20, 31, 41],
+        status=[0, 0, 0, 1],
+    )
+    manifest_path = tmp_path / 'manifest.yaml'
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                'baseline': {'name': 'A0', 'robust_npz': str(baseline)},
+                'candidates': [{'name': 'B1', 'robust_npz': str(candidate)}],
+                'checks': {'diff_keys': ['physical_center_i']},
+                'gates': {
+                    'max_p90_abs_diff_samples': {'physical_center_i': 8},
+                    'min_within_16_sample_rate': {'physical_center_i': 0.97},
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    summary = benchmark.run_benchmark(
+        manifest_path=manifest_path,
+        tag='T',
+        out_dir=tmp_path / 'out',
+        artifacts_only=True,
+        repo_root=tmp_path,
+    )
+
+    assert summary['passed'] is False
+    status_gate = next(
+        gate
+        for gate in summary['candidates'][0]['gates']['checks']
+        if gate['gate'] == 'status_counts_match'
+        and gate['key'] == 'physical_model_status'
+    )
+    assert status_gate['passed'] is False
+    assert status_gate['reason'] == 'status counts changed or are missing'
 
 
 def test_benchmark_exact_gate_fails(tmp_path: Path) -> None:

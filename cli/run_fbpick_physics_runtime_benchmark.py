@@ -812,7 +812,7 @@ def _evaluate_gates(
             )
         )
 
-    if gates.get('allow_status_count_change') is False:
+    if gates.get('allow_status_count_change') is not True:
         status_counts = comparison.get('status_counts') if comparison else None
         for key in ('physical_model_status', 'physical_model_failure_reason'):
             group = status_counts.get(key) if isinstance(status_counts, dict) else None
