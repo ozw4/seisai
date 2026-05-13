@@ -1,3 +1,5 @@
+from typing import Literal
+
 import numpy as np
 from numba import njit
 
@@ -58,6 +60,48 @@ def _picks_hist_from_R(
 
 
 @njit(cache=True, fastmath=True)
+def _picks_hist_and_mask_from_R(
+    R: np.ndarray,
+    thr_on: float,
+    thr_off: float,
+    min_on_len: int,
+    refr_len: int,
+    hist: np.ndarray,
+    mask: np.ndarray,
+) -> None:
+    """STALTA時系列 R から pick hist と trace別 pick mask を同時に作る."""
+    T = R.size
+    if T == 0:
+        return
+    if thr_on < thr_off:
+        msg = 'thr_on must be >= thr_off'
+        raise ValueError(msg)
+    if min_on_len < 1 or refr_len < 1:
+        msg = 'min_on_len and refr_len must be >= 1'
+        raise ValueError(msg)
+
+    t = 0
+    run = 0
+    while t < T:
+        v = R[t]
+        if v >= thr_on:
+            run += 1
+            if run >= min_on_len:
+                t0 = t - (run - 1)  # run開始
+                if 0 <= t0 < T:
+                    hist[t0] += 1
+                    mask[t0] = True
+                # リフラクトリ突入
+                t = t0 + refr_len
+                run = 0
+                continue
+        elif v <= thr_off:
+            run = 0
+        # thr_off < v < thr_on のときは run を保持(ヒステリシス)
+        t += 1
+
+
+@njit(cache=True, fastmath=True)
 def _stalta_pick_hist(
     x_ht: np.ndarray,
     ns: int,
@@ -75,6 +119,29 @@ def _stalta_pick_hist(
         R = stalta_1d(x_ht[h], ns, nl, eps)
         _picks_hist_from_R(R, thr_on, thr_off, min_on_len, refr_len, hist)
     return hist
+
+
+@njit(cache=True, fastmath=True)
+def _stalta_pick_hist_and_trace_mask(
+    x_ht: np.ndarray,
+    ns: int,
+    nl: int,
+    eps: float,
+    thr_on: float,
+    thr_off: float,
+    min_on_len: int,
+    refr_len: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """(H,T) の各トレースに対して pick hist と trace別 pick mask を返す."""
+    H, T = x_ht.shape
+    hist = np.zeros(T, dtype=np.int32)
+    mask = np.zeros((H, T), dtype=np.bool_)
+    for h in range(H):
+        R = stalta_1d(x_ht[h], ns, nl, eps)
+        _picks_hist_and_mask_from_R(
+            R, thr_on, thr_off, min_on_len, refr_len, hist, mask[h]
+        )
+    return hist, mask
 
 
 @njit(cache=True, fastmath=True)
@@ -101,6 +168,30 @@ def _sliding_sum_same(hist: np.ndarray, win: int) -> np.ndarray:
     return out
 
 
+@njit(cache=True, fastmath=True)
+def _sliding_unique_trace_count(pick_mask_ht: np.ndarray, win: int) -> np.ndarray:
+    """_sliding_sum_same と同じ窓定義で、pick がある trace 数を数える."""
+    H, T = pick_mask_ht.shape
+    win = max(win, 1)
+    out = np.zeros(T, dtype=np.int32)
+    half = win // 2
+    for h in range(H):
+        cs = np.zeros(T + 1, dtype=np.int32)
+        for i in range(T):
+            cs[i + 1] = cs[i] + (1 if pick_mask_ht[h, i] else 0)
+        for t in range(T):
+            a = t - half
+            a = max(a, 0)
+            b = a + win
+            if b > T:
+                b = T
+                a = b - win
+                a = max(a, 0)
+            if cs[b] - cs[a] > 0:
+                out[t] += 1
+    return out
+
+
 def detect_event_pick_cluster(
     x_ht: np.ndarray,
     dt_sec: float,
@@ -114,12 +205,13 @@ def detect_event_pick_cluster(
     win_ms: float = 30.0,
     min_traces: int = 8,
     eps: float = 1e-12,
+    cluster_count_mode: Literal['trigger', 'unique_trace'] = 'trigger',
 ) -> tuple[bool, np.ndarray, np.ndarray]:
     """リフラクトリ付き「初動候補クラスタ」方式。
     戻り値: (is_event, pick_hist[T], cluster_counts[T]).
 
     - pick_hist[t]: 各トレースで抽出された初動run開始のヒスト(同一tに複数あれば合算)
-    - cluster_counts[t]: 窓long=win_msの移動和(時刻t近傍のクラスタ本数)
+    - cluster_counts[t]: modeに応じた窓long=win_msのクラスタ本数
     - is_event: max(cluster_counts) >= min_traces
     """
     if x_ht.ndim != 2:
@@ -132,6 +224,12 @@ def detect_event_pick_cluster(
     if H == 0 or T == 0:
         msg = 'empty input'
         raise ValueError(msg)
+    if cluster_count_mode not in ('trigger', 'unique_trace'):
+        msg = (
+            "cluster_count_mode must be 'trigger' or 'unique_trace', "
+            f'got {cluster_count_mode!r}'
+        )
+        raise ValueError(msg)
 
     ns = _ms_to_samples(dt_sec, sta_ms)
     nl = max(ns + 1, _ms_to_samples(dt_sec, lta_ms))
@@ -139,17 +237,31 @@ def detect_event_pick_cluster(
     refr_len = _ms_to_samples(dt_sec, refr_ms)
     win = _ms_to_samples(dt_sec, win_ms)
 
-    pick_hist = _stalta_pick_hist(
-        x_ht.astype(np.float64, copy=False),
-        ns,
-        nl,
-        float(eps),
-        float(thr_on),
-        float(thr_off),
-        int(min_on_len),
-        int(refr_len),
-    )
-    cluster = _sliding_sum_same(pick_hist, int(win))
+    x_f64 = x_ht.astype(np.float64, copy=False)
+    if cluster_count_mode == 'trigger':
+        pick_hist = _stalta_pick_hist(
+            x_f64,
+            ns,
+            nl,
+            float(eps),
+            float(thr_on),
+            float(thr_off),
+            int(min_on_len),
+            int(refr_len),
+        )
+        cluster = _sliding_sum_same(pick_hist, int(win))
+    else:
+        pick_hist, pick_mask = _stalta_pick_hist_and_trace_mask(
+            x_f64,
+            ns,
+            nl,
+            float(eps),
+            float(thr_on),
+            float(thr_off),
+            int(min_on_len),
+            int(refr_len),
+        )
+        cluster = _sliding_unique_trace_count(pick_mask, int(win))
     is_event = int(cluster.max()) >= int(min_traces)
     return bool(is_event), pick_hist, cluster
 
