@@ -455,9 +455,136 @@ def test_physical_center_calls_existing_two_piece_ransac(monkeypatch) -> None:
     assert diagnostics.n_fit_calls == 1
     assert diagnostics.n_cache_misses == 1
     assert diagnostics.n_cache_hits == int(table.n_traces) - 1
-    assert model.predict_call_sizes.count(1) == int(table.n_traces)
-    assert model.predict_call_sizes.count(int(table.n_traces)) == 1
+    assert diagnostics.n_prediction_calls == int(table.n_traces)
+    assert diagnostics.n_prediction_batches == 1
+    assert model.predict_call_sizes.count(1) == 0
+    assert model.predict_call_sizes.count(int(table.n_traces)) == 2
     assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+
+
+def test_assign_model_prediction_batch_matches_single_trace_assignment() -> None:
+    _coarse_npz, table, _feasible, _trend, _merged = _make_inputs(
+        offsets_m=np.asarray([100.0, 200.0, 300.0], dtype=np.float32),
+        dt_sec=0.001,
+        n_samples_orig=1000,
+    )
+    plan = physical_center_mod._ObservationPlan(
+        obs_indices=np.arange(3, dtype=np.int64),
+        neighbor_count=1,
+        prefilter_valid_count=3,
+        segment_id=0,
+        side=0,
+        relaxed=True,
+    )
+    diagnostics = (150.0, 0.001, 0.002, 1000.0, 500.0, 1.5, 2.5)
+    model = _LinearTrendModel(0.001, 0.0)
+    single_arrays = physical_center_mod._allocate_result_arrays(table)
+    batch_arrays = physical_center_mod._allocate_result_arrays(table)
+
+    assert physical_center_mod._assign_model_prediction(
+        single_arrays,
+        1,
+        trend_model=model,
+        diagnostics=diagnostics,
+        plan=plan,
+        offset_abs_m=table.offset_m,
+        dt=float(table.dt_scalar_sec),
+        n_samples=int(table.n_samples_orig),
+        runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+        t0_shift_sec=0.01,
+    )
+    valid = physical_center_mod._assign_model_prediction_batch(
+        batch_arrays,
+        np.asarray([1], dtype=np.int64),
+        trend_model=model,
+        diagnostics=diagnostics,
+        plan_by_trace=plan,
+        offset_abs_m=table.offset_m,
+        dt=float(table.dt_scalar_sec),
+        n_samples=int(table.n_samples_orig),
+        runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+        t0_shift_sec=0.01,
+    )
+
+    np.testing.assert_array_equal(valid, np.asarray([True], dtype=np.bool_))
+    for key in single_arrays:
+        np.testing.assert_array_equal(batch_arrays[key], single_arrays[key])
+
+
+def test_assign_model_prediction_batch_handles_vector_shift_and_invalid() -> None:
+    class PartiallyNanModel(_LinearTrendModel):
+        def predict(self, x_abs: torch.Tensor) -> torch.Tensor:
+            pred = super().predict(x_abs)
+            return torch.where(
+                x_abs == torch.tensor(300.0, dtype=torch.float32),
+                torch.full_like(pred, float('nan')),
+                pred,
+            )
+
+    _coarse_npz, table, _feasible, _trend, _merged = _make_inputs(
+        offsets_m=np.asarray([100.0, 200.0, 300.0, 400.0], dtype=np.float32),
+        dt_sec=0.001,
+        n_samples_orig=1000,
+    )
+    plan = physical_center_mod._ObservationPlan(
+        obs_indices=np.arange(4, dtype=np.int64),
+        neighbor_count=1,
+        prefilter_valid_count=4,
+        segment_id=0,
+        side=0,
+        relaxed=False,
+    )
+    diagnostics = (200.0, 0.001, 0.002, 1000.0, 500.0, 1.0, 2.0)
+    trace_indices = np.arange(4, dtype=np.int64)
+    shifts = np.asarray([0.0, 0.01, 0.0, 0.02], dtype=np.float64)
+    model = PartiallyNanModel(0.001, 0.0)
+    per_trace_arrays = physical_center_mod._allocate_result_arrays(table)
+    batch_arrays = physical_center_mod._allocate_result_arrays(table)
+
+    per_trace_valid = []
+    for trace_idx in trace_indices.tolist():
+        per_trace_valid.append(
+            physical_center_mod._assign_model_prediction(
+                per_trace_arrays,
+                int(trace_idx),
+                trend_model=model,
+                diagnostics=diagnostics,
+                plan=plan,
+                offset_abs_m=table.offset_m,
+                dt=float(table.dt_scalar_sec),
+                n_samples=int(table.n_samples_orig),
+                runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+                t0_shift_sec=float(shifts[int(trace_idx)]),
+            )
+        )
+    batch_valid = physical_center_mod._assign_model_prediction_batch(
+        batch_arrays,
+        trace_indices,
+        trend_model=model,
+        diagnostics=diagnostics,
+        plan_by_trace={int(idx): plan for idx in trace_indices.tolist()},
+        offset_abs_m=table.offset_m,
+        dt=float(table.dt_scalar_sec),
+        n_samples=int(table.n_samples_orig),
+        runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+        t0_shift_sec=shifts,
+    )
+
+    np.testing.assert_array_equal(
+        batch_valid,
+        np.asarray(per_trace_valid, dtype=np.bool_),
+    )
+    np.testing.assert_array_equal(
+        batch_valid,
+        np.asarray([True, True, False, True], dtype=np.bool_),
+    )
+    for key in per_trace_arrays:
+        np.testing.assert_array_equal(batch_arrays[key], per_trace_arrays[key])
+    assert np.isnan(batch_arrays['physical_model_break_offset_m'][2])
+    np.testing.assert_array_equal(
+        batch_arrays['physical_model_break_offset_m'][batch_valid],
+        np.full((3,), np.float32(diagnostics[0]), dtype=np.float32),
+    )
 
 
 def test_observation_sampling_limits_observations_before_ransac(monkeypatch) -> None:

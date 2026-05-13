@@ -349,6 +349,7 @@ def test_physical_runtime_diagnostics_initializes_with_zero_counts() -> None:
     assert summary['obs_count_after_p50'] == 0.0
     assert summary['n_source_groups'] == 0
     assert summary['n_unique_fit_contexts'] == 0
+    assert summary['n_prediction_batches'] == 0
     assert summary['n_t0_shifted_groups'] == 0
     assert summary['n_adaptive_refit_calls'] == 0
 
@@ -376,11 +377,13 @@ def test_physical_runtime_diagnostics_detailed_timer_and_derived_fields() -> Non
     with diagnostics.time_block('neighbor_plan_sec'):
         pass
     diagnostics.inc('n_prediction_calls', 2)
+    diagnostics.inc('n_prediction_batches')
 
     summary = diagnostics.to_summary()
     assert summary['neighbor_plan_sec'] >= 0.0
     assert summary['non_ransac_total_sec'] == pytest.approx(7.0)
     assert summary['n_prediction_calls'] == 2
+    assert summary['n_prediction_batches'] == 1
 
 
 def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> None:

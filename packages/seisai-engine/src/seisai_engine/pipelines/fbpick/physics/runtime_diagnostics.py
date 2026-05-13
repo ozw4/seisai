@@ -81,6 +81,7 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'n_adaptive_refit_failed',
     'n_unique_fit_contexts',
     'n_prediction_calls',
+    'n_prediction_batches',
     'anchor_reuse_rate',
     'fit_call_reduction_rate_vs_full',
     'ransac_fit_time_p50_sec',
@@ -185,6 +186,7 @@ class PhysicalRuntimeDiagnostics:
     n_reuse_contexts: int = 0
     n_unique_fit_contexts: int = 0
     n_prediction_calls: int = 0
+    n_prediction_batches: int = 0
     fit_call_reduction_rate_vs_full: float = 0.0
     observation_sampling_enabled: int = 0
     observation_sampling_method: str = 'offset_bin'
@@ -233,6 +235,8 @@ class PhysicalRuntimeDiagnostics:
         value = int(n)
         if key == 'n_prediction_calls':
             self.n_prediction_calls += value
+        elif key == 'n_prediction_batches':
+            self.n_prediction_batches += value
         elif key == 'n_reuse_contexts':
             self.n_reuse_contexts += value
 
@@ -520,6 +524,7 @@ class PhysicalRuntimeDiagnostics:
             ),
             'n_unique_fit_contexts': int(self.n_unique_fit_contexts),
             'n_prediction_calls': int(self.n_prediction_calls),
+            'n_prediction_batches': int(self.n_prediction_batches),
             'anchor_reuse_rate': float(self.anchor_reuse_rate),
             'fit_call_reduction_rate_vs_full': float(
                 self.fit_call_reduction_rate_vs_full
@@ -629,6 +634,7 @@ class PhysicalRuntimeDiagnostics:
             'n_fallback_full_fit_no_compatible_anchor',
             'n_unique_fit_contexts',
             'n_prediction_calls',
+            'n_prediction_batches',
             'n_downsampled_fit_contexts',
             'compatible_anchor_search_candidates_max',
             'n_no_compatible_anchor_contexts',
@@ -682,6 +688,7 @@ def runtime_summary_from_npz_fields(
         'n_fallback_full_fit_no_compatible_anchor',
         'n_unique_fit_contexts',
         'n_prediction_calls',
+        'n_prediction_batches',
         'n_downsampled_fit_contexts',
         'compatible_anchor_search_candidates_max',
         'n_no_compatible_anchor_contexts',
