@@ -28,6 +28,7 @@ proc/arakawa/
         A4_anchor_stride5_t0_shift.yaml
         A5_anchor_stride5_t0_shift_adaptive_refit.yaml
         A6_A5_obs_downsample256.yaml
+        A0D_downsample_only.yaml
       README.md
 
   scripts/

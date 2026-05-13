@@ -25,6 +25,7 @@ not `fdata_hset_ARA26_Vib.sgy` under
 | stage | purpose |
 |---|---|
 | `A0_full` | Full physics fit baseline with runtime diagnostics enabled. |
+| `A0D_downsample_only` | Full fitting with anchor reuse disabled and offset-bin observation downsampling enabled. |
 | `A1_diagnostics_only` | Same settings as A0, used to check instrumentation and run-to-run stability. |
 | `A2_anchor_selection_dry_run` | Still performs full fitting, but records source-XY anchor selection diagnostics. |
 | `A3_anchor_stride5_nearest_anchor` | Fits every 5th source group and reuses the nearest compatible anchor for non-anchor groups. |
@@ -32,15 +33,18 @@ not `fdata_hset_ARA26_Vib.sgy` under
 | `A5_anchor_stride5_t0_shift_adaptive_refit` | Adds adaptive full refit for reused groups whose residual or shift checks exceed thresholds. |
 | `A6_A5_obs_downsample256` | Adds offset-bin observation downsampling with at most 256 observations per fit. |
 
-A1 through A6 point `paths.coarse_dir` at `A0_full/coarse` so the speedup
-comparison focuses on the physics stage. Run A0 first so the shared coarse NPZ
-is present.
+A0D and A1 through A6 point `paths.coarse_dir` at `A0_full/coarse` so the
+speedup comparison focuses on the physics stage. Run A0 first so the shared
+coarse NPZ is present.
 
 ## Run each stage
 
 ```bash
 python -m cli.run_arakawa_fbpick_physical_export \
   --config proc/arakawa/experiments/runtime_speedup/configs/A0_full.yaml
+
+python -m cli.run_arakawa_fbpick_physical_export \
+  --config proc/arakawa/experiments/runtime_speedup/configs/A0D_downsample_only.yaml
 
 python -m cli.run_arakawa_fbpick_physical_export \
   --config proc/arakawa/experiments/runtime_speedup/configs/A1_diagnostics_only.yaml
@@ -107,6 +111,7 @@ TAG=Arakawa2026__fdata_hset_ARA26_Vib
 mkdir -p proc/arakawa/outputs/runtime_compare
 
 for RUN in \
+  A0D_downsample_only \
   A1_diagnostics_only \
   A2_anchor_selection_dry_run \
   A3_anchor_stride5_nearest_anchor \
@@ -147,7 +152,8 @@ Runtime fields live under the `runtime` group in the compare JSON and CSV.
 - `fit_call_reduction_rate`: `(A0 n_fit_calls - candidate n_fit_calls) / A0 n_fit_calls`.
 - `cache_hit_rate`: fraction of repeated fit contexts served from cache.
 - `observation_sampling_enabled`, `max_obs_per_fit`, `obs_count_before_*`,
-  and `obs_count_after_*`: confirm that A6 actually downsampled observations.
+  and `obs_count_after_*`: confirm that A6 or A0D actually downsampled
+  observations.
 
 Center-diff fields live under `physical_center_i_diff` and `fine_center_i_diff`
 in the compare CSV, and under `center_diffs` in the JSON.
@@ -169,6 +175,7 @@ that is a quality-risk signal and should be reviewed with center diffs.
 | run_name | physics_total_sec | speedup_vs_A0 | ransac_fit_total_sec | n_fit_calls | fit_call_reduction_rate | cache_hit_rate | physical_center_diff_p90 | physical_center_diff_p99 | fine_center_diff_p90 | fine_center_diff_p99 | within_4_samples_rate | within_16_samples_rate | status_counts | notes |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
 | A0_full |  | 1.00 |  |  |  |  | 0 | 0 | 0 | 0 | 1.00 | 1.00 |  | baseline |
+| A0D_downsample_only |  |  |  |  |  |  |  |  |  |  |  |  |  | downsampling only |
 | A1_diagnostics_only |  |  |  |  |  |  |  |  |  |  |  |  |  | stability repeat |
 | A2_anchor_selection_dry_run |  |  |  |  |  |  |  |  |  |  |  |  |  | anchor diagnostics only |
 | A3_anchor_stride5_nearest_anchor |  |  |  |  |  |  |  |  |  |  |  |  |  | nearest anchor reuse |
