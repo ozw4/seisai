@@ -222,6 +222,7 @@ class _FitCacheEntry:
     diagnostics: tuple[float, float, float, float, float, float, float] | None
     fit_failed: bool
     diagnostics_computed: bool = False
+    failure_reason: int | None = None
 
 
 @dataclass(frozen=True)
@@ -294,6 +295,7 @@ class _FitTaskResult:
     elapsed_sec: float
     obs_count: int
     obs_count_before_sampling: int
+    fit_attempted: bool
 
 
 @dataclass(frozen=True)
@@ -1432,6 +1434,7 @@ def _run_fit_task(task: _FitTask) -> _FitTaskResult:
             elapsed_sec=0.0,
             obs_count=int(x_obs.size),
             obs_count_before_sampling=int(task.obs_count_before_sampling),
+            fit_attempted=False,
         )
 
     strategy = _strategy_from_fit_task_cfg(cfg_values)
@@ -1451,6 +1454,7 @@ def _run_fit_task(task: _FitTask) -> _FitTaskResult:
             elapsed_sec=elapsed,
             obs_count=int(x_obs.size),
             obs_count_before_sampling=int(task.obs_count_before_sampling),
+            fit_attempted=True,
         )
     try:
         diagnostics = _model_diagnostics(
@@ -1469,6 +1473,7 @@ def _run_fit_task(task: _FitTask) -> _FitTaskResult:
         elapsed_sec=elapsed,
         obs_count=int(x_obs.size),
         obs_count_before_sampling=int(task.obs_count_before_sampling),
+        fit_attempted=True,
     )
 
 
@@ -1548,7 +1553,12 @@ def _fit_model_for_plan(
             trend_model = None
 
         if trend_model is None:
-            entry = _FitCacheEntry(model=None, diagnostics=None, fit_failed=True)
+            entry = _FitCacheEntry(
+                model=None,
+                diagnostics=None,
+                fit_failed=True,
+                failure_reason=PHYSICAL_MODEL_FAILURE_FIT_FAILED,
+            )
         else:
             entry = _FitCacheEntry(
                 model=trend_model,
@@ -1559,6 +1569,8 @@ def _fit_model_for_plan(
     elif runtime_diagnostics is not None:
         runtime_diagnostics.record_cache_hit()
 
+    if entry.failure_reason is not None:
+        return None, None, entry.failure_reason
     if bool(entry.fit_failed):
         return None, None, PHYSICAL_MODEL_FAILURE_FIT_FAILED
     return entry.model, entry.diagnostics, None
@@ -1591,6 +1603,7 @@ def _diagnostics_for_plan(
         diagnostics=diagnostics,
         fit_failed=False,
         diagnostics_computed=True,
+        failure_reason=entry.failure_reason,
     )
     return diagnostics
 
@@ -2286,11 +2299,12 @@ def _record_new_fit_task_diagnostics(
     if task_result.failure_reason == PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS:
         return
     runtime_diagnostics.record_cache_miss()
-    runtime_diagnostics.record_ransac_fit(
-        elapsed_sec=float(task_result.elapsed_sec),
-        obs_count=int(task_result.obs_count),
-        obs_count_before=int(task_result.obs_count_before_sampling),
-    )
+    if bool(task_result.fit_attempted):
+        runtime_diagnostics.record_ransac_fit(
+            elapsed_sec=float(task_result.elapsed_sec),
+            obs_count=int(task_result.obs_count),
+            obs_count_before=int(task_result.obs_count_before_sampling),
+        )
     extra_hits = int(work_item.trace_indices.size) - 1
     if extra_hits > 0:
         runtime_diagnostics.record_cache_hit(extra_hits)
@@ -2301,8 +2315,20 @@ def _cache_entry_from_fit_task_result(
 ) -> _FitCacheEntry | None:
     if task_result.failure_reason == PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS:
         return None
+    if task_result.failure_reason is not None:
+        return _FitCacheEntry(
+            model=None,
+            diagnostics=None,
+            fit_failed=bool(task_result.fit_failed),
+            failure_reason=task_result.failure_reason,
+        )
     if bool(task_result.fit_failed):
-        return _FitCacheEntry(model=None, diagnostics=None, fit_failed=True)
+        return _FitCacheEntry(
+            model=None,
+            diagnostics=None,
+            fit_failed=True,
+            failure_reason=PHYSICAL_MODEL_FAILURE_FIT_FAILED,
+        )
     return _FitCacheEntry(
         model=task_result.trend_model,
         diagnostics=task_result.diagnostics,
@@ -2342,9 +2368,9 @@ def _fit_and_assign_context_work_items_parallel(
             runtime_diagnostics=runtime_diagnostics,
             work_item=work_item,
         )
-        fit_failure_reason = (
-            PHYSICAL_MODEL_FAILURE_FIT_FAILED if bool(entry.fit_failed) else None
-        )
+        fit_failure_reason = entry.failure_reason
+        if fit_failure_reason is None and bool(entry.fit_failed):
+            fit_failure_reason = PHYSICAL_MODEL_FAILURE_FIT_FAILED
         results[work_item.fit_key] = _assign_fit_context_work_item_outcome(
             arrays=arrays,
             work_item=work_item,

@@ -499,6 +499,91 @@ def test_parallel_cached_context_hit_accounting_excludes_owner_trace() -> None:
     assert diagnostics.n_cache_hits == 3
 
 
+def test_fit_task_cache_preserves_specific_prefit_failure_reason() -> None:
+    plan = physical_center_mod._ObservationPlan(
+        obs_indices=np.arange(4, dtype=np.int64),
+        neighbor_count=1,
+        prefilter_valid_count=4,
+        segment_id=0,
+        side=0,
+        relaxed=False,
+    )
+    task_result = physical_center_mod._FitTaskResult(
+        fit_key=physical_center_mod._fit_cache_key(plan),
+        trend_model=None,
+        diagnostics=None,
+        fit_failed=False,
+        failure_reason=PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
+        elapsed_sec=0.0,
+        obs_count=4,
+        obs_count_before_sampling=4,
+        fit_attempted=False,
+    )
+    entry = physical_center_mod._cache_entry_from_fit_task_result(task_result)
+    assert entry is not None
+    assert entry.failure_reason == PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID
+
+    cache = {physical_center_mod._fit_cache_key(plan): entry}
+    strategy = TwoPieceRansacAutoBreakStrategy(min_pts=3)
+    model, diagnostics, failure_reason = physical_center_mod._fit_model_for_plan(
+        strategy=strategy,
+        plan=plan,
+        x_obs=np.asarray([0.0, 20.0, 40.0, 60.0], dtype=np.float32),
+        y_obs=np.asarray([0.0, 0.02, 0.04, 0.06], dtype=np.float32),
+        min_pts=3,
+        min_offset_spread_m=1.0,
+        cache=cache,
+    )
+
+    assert model is None
+    assert diagnostics is None
+    assert failure_reason == PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID
+
+
+def test_prefit_task_failure_does_not_record_ransac_fit_call() -> None:
+    diagnostics = PhysicalRuntimeDiagnostics()
+    plan = physical_center_mod._ObservationPlan(
+        obs_indices=np.arange(4, dtype=np.int64),
+        neighbor_count=1,
+        prefilter_valid_count=4,
+        segment_id=0,
+        side=0,
+        relaxed=False,
+    )
+    work_item = physical_center_mod._FitContextWorkItem(
+        fit_key=physical_center_mod._fit_cache_key(plan),
+        fit_plan=plan,
+        obs_count_before_sampling=4,
+        trace_indices=np.arange(4, dtype=np.int64),
+        runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+        assignments=(),
+        x_obs=np.arange(4, dtype=np.float32),
+        y_obs=np.arange(4, dtype=np.float32),
+    )
+    task_result = physical_center_mod._FitTaskResult(
+        fit_key=work_item.fit_key,
+        trend_model=None,
+        diagnostics=None,
+        fit_failed=False,
+        failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+        elapsed_sec=0.0,
+        obs_count=4,
+        obs_count_before_sampling=4,
+        fit_attempted=False,
+    )
+
+    physical_center_mod._record_new_fit_task_diagnostics(
+        runtime_diagnostics=diagnostics,
+        work_item=work_item,
+        task_result=task_result,
+    )
+
+    assert diagnostics.n_cache_misses == 1
+    assert diagnostics.n_fit_calls == 0
+    assert diagnostics.ransac_fit_total_sec == 0.0
+    assert diagnostics.n_cache_hits == 3
+
+
 def test_assign_model_prediction_batch_matches_single_trace_assignment() -> None:
     _coarse_npz, table, _feasible, _trend, _merged = _make_inputs(
         offsets_m=np.asarray([100.0, 200.0, 300.0], dtype=np.float32),
