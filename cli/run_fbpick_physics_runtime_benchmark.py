@@ -50,6 +50,7 @@ class BenchmarkRunSpec:
     robust_npz: Path | None = None
     export_npz: Path | None = None
     runtime_json: Path | None = None
+    gates: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,7 @@ def _run_spec_from_raw(
         robust_npz=robust_npz,
         export_npz=export_npz,
         runtime_json=runtime_json,
+        gates=dict(_as_dict(raw.get('gates'), name=f'{field_prefix}.gates')),
     )
 
 
@@ -603,6 +605,25 @@ def _numeric_gate_map(
             raise TypeError(msg)
         out[key] = float(raw_threshold)
     return out
+
+
+def _candidate_gates(
+    *,
+    manifest_gates: dict[str, Any],
+    candidate: BenchmarkRunSpec,
+) -> dict[str, Any]:
+    if candidate.gates:
+        return dict(candidate.gates)
+    return dict(manifest_gates)
+
+
+def _manifest_gate_sets(manifest: BenchmarkManifest) -> tuple[dict[str, Any], ...]:
+    gates: list[dict[str, Any]] = [manifest.gates]
+    gates.extend(
+        _candidate_gates(manifest_gates=manifest.gates, candidate=candidate)
+        for candidate in manifest.candidates
+    )
+    return tuple(gates)
 
 
 def _gate_row(
@@ -1209,28 +1230,39 @@ def run_benchmark(
     if baseline_exists:
         baseline_payload = _load_npz(baseline.robust_npz)
 
-    exact_gate_keys = _string_list(
-        manifest.gates.get('exact_match_required'),
-        name='gates.exact_match_required',
-        default=(),
+    gate_sets = _manifest_gate_sets(manifest)
+    exact_gate_keys = tuple(
+        key
+        for gates in gate_sets
+        for key in _string_list(
+            gates.get('exact_match_required'),
+            name='gates.exact_match_required',
+            default=(),
+        )
     )
     max_abs_keys = tuple(
-        _numeric_gate_map(
-            manifest.gates.get('max_abs_diff_samples'),
+        key
+        for gates in gate_sets
+        for key in _numeric_gate_map(
+            gates.get('max_abs_diff_samples'),
             gate_name='max_abs_diff_samples',
             default_keys=manifest.diff_keys,
         )
     )
     max_p90_keys = tuple(
-        _numeric_gate_map(
-            manifest.gates.get('max_p90_abs_diff_samples'),
+        key
+        for gates in gate_sets
+        for key in _numeric_gate_map(
+            gates.get('max_p90_abs_diff_samples'),
             gate_name='max_p90_abs_diff_samples',
             default_keys=manifest.diff_keys,
         )
     )
     min_within16_keys = tuple(
-        _numeric_gate_map(
-            manifest.gates.get('min_within_16_sample_rate'),
+        key
+        for gates in gate_sets
+        for key in _numeric_gate_map(
+            gates.get('min_within_16_sample_rate'),
             gate_name='min_within_16_sample_rate',
             default_keys=manifest.diff_keys,
         )
@@ -1246,7 +1278,7 @@ def run_benchmark(
     )
 
     summary_candidates: list[dict[str, Any]] = []
-    for candidate in candidates:
+    for candidate, candidate_spec in zip(candidates, manifest.candidates, strict=True):
         candidate_exists = candidate.robust_npz.is_file()
         artifact_available = baseline_exists and candidate_exists
         comparison: dict[str, Any] | None = None
@@ -1301,7 +1333,10 @@ def run_benchmark(
             }
 
         gates = _evaluate_gates(
-            gates=manifest.gates,
+            gates=_candidate_gates(
+                manifest_gates=manifest.gates,
+                candidate=candidate_spec,
+            ),
             exact_checks=exact_checks,
             diff_checks=diff_checks,
             comparison=comparison,

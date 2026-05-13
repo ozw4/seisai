@@ -7,18 +7,75 @@ baseline:
 candidates:
   - name: A0D_downsample_only
     config: proc/arakawa/experiments/runtime_speedup/configs/A0D_downsample_only.yaml
+    gates:
+      max_p90_abs_diff_samples:
+        physical_center_i: 8
+        fine_center_i: 8
+      min_within_16_sample_rate:
+        physical_center_i: 0.97
+        fine_center_i: 0.97
+      min_speedup_physics_total: 1.0
+      allow_status_count_change: true
   - name: A1_diagnostics_only
     config: proc/arakawa/experiments/runtime_speedup/configs/A1_diagnostics_only.yaml
+    gates:
+      exact_match_required:
+        - physical_center_i
+        - fine_center_i
+        - physical_model_status
+        - physical_model_failure_reason
   - name: A2_anchor_selection_dry_run
     config: proc/arakawa/experiments/runtime_speedup/configs/A2_anchor_selection_dry_run.yaml
+    gates:
+      exact_match_required:
+        - physical_center_i
+        - fine_center_i
+        - physical_model_status
+        - physical_model_failure_reason
   - name: A3_anchor_stride5_nearest_anchor
     config: proc/arakawa/experiments/runtime_speedup/configs/A3_anchor_stride5_nearest_anchor.yaml
+    gates:
+      max_p90_abs_diff_samples:
+        physical_center_i: 8
+        fine_center_i: 8
+      min_within_16_sample_rate:
+        physical_center_i: 0.97
+        fine_center_i: 0.97
+      min_speedup_physics_total: 1.0
+      allow_status_count_change: true
   - name: A4_anchor_stride5_t0_shift
     config: proc/arakawa/experiments/runtime_speedup/configs/A4_anchor_stride5_t0_shift.yaml
+    gates:
+      max_p90_abs_diff_samples:
+        physical_center_i: 8
+        fine_center_i: 8
+      min_within_16_sample_rate:
+        physical_center_i: 0.97
+        fine_center_i: 0.97
+      min_speedup_physics_total: 1.0
+      allow_status_count_change: true
   - name: A5_anchor_stride5_t0_shift_adaptive_refit
     config: proc/arakawa/experiments/runtime_speedup/configs/A5_anchor_stride5_t0_shift_adaptive_refit.yaml
+    gates:
+      max_p90_abs_diff_samples:
+        physical_center_i: 8
+        fine_center_i: 8
+      min_within_16_sample_rate:
+        physical_center_i: 0.97
+        fine_center_i: 0.97
+      min_speedup_physics_total: 1.0
+      allow_status_count_change: true
   - name: A6_A5_obs_downsample256
     config: proc/arakawa/experiments/runtime_speedup/configs/A6_A5_obs_downsample256.yaml
+    gates:
+      max_p90_abs_diff_samples:
+        physical_center_i: 8
+        fine_center_i: 8
+      min_within_16_sample_rate:
+        physical_center_i: 0.97
+        fine_center_i: 0.97
+      min_speedup_physics_total: 1.0
+      allow_status_count_change: true
 
 checks:
   exact_keys:
@@ -39,12 +96,4 @@ checks:
     - prediction_sec
     - assignment_sec
 
-gates:
-  max_p90_abs_diff_samples:
-    physical_center_i: 8
-    fine_center_i: 8
-  min_within_16_sample_rate:
-    physical_center_i: 0.97
-    fine_center_i: 0.97
-  min_speedup_physics_total: 1.0
-  allow_status_count_change: true
+gates: {}

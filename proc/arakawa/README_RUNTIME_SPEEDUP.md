@@ -42,7 +42,9 @@ coarse NPZ is present.
 
 The manifest-driven harness runs candidate configs, compares each candidate
 against A0 with `cli.compare_fbpick_physics_runtime`, and writes combined
-JSON/CSV/Markdown reports with gate results.
+JSON/CSV/Markdown reports with gate results. Candidate entries may define their
+own `gates` block; the checked-in manifest keeps exact-match gates on A1/A2 and
+uses tolerance gates only for anchor reuse or observation-sampling stages.
 
 ```bash
 python -m cli.run_fbpick_physics_runtime_benchmark \

@@ -69,6 +69,9 @@ def test_benchmark_manifest_parser_resolves_tagged_paths(tmp_path: Path) -> None
                     {
                         'name': 'B1',
                         'config': 'configs/B1.yaml',
+                        'gates': {
+                            'exact_match_required': ['physical_center_i'],
+                        },
                     }
                 ],
                 'checks': {
@@ -87,6 +90,9 @@ def test_benchmark_manifest_parser_resolves_tagged_paths(tmp_path: Path) -> None
         tmp_path / 'runs' / 'A0' / 'robust' / 'Line01.robust.npz'
     )
     assert manifest.candidates[0].config == tmp_path / 'configs' / 'B1.yaml'
+    assert manifest.candidates[0].gates == {
+        'exact_match_required': ['physical_center_i']
+    }
     assert manifest.exact_keys == ('physical_model_status',)
     assert manifest.runtime_keys == ('physics_total_sec',)
 
@@ -201,6 +207,63 @@ def test_benchmark_tolerance_gate_fails(tmp_path: Path) -> None:
     assert gate['passed'] is False
 
 
+def test_benchmark_uses_candidate_specific_gates(tmp_path: Path) -> None:
+    baseline = _write_robust(
+        tmp_path / 'runs' / 'A0' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20],
+    )
+    strict_candidate = _write_robust(
+        tmp_path / 'runs' / 'A1' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 22],
+    )
+    loose_candidate = _write_robust(
+        tmp_path / 'runs' / 'A3' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 22],
+    )
+    manifest_path = tmp_path / 'manifest.yaml'
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                'baseline': {'name': 'A0', 'robust_npz': str(baseline)},
+                'candidates': [
+                    {
+                        'name': 'A1',
+                        'robust_npz': str(strict_candidate),
+                        'gates': {
+                            'exact_match_required': ['physical_center_i'],
+                        },
+                    },
+                    {
+                        'name': 'A3',
+                        'robust_npz': str(loose_candidate),
+                        'gates': {
+                            'max_p90_abs_diff_samples': {'physical_center_i': 8},
+                        },
+                    },
+                ],
+                'checks': {'diff_keys': ['physical_center_i']},
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    summary = benchmark.run_benchmark(
+        manifest_path=manifest_path,
+        tag='T',
+        out_dir=tmp_path / 'out',
+        artifacts_only=True,
+        repo_root=tmp_path,
+    )
+
+    strict_summary, loose_summary = summary['candidates']
+    assert summary['passed'] is False
+    assert strict_summary['gates']['checks'][0]['gate'] == 'exact_match_required'
+    assert strict_summary['gates']['checks'][0]['passed'] is False
+    assert loose_summary['gates']['checks'][0]['gate'] == 'max_p90_abs_diff_samples'
+    assert loose_summary['gates']['checks'][0]['passed'] is True
+
+
 def test_benchmark_tolerance_gate_fails_on_one_sided_missing_pick(
     tmp_path: Path,
 ) -> None:
@@ -283,6 +346,52 @@ def test_benchmark_exact_gate_fails(tmp_path: Path) -> None:
     gate = summary['candidates'][0]['gates']['checks'][0]
     assert gate['gate'] == 'exact_match_required'
     assert gate['passed'] is False
+
+
+def test_benchmark_reports_missing_runtime_summary_file(tmp_path: Path) -> None:
+    baseline = _write_robust(
+        tmp_path / 'runs' / 'A0' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20],
+    )
+    candidate = _write_robust(
+        tmp_path / 'runs' / 'B1' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20],
+    )
+    _write_runtime(
+        tmp_path / 'runs' / 'A0' / 'robust' / 'T.physics_runtime_summary.json',
+        physics_total_sec=10.0,
+    )
+    manifest_path = tmp_path / 'manifest.yaml'
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                'baseline': {'name': 'A0', 'robust_npz': str(baseline)},
+                'candidates': [{'name': 'B1', 'robust_npz': str(candidate)}],
+                'checks': {'runtime_keys': ['physics_total_sec']},
+                'gates': {'exact_match_required': ['physical_model_status']},
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    summary = benchmark.run_benchmark(
+        manifest_path=manifest_path,
+        tag='T',
+        out_dir=tmp_path / 'out',
+        artifacts_only=True,
+        repo_root=tmp_path,
+    )
+
+    candidate_summary = summary['candidates'][0]
+    runtime_row = candidate_summary['runtime'][0]
+    assert summary['passed'] is True
+    assert candidate_summary['artifacts']['runtime_json_exists'] is False
+    assert runtime_row['baseline'] == 10.0
+    assert runtime_row['candidate'] is None
+    assert runtime_row['missing_candidate'] is True
+    md_text = (tmp_path / 'out' / 'summary.md').read_text(encoding='utf-8')
+    assert '| B1 | pass | missing | missing | missing | physics_total_sec |' in md_text
 
 
 def test_benchmark_runs_candidate_config_when_not_artifacts_only(
