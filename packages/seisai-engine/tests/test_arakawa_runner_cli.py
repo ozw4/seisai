@@ -21,20 +21,14 @@ def _load_module():
     return module
 
 
-def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
-    monkeypatch,
-    tmp_path: Path,
+def _write_runner_templates(
+    template_dir: Path,
+    *,
+    coarse_name: str = 'coarse.yaml',
+    physics_name: str = 'physics.yaml',
 ) -> None:
-    module = _load_module()
-    monkeypatch.setattr(module, '_repo_root', lambda: tmp_path)
-
-    segy = tmp_path / 'Arakawa2026' / 'line.sgy'
-    segy.parent.mkdir()
-    segy.touch()
-
-    template_dir = tmp_path / 'proc' / 'arakawa' / 'configs'
     template_dir.mkdir(parents=True)
-    (template_dir / 'coarse_one.yaml').write_text(
+    (template_dir / coarse_name).write_text(
         yaml.safe_dump(
             {
                 'paths': {
@@ -49,7 +43,7 @@ def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
         ),
         encoding='utf-8',
     )
-    (template_dir / 'physics_one.yaml').write_text(
+    (template_dir / physics_name).write_text(
         yaml.safe_dump(
             {
                 'paths': {
@@ -69,6 +63,50 @@ def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
         ),
         encoding='utf-8',
     )
+
+
+def test_arakawa_runner_default_template_paths_exist() -> None:
+    template_dir = REPO_ROOT / 'proc' / 'arakawa' / 'configs' / 'templates'
+    assert (template_dir / 'coarse.yaml').is_file()
+    assert (template_dir / 'physics.yaml').is_file()
+
+
+def test_arakawa_runner_falls_back_to_legacy_default_templates(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    template_dir = tmp_path / 'proc' / 'arakawa' / 'configs'
+    _write_runner_templates(
+        template_dir,
+        coarse_name='coarse_one.yaml',
+        physics_name='physics_one.yaml',
+    )
+
+    assert module._default_template_path(
+        tmp_path,
+        canonical_name='coarse.yaml',
+        legacy_name='coarse_one.yaml',
+    ) == template_dir / 'coarse_one.yaml'
+    assert module._default_template_path(
+        tmp_path,
+        canonical_name='physics.yaml',
+        legacy_name='physics_one.yaml',
+    ) == template_dir / 'physics_one.yaml'
+
+
+def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.setattr(module, '_repo_root', lambda: tmp_path)
+
+    segy = tmp_path / 'Arakawa2026' / 'line.sgy'
+    segy.parent.mkdir()
+    segy.touch()
+
+    template_dir = tmp_path / 'proc' / 'arakawa' / 'configs' / 'templates'
+    _write_runner_templates(template_dir)
 
     cfg_path = tmp_path / 'runner.yaml'
     cfg_path.write_text(
@@ -137,7 +175,7 @@ def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(
 
     result = module.run_pipeline(cfg_path)
 
-    work_dir = tmp_path / 'proc' / 'arakawa'
+    work_dir = tmp_path / 'proc' / 'arakawa' / 'outputs'
     expected_coarse = work_dir / 'coarse' / 'Arakawa2026__line.coarse.npz'
     expected_robust = work_dir / 'robust' / 'Arakawa2026__line.robust.npz'
     expected_crd = (
@@ -193,32 +231,8 @@ def test_arakawa_runner_can_run_visualization_with_dummy_fb(
     segy.parent.mkdir()
     segy.touch()
 
-    template_dir = tmp_path / 'proc' / 'arakawa' / 'configs'
-    template_dir.mkdir(parents=True)
-    (template_dir / 'coarse_one.yaml').write_text(
-        yaml.safe_dump(
-            {
-                'paths': {'segy_files': ['/old/input.sgy'], 'out_dir': '/old/coarse'},
-                'infer': {'ckpt_path': '/fixed/best.pt'},
-                'model': {'pre_stages': 3, 'backbone': 'resnet18'},
-            },
-            sort_keys=False,
-        ),
-        encoding='utf-8',
-    )
-    (template_dir / 'physics_one.yaml').write_text(
-        yaml.safe_dump(
-            {
-                'paths': {
-                    'coarse_npz_path': '/old/coarse.npz',
-                    'out_path': '/old/robust.npz',
-                },
-                'physical_trend': {'enabled': True},
-            },
-            sort_keys=False,
-        ),
-        encoding='utf-8',
-    )
+    template_dir = tmp_path / 'proc' / 'arakawa' / 'configs' / 'templates'
+    _write_runner_templates(template_dir)
 
     cfg_path = tmp_path / 'runner.yaml'
     cfg_path.write_text(
@@ -300,7 +314,7 @@ def test_arakawa_runner_can_run_visualization_with_dummy_fb(
     module.run_pipeline(cfg_path)
 
     qc_cfg = calls['qc_cfg']
-    work_dir = tmp_path / 'proc' / 'arakawa'
+    work_dir = tmp_path / 'proc' / 'arakawa' / 'outputs'
     assert qc_cfg['paths']['segy_files'] == [str(segy)]
     assert qc_cfg['paths']['coarse_npz_dir'] == str(work_dir / 'coarse')
     assert qc_cfg['paths']['robust_npz_dir'] == str(work_dir / 'robust')

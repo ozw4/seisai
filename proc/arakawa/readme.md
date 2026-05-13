@@ -42,6 +42,8 @@ ls proc/arakawa/configs/run_coarse_physics_export.yaml
 proc/arakawa/configs/run_coarse_physics_export_minimal.yaml
 ```
 
+canonical layout は `proc/arakawa/README_LAYOUT.md` を参照してください。
+
 ---
 
 ## 2. 最小 config を編集する
@@ -80,14 +82,14 @@ python -m cli.run_arakawa_fbpick_physical_export \
 処理が成功すると、以下のような出力が作られます。
 
 ```text
-proc/arakawa/coarse/<TAG>.coarse.npz
-proc/arakawa/robust/<TAG>.robust.npz
-proc/arakawa/grstat/<TAG>.physical_center.snap_peak.ltcor2.crd
-proc/arakawa/grstat/<TAG>.physical_center.snap_peak.ltcor2.npz
-proc/arakawa/qc/<TAG>/gather_*.png
-proc/arakawa/qc/summary_global.csv
-proc/arakawa/qc/summary_per_file.csv
-proc/arakawa/<TAG>.arakawa_physical_export_summary.json
+proc/arakawa/outputs/coarse/<TAG>.coarse.npz
+proc/arakawa/outputs/robust/<TAG>.robust.npz
+proc/arakawa/outputs/grstat/<TAG>.physical_center.snap_peak.ltcor2.crd
+proc/arakawa/outputs/grstat/<TAG>.physical_center.snap_peak.ltcor2.npz
+proc/arakawa/outputs/qc/<TAG>/gather_*.png
+proc/arakawa/outputs/qc/summary_global.csv
+proc/arakawa/outputs/qc/summary_per_file.csv
+proc/arakawa/outputs/<TAG>.arakawa_physical_export_summary.json
 ```
 
 `<TAG>` は SEG-Y の親ディレクトリ名とファイル stem から自動生成されます。
@@ -204,10 +206,10 @@ numpy2fbcrd(
 出力例:
 
 ```text
-proc/arakawa/qc/<TAG>/gather_*.png
-proc/arakawa/qc/summary_global.csv
-proc/arakawa/qc/summary_per_file.csv
-proc/arakawa/fb_dummy/<TAG>.fb_none.npy
+proc/arakawa/outputs/qc/<TAG>/gather_*.png
+proc/arakawa/outputs/qc/summary_global.csv
+proc/arakawa/outputs/qc/summary_per_file.csv
+proc/arakawa/outputs/fb_dummy/<TAG>.fb_none.npy
 ```
 
 デフォルトの可視化設定は以下です。
@@ -263,8 +265,8 @@ paths:
 出力例:
 
 ```text
-proc/arakawa/eval/<TAG>.physical_center.snap_peak.ltcor2.eval_summary.json
-proc/arakawa/eval/<TAG>.physical_center.snap_peak.ltcor2.eval_summary.csv
+proc/arakawa/outputs/eval/<TAG>.physical_center.snap_peak.ltcor2.eval_summary.json
+proc/arakawa/outputs/eval/<TAG>.physical_center.snap_peak.ltcor2.eval_summary.csv
 ```
 
 主な評価指標:
@@ -367,7 +369,7 @@ paths:
 まず見るべきファイルは grstat 出力です。
 
 ```bash
-ls -lh proc/arakawa/grstat/*.crd
+ls -lh proc/arakawa/outputs/grstat/*.crd
 ```
 
 summary も確認します。
@@ -379,13 +381,13 @@ cat proc/arakawa/*arakawa_physical_export_summary.json
 可視化図も確認します。
 
 ```bash
-ls -lh proc/arakawa/qc/*/gather_*.png
+ls -lh proc/arakawa/outputs/qc/*/gather_*.png
 ```
 
 参照 grstat を指定した場合は、評価 summary を確認します。
 
 ```bash
-cat proc/arakawa/eval/*.eval_summary.json
+cat proc/arakawa/outputs/eval/*.eval_summary.json
 ```
 
 ---
@@ -406,7 +408,7 @@ paths:
 coarse checkpoint と coarse config の model 設定が一致していません。Arakawa 用の既存 config を使っているか確認してください。
 
 ```text
-proc/arakawa/configs/coarse_one.yaml
+proc/arakawa/configs/templates/coarse.yaml
 ```
 
 ### duplicate FFID/CHNO error
@@ -442,8 +444,8 @@ python -m cli.run_arakawa_fbpick_physical_export \
   --config proc/arakawa/configs/run_coarse_physics_export_minimal.yaml
 
 # 3. 出力確認
-ls -lh proc/arakawa/grstat/*.crd
-cat proc/arakawa/*arakawa_physical_export_summary.json
+ls -lh proc/arakawa/outputs/grstat/*.crd
+cat proc/arakawa/outputs/*arakawa_physical_export_summary.json
 ```
 
 参照 grstat と比較したい場合は、config に `reference_grstat_path` を追加して同じコマンドを実行します。

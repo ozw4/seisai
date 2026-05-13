@@ -5,8 +5,8 @@ paths:
   sgy_file: fdata_hset_ARA26_Vib.sgy
   sgy_dir: /home/dcuser/data/ActiveSeisField/Arakawa2026
 
-  # Optional. Defaults to /workspace/proc/arakawa.
-  work_dir: /workspace/proc/arakawa
+  # Optional. Defaults to /workspace/proc/arakawa/outputs.
+  work_dir: /workspace/proc/arakawa/outputs
 
   # Optional. When set, export also evaluates against this grstat first-break file.
   # reference_grstat_path: /path/to/reference_first_break.crd
@@ -15,9 +15,9 @@ paths:
   # default grstat output path.
   # export_npz: /path/to/<TAG>.physical_center.snap_peak.ltcor2.npz
 
-  # Optional. Defaults to the existing Arakawa templates below.
-  # coarse_template: /workspace/proc/arakawa/configs/coarse_one.yaml
-  # physics_template: /workspace/proc/arakawa/configs/physics_one.yaml
+  # Optional. Defaults to the canonical Arakawa templates below.
+  # coarse_template: /workspace/proc/arakawa/configs/templates/coarse.yaml
+  # physics_template: /workspace/proc/arakawa/configs/templates/physics.yaml
 
 run:
   # true: skip Coarse/Physics/export and rerun only grstat reference evaluation
@@ -54,7 +54,7 @@ evaluation:
 visualization:
   enabled: true
   allow_no_fb: true
-  out_dir: /workspace/proc/arakawa/qc
+  out_dir: /workspace/proc/arakawa/outputs/qc
 
   max_gathers_per_file: 10
   gather_selection: even

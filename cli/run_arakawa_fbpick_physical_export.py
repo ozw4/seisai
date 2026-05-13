@@ -21,6 +21,20 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _default_template_path(root: Path, *, canonical_name: str, legacy_name: str) -> Path:
+    arakawa_dir = root / 'proc' / 'arakawa'
+    canonical = arakawa_dir / 'configs' / 'templates' / canonical_name
+    if canonical.is_file():
+        return canonical
+
+    legacy = arakawa_dir / 'configs' / legacy_name
+    if legacy.is_file():
+        return legacy
+
+    msg = f'Arakawa template config not found; tried {canonical} and {legacy}'
+    raise FileNotFoundError(msg)
+
+
 def _load_runtime() -> SimpleNamespace:
     from cli.run_fbpick_coarse_infer import run_pipeline as run_coarse_infer
     from cli.run_fbpick_physics import run_pipeline as run_physics
@@ -462,26 +476,12 @@ def run_pipeline(
         raise FileNotFoundError(segy_path)
 
     paths = _as_dict(cfg.get('paths'), name='paths')
-    work_dir_value = paths.get('work_dir', str(root / 'proc' / 'arakawa'))
+    arakawa_dir = root / 'proc' / 'arakawa'
+    work_dir_value = paths.get('work_dir', str(arakawa_dir / 'outputs'))
     if not isinstance(work_dir_value, str) or not work_dir_value:
         msg = 'paths.work_dir must be str when provided'
         raise TypeError(msg)
     work_dir = Path(runtime.resolve_relpath(base_dir, work_dir_value))
-
-    coarse_template_value = paths.get(
-        'coarse_template', str(root / 'proc' / 'arakawa' / 'configs' / 'coarse_one.yaml')
-    )
-    physics_template_value = paths.get(
-        'physics_template',
-        str(root / 'proc' / 'arakawa' / 'configs' / 'physics_one.yaml'),
-    )
-    if not isinstance(coarse_template_value, str) or not isinstance(
-        physics_template_value, str
-    ):
-        msg = 'paths.coarse_template and paths.physics_template must be str'
-        raise TypeError(msg)
-    coarse_template = Path(runtime.resolve_relpath(base_dir, coarse_template_value))
-    physics_template = Path(runtime.resolve_relpath(base_dir, physics_template_value))
 
     tag_value = paths.get('tag')
     if tag_value is not None:
@@ -638,6 +638,35 @@ def run_pipeline(
     coarse_cfg_path = generated_cfg_dir / f'{tag}.coarse.yaml'
     physics_cfg_path = generated_cfg_dir / f'{tag}.physics.yaml'
     qc_cfg_path = generated_cfg_dir / f'{tag}.physics_qc.yaml'
+
+    coarse_template_value = paths.get('coarse_template')
+    physics_template_value = paths.get('physics_template')
+    if coarse_template_value is not None and (
+        not isinstance(coarse_template_value, str) or not coarse_template_value
+    ):
+        msg = 'paths.coarse_template and paths.physics_template must be str'
+        raise TypeError(msg)
+    if physics_template_value is not None and (
+        not isinstance(physics_template_value, str) or not physics_template_value
+    ):
+        msg = 'paths.coarse_template and paths.physics_template must be str'
+        raise TypeError(msg)
+    if coarse_template_value is not None:
+        coarse_template = Path(runtime.resolve_relpath(base_dir, coarse_template_value))
+    else:
+        coarse_template = _default_template_path(
+            root,
+            canonical_name='coarse.yaml',
+            legacy_name='coarse_one.yaml',
+        )
+    if physics_template_value is not None:
+        physics_template = Path(runtime.resolve_relpath(base_dir, physics_template_value))
+    else:
+        physics_template = _default_template_path(
+            root,
+            canonical_name='physics.yaml',
+            legacy_name='physics_one.yaml',
+        )
 
     coarse_cfg = _prepare_coarse_config(
         template_path=coarse_template,

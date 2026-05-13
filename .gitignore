@@ -65,5 +65,7 @@ proc/tools/configs/fb_list_site54.txt
 proc/tools/configs/sgy_list_site54.txt
 site54_oof_coarse_runner/
 site54_oof_physics_runner/
+proc/arakawa/outputs/*
+!proc/arakawa/outputs/.gitkeep
 !/workspace/proc/arakawa/readme.md
 !/workspace/proc/fbpick/site54/oof/coarse_fold01_train_out/ckpt/best.pt

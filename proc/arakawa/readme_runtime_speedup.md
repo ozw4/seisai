@@ -13,7 +13,7 @@ cd /workspace
 The example configs are under:
 
 ```text
-proc/arakawa/configs/runtime_speedup/
+proc/arakawa/experiments/runtime_speedup/configs/
 ```
 
 Edit `paths.sgy_file` and `paths.sgy_dir` in the configs if the SEG-Y file is
@@ -40,39 +40,39 @@ is present.
 
 ```bash
 python -m cli.run_arakawa_fbpick_physical_export \
-  --config proc/arakawa/configs/runtime_speedup/A0_full.yaml
+  --config proc/arakawa/experiments/runtime_speedup/configs/A0_full.yaml
 
 python -m cli.run_arakawa_fbpick_physical_export \
-  --config proc/arakawa/configs/runtime_speedup/A1_diagnostics_only.yaml
+  --config proc/arakawa/experiments/runtime_speedup/configs/A1_diagnostics_only.yaml
 
 python -m cli.run_arakawa_fbpick_physical_export \
-  --config proc/arakawa/configs/runtime_speedup/A2_anchor_selection_dry_run.yaml
+  --config proc/arakawa/experiments/runtime_speedup/configs/A2_anchor_selection_dry_run.yaml
 
 python -m cli.run_arakawa_fbpick_physical_export \
-  --config proc/arakawa/configs/runtime_speedup/A3_anchor_stride5_nearest_anchor.yaml
+  --config proc/arakawa/experiments/runtime_speedup/configs/A3_anchor_stride5_nearest_anchor.yaml
 
 python -m cli.run_arakawa_fbpick_physical_export \
-  --config proc/arakawa/configs/runtime_speedup/A4_anchor_stride5_t0_shift.yaml
+  --config proc/arakawa/experiments/runtime_speedup/configs/A4_anchor_stride5_t0_shift.yaml
 
 python -m cli.run_arakawa_fbpick_physical_export \
-  --config proc/arakawa/configs/runtime_speedup/A5_anchor_stride5_t0_shift_adaptive_refit.yaml
+  --config proc/arakawa/experiments/runtime_speedup/configs/A5_anchor_stride5_t0_shift_adaptive_refit.yaml
 
 python -m cli.run_arakawa_fbpick_physical_export \
-  --config proc/arakawa/configs/runtime_speedup/A6_A5_obs_downsample256.yaml
+  --config proc/arakawa/experiments/runtime_speedup/configs/A6_A5_obs_downsample256.yaml
 ```
 
 Each config writes outputs below:
 
 ```text
-proc/arakawa/runtime_runs/<STAGE>/
+proc/arakawa/outputs/runtime_runs/<STAGE>/
 ```
 
 The key files are:
 
 ```text
-proc/arakawa/runtime_runs/<STAGE>/robust/<TAG>.robust.npz
-proc/arakawa/runtime_runs/<STAGE>/robust/<TAG>.physics_runtime_summary.json
-proc/arakawa/runtime_runs/<STAGE>/grstat/<TAG>.physical_center.snap_peak.ltcor2.npz
+proc/arakawa/outputs/runtime_runs/<STAGE>/robust/<TAG>.robust.npz
+proc/arakawa/outputs/runtime_runs/<STAGE>/robust/<TAG>.physics_runtime_summary.json
+proc/arakawa/outputs/runtime_runs/<STAGE>/grstat/<TAG>.physical_center.snap_peak.ltcor2.npz
 ```
 
 For the default example data, `<TAG>` is:
@@ -91,20 +91,20 @@ Example for A3:
 
 ```bash
 TAG=Arakawa2026__fdata_hset_ARA26_Vib
-mkdir -p proc/arakawa/runtime_compare
+mkdir -p proc/arakawa/outputs/runtime_compare
 
 python -m cli.compare_fbpick_physics_runtime \
-  --baseline proc/arakawa/runtime_runs/A0_full/robust/${TAG}.robust.npz \
-  --candidate proc/arakawa/runtime_runs/A3_anchor_stride5_nearest_anchor/robust/${TAG}.robust.npz \
-  --out-json proc/arakawa/runtime_compare/A3_vs_A0.json \
-  --out-csv proc/arakawa/runtime_compare/A3_vs_A0.csv
+  --baseline proc/arakawa/outputs/runtime_runs/A0_full/robust/${TAG}.robust.npz \
+  --candidate proc/arakawa/outputs/runtime_runs/A3_anchor_stride5_nearest_anchor/robust/${TAG}.robust.npz \
+  --out-json proc/arakawa/outputs/runtime_compare/A3_vs_A0.json \
+  --out-csv proc/arakawa/outputs/runtime_compare/A3_vs_A0.csv
 ```
 
 Compare every non-baseline stage:
 
 ```bash
 TAG=Arakawa2026__fdata_hset_ARA26_Vib
-mkdir -p proc/arakawa/runtime_compare
+mkdir -p proc/arakawa/outputs/runtime_compare
 
 for RUN in \
   A1_diagnostics_only \
@@ -115,10 +115,10 @@ for RUN in \
   A6_A5_obs_downsample256
 do
   python -m cli.compare_fbpick_physics_runtime \
-    --baseline proc/arakawa/runtime_runs/A0_full/robust/${TAG}.robust.npz \
-    --candidate proc/arakawa/runtime_runs/${RUN}/robust/${TAG}.robust.npz \
-    --out-json proc/arakawa/runtime_compare/${RUN}_vs_A0.json \
-    --out-csv proc/arakawa/runtime_compare/${RUN}_vs_A0.csv
+    --baseline proc/arakawa/outputs/runtime_runs/A0_full/robust/${TAG}.robust.npz \
+    --candidate proc/arakawa/outputs/runtime_runs/${RUN}/robust/${TAG}.robust.npz \
+    --out-json proc/arakawa/outputs/runtime_compare/${RUN}_vs_A0.json \
+    --out-csv proc/arakawa/outputs/runtime_compare/${RUN}_vs_A0.csv
 done
 ```
 
@@ -126,12 +126,12 @@ To include post-export snap differences, pass both export NPZs:
 
 ```bash
 python -m cli.compare_fbpick_physics_runtime \
-  --baseline proc/arakawa/runtime_runs/A0_full/robust/${TAG}.robust.npz \
-  --candidate proc/arakawa/runtime_runs/A3_anchor_stride5_nearest_anchor/robust/${TAG}.robust.npz \
-  --baseline-export proc/arakawa/runtime_runs/A0_full/grstat/${TAG}.physical_center.snap_peak.ltcor2.npz \
-  --candidate-export proc/arakawa/runtime_runs/A3_anchor_stride5_nearest_anchor/grstat/${TAG}.physical_center.snap_peak.ltcor2.npz \
-  --out-json proc/arakawa/runtime_compare/A3_vs_A0_with_export.json \
-  --out-csv proc/arakawa/runtime_compare/A3_vs_A0_with_export.csv
+  --baseline proc/arakawa/outputs/runtime_runs/A0_full/robust/${TAG}.robust.npz \
+  --candidate proc/arakawa/outputs/runtime_runs/A3_anchor_stride5_nearest_anchor/robust/${TAG}.robust.npz \
+  --baseline-export proc/arakawa/outputs/runtime_runs/A0_full/grstat/${TAG}.physical_center.snap_peak.ltcor2.npz \
+  --candidate-export proc/arakawa/outputs/runtime_runs/A3_anchor_stride5_nearest_anchor/grstat/${TAG}.physical_center.snap_peak.ltcor2.npz \
+  --out-json proc/arakawa/outputs/runtime_compare/A3_vs_A0_with_export.json \
+  --out-csv proc/arakawa/outputs/runtime_compare/A3_vs_A0_with_export.csv
 ```
 
 ## Interpreting metrics
@@ -189,7 +189,7 @@ For a QC pass, enable visualization for the candidate run:
 visualization:
   enabled: true
   allow_no_fb: true
-  out_dir: ../../runtime_runs/A3_anchor_stride5_nearest_anchor/qc
+  out_dir: ../../../outputs/runtime_runs/A3_anchor_stride5_nearest_anchor/qc
   max_gathers_per_file: 10
   gather_selection: even
   first_panel_only: true
@@ -202,9 +202,9 @@ visualization:
 Then rerun the candidate config and inspect:
 
 ```text
-proc/arakawa/runtime_runs/<STAGE>/qc/<TAG>/gather_*.png
-proc/arakawa/runtime_runs/<STAGE>/qc/summary_global.csv
-proc/arakawa/runtime_runs/<STAGE>/qc/summary_per_file.csv
+proc/arakawa/outputs/runtime_runs/<STAGE>/qc/<TAG>/gather_*.png
+proc/arakawa/outputs/runtime_runs/<STAGE>/qc/summary_global.csv
+proc/arakawa/outputs/runtime_runs/<STAGE>/qc/summary_per_file.csv
 ```
 
 FB is not required for this QC mode when `allow_no_fb: true`; the runner creates
