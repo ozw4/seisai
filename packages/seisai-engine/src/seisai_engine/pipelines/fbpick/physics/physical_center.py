@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 
@@ -256,6 +258,42 @@ class _FitContextWorkResult:
     trend_model: object | None
     diagnostics: tuple[float, float, float, float, float, float, float] | None
     valid_trace_indices: frozenset[int]
+
+
+@dataclass(frozen=True)
+class _FitTaskCfgValues:
+    n_iter: int
+    inlier_th_ms: float
+    min_pts: int
+    n_break_cand: int
+    q_lo: float
+    q_hi: float
+    seed: int
+    slope_eps: float
+    sort_offsets: bool
+    min_offset_spread_m: float
+    torch_num_threads_per_worker: int
+
+
+@dataclass(frozen=True)
+class _FitTask:
+    fit_key: tuple[int, ...]
+    x_obs: np.ndarray
+    y_obs: np.ndarray
+    obs_count_before_sampling: int
+    cfg_values: _FitTaskCfgValues
+
+
+@dataclass(frozen=True)
+class _FitTaskResult:
+    fit_key: tuple[int, ...]
+    trend_model: object | None
+    diagnostics: tuple[float, float, float, float, float, float, float] | None
+    fit_failed: bool
+    failure_reason: int | None
+    elapsed_sec: float
+    obs_count: int
+    obs_count_before_sampling: int
 
 
 @dataclass(frozen=True)
@@ -1328,6 +1366,144 @@ def _offset_spread_failure_reason(
     return None
 
 
+def _fit_task_cfg_values(cfg: PhysicsLiteConfig) -> _FitTaskCfgValues:
+    executor = cfg.physical_runtime.fit_executor
+    return _FitTaskCfgValues(
+        n_iter=int(cfg.two_piece_ransac.n_iter),
+        inlier_th_ms=float(cfg.two_piece_ransac.inlier_th_ms),
+        min_pts=int(cfg.two_piece_ransac.min_pts),
+        n_break_cand=int(cfg.two_piece_ransac.n_break_cand),
+        q_lo=float(cfg.two_piece_ransac.q_lo),
+        q_hi=float(cfg.two_piece_ransac.q_hi),
+        seed=int(cfg.two_piece_ransac.seed),
+        slope_eps=float(cfg.two_piece_ransac.slope_eps),
+        sort_offsets=bool(cfg.two_piece_ransac.sort_offsets),
+        min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
+        torch_num_threads_per_worker=int(executor.torch_num_threads_per_worker),
+    )
+
+
+def _fit_task_from_work_item(
+    work_item: _FitContextWorkItem,
+    *,
+    cfg_values: _FitTaskCfgValues,
+) -> _FitTask:
+    return _FitTask(
+        fit_key=work_item.fit_key,
+        x_obs=np.asarray(work_item.x_obs, dtype=np.float32),
+        y_obs=np.asarray(work_item.y_obs, dtype=np.float32),
+        obs_count_before_sampling=int(work_item.obs_count_before_sampling),
+        cfg_values=cfg_values,
+    )
+
+
+def _strategy_from_fit_task_cfg(
+    cfg_values: _FitTaskCfgValues,
+) -> TwoPieceRansacAutoBreakStrategy:
+    return TwoPieceRansacAutoBreakStrategy(
+        n_iter=int(cfg_values.n_iter),
+        inlier_th_ms=float(cfg_values.inlier_th_ms),
+        min_pts=int(cfg_values.min_pts),
+        n_break_cand=int(cfg_values.n_break_cand),
+        q_lo=float(cfg_values.q_lo),
+        q_hi=float(cfg_values.q_hi),
+        seed=int(cfg_values.seed),
+        slope_eps=float(cfg_values.slope_eps),
+        sort_offsets=bool(cfg_values.sort_offsets),
+    )
+
+
+def _run_fit_task(task: _FitTask) -> _FitTaskResult:
+    cfg_values = task.cfg_values
+    x_obs = np.asarray(task.x_obs, dtype=np.float32)
+    y_obs = np.asarray(task.y_obs, dtype=np.float32)
+    spread_failure_reason = _offset_spread_failure_reason(
+        x_obs,
+        min_pts=int(cfg_values.min_pts),
+        min_offset_spread_m=float(cfg_values.min_offset_spread_m),
+    )
+    if spread_failure_reason is not None:
+        return _FitTaskResult(
+            fit_key=task.fit_key,
+            trend_model=None,
+            diagnostics=None,
+            fit_failed=False,
+            failure_reason=spread_failure_reason,
+            elapsed_sec=0.0,
+            obs_count=int(x_obs.size),
+            obs_count_before_sampling=int(task.obs_count_before_sampling),
+        )
+
+    strategy = _strategy_from_fit_task_cfg(cfg_values)
+    start = time.perf_counter()
+    trend_model = strategy.fit(
+        torch.as_tensor(x_obs, dtype=torch.float32),
+        torch.as_tensor(y_obs, dtype=torch.float32),
+    )
+    elapsed = time.perf_counter() - start
+    if trend_model is None:
+        return _FitTaskResult(
+            fit_key=task.fit_key,
+            trend_model=None,
+            diagnostics=None,
+            fit_failed=True,
+            failure_reason=PHYSICAL_MODEL_FAILURE_FIT_FAILED,
+            elapsed_sec=elapsed,
+            obs_count=int(x_obs.size),
+            obs_count_before_sampling=int(task.obs_count_before_sampling),
+        )
+    try:
+        diagnostics = _model_diagnostics(
+            trend_model,
+            obs_offsets_m=x_obs,
+            obs_times_sec=y_obs,
+        )
+    except (TypeError, ValueError, RuntimeError):
+        diagnostics = None
+    return _FitTaskResult(
+        fit_key=task.fit_key,
+        trend_model=trend_model,
+        diagnostics=diagnostics,
+        fit_failed=False,
+        failure_reason=None,
+        elapsed_sec=elapsed,
+        obs_count=int(x_obs.size),
+        obs_count_before_sampling=int(task.obs_count_before_sampling),
+    )
+
+
+def _set_fit_worker_torch_num_threads(num_threads: int) -> None:
+    torch.set_num_threads(int(num_threads))
+
+
+def _run_fit_tasks_with_executor(
+    tasks: list[_FitTask],
+    *,
+    cfg: PhysicsLiteConfig,
+) -> dict[tuple[int, ...], _FitTaskResult]:
+    executor_cfg = cfg.physical_runtime.fit_executor
+    if str(executor_cfg.backend) == 'thread':
+        with ThreadPoolExecutor(max_workers=executor_cfg.max_workers) as executor:
+            results = executor.map(
+                _run_fit_task,
+                tasks,
+                chunksize=int(executor_cfg.chunksize),
+            )
+            return {result.fit_key: result for result in results}
+
+    with ProcessPoolExecutor(
+        max_workers=executor_cfg.max_workers,
+        initializer=_set_fit_worker_torch_num_threads,
+        initargs=(int(executor_cfg.torch_num_threads_per_worker),),
+    ) as executor:
+        results = executor.map(
+            _run_fit_task,
+            tasks,
+            chunksize=int(executor_cfg.chunksize),
+        )
+        return {result.fit_key: result for result in results}
+
+
 def _fit_model_for_plan(
     *,
     strategy: TwoPieceRansacAutoBreakStrategy,
@@ -1886,6 +2062,37 @@ def _fit_and_assign_context_work_item(
     ):
         runtime_diagnostics.record_cache_hit(int(work_item.trace_indices.size) - 1)
 
+    return _assign_fit_context_work_item_outcome(
+        arrays=arrays,
+        work_item=work_item,
+        offset_abs_m=offset_abs_m,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        fit_cache=fit_cache,
+        trend_model=trend_model,
+        diagnostics=diagnostics,
+        fit_failure_reason=fit_failure_reason,
+        runtime_diagnostics=runtime_diagnostics,
+    )
+
+
+def _assign_fit_context_work_item_outcome(
+    *,
+    arrays: dict[str, np.ndarray],
+    work_item: _FitContextWorkItem,
+    offset_abs_m: np.ndarray,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    fit_cache: dict[tuple[int, ...], _FitCacheEntry],
+    trend_model: object | None,
+    diagnostics: tuple[float, float, float, float, float, float, float] | None,
+    fit_failure_reason: int | None,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+) -> _FitContextWorkResult:
     if fit_failure_reason is not None:
         _assign_fit_context_fallback(
             arrays=arrays,
@@ -2024,6 +2231,20 @@ def _fit_and_assign_context_work_items(
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
 ) -> dict[tuple[int, ...], _FitContextWorkResult]:
+    if bool(cfg.physical_runtime.fit_executor.enabled) and work_items:
+        return _fit_and_assign_context_work_items_parallel(
+            work_items,
+            arrays=arrays,
+            offset_abs_m=offset_abs_m,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+            cfg=cfg,
+            fit_cache=fit_cache,
+            runtime_diagnostics=runtime_diagnostics,
+        )
+
     results: dict[tuple[int, ...], _FitContextWorkResult] = {}
     for work_item in work_items:
         results[work_item.fit_key] = _fit_and_assign_context_work_item(
@@ -2039,6 +2260,141 @@ def _fit_and_assign_context_work_items(
             fit_cache=fit_cache,
             runtime_diagnostics=runtime_diagnostics,
         )
+    return results
+
+
+def _record_cached_context_hits(
+    *,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    work_item: _FitContextWorkItem,
+) -> None:
+    if runtime_diagnostics is None:
+        return
+    extra_hits = int(work_item.trace_indices.size) - 1
+    if extra_hits > 0:
+        runtime_diagnostics.record_cache_hit(extra_hits)
+
+
+def _record_new_fit_task_diagnostics(
+    *,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    work_item: _FitContextWorkItem,
+    task_result: _FitTaskResult,
+) -> None:
+    if runtime_diagnostics is None:
+        return
+    if task_result.failure_reason == PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS:
+        return
+    runtime_diagnostics.record_cache_miss()
+    runtime_diagnostics.record_ransac_fit(
+        elapsed_sec=float(task_result.elapsed_sec),
+        obs_count=int(task_result.obs_count),
+        obs_count_before=int(task_result.obs_count_before_sampling),
+    )
+    extra_hits = int(work_item.trace_indices.size) - 1
+    if extra_hits > 0:
+        runtime_diagnostics.record_cache_hit(extra_hits)
+
+
+def _cache_entry_from_fit_task_result(
+    task_result: _FitTaskResult,
+) -> _FitCacheEntry | None:
+    if task_result.failure_reason == PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS:
+        return None
+    if bool(task_result.fit_failed):
+        return _FitCacheEntry(model=None, diagnostics=None, fit_failed=True)
+    return _FitCacheEntry(
+        model=task_result.trend_model,
+        diagnostics=task_result.diagnostics,
+        fit_failed=False,
+        diagnostics_computed=task_result.diagnostics is not None,
+    )
+
+
+def _fit_and_assign_context_work_items_parallel(
+    work_items: list[_FitContextWorkItem],
+    *,
+    arrays: dict[str, np.ndarray],
+    offset_abs_m: np.ndarray,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    cfg: PhysicsLiteConfig,
+    fit_cache: dict[tuple[int, ...], _FitCacheEntry],
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+) -> dict[tuple[int, ...], _FitContextWorkResult]:
+    results: dict[tuple[int, ...], _FitContextWorkResult] = {}
+    pending_items: list[_FitContextWorkItem] = []
+    tasks: list[_FitTask] = []
+    cfg_values = _fit_task_cfg_values(cfg)
+
+    for work_item in work_items:
+        entry = fit_cache.get(work_item.fit_key)
+        if entry is None:
+            pending_items.append(work_item)
+            tasks.append(
+                _fit_task_from_work_item(work_item, cfg_values=cfg_values)
+            )
+            continue
+
+        _record_cached_context_hits(
+            runtime_diagnostics=runtime_diagnostics,
+            work_item=work_item,
+        )
+        fit_failure_reason = (
+            PHYSICAL_MODEL_FAILURE_FIT_FAILED if bool(entry.fit_failed) else None
+        )
+        results[work_item.fit_key] = _assign_fit_context_work_item_outcome(
+            arrays=arrays,
+            work_item=work_item,
+            offset_abs_m=offset_abs_m,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+            fit_cache=fit_cache,
+            trend_model=entry.model,
+            diagnostics=entry.diagnostics,
+            fit_failure_reason=fit_failure_reason,
+            runtime_diagnostics=runtime_diagnostics,
+        )
+
+    if tasks:
+        start = time.perf_counter()
+        task_results_by_key = _run_fit_tasks_with_executor(tasks, cfg=cfg)
+        wall_sec = time.perf_counter() - start
+        if runtime_diagnostics is not None:
+            runtime_diagnostics.record_fit_executor_run(
+                wall_sec=wall_sec,
+                tasks=len(tasks),
+            )
+
+        for work_item in pending_items:
+            task_result = task_results_by_key[work_item.fit_key]
+            entry = _cache_entry_from_fit_task_result(task_result)
+            if entry is not None:
+                fit_cache[work_item.fit_key] = entry
+            _record_new_fit_task_diagnostics(
+                runtime_diagnostics=runtime_diagnostics,
+                work_item=work_item,
+                task_result=task_result,
+            )
+            results[work_item.fit_key] = _assign_fit_context_work_item_outcome(
+                arrays=arrays,
+                work_item=work_item,
+                offset_abs_m=offset_abs_m,
+                table=table,
+                feasible=feasible,
+                trend=trend,
+                merged=merged,
+                fit_cache=fit_cache,
+                trend_model=task_result.trend_model,
+                diagnostics=task_result.diagnostics,
+                fit_failure_reason=task_result.failure_reason,
+                runtime_diagnostics=runtime_diagnostics,
+            )
+
     return results
 
 
@@ -2483,6 +2839,12 @@ def build_geometry_two_piece_physical_center(
             max_obs_per_fit=int(sampling.max_obs_per_fit),
             n_offset_bins=int(sampling.n_offset_bins),
         )
+        fit_executor = cfg.physical_runtime.fit_executor
+        runtime_diagnostics.set_fit_executor(
+            enabled=bool(fit_executor.enabled),
+            backend=str(fit_executor.backend),
+            max_workers=fit_executor.max_workers,
+        )
 
     if not bool(cfg.physical_trend.enabled):
         return _build_disabled_result(table, trend)
@@ -2596,19 +2958,16 @@ def build_geometry_two_piece_physical_center(
     with (
         runtime_diagnostics.time_block('valid_mask_build_sec')
         if runtime_diagnostics is not None
+        else nullcontext(), runtime_diagnostics.time_block('velocity_prefilter_sec')
+        if runtime_diagnostics is not None
         else nullcontext()
     ):
-        with (
-            runtime_diagnostics.time_block('velocity_prefilter_sec')
-            if runtime_diagnostics is not None
-            else nullcontext()
-        ):
-            valid_for_fit = _compute_physical_prefilter_mask(
-                offset_abs_m=offset_abs_m,
-                table=table,
-                feasible=feasible,
-                cfg=cfg,
-            )
+        valid_for_fit = _compute_physical_prefilter_mask(
+            offset_abs_m=offset_abs_m,
+            table=table,
+            feasible=feasible,
+            cfg=cfg,
+        )
 
     with (
         runtime_diagnostics.time_block('neighbor_plan_sec')
@@ -3217,20 +3576,19 @@ def build_geometry_two_piece_physical_center(
         pick_t_sec=pick_t_sec,
         runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT,
     )
-    for work_item in work_items:
-        _fit_and_assign_context_work_item(
-            arrays=arrays,
-            work_item=work_item,
-            offset_abs_m=offset_abs_m,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            merged=merged,
-            cfg=cfg,
-            strategy=strategy,
-            fit_cache=fit_cache,
-            runtime_diagnostics=runtime_diagnostics,
-        )
+    _fit_and_assign_context_work_items(
+        work_items,
+        arrays=arrays,
+        offset_abs_m=offset_abs_m,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=cfg,
+        strategy=strategy,
+        fit_cache=fit_cache,
+        runtime_diagnostics=runtime_diagnostics,
+    )
 
     if runtime_diagnostics is not None:
         runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))

@@ -421,7 +421,11 @@ _ROBUST_RUNTIME_DIAGNOSTIC_DTYPES = {
     'anchor_source_distance_max_m': np.float64,
 }
 _ROBUST_RUNTIME_DIAGNOSTIC_STRING_KEYS = frozenset(
-    {'anchor_selection_mode', 'observation_sampling_method'}
+    {
+        'anchor_selection_mode',
+        'fit_executor_backend',
+        'observation_sampling_method',
+    }
 )
 
 _ROBUST_RUNTIME_DIAGNOSTIC_SPECS = tuple(
@@ -960,6 +964,7 @@ def save_robust_npz(
         is_runtime_scalar = (
             key in ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS
             or key.startswith('physical_runtime_')
+            or key.startswith('fit_executor_')
             or key.endswith('_sec')
             or key.startswith('n_')
             or key.endswith('_rate')

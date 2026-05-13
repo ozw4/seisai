@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
+import pytest
 import torch
 from seisai_engine.pipelines.fbpick.physics import (
     physical_center as physical_center_mod,
@@ -460,6 +461,42 @@ def test_physical_center_calls_existing_two_piece_ransac(monkeypatch) -> None:
     assert model.predict_call_sizes.count(1) == 0
     assert model.predict_call_sizes.count(int(table.n_traces)) == 2
     assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+
+
+def test_parallel_cached_context_hit_accounting_excludes_owner_trace() -> None:
+    diagnostics = PhysicalRuntimeDiagnostics()
+    plan = physical_center_mod._ObservationPlan(
+        obs_indices=np.arange(4, dtype=np.int64),
+        neighbor_count=1,
+        prefilter_valid_count=4,
+        segment_id=0,
+        side=0,
+        relaxed=False,
+    )
+    work_item = physical_center_mod._FitContextWorkItem(
+        fit_key=(0, 1, 2, 3, 0, 0, 0),
+        fit_plan=plan,
+        obs_count_before_sampling=4,
+        trace_indices=np.arange(4, dtype=np.int64),
+        runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+        assignments=(),
+        x_obs=np.arange(4, dtype=np.float32),
+        y_obs=np.arange(4, dtype=np.float32),
+    )
+
+    physical_center_mod._record_cached_context_hits(
+        runtime_diagnostics=diagnostics,
+        work_item=work_item,
+    )
+    physical_center_mod._record_cached_context_hits(
+        runtime_diagnostics=diagnostics,
+        work_item=replace(
+            work_item,
+            trace_indices=np.asarray([0], dtype=np.int64),
+        ),
+    )
+
+    assert diagnostics.n_cache_hits == 3
 
 
 def test_assign_model_prediction_batch_matches_single_trace_assignment() -> None:
@@ -1013,6 +1050,144 @@ def test_physical_center_fits_once_per_unique_observation_segment(monkeypatch) -
     assert diagnostics.n_cache_hits == 10
     assert diagnostics.n_unique_fit_contexts == 2
     assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+
+
+def test_thread_fit_executor_matches_serial_unique_contexts(monkeypatch) -> None:
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        return _fit_linear_model(x_abs, y_sec)
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    offsets = np.asarray(
+        [
+            10.0,
+            20.0,
+            30.0,
+            40.0,
+            50.0,
+            60.0,
+            1000.0,
+            1010.0,
+            1020.0,
+            1030.0,
+            1040.0,
+            1050.0,
+        ],
+        dtype=np.float32,
+    )
+    pick_i = np.rint((0.02 + offsets / 2000.0) / 0.001).astype(np.int32)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+    )
+    base_cfg = {
+        'physical_prefilter': {'enabled': False},
+        'two_piece_ransac': {'min_pts': 3},
+    }
+    serial_diagnostics = PhysicalRuntimeDiagnostics()
+    parallel_diagnostics = PhysicalRuntimeDiagnostics()
+    original_torch_threads = torch.get_num_threads()
+    caller_torch_threads = 2 if original_torch_threads != 2 else 1
+    worker_torch_threads = 1 if caller_torch_threads != 1 else 2
+
+    serial = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(base_cfg),
+        runtime_diagnostics=serial_diagnostics,
+    )
+    torch.set_num_threads(caller_torch_threads)
+    try:
+        parallel = build_geometry_two_piece_physical_center(
+            coarse_npz=coarse_npz,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+            cfg=_physical_cfg(
+                {
+                    **base_cfg,
+                    'physical_runtime': {
+                        'fit_executor': {
+                            'enabled': True,
+                            'backend': 'thread',
+                            'max_workers': 2,
+                            'torch_num_threads_per_worker': worker_torch_threads,
+                            'chunksize': 1,
+                        }
+                    },
+                }
+            ),
+            runtime_diagnostics=parallel_diagnostics,
+        )
+        assert torch.get_num_threads() == caller_torch_threads
+    finally:
+        torch.set_num_threads(original_torch_threads)
+
+    for field in (
+        'physical_center_i',
+        'fine_center_i',
+        'physical_model_status',
+        'physical_model_failure_reason',
+    ):
+        np.testing.assert_array_equal(getattr(parallel, field), getattr(serial, field))
+    for field in (
+        'physical_model_break_offset_m',
+        'physical_model_slope_near_s_per_m',
+        'physical_model_slope_far_s_per_m',
+        'physical_model_velocity_near_m_s',
+        'physical_model_velocity_far_m_s',
+        'physical_model_resid_p50_ms',
+        'physical_model_resid_p90_ms',
+    ):
+        np.testing.assert_allclose(
+            getattr(parallel, field),
+            getattr(serial, field),
+            equal_nan=True,
+            atol=1.0e-6,
+            rtol=0.0,
+        )
+    assert parallel_diagnostics.n_fit_calls == serial_diagnostics.n_fit_calls == 2
+    assert parallel_diagnostics.n_cache_misses == serial_diagnostics.n_cache_misses
+    assert parallel_diagnostics.n_cache_hits == serial_diagnostics.n_cache_hits
+    summary = parallel_diagnostics.to_summary()
+    assert summary['fit_executor_enabled'] == 1
+    assert summary['fit_executor_backend'] == 'thread'
+    assert summary['fit_executor_max_workers'] == 2
+    assert summary['fit_executor_tasks'] == 2
+    assert summary['fit_executor_wall_sec'] >= 0.0
+
+
+def test_thread_fit_executor_propagates_worker_fit_runtime_error(monkeypatch) -> None:
+    def fake_fit(self, x_abs: torch.Tensor, y_sec: torch.Tensor):
+        raise RuntimeError('synthetic worker fit failure')
+
+    monkeypatch.setattr(TwoPieceRansacAutoBreakStrategy, 'fit', fake_fit)
+    offsets = np.linspace(50.0, 1600.0, 12, dtype=np.float32)
+    coarse_npz, table, feasible, trend, merged = _make_inputs(offsets_m=offsets)
+
+    with pytest.raises(RuntimeError, match='synthetic worker fit failure'):
+        build_geometry_two_piece_physical_center(
+            coarse_npz=coarse_npz,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+            cfg=_physical_cfg(
+                {
+                    'two_piece_ransac': {'min_pts': 3},
+                    'physical_runtime': {
+                        'fit_executor': {
+                            'enabled': True,
+                            'backend': 'thread',
+                            'max_workers': 2,
+                        }
+                    },
+                }
+            ),
+        )
 
 
 def test_physical_center_uses_saved_signed_offset_for_side_segmentation(

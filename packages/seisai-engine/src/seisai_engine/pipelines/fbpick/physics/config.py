@@ -17,6 +17,7 @@ __all__ = [
     'PhysicalAdaptiveRefitCfg',
     'PhysicalAnchorReuseCfg',
     'PhysicalAnchorSelectionCfg',
+    'PhysicalFitExecutorCfg',
     'PhysicalObservationSamplingCfg',
     'PhysicalPrefilterCfg',
     'PhysicalProjectionCfg',
@@ -193,6 +194,15 @@ class PhysicalObservationSamplingCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalFitExecutorCfg:
+    enabled: bool = False
+    backend: str = 'process'
+    max_workers: int | None = None
+    torch_num_threads_per_worker: int = 1
+    chunksize: int = 1
+
+
+@dataclass(frozen=True)
 class PhysicalRuntimeDiagnosticsCfg:
     enabled: bool = True
     detailed_timing: bool = False
@@ -214,6 +224,7 @@ class PhysicalRuntimeCfg:
     observation_sampling: PhysicalObservationSamplingCfg = (
         PhysicalObservationSamplingCfg()
     )
+    fit_executor: PhysicalFitExecutorCfg = PhysicalFitExecutorCfg()
 
 
 @dataclass(frozen=True)
@@ -562,6 +573,25 @@ def _load_physical_observation_sampling_cfg(
     )
 
 
+def _load_physical_fit_executor_cfg(cfg: dict[str, Any]) -> PhysicalFitExecutorCfg:
+    backend = optional_str(cfg, 'backend', 'process')
+    if backend is None:
+        msg = 'physical_runtime.fit_executor.backend must not be null'
+        raise TypeError(msg)
+    max_workers = cfg.get('max_workers')
+    if max_workers is not None:
+        max_workers = int(optional_int(cfg, 'max_workers', 0))
+    return PhysicalFitExecutorCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=False)),
+        backend=str(backend),
+        max_workers=max_workers,
+        torch_num_threads_per_worker=int(
+            optional_int(cfg, 'torch_num_threads_per_worker', 1)
+        ),
+        chunksize=int(optional_int(cfg, 'chunksize', 1)),
+    )
+
+
 def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
     diagnostics_raw = _require_dict(
         cfg.get('diagnostics'),
@@ -623,6 +653,12 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
             _require_dict(
                 cfg.get('observation_sampling'),
                 key='physical_runtime.observation_sampling',
+            )
+        ),
+        fit_executor=_load_physical_fit_executor_cfg(
+            _require_dict(
+                cfg.get('fit_executor'),
+                key='physical_runtime.fit_executor',
             )
         ),
     )
@@ -837,6 +873,26 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
             f'got {sampling.bin_pick!r}'
         )
         raise ValueError(msg)
+    executor = cfg.fit_executor
+    if executor.backend not in {'process', 'thread'}:
+        msg = (
+            "physical_runtime.fit_executor.backend must be 'process' or 'thread', "
+            f'got {executor.backend!r}'
+        )
+        raise ValueError(msg)
+    if executor.max_workers is not None:
+        _validate_positive_int(
+            'physical_runtime.fit_executor.max_workers',
+            executor.max_workers,
+        )
+    _validate_positive_int(
+        'physical_runtime.fit_executor.torch_num_threads_per_worker',
+        executor.torch_num_threads_per_worker,
+    )
+    _validate_positive_int(
+        'physical_runtime.fit_executor.chunksize',
+        executor.chunksize,
+    )
 
 
 def _validate_robust_center_cfg(cfg: PhysicsRobustCenterCfg) -> None:
