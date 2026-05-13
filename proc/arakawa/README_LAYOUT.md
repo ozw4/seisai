@@ -54,6 +54,7 @@ proc/arakawa/
   config.
 - `configs/run_coarse_physics_export.yaml` is the full commented user config.
 - `configs/templates/*.yaml` are runner templates, not per-run generated files.
+- Legacy `configs/*_one.yaml` files are deprecated comment-only stubs.
 - `experiments/runtime_speedup/configs/*.yaml` are development benchmark configs.
 - `outputs/` is ignored and owns generated artifacts, including generated
   configs, runtime benchmark runs, QC images, summaries, NPZ, CRD, JSON, and CSV.
@@ -80,20 +81,16 @@ proc/arakawa/
 | `proc/arakawa/runtime_runs/` | `proc/arakawa/outputs/runtime_runs/` |
 | `proc/arakawa/runtime_compare/` | `proc/arakawa/outputs/runtime_compare/` |
 
-## Temporary fallback policy
+## Template Resolution
 
 When `paths.coarse_template` or `paths.physics_template` is omitted, the
-Arakawa one-shot runner first tries the canonical template path and then falls
-back to the legacy template path:
+Arakawa one-shot runner uses only these canonical template paths:
 
 ```text
 coarse:  proc/arakawa/configs/templates/coarse.yaml
-         proc/arakawa/configs/coarse_one.yaml
-
 physics: proc/arakawa/configs/templates/physics.yaml
-         proc/arakawa/configs/physics_one.yaml
 ```
 
 Explicit `paths.coarse_template` and `paths.physics_template` values are
-resolved as written. The fallback is only for omitted template paths during the
-layout transition.
+resolved as written. Deprecated legacy config names are not used as implicit
+fallback templates.

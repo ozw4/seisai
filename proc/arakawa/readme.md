@@ -42,6 +42,14 @@ ls proc/arakawa/configs/run_coarse_physics_export.yaml
 proc/arakawa/configs/run_coarse_physics_export_minimal.yaml
 ```
 
+詳細な出力先、評価、可視化設定を確認したい場合だけ、コメント付き full config を参照します。
+
+```text
+proc/arakawa/configs/run_coarse_physics_export.yaml
+```
+
+`proc/arakawa/configs/templates/*.yaml` は runner が読み込む template であり、ユーザーが直接実行・編集する config ではありません。旧 `coarse_one.yaml` / `physics_one.yaml` / `physics_qc_one_no_fb.yaml` / `fine_one.yaml` は deprecated です。
+
 canonical layout は `proc/arakawa/README_LAYOUT.md` を参照してください。
 
 ---
@@ -53,6 +61,9 @@ canonical layout は `proc/arakawa/README_LAYOUT.md` を参照してください
 ```yaml
 paths:
   sgy_file: fdata_hset_ARA26_Vib.sgy
+
+visualization:
+  enabled: true
 ```
 
 ファイル名だけを書いた場合、runner はデフォルトで以下のディレクトリから SEG-Y を探します。
@@ -68,7 +79,7 @@ paths:
   sgy_file: /path/to/your/file.sgy
 ```
 
-重み、coarse model 設定、physics 設定は既存の Arakawa config を default として使います。通常はユーザーが変更する必要はありません。
+重み、coarse model 設定、physics 設定は `proc/arakawa/configs/templates/` の canonical template を default として使います。通常はユーザーが変更する必要はありません。
 
 ---
 
@@ -345,6 +356,9 @@ run:
 ```yaml
 paths:
   sgy_file: fdata_hset_ARA26_Vib.sgy
+
+visualization:
+  enabled: true
 ```
 
 ### 絶対パスで SEG-Y を指定する例

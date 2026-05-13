@@ -1,3 +1,6 @@
+# Template for cli.run_arakawa_fbpick_physical_export.
+# Do not run or edit as a user config; the runner rewrites paths into
+# proc/arakawa/outputs/generated_configs/<TAG>.coarse.yaml.
 paths:
   segy_files:
   - /home/dcuser/data/ActiveSeisField/Arakawa2026/fdata_hset_ARA26_Vib.sgy

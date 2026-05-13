@@ -21,17 +21,13 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _default_template_path(root: Path, *, canonical_name: str, legacy_name: str) -> Path:
+def _default_template_path(root: Path, *, name: str) -> Path:
     arakawa_dir = root / 'proc' / 'arakawa'
-    canonical = arakawa_dir / 'configs' / 'templates' / canonical_name
-    if canonical.is_file():
-        return canonical
+    path = arakawa_dir / 'configs' / 'templates' / name
+    if path.is_file():
+        return path
 
-    legacy = arakawa_dir / 'configs' / legacy_name
-    if legacy.is_file():
-        return legacy
-
-    msg = f'Arakawa template config not found; tried {canonical} and {legacy}'
+    msg = f'Arakawa template config not found: {path}'
     raise FileNotFoundError(msg)
 
 
@@ -462,6 +458,9 @@ def run_pipeline(
 ) -> Path:
     runtime = _load_runtime()
     cfg, base_dir = runtime.load_cfg_with_base_dir(Path(config_path))
+    if not isinstance(cfg, dict):
+        msg = f'runner config must be dict: {config_path}'
+        raise TypeError(msg)
     root = _repo_root()
 
     run_section = _as_dict(cfg.get('run'), name='run')
@@ -656,16 +655,14 @@ def run_pipeline(
     else:
         coarse_template = _default_template_path(
             root,
-            canonical_name='coarse.yaml',
-            legacy_name='coarse_one.yaml',
+            name='coarse.yaml',
         )
     if physics_template_value is not None:
         physics_template = Path(runtime.resolve_relpath(base_dir, physics_template_value))
     else:
         physics_template = _default_template_path(
             root,
-            canonical_name='physics.yaml',
-            legacy_name='physics_one.yaml',
+            name='physics.yaml',
         )
 
     coarse_cfg = _prepare_coarse_config(

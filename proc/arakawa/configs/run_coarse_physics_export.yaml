@@ -1,12 +1,26 @@
-# Arakawa one-shot runner: Coarse -> Physics -> physical_center_i grstat export.
-# Usually only paths.sgy_file needs to be changed.
+# Arakawa one-shot runner full config:
+# Coarse -> Physics -> physical_center_i grstat export -> optional QC/evaluation.
+#
+# Most users should edit run_coarse_physics_export_minimal.yaml instead.
+# Use this file when you need to inspect or override output, visualization, or
+# evaluation settings.
 paths:
   # Bare filenames are resolved against sgy_dir.
   sgy_file: fdata_hset_ARA26_Vib.sgy
   sgy_dir: /home/dcuser/data/ActiveSeisField/Arakawa2026
 
-  # Optional. Defaults to /workspace/proc/arakawa/outputs.
+  # Output root. Stage outputs default to subdirectories under this path:
+  # coarse/, robust/, grstat/, eval/, generated_configs/, qc/, fb_dummy/.
   work_dir: /workspace/proc/arakawa/outputs
+
+  # Optional output overrides. Leave unset to use work_dir-derived defaults.
+  # coarse_dir: /workspace/proc/arakawa/outputs/coarse
+  # robust_dir: /workspace/proc/arakawa/outputs/robust
+  # grstat_dir: /workspace/proc/arakawa/outputs/grstat
+  # eval_dir: /workspace/proc/arakawa/outputs/eval
+  # generated_config_dir: /workspace/proc/arakawa/outputs/generated_configs
+  # out_crd: /path/to/output.crd
+  # out_npz: /path/to/output.npz
 
   # Optional. When set, export also evaluates against this grstat first-break file.
   # reference_grstat_path: /path/to/reference_first_break.crd
@@ -15,7 +29,8 @@ paths:
   # default grstat output path.
   # export_npz: /path/to/<TAG>.physical_center.snap_peak.ltcor2.npz
 
-  # Optional. Defaults to the canonical Arakawa templates below.
+  # Optional. Defaults to the canonical Arakawa templates below. These templates
+  # are not user-run configs; this runner rewrites paths into generated configs.
   # coarse_template: /workspace/proc/arakawa/configs/templates/coarse.yaml
   # physics_template: /workspace/proc/arakawa/configs/templates/physics.yaml
 
@@ -41,7 +56,8 @@ export:
   values_per_line: 5
   header_comment: Arakawa physical_center_i snap to phase
 
-# Used only when paths.reference_grstat_path is set.
+# Used only when paths.reference_grstat_path is set. Summary files are written
+# under paths.eval_dir unless evaluation.summary_json/csv are explicitly set.
 evaluation:
   enabled: true
   strict_gather_numbers: true
@@ -50,7 +66,9 @@ evaluation:
 
 
 # Optional physics QC visualization after export.
-# This writes first-panel-only flattened gather PNGs centered on physical_center_i.
+# This writes first-panel-only flattened gather PNGs centered on physical_center_i
+# under visualization.out_dir. If no FB file is provided, allow_no_fb creates a
+# dummy FB array under work_dir/fb_dummy.
 visualization:
   enabled: true
   allow_no_fb: true

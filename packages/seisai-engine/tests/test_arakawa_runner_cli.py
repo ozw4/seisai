@@ -71,7 +71,7 @@ def test_arakawa_runner_default_template_paths_exist() -> None:
     assert (template_dir / 'physics.yaml').is_file()
 
 
-def test_arakawa_runner_falls_back_to_legacy_default_templates(
+def test_arakawa_runner_default_template_paths_do_not_use_legacy_names(
     tmp_path: Path,
 ) -> None:
     module = _load_module()
@@ -82,16 +82,19 @@ def test_arakawa_runner_falls_back_to_legacy_default_templates(
         physics_name='physics_one.yaml',
     )
 
-    assert module._default_template_path(
-        tmp_path,
-        canonical_name='coarse.yaml',
-        legacy_name='coarse_one.yaml',
-    ) == template_dir / 'coarse_one.yaml'
-    assert module._default_template_path(
-        tmp_path,
-        canonical_name='physics.yaml',
-        legacy_name='physics_one.yaml',
-    ) == template_dir / 'physics_one.yaml'
+    try:
+        module._default_template_path(tmp_path, name='coarse.yaml')
+    except FileNotFoundError as exc:
+        assert str(template_dir / 'templates' / 'coarse.yaml') in str(exc)
+    else:
+        raise AssertionError('legacy coarse_one.yaml must not be a default template')
+
+    try:
+        module._default_template_path(tmp_path, name='physics.yaml')
+    except FileNotFoundError as exc:
+        assert str(template_dir / 'templates' / 'physics.yaml') in str(exc)
+    else:
+        raise AssertionError('legacy physics_one.yaml must not be a default template')
 
 
 def test_arakawa_runner_uses_fixed_templates_and_runs_three_stages(

@@ -1,3 +1,6 @@
+# Template for cli.run_arakawa_fbpick_physical_export.
+# Do not run or edit as a user config; the runner rewrites paths into
+# proc/arakawa/outputs/generated_configs/<TAG>.physics.yaml.
 paths:
   coarse_npz_path: "/workspace/proc/arakawa/outputs/coarse/Arakawa2026__fdata_hset_ARA26_Vib.coarse.npz"
   out_path: "/workspace/proc/arakawa/outputs/robust/Arakawa2026__fdata_hset_ARA26_Vib.robust.npz"

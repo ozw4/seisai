@@ -1,3 +1,6 @@
+# Template for Arakawa physics QC generation.
+# Do not run or edit as a user config; the export runner creates a generated QC
+# config with current paths when visualization.enabled is true.
 paths:
   segy_files:
     - "/home/dcuser/data/ActiveSeisField/Arakawa2026/fdata_hset_ARA26_Vib.sgy"
