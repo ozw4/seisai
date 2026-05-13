@@ -291,10 +291,23 @@ def _load_yaml(path: Path, *, name: str) -> dict[str, Any]:
     return payload
 
 
-def _resolve_config_path(value: str | Path, *, base_dir: Path) -> Path:
+def _is_repo_root_relative_arakawa_path(path: Path) -> bool:
+    parts = path.parts
+    return len(parts) >= 2 and parts[0] == 'proc' and parts[1] == 'arakawa'
+
+
+def _resolve_config_path(
+    value: str | Path,
+    *,
+    base_dir: Path,
+    repo_root: Path | None = None,
+) -> Path:
     path = Path(value).expanduser()
     if not path.is_absolute():
-        path = base_dir / path
+        if repo_root is not None and _is_repo_root_relative_arakawa_path(path):
+            path = repo_root / path
+        else:
+            path = base_dir / path
     return path.resolve()
 
 
@@ -357,14 +370,17 @@ def _derive_from_config(
     work_dir = _resolve_config_path(
         paths.get('work_dir', str(default_work_dir)),
         base_dir=base_dir,
+        repo_root=repo_root,
     )
     robust_dir = _resolve_config_path(
         paths.get('robust_dir', str(work_dir / 'robust')),
         base_dir=base_dir,
+        repo_root=repo_root,
     )
     grstat_dir = _resolve_config_path(
         paths.get('grstat_dir', str(work_dir / 'grstat')),
         base_dir=base_dir,
+        repo_root=repo_root,
     )
 
     robust_npz = spec.robust_npz or robust_dir / f'{tag}.robust.npz'
@@ -390,7 +406,7 @@ def _derive_from_config(
     )
     out_npz_value = paths.get('out_npz')
     export_npz = (
-        _resolve_config_path(out_npz_value, base_dir=base_dir)
+        _resolve_config_path(out_npz_value, base_dir=base_dir, repo_root=repo_root)
         if out_npz_value is not None
         else grstat_dir / f'{out_label}.npz'
     )
@@ -612,9 +628,18 @@ def _candidate_gates(
     manifest_gates: dict[str, Any],
     candidate: BenchmarkRunSpec,
 ) -> dict[str, Any]:
-    if candidate.gates:
-        return dict(candidate.gates)
-    return dict(manifest_gates)
+    merged = dict(manifest_gates)
+    if not candidate.gates:
+        return merged
+    for key, value in candidate.gates.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = {**existing, **value}
+        elif isinstance(existing, list) and isinstance(value, list):
+            merged[key] = list(_ordered_unique([*existing, *value]))
+        else:
+            merged[key] = value
+    return merged
 
 
 def _manifest_gate_sets(manifest: BenchmarkManifest) -> tuple[dict[str, Any], ...]:

@@ -264,6 +264,145 @@ def test_benchmark_uses_candidate_specific_gates(tmp_path: Path) -> None:
     assert loose_summary['gates']['checks'][0]['passed'] is True
 
 
+def test_benchmark_merges_candidate_gates_over_manifest_gates(
+    tmp_path: Path,
+) -> None:
+    baseline = _write_robust(
+        tmp_path / 'runs' / 'A0' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20],
+        status=[0, 0],
+    )
+    candidate = _write_robust(
+        tmp_path / 'runs' / 'B1' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20],
+        status=[0, 1],
+    )
+    manifest_path = tmp_path / 'manifest.yaml'
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                'baseline': {'name': 'A0', 'robust_npz': str(baseline)},
+                'candidates': [
+                    {
+                        'name': 'B1',
+                        'robust_npz': str(candidate),
+                        'gates': {
+                            'max_abs_diff_samples': {'physical_center_i': 0},
+                            'allow_status_count_change': True,
+                        },
+                    }
+                ],
+                'checks': {'diff_keys': ['physical_center_i']},
+                'gates': {
+                    'exact_match_required': ['physical_model_status'],
+                    'allow_status_count_change': True,
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    summary = benchmark.run_benchmark(
+        manifest_path=manifest_path,
+        tag='T',
+        out_dir=tmp_path / 'out',
+        artifacts_only=True,
+        repo_root=tmp_path,
+    )
+
+    gate_checks = summary['candidates'][0]['gates']['checks']
+    exact_gate = next(
+        gate for gate in gate_checks if gate['gate'] == 'exact_match_required'
+    )
+    tolerance_gate = next(
+        gate for gate in gate_checks if gate['gate'] == 'max_abs_diff_samples'
+    )
+    assert summary['passed'] is False
+    assert exact_gate['passed'] is False
+    assert tolerance_gate['passed'] is True
+
+
+def test_benchmark_derives_repo_root_style_config_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    baseline_path = (
+        tmp_path
+        / 'proc'
+        / 'arakawa'
+        / 'outputs'
+        / 'runtime_runs'
+        / 'A0'
+        / 'robust'
+        / 'T.robust.npz'
+    )
+    baseline = _write_robust(
+        baseline_path,
+        physical_center_i=[10, 20],
+    )
+    config_dir = (
+        tmp_path / 'proc' / 'arakawa' / 'experiments' / 'runtime_speedup' / 'configs'
+    )
+    config_dir.mkdir(parents=True)
+    candidate_config = config_dir / 'B1.yaml'
+    candidate_config.write_text(
+        yaml.safe_dump(
+            {
+                'paths': {
+                    'work_dir': 'proc/arakawa/outputs/runtime_runs/B1',
+                    'out_npz': (
+                        'proc/arakawa/outputs/runtime_runs/B1/grstat/'
+                        'T.custom.npz'
+                    ),
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+    manifest_path = tmp_path / 'manifest.yaml'
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                'baseline': {'name': 'A0', 'robust_npz': str(baseline)},
+                'candidates': [{'name': 'B1', 'config': str(candidate_config)}],
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    summary = benchmark.run_benchmark(
+        manifest_path=manifest_path,
+        tag='T',
+        out_dir=tmp_path / 'out',
+        artifacts_only=True,
+        repo_root=tmp_path,
+    )
+
+    artifacts = summary['candidates'][0]['artifacts']
+    assert artifacts['robust_npz'] == str(
+        tmp_path
+        / 'proc'
+        / 'arakawa'
+        / 'outputs'
+        / 'runtime_runs'
+        / 'B1'
+        / 'robust'
+        / 'T.robust.npz'
+    )
+    assert artifacts['export_npz'] == str(
+        tmp_path
+        / 'proc'
+        / 'arakawa'
+        / 'outputs'
+        / 'runtime_runs'
+        / 'B1'
+        / 'grstat'
+        / 'T.custom.npz'
+    )
+
+
 def test_benchmark_tolerance_gate_fails_on_one_sided_missing_pick(
     tmp_path: Path,
 ) -> None:
