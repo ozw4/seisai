@@ -42,16 +42,16 @@ def _write_robust(
     return path
 
 
-def _write_runtime(path: Path, *, physics_total_sec: float) -> None:
+def _write_runtime(path: Path, *, physics_total_sec: float, **extra: float) -> None:
+    payload = {
+        'physics_total_sec': physics_total_sec,
+        'physical_center_total_sec': physics_total_sec * 0.9,
+        'ransac_fit_total_sec': physics_total_sec * 0.4,
+        'non_ransac_total_sec': physics_total_sec * 0.5,
+    }
+    payload.update(extra)
     path.write_text(
-        json.dumps(
-            {
-                'physics_total_sec': physics_total_sec,
-                'physical_center_total_sec': physics_total_sec * 0.9,
-                'ransac_fit_total_sec': physics_total_sec * 0.4,
-                'non_ransac_total_sec': physics_total_sec * 0.5,
-            }
-        ),
+        json.dumps(payload),
         encoding='utf-8',
     )
 
@@ -160,6 +160,60 @@ def test_benchmark_artifacts_only_passes_exact_gate_and_reports_missing_runtime_
     assert 'missing' in md_text
     assert '## Exact Match Summary' in md_text
     assert '| B1 | fine_center_i | pass | pass | pass | no | no |' in md_text
+
+
+def test_benchmark_reports_manifest_runtime_key_from_runtime_json(
+    tmp_path: Path,
+) -> None:
+    baseline = _write_robust(
+        tmp_path / 'runs' / 'A0' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20],
+    )
+    candidate = _write_robust(
+        tmp_path / 'runs' / 'B1' / 'robust' / 'T.robust.npz',
+        physical_center_i=[10, 20],
+    )
+    _write_runtime(
+        tmp_path / 'runs' / 'A0' / 'robust' / 'T.physics_runtime_summary.json',
+        physics_total_sec=10.0,
+        side_segment_build_sec=2.0,
+    )
+    _write_runtime(
+        tmp_path / 'runs' / 'B1' / 'robust' / 'T.physics_runtime_summary.json',
+        physics_total_sec=5.0,
+        side_segment_build_sec=0.5,
+    )
+    manifest_path = tmp_path / 'manifest.yaml'
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                'baseline': {'name': 'A0', 'robust_npz': str(baseline)},
+                'candidates': [{'name': 'B1', 'robust_npz': str(candidate)}],
+                'checks': {'runtime_keys': ['side_segment_build_sec']},
+                'gates': {'exact_match_required': ['physical_model_status']},
+            },
+            sort_keys=False,
+        ),
+        encoding='utf-8',
+    )
+
+    summary = benchmark.run_benchmark(
+        manifest_path=manifest_path,
+        tag='T',
+        out_dir=tmp_path / 'out',
+        artifacts_only=True,
+        repo_root=tmp_path,
+    )
+
+    runtime_row = summary['candidates'][0]['runtime'][0]
+    assert runtime_row['key'] == 'side_segment_build_sec'
+    assert runtime_row['baseline'] == 2.0
+    assert runtime_row['candidate'] == 0.5
+    assert runtime_row['speedup'] == 4.0
+    assert runtime_row['missing_baseline'] is False
+    assert runtime_row['missing_candidate'] is False
+    md_text = (tmp_path / 'out' / 'summary.md').read_text(encoding='utf-8')
+    assert '| B1 | 0.5 |' in md_text
 
 
 def test_benchmark_tolerance_gate_fails(tmp_path: Path) -> None:

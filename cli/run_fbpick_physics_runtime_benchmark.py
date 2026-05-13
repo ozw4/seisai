@@ -462,6 +462,42 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def _read_runtime_json(path: Path | None) -> dict[str, Any] | None:
+    if path is None or not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(payload, dict):
+        msg = f'runtime summary must be a JSON object: {path}'
+        raise TypeError(msg)
+    return payload
+
+
+def _runtime_speedup_from_values(baseline: Any, candidate: Any) -> float | None:
+    if baseline is None or candidate is None:
+        return None
+    if isinstance(baseline, bool) or isinstance(candidate, bool):
+        return None
+    if not isinstance(baseline, int | float) or not isinstance(candidate, int | float):
+        return None
+    if not np.isfinite(float(baseline)) or not np.isfinite(float(candidate)):
+        return None
+    if float(candidate) <= 0.0:
+        return None
+    return float(baseline) / float(candidate)
+
+
+def _runtime_value(
+    *,
+    summary: dict[str, Any] | None,
+    comparison_runtime: dict[str, Any],
+    summary_key: str,
+    comparison_key: str,
+) -> Any:
+    if summary is not None and summary_key in summary:
+        return summary[summary_key]
+    return comparison_runtime.get(comparison_key)
+
+
 def _load_npz(path: Path) -> dict[str, np.ndarray]:
     with np.load(path, allow_pickle=False) as payload:
         return {key: payload[key] for key in payload.files}
@@ -864,18 +900,35 @@ def _runtime_rows(
     *,
     runtime: dict[str, Any] | None,
     runtime_keys: tuple[str, ...],
+    baseline_runtime_summary: dict[str, Any] | None = None,
+    candidate_runtime_summary: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    runtime = runtime or {}
+    comparison_runtime = runtime or {}
     for key in runtime_keys:
+        baseline = _runtime_value(
+            summary=baseline_runtime_summary,
+            comparison_runtime=comparison_runtime,
+            summary_key=key,
+            comparison_key=f'{key}_baseline',
+        )
+        candidate = _runtime_value(
+            summary=candidate_runtime_summary,
+            comparison_runtime=comparison_runtime,
+            summary_key=key,
+            comparison_key=f'{key}_candidate',
+        )
+        speedup = _runtime_speedup_from_values(baseline, candidate)
+        if speedup is None:
+            speedup = comparison_runtime.get(f'speedup_{key.removesuffix("_sec")}')
         rows.append(
             {
                 'key': key,
-                'baseline': runtime.get(f'{key}_baseline'),
-                'candidate': runtime.get(f'{key}_candidate'),
-                'speedup': runtime.get(f'speedup_{key.removesuffix("_sec")}'),
-                'missing_baseline': runtime.get(f'{key}_baseline') is None,
-                'missing_candidate': runtime.get(f'{key}_candidate') is None,
+                'baseline': baseline,
+                'candidate': candidate,
+                'speedup': speedup,
+                'missing_baseline': baseline is None,
+                'missing_candidate': candidate is None,
             }
         )
     return rows
@@ -1254,6 +1307,7 @@ def run_benchmark(
     baseline_exists = baseline.robust_npz.is_file()
     if baseline_exists:
         baseline_payload = _load_npz(baseline.robust_npz)
+    baseline_runtime_summary = _read_runtime_json(baseline.runtime_json)
 
     gate_sets = _manifest_gate_sets(manifest)
     exact_gate_keys = tuple(
@@ -1305,6 +1359,7 @@ def run_benchmark(
     summary_candidates: list[dict[str, Any]] = []
     for candidate, candidate_spec in zip(candidates, manifest.candidates, strict=True):
         candidate_exists = candidate.robust_npz.is_file()
+        candidate_runtime_summary = _read_runtime_json(candidate.runtime_json)
         artifact_available = baseline_exists and candidate_exists
         comparison: dict[str, Any] | None = None
         comparison_json: Path | None = None
@@ -1400,6 +1455,8 @@ def run_benchmark(
             'runtime': _runtime_rows(
                 runtime=comparison.get('runtime') if comparison is not None else None,
                 runtime_keys=manifest.runtime_keys,
+                baseline_runtime_summary=baseline_runtime_summary,
+                candidate_runtime_summary=candidate_runtime_summary,
             ),
             'exact_checks': exact_checks,
             'diff_checks': diff_checks,
