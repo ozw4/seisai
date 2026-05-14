@@ -181,6 +181,7 @@ class _GroupObservationContext:
 @dataclass(frozen=True)
 class _ObservationPlan:
     obs_indices: np.ndarray
+    obs_key: tuple[int, ...] | None
     neighbor_count: int
     prefilter_valid_count: int
     segment_id: int
@@ -215,13 +216,6 @@ class _ObservationPlanCache:
     index_members: dict[tuple[int, ...], frozenset[int]] = field(
         default_factory=dict,
     )
-    signed_context_counts: dict[
-        tuple[int, tuple[int, ...]], tuple[int, int]
-    ] = field(default_factory=dict)
-    signed_side_filter: dict[
-        tuple[int, tuple[int, ...], int],
-        tuple[np.ndarray, tuple[int, ...]],
-    ] = field(default_factory=dict)
     signed_side_context: dict[
         tuple[int, tuple[int, ...]], _SideObservationContext
     ] = field(default_factory=dict)
@@ -727,26 +721,6 @@ def _signed_offset_side_labels(
     return _SignedOffsetSideLabels(side=side, finite=finite)
 
 
-def _signed_context_counts(
-    *,
-    labels: _SignedOffsetSideLabels,
-    obs_indices: np.ndarray,
-    obs_key: tuple[int, ...],
-    cache: _ObservationPlanCache,
-) -> tuple[int, int]:
-    cache_key = (id(labels.side), obs_key)
-    counts = cache.signed_context_counts.get(cache_key)
-    if counts is not None:
-        return counts
-
-    obs = np.asarray(obs_indices, dtype=np.int64)
-    finite_count = int(np.count_nonzero(labels.finite[obs]))
-    nonzero_count = int(np.count_nonzero(labels.side[obs] != 0))
-    counts = (finite_count, nonzero_count)
-    cache.signed_context_counts[cache_key] = counts
-    return counts
-
-
 def _filtered_obs_key(
     *,
     obs_indices: np.ndarray,
@@ -840,7 +814,7 @@ def _obs_with_target_labeled_side(
     obs = np.asarray(obs_indices, dtype=np.int64)
     if side_context is not None:
         if runtime_diagnostics is not None:
-            runtime_diagnostics.inc('n_side_context_cache_hits')
+            runtime_diagnostics.inc('n_side_context_lookup_calls')
         context = side_context
     else:
         context = _build_side_observation_context(
@@ -994,6 +968,7 @@ def _obs_with_target_signed_offset_side(
     cache: _ObservationPlanCache | None = None,
     labels: _SignedOffsetSideLabels | None = None,
     finite_mask: np.ndarray | None = None,
+    min_finite_count: int = 2,
     side_context: _SideObservationContext | None = None,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> tuple[np.ndarray, tuple[int, ...], int, bool]:
@@ -1013,7 +988,7 @@ def _obs_with_target_signed_offset_side(
         obs_key=key,
         labels=plan_cache.offset_signed_labels,
         cache=plan_cache,
-        min_finite_count=2,
+        min_finite_count=int(min_finite_count),
         side_context=side_context,
         runtime_diagnostics=runtime_diagnostics,
     )
@@ -1216,6 +1191,7 @@ def _build_observation_plan(
     if prefilter_valid_count < min_fit_obs:
         return _ObservationPlan(
             obs_indices=valid_obs,
+            obs_key=valid_obs_key,
             neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=-1,
@@ -1246,6 +1222,15 @@ def _build_observation_plan(
                     obs_key=valid_obs_key,
                     cache=observation_cache,
                     labels=observation_cache.offset_signed_labels,
+                    min_finite_count=(
+                        1
+                        if (
+                            geometry is not None
+                            and bool(cfg.physical_trend.use_geometry_offset)
+                            and geometry.offset_signed_geom_m is not None
+                        )
+                        else 2
+                    ),
                     side_context=group_context.side_context,
                     runtime_diagnostics=runtime_diagnostics,
                 )
@@ -1264,9 +1249,10 @@ def _build_observation_plan(
                 )
 
         segment_obs = side_obs
+        segment_obs_key = side_obs_key
         segment_id = 0
         if bool(cfg.physical_trend.split_by_offset_gap):
-            segment_obs, _segment_obs_key, segment_id = _obs_with_target_gap_segment(
+            segment_obs, segment_obs_key, segment_id = _obs_with_target_gap_segment(
                 trace_idx=trace_idx,
                 obs_indices=side_obs,
                 obs_key=side_obs_key,
@@ -1279,6 +1265,7 @@ def _build_observation_plan(
     if int(segment_obs.size) >= min_fit_obs:
         return _ObservationPlan(
             obs_indices=segment_obs,
+            obs_key=segment_obs_key,
             neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=segment_id,
@@ -1292,6 +1279,7 @@ def _build_observation_plan(
     ):
         return _ObservationPlan(
             obs_indices=side_obs,
+            obs_key=side_obs_key,
             neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=0,
@@ -1302,6 +1290,7 @@ def _build_observation_plan(
     if side_reliable and int(valid_obs.size) >= min_fit_obs:
         return _ObservationPlan(
             obs_indices=valid_obs,
+            obs_key=valid_obs_key,
             neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=0,
@@ -1311,6 +1300,7 @@ def _build_observation_plan(
 
     return _ObservationPlan(
         obs_indices=segment_obs,
+        obs_key=segment_obs_key,
         neighbor_count=neighbor_count,
         prefilter_valid_count=prefilter_valid_count,
         segment_id=segment_id,
@@ -1597,8 +1587,30 @@ def _model_diagnostics(
     )
 
 
+def _fit_key_for_obs(
+    obs_indices: np.ndarray,
+    *,
+    precomputed_key: tuple[int, ...] | None = None,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+    after_sampling: bool = False,
+    count_missing_precomputed: bool = True,
+) -> tuple[int, ...]:
+    if precomputed_key is not None:
+        if runtime_diagnostics is not None:
+            runtime_diagnostics.inc('n_precomputed_fit_key_used')
+        return precomputed_key
+
+    if runtime_diagnostics is not None:
+        if bool(count_missing_precomputed):
+            runtime_diagnostics.inc('n_fit_key_missing_precomputed')
+        runtime_diagnostics.inc('n_fit_key_built_from_indices')
+        if bool(after_sampling):
+            runtime_diagnostics.inc('n_fit_key_built_after_sampling')
+    return _indices_key(obs_indices)
+
+
 def _fit_cache_key(plan: _ObservationPlan) -> tuple[int, ...]:
-    return tuple(np.asarray(plan.obs_indices, dtype=np.int64).tolist())
+    return _fit_key_for_obs(plan.obs_indices, precomputed_key=plan.obs_key)
 
 
 def _offset_spread_failure_reason(
@@ -2141,8 +2153,18 @@ def _prepare_trace_plan_assignment(
             cfg=cfg,
             min_required_obs=int(min_fit_obs),
         )
+    sampling_changed = obs_indices is not plan.obs_indices
+    precomputed_fit_key = None if sampling_changed else plan.obs_key
+    fit_key = _fit_key_for_obs(
+        obs_indices,
+        precomputed_key=precomputed_fit_key,
+        runtime_diagnostics=runtime_diagnostics,
+        after_sampling=sampling_changed,
+        count_missing_precomputed=not sampling_changed,
+    )
     fit_plan = _ObservationPlan(
         obs_indices=obs_indices,
+        obs_key=fit_key,
         neighbor_count=plan.neighbor_count,
         prefilter_valid_count=plan.prefilter_valid_count,
         segment_id=plan.segment_id,
@@ -2152,7 +2174,7 @@ def _prepare_trace_plan_assignment(
     return _TracePlanAssignment(
         trace_idx=int(trace_idx),
         plan=fit_plan,
-        fit_key=_fit_cache_key(fit_plan),
+        fit_key=fit_key,
         obs_count_before_sampling=obs_count_before_sampling,
     )
 
