@@ -93,6 +93,18 @@ checks:
     - ransac_fit_total_sec
     - neighbor_plan_sec
     - side_segment_build_sec
+    - side_filter_precompute_sec
+    - side_filter_lookup_sec
+    - gap_segment_precompute_sec
+    - gap_segment_lookup_sec
+    - gap_segment_fallback_sec
+    - side_segment_key_build_sec
+    - n_side_contexts_built
+    - n_gap_contexts_built
+    - n_gap_fast_path_calls
+    - n_gap_fallback_calls
+    - side_obs_count_p50
+    - gap_segment_obs_count_p50
     - prediction_sec
     - assignment_sec
 
