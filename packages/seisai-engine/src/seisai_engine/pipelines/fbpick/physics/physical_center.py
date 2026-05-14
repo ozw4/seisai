@@ -175,6 +175,7 @@ class _GroupObservationContext:
     valid_obs_key: tuple[int, ...]
     neighbor_count: int
     prefilter_valid_count: int
+    side_context: _SideObservationContext | None = None
 
 
 @dataclass(frozen=True)
@@ -193,6 +194,21 @@ class _SignedOffsetSideLabels:
     finite: np.ndarray
 
 
+@dataclass(frozen=True)
+class _SideObservationContext:
+    obs_indices_by_side: tuple[np.ndarray, np.ndarray, np.ndarray]
+    obs_key_by_side: tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]
+    finite_count: int
+    nonzero_count: int
+
+
+@dataclass(frozen=True)
+class _GapSegmentContext:
+    segment_id_by_trace_idx: dict[int, int]
+    obs_indices_by_segment_id: dict[int, np.ndarray]
+    obs_key_by_segment_id: dict[int, tuple[int, ...]]
+
+
 @dataclass
 class _ObservationPlanCache:
     offset_signed_labels: _SignedOffsetSideLabels | None = None
@@ -206,6 +222,9 @@ class _ObservationPlanCache:
         tuple[int, tuple[int, ...], int],
         tuple[np.ndarray, tuple[int, ...]],
     ] = field(default_factory=dict)
+    signed_side_context: dict[
+        tuple[int, tuple[int, ...]], _SideObservationContext
+    ] = field(default_factory=dict)
     geometry_side: dict[
         tuple[tuple[int, ...], int],
         tuple[np.ndarray, tuple[int, ...], int, bool],
@@ -213,6 +232,10 @@ class _ObservationPlanCache:
     gap_segment: dict[
         tuple[tuple[int, ...], int, float, float | None],
         tuple[np.ndarray, tuple[int, ...], int],
+    ] = field(default_factory=dict)
+    gap_context: dict[
+        tuple[tuple[int, ...], float, float | None],
+        _GapSegmentContext,
     ] = field(default_factory=dict)
 
 
@@ -662,6 +685,14 @@ def _index_key_contains(
     return int(trace_idx) in members
 
 
+def _side_slot(side: int) -> int:
+    value = int(side)
+    if value < -1 or value > 1:
+        msg = 'side must be -1, 0, or 1'
+        raise ValueError(msg)
+    return value + 1
+
+
 def _signed_offset_side_labels(
     signed_offset_m: np.ndarray,
     *,
@@ -721,6 +752,7 @@ def _filtered_obs_key(
     obs_indices: np.ndarray,
     obs_key: tuple[int, ...],
     keep_mask: np.ndarray,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> tuple[np.ndarray, tuple[int, ...]]:
     obs = np.asarray(obs_indices, dtype=np.int64)
     mask = np.asarray(keep_mask, dtype=np.bool_)
@@ -730,7 +762,67 @@ def _filtered_obs_key(
     if bool(np.all(mask)):
         return obs, obs_key
     filtered = obs[mask]
-    return filtered, _indices_key(filtered)
+    with (
+        runtime_diagnostics.time_block('side_segment_key_build_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        filtered_key = _indices_key(filtered)
+    return filtered, filtered_key
+
+
+def _build_side_observation_context(
+    *,
+    labels: _SignedOffsetSideLabels,
+    obs_indices: np.ndarray,
+    obs_key: tuple[int, ...],
+    cache: _ObservationPlanCache,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+) -> _SideObservationContext:
+    cache_key = (id(labels.side), obs_key)
+    cached = cache.signed_side_context.get(cache_key)
+    if cached is not None:
+        if runtime_diagnostics is not None:
+            runtime_diagnostics.inc('n_side_context_cache_hits')
+        return cached
+
+    if runtime_diagnostics is not None:
+        runtime_diagnostics.inc('n_side_context_cache_misses')
+    with (
+        runtime_diagnostics.time_block('side_filter_precompute_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        obs = np.asarray(obs_indices, dtype=np.int64)
+        finite_count = int(np.count_nonzero(labels.finite[obs]))
+        nonzero_count = int(np.count_nonzero(labels.side[obs] != 0))
+        obs_by_side: list[np.ndarray] = []
+        key_by_side: list[tuple[int, ...]] = []
+        for side in (-1, 0, 1):
+            side_obs, side_key = _filtered_obs_key(
+                obs_indices=obs,
+                obs_key=obs_key,
+                keep_mask=labels.side[obs] == int(side),
+                runtime_diagnostics=runtime_diagnostics,
+            )
+            obs_by_side.append(side_obs)
+            key_by_side.append(side_key)
+            if runtime_diagnostics is not None:
+                runtime_diagnostics.record_side_obs_count(int(side_obs.size))
+        context = _SideObservationContext(
+            obs_indices_by_side=tuple(obs_by_side),  # type: ignore[arg-type]
+            obs_key_by_side=tuple(key_by_side),  # type: ignore[arg-type]
+            finite_count=finite_count,
+            nonzero_count=nonzero_count,
+        )
+    cache.signed_side_context[cache_key] = context
+    if runtime_diagnostics is not None:
+        runtime_diagnostics.inc('n_side_contexts_built')
+        runtime_diagnostics.inc(
+            'n_side_gap_precomputed_fit_keys',
+            len(set(context.obs_key_by_side)),
+        )
+    return context
 
 
 def _obs_with_target_labeled_side(
@@ -741,15 +833,25 @@ def _obs_with_target_labeled_side(
     labels: _SignedOffsetSideLabels,
     cache: _ObservationPlanCache,
     min_finite_count: int,
+    side_context: _SideObservationContext | None = None,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> tuple[np.ndarray, tuple[int, ...], int, bool]:
     trace = int(trace_idx)
     obs = np.asarray(obs_indices, dtype=np.int64)
-    finite_count, nonzero_count = _signed_context_counts(
-        labels=labels,
-        obs_indices=obs,
-        obs_key=obs_key,
-        cache=cache,
-    )
+    if side_context is not None:
+        if runtime_diagnostics is not None:
+            runtime_diagnostics.inc('n_side_context_cache_hits')
+        context = side_context
+    else:
+        context = _build_side_observation_context(
+            labels=labels,
+            obs_indices=obs,
+            obs_key=obs_key,
+            cache=cache,
+            runtime_diagnostics=runtime_diagnostics,
+        )
+    finite_count = int(context.finite_count)
+    nonzero_count = int(context.nonzero_count)
     if not _index_key_contains(obs_key=obs_key, trace_idx=trace, cache=cache):
         if bool(labels.finite[trace]):
             finite_count += 1
@@ -760,16 +862,14 @@ def _obs_with_target_labeled_side(
         return obs, obs_key, 0, False
 
     target_side = int(labels.side[trace])
-    filter_key = (id(labels.side), obs_key, target_side)
-    cached = cache.signed_side_filter.get(filter_key)
-    if cached is None:
-        cached = _filtered_obs_key(
-            obs_indices=obs,
-            obs_key=obs_key,
-            keep_mask=labels.side[obs] == target_side,
-        )
-        cache.signed_side_filter[filter_key] = cached
-    side_obs, side_obs_key = cached
+    with (
+        runtime_diagnostics.time_block('side_filter_lookup_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        side_slot = _side_slot(target_side)
+        side_obs = context.obs_indices_by_side[side_slot]
+        side_obs_key = context.obs_key_by_side[side_slot]
     return side_obs, side_obs_key, target_side, True
 
 
@@ -798,8 +898,14 @@ def _build_group_observation_contexts(
     valid_for_fit: np.ndarray,
     cfg: PhysicsLiteConfig,
     use_neighbor_context: bool,
+    offset_signed_labels: _SignedOffsetSideLabels | None = None,
+    plan_cache: _ObservationPlanCache | None = None,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> dict[int, _GroupObservationContext]:
     valid_mask = np.asarray(valid_for_fit, dtype=np.bool_)
+    observation_cache = (
+        plan_cache if plan_cache is not None else _ObservationPlanCache()
+    )
     contexts: dict[int, _GroupObservationContext] = {}
     for group in groups:
         group_id = int(group.group_id)
@@ -815,6 +921,17 @@ def _build_group_observation_contexts(
         )
         valid_obs_indices = neighbor_indices[valid_mask[neighbor_indices]]
         valid_obs_key = _indices_key(valid_obs_indices)
+        side_context = None
+        if offset_signed_labels is not None and bool(
+            cfg.physical_trend.segment_by_offset_sign
+        ):
+            side_context = _build_side_observation_context(
+                labels=offset_signed_labels,
+                obs_indices=valid_obs_indices,
+                obs_key=valid_obs_key,
+                cache=observation_cache,
+                runtime_diagnostics=runtime_diagnostics,
+            )
         contexts[group_id] = _GroupObservationContext(
             group_id=group_id,
             neighbor_group_ids=neighbor_group_ids,
@@ -823,6 +940,7 @@ def _build_group_observation_contexts(
             valid_obs_key=valid_obs_key,
             neighbor_count=int(neighbor_group_ids.size),
             prefilter_valid_count=int(valid_obs_indices.size),
+            side_context=side_context,
         )
     return contexts
 
@@ -874,12 +992,19 @@ def _obs_with_target_signed_offset_side(
     zero_tol_m: float = 1.0e-6,
     obs_key: tuple[int, ...] | None = None,
     cache: _ObservationPlanCache | None = None,
+    labels: _SignedOffsetSideLabels | None = None,
+    finite_mask: np.ndarray | None = None,
+    side_context: _SideObservationContext | None = None,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> tuple[np.ndarray, tuple[int, ...], int, bool]:
     plan_cache = cache if cache is not None else _ObservationPlanCache()
-    if plan_cache.offset_signed_labels is None:
+    if labels is not None:
+        plan_cache.offset_signed_labels = labels
+    elif plan_cache.offset_signed_labels is None:
         plan_cache.offset_signed_labels = _signed_offset_side_labels(
             signed_offset_m,
             zero_tol_m=zero_tol_m,
+            finite_mask=finite_mask,
         )
     key = _obs_key_or_build(obs_indices, obs_key)
     return _obs_with_target_labeled_side(
@@ -889,7 +1014,90 @@ def _obs_with_target_signed_offset_side(
         labels=plan_cache.offset_signed_labels,
         cache=plan_cache,
         min_finite_count=2,
+        side_context=side_context,
+        runtime_diagnostics=runtime_diagnostics,
     )
+
+
+def _gap_context_key(
+    *,
+    obs_key: tuple[int, ...],
+    cfg: PhysicsLiteConfig,
+) -> tuple[tuple[int, ...], float, float | None]:
+    min_gap = cfg.physical_trend.min_gap_m
+    return (
+        obs_key,
+        float(cfg.physical_trend.gap_ratio),
+        None if min_gap is None else float(min_gap),
+    )
+
+
+def _build_gap_segment_context(
+    *,
+    obs_indices: np.ndarray,
+    obs_key: tuple[int, ...],
+    offset_abs_m: np.ndarray,
+    cfg: PhysicsLiteConfig,
+    cache: _ObservationPlanCache,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+) -> _GapSegmentContext:
+    cache_key = _gap_context_key(obs_key=obs_key, cfg=cfg)
+    cached = cache.gap_context.get(cache_key)
+    if cached is not None:
+        if runtime_diagnostics is not None:
+            runtime_diagnostics.inc('n_gap_context_cache_hits')
+        return cached
+
+    if runtime_diagnostics is not None:
+        runtime_diagnostics.inc('n_gap_context_cache_misses')
+    with (
+        runtime_diagnostics.time_block('gap_segment_precompute_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        obs = np.asarray(obs_indices, dtype=np.int64)
+        segment_id = split_offset_gap_segments(
+            np.asarray(offset_abs_m, dtype=np.float32)[obs],
+            split_by_offset_gap=bool(cfg.physical_trend.split_by_offset_gap),
+            gap_ratio=float(cfg.physical_trend.gap_ratio),
+            min_gap_m=cfg.physical_trend.min_gap_m,
+        )
+        segment_id_by_trace_idx = {
+            int(trace_idx): int(seg_id)
+            for trace_idx, seg_id in zip(
+                obs.tolist(),
+                segment_id.tolist(),
+                strict=True,
+            )
+        }
+        obs_indices_by_segment_id: dict[int, np.ndarray] = {}
+        obs_key_by_segment_id: dict[int, tuple[int, ...]] = {}
+        for seg_id in np.unique(segment_id).astype(np.int64).tolist():
+            segment_obs, segment_key = _filtered_obs_key(
+                obs_indices=obs,
+                obs_key=obs_key,
+                keep_mask=segment_id == int(seg_id),
+                runtime_diagnostics=runtime_diagnostics,
+            )
+            obs_indices_by_segment_id[int(seg_id)] = segment_obs
+            obs_key_by_segment_id[int(seg_id)] = segment_key
+            if runtime_diagnostics is not None:
+                runtime_diagnostics.record_gap_segment_obs_count(
+                    int(segment_obs.size)
+                )
+        context = _GapSegmentContext(
+            segment_id_by_trace_idx=segment_id_by_trace_idx,
+            obs_indices_by_segment_id=obs_indices_by_segment_id,
+            obs_key_by_segment_id=obs_key_by_segment_id,
+        )
+    cache.gap_context[cache_key] = context
+    if runtime_diagnostics is not None:
+        runtime_diagnostics.inc('n_gap_contexts_built')
+        runtime_diagnostics.inc(
+            'n_side_gap_precomputed_fit_keys',
+            len(context.obs_key_by_segment_id),
+        )
+    return context
 
 
 def _obs_with_target_gap_segment(
@@ -900,41 +1108,77 @@ def _obs_with_target_gap_segment(
     cfg: PhysicsLiteConfig,
     obs_key: tuple[int, ...] | None = None,
     cache: _ObservationPlanCache | None = None,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
 ) -> tuple[np.ndarray, tuple[int, ...], int]:
     plan_cache = cache if cache is not None else _ObservationPlanCache()
     key = _obs_key_or_build(obs_indices, obs_key)
     min_gap = cfg.physical_trend.min_gap_m
-    gap_key = (
+    fallback_gap_key = (
         key,
         int(trace_idx),
         float(cfg.physical_trend.gap_ratio),
         None if min_gap is None else float(min_gap),
     )
-    cached = plan_cache.gap_segment.get(gap_key)
+    obs = np.asarray(obs_indices, dtype=np.int64)
+    if _index_key_contains(obs_key=key, trace_idx=int(trace_idx), cache=plan_cache):
+        if runtime_diagnostics is not None:
+            runtime_diagnostics.inc('n_gap_trace_in_obs')
+            runtime_diagnostics.inc('n_gap_fast_path_calls')
+        context = _build_gap_segment_context(
+            obs_indices=obs,
+            obs_key=key,
+            offset_abs_m=offset_abs_m,
+            cfg=cfg,
+            cache=plan_cache,
+            runtime_diagnostics=runtime_diagnostics,
+        )
+        with (
+            runtime_diagnostics.time_block('gap_segment_lookup_sec')
+            if runtime_diagnostics is not None
+            else nullcontext()
+        ):
+            target_segment_id = int(
+                context.segment_id_by_trace_idx[int(trace_idx)]
+            )
+            return (
+                context.obs_indices_by_segment_id[target_segment_id],
+                context.obs_key_by_segment_id[target_segment_id],
+                target_segment_id,
+            )
+
+    if runtime_diagnostics is not None:
+        runtime_diagnostics.inc('n_gap_trace_not_in_obs')
+        runtime_diagnostics.inc('n_gap_fallback_calls')
+    cached = plan_cache.gap_segment.get(fallback_gap_key)
     if cached is not None:
         return cached
 
-    obs = np.asarray(obs_indices, dtype=np.int64)
-    context_indices = _append_index(obs_indices, trace_idx)
-    segment_id = split_offset_gap_segments(
-        np.asarray(offset_abs_m, dtype=np.float32)[context_indices],
-        split_by_offset_gap=bool(cfg.physical_trend.split_by_offset_gap),
-        gap_ratio=float(cfg.physical_trend.gap_ratio),
-        min_gap_m=cfg.physical_trend.min_gap_m,
-    )
-    pos = _trace_position_map(context_indices)
-    target_segment_id = int(segment_id[pos[int(trace_idx)]])
-    obs_segment_id = np.asarray(
-        [int(segment_id[pos[int(obs_idx)]]) for obs_idx in obs.tolist()],
-        dtype=np.int64,
-    )
-    segment_obs, segment_obs_key = _filtered_obs_key(
-        obs_indices=obs,
-        obs_key=key,
-        keep_mask=obs_segment_id == target_segment_id,
-    )
-    result = (segment_obs, segment_obs_key, target_segment_id)
-    plan_cache.gap_segment[gap_key] = result
+    with (
+        runtime_diagnostics.time_block('gap_segment_fallback_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        context_indices = _append_index(obs_indices, trace_idx)
+        segment_id = split_offset_gap_segments(
+            np.asarray(offset_abs_m, dtype=np.float32)[context_indices],
+            split_by_offset_gap=bool(cfg.physical_trend.split_by_offset_gap),
+            gap_ratio=float(cfg.physical_trend.gap_ratio),
+            min_gap_m=cfg.physical_trend.min_gap_m,
+        )
+        pos = _trace_position_map(context_indices)
+        target_segment_id = int(segment_id[pos[int(trace_idx)]])
+        obs_segment_id = np.asarray(
+            [int(segment_id[pos[int(obs_idx)]]) for obs_idx in obs.tolist()],
+            dtype=np.int64,
+        )
+        segment_obs, segment_obs_key = _filtered_obs_key(
+            obs_indices=obs,
+            obs_key=key,
+            keep_mask=obs_segment_id == target_segment_id,
+            runtime_diagnostics=runtime_diagnostics,
+        )
+        result = (segment_obs, segment_obs_key, target_segment_id)
+    plan_cache.gap_segment[fallback_gap_key] = result
     return result
 
 
@@ -1001,6 +1245,9 @@ def _build_observation_plan(
                     signed_offset_m=offset_signed_m,
                     obs_key=valid_obs_key,
                     cache=observation_cache,
+                    labels=observation_cache.offset_signed_labels,
+                    side_context=group_context.side_context,
+                    runtime_diagnostics=runtime_diagnostics,
                 )
             elif geometry is not None:
                 (
@@ -1026,6 +1273,7 @@ def _build_observation_plan(
                 offset_abs_m=offset_abs_m,
                 cfg=cfg,
                 cache=observation_cache,
+                runtime_diagnostics=runtime_diagnostics,
             )
 
     if int(segment_obs.size) >= min_fit_obs:
@@ -2895,6 +3143,8 @@ def build_geometry_two_piece_physical_center(
             merged=merged,
         )
 
+    segment_by_offset_sign = bool(cfg.physical_trend.segment_by_offset_sign)
+    offset_signed_labels = None
     if use_geometry_offset:
         offset_abs_m = _as_vector(
             'geometry.offset_abs_geom_m',
@@ -2902,16 +3152,32 @@ def build_geometry_two_piece_physical_center(
             n_traces=n,
             dtype=np.float32,
         )
-        offset_signed_m = None
+        if segment_by_offset_sign and geometry.offset_signed_geom_m is not None:
+            offset_signed_m = _as_vector(
+                'geometry.offset_signed_geom_m',
+                geometry.offset_signed_geom_m,
+                n_traces=n,
+                dtype=np.float32,
+            )
+            offset_signed_labels = _signed_offset_side_labels(
+                offset_signed_m,
+                finite_mask=geometry.geometry_valid_mask,
+            )
+        else:
+            offset_signed_m = None
         offset_source = PHYSICAL_OFFSET_SOURCE_GEOMETRY
     else:
         offset_abs_m = _table_offset_abs_m(table, n_traces=n)
-        offset_signed_m = _as_vector(
-            'table.offset_m',
-            table.offset_m,
-            n_traces=n,
-            dtype=np.float32,
-        )
+        if segment_by_offset_sign:
+            offset_signed_m = _as_vector(
+                'table.offset_m',
+                table.offset_m,
+                n_traces=n,
+                dtype=np.float32,
+            )
+            offset_signed_labels = _signed_offset_side_labels(offset_signed_m)
+        else:
+            offset_signed_m = None
         offset_source = PHYSICAL_OFFSET_SOURCE_HEADER
 
     with (
@@ -2995,6 +3261,9 @@ def build_geometry_two_piece_physical_center(
             cfg=cfg,
         )
 
+    observation_plan_cache = _ObservationPlanCache(
+        offset_signed_labels=offset_signed_labels,
+    )
     with (
         runtime_diagnostics.time_block('neighbor_plan_sec')
         if runtime_diagnostics is not None
@@ -3006,6 +3275,9 @@ def build_geometry_two_piece_physical_center(
             valid_for_fit=valid_for_fit,
             cfg=cfg,
             use_neighbor_context=source_groups_from_geometry,
+            offset_signed_labels=offset_signed_labels,
+            plan_cache=observation_plan_cache,
+            runtime_diagnostics=runtime_diagnostics,
         )
 
     arrays = _allocate_result_arrays(table)
@@ -3022,7 +3294,6 @@ def build_geometry_two_piece_physical_center(
         )
     strategy = _fit_strategy(cfg)
     fit_cache: dict[tuple[int, ...], _FitCacheEntry] = {}
-    observation_plan_cache = _ObservationPlanCache()
     min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
 
     if cfg.physical_runtime.fit_policy == 'anchor_source_xy':

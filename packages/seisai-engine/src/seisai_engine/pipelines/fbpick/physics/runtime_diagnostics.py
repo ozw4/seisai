@@ -44,6 +44,12 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'valid_mask_build_sec',
     'velocity_prefilter_sec',
     'side_segment_build_sec',
+    'side_filter_precompute_sec',
+    'side_filter_lookup_sec',
+    'gap_segment_precompute_sec',
+    'gap_segment_lookup_sec',
+    'gap_segment_fallback_sec',
+    'side_segment_key_build_sec',
     'anchor_selection_sec',
     'anchor_lookup_sec',
     'compatible_anchor_search_sec',
@@ -67,6 +73,17 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'n_cache_misses',
     'cache_hit_rate',
     'n_source_groups',
+    'n_side_contexts_built',
+    'n_side_context_cache_hits',
+    'n_side_context_cache_misses',
+    'n_gap_contexts_built',
+    'n_gap_context_cache_hits',
+    'n_gap_context_cache_misses',
+    'n_gap_fast_path_calls',
+    'n_gap_fallback_calls',
+    'n_gap_trace_in_obs',
+    'n_gap_trace_not_in_obs',
+    'n_side_gap_precomputed_fit_keys',
     'n_non_anchor_groups',
     'n_reused_predictions',
     'n_t0_shifted_groups',
@@ -114,6 +131,12 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'obs_count_for_fit_p50',
     'obs_count_for_fit_p90',
     'obs_count_for_fit_p99',
+    'side_obs_count_p50',
+    'side_obs_count_p90',
+    'side_obs_count_p99',
+    'gap_segment_obs_count_p50',
+    'gap_segment_obs_count_p90',
+    'gap_segment_obs_count_p99',
     'compatible_anchor_search_candidates_p50',
     'compatible_anchor_search_candidates_p90',
     'compatible_anchor_search_candidates_max',
@@ -164,6 +187,22 @@ PHYSICS_RUNTIME_PREFIXED_NPZ_KEYS = frozenset(
     }
 )
 
+_SIDE_GAP_COUNTER_KEYS = frozenset(
+    {
+        'n_side_contexts_built',
+        'n_side_context_cache_hits',
+        'n_side_context_cache_misses',
+        'n_gap_contexts_built',
+        'n_gap_context_cache_hits',
+        'n_gap_context_cache_misses',
+        'n_gap_fast_path_calls',
+        'n_gap_fallback_calls',
+        'n_gap_trace_in_obs',
+        'n_gap_trace_not_in_obs',
+        'n_side_gap_precomputed_fit_keys',
+    }
+)
+
 
 def _percentile(values: list[float] | list[int], q: float) -> float:
     if not values:
@@ -183,6 +222,17 @@ class PhysicalRuntimeDiagnostics:
     n_cache_hits: int = 0
     n_cache_misses: int = 0
     n_source_groups: int = 0
+    n_side_contexts_built: int = 0
+    n_side_context_cache_hits: int = 0
+    n_side_context_cache_misses: int = 0
+    n_gap_contexts_built: int = 0
+    n_gap_context_cache_hits: int = 0
+    n_gap_context_cache_misses: int = 0
+    n_gap_fast_path_calls: int = 0
+    n_gap_fallback_calls: int = 0
+    n_gap_trace_in_obs: int = 0
+    n_gap_trace_not_in_obs: int = 0
+    n_side_gap_precomputed_fit_keys: int = 0
     n_non_anchor_groups: int = 0
     n_reused_predictions: int = 0
     n_t0_shifted_groups: int = 0
@@ -215,6 +265,8 @@ class PhysicalRuntimeDiagnostics:
     _fit_obs_counts_before: list[int] = field(default_factory=list, repr=False)
     _fit_obs_counts_after: list[int] = field(default_factory=list, repr=False)
     _fit_obs_downsample_rates: list[float] = field(default_factory=list, repr=False)
+    _side_obs_counts: list[int] = field(default_factory=list, repr=False)
+    _gap_segment_obs_counts: list[int] = field(default_factory=list, repr=False)
     _t0_shift_abs_ms: list[float] = field(default_factory=list, repr=False)
     _reuse_resid_p50_ms: list[float] = field(default_factory=list, repr=False)
     _reuse_resid_p90_ms: list[float] = field(default_factory=list, repr=False)
@@ -253,6 +305,14 @@ class PhysicalRuntimeDiagnostics:
             self.n_prediction_batches += value
         elif key == 'n_reuse_contexts':
             self.n_reuse_contexts += value
+        elif key in _SIDE_GAP_COUNTER_KEYS:
+            setattr(self, key, int(getattr(self, key)) + value)
+
+    def record_side_obs_count(self, value: int) -> None:
+        self._side_obs_counts.append(int(value))
+
+    def record_gap_segment_obs_count(self, value: int) -> None:
+        self._gap_segment_obs_counts.append(int(value))
 
     @contextmanager
     def time_physics(self) -> Iterator[None]:
@@ -507,6 +567,24 @@ class PhysicalRuntimeDiagnostics:
             'side_segment_build_sec': float(
                 timing.get('side_segment_build_sec', 0.0)
             ),
+            'side_filter_precompute_sec': float(
+                timing.get('side_filter_precompute_sec', 0.0)
+            ),
+            'side_filter_lookup_sec': float(
+                timing.get('side_filter_lookup_sec', 0.0)
+            ),
+            'gap_segment_precompute_sec': float(
+                timing.get('gap_segment_precompute_sec', 0.0)
+            ),
+            'gap_segment_lookup_sec': float(
+                timing.get('gap_segment_lookup_sec', 0.0)
+            ),
+            'gap_segment_fallback_sec': float(
+                timing.get('gap_segment_fallback_sec', 0.0)
+            ),
+            'side_segment_key_build_sec': float(
+                timing.get('side_segment_key_build_sec', 0.0)
+            ),
             'anchor_selection_sec': float(timing.get('anchor_selection_sec', 0.0)),
             'anchor_lookup_sec': float(timing.get('anchor_lookup_sec', 0.0)),
             'compatible_anchor_search_sec': float(
@@ -544,6 +622,19 @@ class PhysicalRuntimeDiagnostics:
             'n_cache_misses': int(self.n_cache_misses),
             'cache_hit_rate': float(self.cache_hit_rate),
             'n_source_groups': int(self.n_source_groups),
+            'n_side_contexts_built': int(self.n_side_contexts_built),
+            'n_side_context_cache_hits': int(self.n_side_context_cache_hits),
+            'n_side_context_cache_misses': int(self.n_side_context_cache_misses),
+            'n_gap_contexts_built': int(self.n_gap_contexts_built),
+            'n_gap_context_cache_hits': int(self.n_gap_context_cache_hits),
+            'n_gap_context_cache_misses': int(self.n_gap_context_cache_misses),
+            'n_gap_fast_path_calls': int(self.n_gap_fast_path_calls),
+            'n_gap_fallback_calls': int(self.n_gap_fallback_calls),
+            'n_gap_trace_in_obs': int(self.n_gap_trace_in_obs),
+            'n_gap_trace_not_in_obs': int(self.n_gap_trace_not_in_obs),
+            'n_side_gap_precomputed_fit_keys': int(
+                self.n_side_gap_precomputed_fit_keys
+            ),
             'n_non_anchor_groups': int(self.n_non_anchor_groups),
             'n_reused_predictions': int(self.n_reused_predictions),
             'n_t0_shifted_groups': int(self.n_t0_shifted_groups),
@@ -613,6 +704,21 @@ class PhysicalRuntimeDiagnostics:
             'obs_count_for_fit_p50': _percentile(self._fit_obs_counts, 50.0),
             'obs_count_for_fit_p90': _percentile(self._fit_obs_counts, 90.0),
             'obs_count_for_fit_p99': _percentile(self._fit_obs_counts, 99.0),
+            'side_obs_count_p50': _percentile(self._side_obs_counts, 50.0),
+            'side_obs_count_p90': _percentile(self._side_obs_counts, 90.0),
+            'side_obs_count_p99': _percentile(self._side_obs_counts, 99.0),
+            'gap_segment_obs_count_p50': _percentile(
+                self._gap_segment_obs_counts,
+                50.0,
+            ),
+            'gap_segment_obs_count_p90': _percentile(
+                self._gap_segment_obs_counts,
+                90.0,
+            ),
+            'gap_segment_obs_count_p99': _percentile(
+                self._gap_segment_obs_counts,
+                99.0,
+            ),
             'compatible_anchor_search_candidates_p50': _percentile(
                 self._compatible_anchor_search_candidates,
                 50.0,
@@ -673,6 +779,17 @@ class PhysicalRuntimeDiagnostics:
             'n_cache_hits',
             'n_cache_misses',
             'n_source_groups',
+            'n_side_contexts_built',
+            'n_side_context_cache_hits',
+            'n_side_context_cache_misses',
+            'n_gap_contexts_built',
+            'n_gap_context_cache_hits',
+            'n_gap_context_cache_misses',
+            'n_gap_fast_path_calls',
+            'n_gap_fallback_calls',
+            'n_gap_trace_in_obs',
+            'n_gap_trace_not_in_obs',
+            'n_side_gap_precomputed_fit_keys',
             'n_non_anchor_groups',
             'n_reused_predictions',
             'n_t0_shifted_groups',
@@ -730,6 +847,17 @@ def runtime_summary_from_npz_fields(
         'n_cache_hits',
         'n_cache_misses',
         'n_source_groups',
+        'n_side_contexts_built',
+        'n_side_context_cache_hits',
+        'n_side_context_cache_misses',
+        'n_gap_contexts_built',
+        'n_gap_context_cache_hits',
+        'n_gap_context_cache_misses',
+        'n_gap_fast_path_calls',
+        'n_gap_fallback_calls',
+        'n_gap_trace_in_obs',
+        'n_gap_trace_not_in_obs',
+        'n_side_gap_precomputed_fit_keys',
         'n_non_anchor_groups',
         'n_reused_predictions',
         'n_t0_shifted_groups',

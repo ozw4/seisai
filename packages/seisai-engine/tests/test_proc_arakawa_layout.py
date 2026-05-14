@@ -73,6 +73,10 @@ def test_runtime_speedup_configs_live_in_expected_directory() -> None:
         "A4_anchor_stride5_t0_shift.yaml",
         "A5_anchor_stride5_t0_shift_adaptive_refit.yaml",
         "A6_A5_obs_downsample256.yaml",
+        "B201_side_on_gap_on_control.yaml",
+        "B202_side_on_gap_off.yaml",
+        "B203_side_off_gap_on.yaml",
+        "B204_side_off_gap_off.yaml",
     }
     assert not (CONFIG_DIR / "runtime_speedup").exists()
 

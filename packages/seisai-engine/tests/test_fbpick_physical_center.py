@@ -326,6 +326,59 @@ def test_group_observation_contexts_use_self_group_when_neighbor_disabled() -> N
         assert context.prefilter_valid_count == int(expected_valid_obs.size)
 
 
+def test_group_observation_contexts_precompute_signed_side_sets() -> None:
+    groups = _source_groups_for_context_tests()
+    groups_by_id = {int(group.group_id): group for group in groups}
+    valid_for_fit = np.asarray(
+        [True, False, True, True, False, True, True, False],
+        dtype=np.bool_,
+    )
+    cfg = _physical_cfg(
+        {
+            'physical_trend': {
+                'segment_by_offset_sign': True,
+                'split_by_offset_gap': False,
+            },
+            'neighbor_context': {'enabled': False},
+            'two_piece_ransac': {'min_pts': 2},
+        }
+    )
+    labels = physical_center_mod._signed_offset_side_labels(
+        np.asarray([-3.0, 2.0, -1.0, 0.0, 4.0, 5.0, -6.0, 7.0], dtype=np.float32)
+    )
+    cache = physical_center_mod._ObservationPlanCache(offset_signed_labels=labels)
+    diagnostics = PhysicalRuntimeDiagnostics(detailed_timing=True)
+
+    contexts = physical_center_mod._build_group_observation_contexts(
+        groups=groups,
+        groups_by_id=groups_by_id,
+        valid_for_fit=valid_for_fit,
+        cfg=cfg,
+        use_neighbor_context=True,
+        offset_signed_labels=labels,
+        plan_cache=cache,
+        runtime_diagnostics=diagnostics,
+    )
+
+    for context in contexts.values():
+        assert context.side_context is not None
+        obs = context.valid_obs_indices
+        for side in (-1, 0, 1):
+            expected = obs[labels.side[obs] == side]
+            np.testing.assert_array_equal(
+                context.side_context.obs_indices_by_side[side + 1],
+                expected,
+            )
+            assert context.side_context.obs_key_by_side[side + 1] == tuple(
+                expected.tolist()
+            )
+
+    summary = diagnostics.to_summary()
+    assert summary['n_side_contexts_built'] == len(contexts)
+    assert summary['side_filter_precompute_sec'] >= 0.0
+    assert summary['side_obs_count_p50'] >= 0.0
+
+
 def _fake_piecewise_model() -> PiecewiseLinearTrend:
     return PiecewiseLinearTrend(
         edges=torch.tensor([0.0, 1000.0, 2500.0], dtype=torch.float32),
@@ -1583,6 +1636,7 @@ def test_physical_center_cached_observation_plan_matches_legacy_outputs(
         }
     )
 
+    diagnostics = PhysicalRuntimeDiagnostics(detailed_timing=True)
     cached = build_geometry_two_piece_physical_center(
         coarse_npz=coarse_npz,
         table=table,
@@ -1590,6 +1644,7 @@ def test_physical_center_cached_observation_plan_matches_legacy_outputs(
         trend=trend,
         merged=merged,
         cfg=cfg,
+        runtime_diagnostics=diagnostics,
     )
 
     monkeypatch.setattr(
@@ -1615,6 +1670,83 @@ def test_physical_center_cached_observation_plan_matches_legacy_outputs(
         'physical_prefilter_valid_count',
     ):
         np.testing.assert_array_equal(getattr(cached, field), getattr(legacy, field))
+
+    summary = diagnostics.to_summary()
+    assert summary['n_side_contexts_built'] > 0
+    assert summary['n_gap_fast_path_calls'] > 0
+    assert summary['n_gap_fallback_calls'] == 0
+
+
+def test_gap_segment_context_fast_path_and_fallback_match_legacy() -> None:
+    cfg = _physical_cfg(
+        {
+            'physical_trend': {
+                'segment_by_offset_sign': False,
+                'split_by_offset_gap': True,
+                'gap_ratio': 5.0,
+            },
+            'two_piece_ransac': {'min_pts': 2},
+        }
+    )
+    offset_abs_m = np.asarray(
+        [100.0, 110.0, 120.0, 1000.0, 1010.0, 1020.0, 2000.0],
+        dtype=np.float32,
+    )
+    obs = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
+    obs_key = tuple(obs.tolist())
+    cache = physical_center_mod._ObservationPlanCache()
+    diagnostics = PhysicalRuntimeDiagnostics(detailed_timing=True)
+
+    fast_obs, fast_key, fast_segment_id = (
+        physical_center_mod._obs_with_target_gap_segment(
+            trace_idx=4,
+            obs_indices=obs,
+            obs_key=obs_key,
+            offset_abs_m=offset_abs_m,
+            cfg=cfg,
+            cache=cache,
+            runtime_diagnostics=diagnostics,
+        )
+    )
+    legacy_fast_obs, legacy_fast_segment_id = _legacy_obs_with_target_gap_segment(
+        trace_idx=4,
+        obs_indices=obs,
+        offset_abs_m=offset_abs_m,
+        cfg=cfg,
+    )
+    np.testing.assert_array_equal(fast_obs, legacy_fast_obs)
+    assert fast_key == tuple(legacy_fast_obs.tolist())
+    assert fast_segment_id == legacy_fast_segment_id
+
+    fallback_obs, fallback_key, fallback_segment_id = (
+        physical_center_mod._obs_with_target_gap_segment(
+            trace_idx=6,
+            obs_indices=obs,
+            obs_key=obs_key,
+            offset_abs_m=offset_abs_m,
+            cfg=cfg,
+            cache=cache,
+            runtime_diagnostics=diagnostics,
+        )
+    )
+    legacy_fallback_obs, legacy_fallback_segment_id = (
+        _legacy_obs_with_target_gap_segment(
+            trace_idx=6,
+            obs_indices=obs,
+            offset_abs_m=offset_abs_m,
+            cfg=cfg,
+        )
+    )
+    np.testing.assert_array_equal(fallback_obs, legacy_fallback_obs)
+    assert fallback_key == tuple(legacy_fallback_obs.tolist())
+    assert fallback_segment_id == legacy_fallback_segment_id
+
+    summary = diagnostics.to_summary()
+    assert summary['n_gap_contexts_built'] == 1
+    assert summary['n_gap_fast_path_calls'] == 1
+    assert summary['n_gap_fallback_calls'] == 1
+    assert summary['n_gap_trace_in_obs'] == 1
+    assert summary['n_gap_trace_not_in_obs'] == 1
 
 
 def test_synthetic_two_piece_trend_predicts_physical_centers() -> None:

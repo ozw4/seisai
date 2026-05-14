@@ -31,6 +31,10 @@ def test_runtime_speedup_source_configs_live_only_under_experiments() -> None:
         'A4_anchor_stride5_t0_shift',
         'A5_anchor_stride5_t0_shift_adaptive_refit',
         'A6_A5_obs_downsample256',
+        'B201_side_on_gap_on_control',
+        'B202_side_on_gap_off',
+        'B203_side_off_gap_on',
+        'B204_side_off_gap_off',
     }
     assert not list(LEGACY_CONFIG_DIR.glob('*.yaml'))
 
