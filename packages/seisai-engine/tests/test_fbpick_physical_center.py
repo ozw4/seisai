@@ -213,6 +213,26 @@ def _source_groups_for_context_tests() -> tuple[
     )
 
 
+def _single_group_context(
+    obs_indices: np.ndarray,
+    *,
+    side_context: physical_center_mod._SideObservationContext | None = None,
+) -> dict[int, physical_center_mod._GroupObservationContext]:
+    obs = np.asarray(obs_indices, dtype=np.int64)
+    return {
+        0: physical_center_mod._GroupObservationContext(
+            group_id=0,
+            neighbor_group_ids=np.asarray([0], dtype=np.int64),
+            neighbor_indices=obs,
+            valid_obs_indices=obs,
+            valid_obs_key=tuple(obs.tolist()),
+            neighbor_count=1,
+            prefilter_valid_count=int(obs.size),
+            side_context=side_context,
+        )
+    }
+
+
 def test_group_observation_contexts_match_existing_selection_and_filtering() -> None:
     groups = _source_groups_for_context_tests()
     groups_by_id = {int(group.group_id): group for group in groups}
@@ -379,6 +399,202 @@ def test_group_observation_contexts_precompute_signed_side_sets() -> None:
     assert summary['side_obs_count_p50'] >= 0.0
 
 
+def test_observation_plan_propagates_precomputed_obs_keys() -> None:
+    obs = np.arange(12, dtype=np.int64)
+    offsets = np.asarray(
+        [
+            100.0,
+            110.0,
+            120.0,
+            130.0,
+            1000.0,
+            1010.0,
+            1020.0,
+            1030.0,
+            2000.0,
+            2010.0,
+            2020.0,
+            2030.0,
+        ],
+        dtype=np.float32,
+    )
+
+    disabled_cfg = _physical_cfg(
+        {
+            'physical_trend': {
+                'segment_by_offset_sign': False,
+                'split_by_offset_gap': False,
+            },
+            'neighbor_context': {'enabled': False},
+            'two_piece_ransac': {'min_pts': 2},
+        }
+    )
+    disabled_plan = physical_center_mod._build_observation_plan(
+        trace_idx=4,
+        target_group_id=0,
+        group_context_by_id=_single_group_context(obs),
+        geometry=None,
+        offset_abs_m=offsets,
+        offset_signed_m=None,
+        cfg=disabled_cfg,
+    )
+    assert disabled_plan is not None
+    assert disabled_plan.obs_key == tuple(obs.tolist())
+
+    gap_cfg = _physical_cfg(
+        {
+            'physical_trend': {
+                'segment_by_offset_sign': False,
+                'split_by_offset_gap': True,
+            },
+            'neighbor_context': {'enabled': False},
+            'two_piece_ransac': {'min_pts': 2},
+        }
+    )
+    gap_plan = physical_center_mod._build_observation_plan(
+        trace_idx=8,
+        target_group_id=0,
+        group_context_by_id=_single_group_context(obs),
+        geometry=None,
+        offset_abs_m=offsets,
+        offset_signed_m=None,
+        cfg=gap_cfg,
+    )
+    assert gap_plan is not None
+    np.testing.assert_array_equal(gap_plan.obs_indices, np.asarray([8, 9, 10, 11]))
+    assert gap_plan.obs_key == (8, 9, 10, 11)
+
+    labels = physical_center_mod._signed_offset_side_labels(
+        np.asarray([-1.0] * 4 + [1.0] * 8, dtype=np.float32)
+    )
+    cache = physical_center_mod._ObservationPlanCache(offset_signed_labels=labels)
+    side_context = physical_center_mod._build_side_observation_context(
+        labels=labels,
+        obs_indices=obs,
+        obs_key=tuple(obs.tolist()),
+        cache=cache,
+    )
+    side_cfg = _physical_cfg(
+        {
+            'physical_trend': {
+                'segment_by_offset_sign': True,
+                'split_by_offset_gap': False,
+            },
+            'neighbor_context': {'enabled': False},
+            'two_piece_ransac': {'min_pts': 2},
+        }
+    )
+    side_plan = physical_center_mod._build_observation_plan(
+        trace_idx=4,
+        target_group_id=0,
+        group_context_by_id=_single_group_context(obs, side_context=side_context),
+        geometry=None,
+        offset_abs_m=offsets,
+        offset_signed_m=labels.side.astype(np.float32),
+        cfg=side_cfg,
+        plan_cache=cache,
+    )
+    assert side_plan is not None
+    np.testing.assert_array_equal(side_plan.obs_indices, np.arange(4, 12))
+    assert side_plan.obs_key == tuple(range(4, 12))
+
+    side_gap_cfg = _physical_cfg(
+        {
+            'physical_trend': {
+                'segment_by_offset_sign': True,
+                'split_by_offset_gap': True,
+            },
+            'neighbor_context': {'enabled': False},
+            'two_piece_ransac': {'min_pts': 2},
+        }
+    )
+    side_gap_plan = physical_center_mod._build_observation_plan(
+        trace_idx=8,
+        target_group_id=0,
+        group_context_by_id=_single_group_context(obs, side_context=side_context),
+        geometry=None,
+        offset_abs_m=offsets,
+        offset_signed_m=labels.side.astype(np.float32),
+        cfg=side_gap_cfg,
+        plan_cache=cache,
+    )
+    assert side_gap_plan is not None
+    np.testing.assert_array_equal(
+        side_gap_plan.obs_indices,
+        np.asarray([8, 9, 10, 11]),
+    )
+    assert side_gap_plan.obs_key == (8, 9, 10, 11)
+
+    fallback_plan = physical_center_mod._build_observation_plan(
+        trace_idx=10,
+        target_group_id=0,
+        group_context_by_id=_single_group_context(obs[:8]),
+        geometry=None,
+        offset_abs_m=np.asarray(
+            [
+                100.0,
+                110.0,
+                120.0,
+                130.0,
+                1000.0,
+                1010.0,
+                1020.0,
+                1030.0,
+                2000.0,
+                2010.0,
+                1025.0,
+            ],
+            dtype=np.float32,
+        ),
+        offset_signed_m=None,
+        cfg=gap_cfg,
+    )
+    assert fallback_plan is not None
+    assert fallback_plan.obs_key == tuple(fallback_plan.obs_indices.tolist())
+
+
+def test_side_context_lookup_diagnostics_are_separate_from_cache_hits() -> None:
+    obs = np.arange(4, dtype=np.int64)
+    obs_key = tuple(obs.tolist())
+    labels = physical_center_mod._signed_offset_side_labels(
+        np.asarray([-2.0, -1.0, 1.0, 2.0], dtype=np.float32)
+    )
+    cache = physical_center_mod._ObservationPlanCache(offset_signed_labels=labels)
+    diagnostics = PhysicalRuntimeDiagnostics(detailed_timing=True)
+
+    context = physical_center_mod._build_side_observation_context(
+        labels=labels,
+        obs_indices=obs,
+        obs_key=obs_key,
+        cache=cache,
+        runtime_diagnostics=diagnostics,
+    )
+    cached_context = physical_center_mod._build_side_observation_context(
+        labels=labels,
+        obs_indices=obs,
+        obs_key=obs_key,
+        cache=cache,
+        runtime_diagnostics=diagnostics,
+    )
+    assert cached_context is context
+
+    physical_center_mod._obs_with_target_signed_offset_side(
+        trace_idx=2,
+        obs_indices=obs,
+        signed_offset_m=labels.side.astype(np.float32),
+        obs_key=obs_key,
+        cache=cache,
+        labels=labels,
+        side_context=context,
+        runtime_diagnostics=diagnostics,
+    )
+
+    summary = diagnostics.to_summary()
+    assert summary['n_side_contexts_built'] == 1
+    assert summary['n_side_context_cache_hits'] == 1
+    assert summary['n_side_context_lookup_calls'] == 1
+
+
 def _fake_piecewise_model() -> PiecewiseLinearTrend:
     return PiecewiseLinearTrend(
         edges=torch.tensor([0.0, 1000.0, 2500.0], dtype=torch.float32),
@@ -520,6 +736,7 @@ def test_parallel_cached_context_hit_accounting_excludes_owner_trace() -> None:
     diagnostics = PhysicalRuntimeDiagnostics()
     plan = physical_center_mod._ObservationPlan(
         obs_indices=np.arange(4, dtype=np.int64),
+        obs_key=(0, 1, 2, 3),
         neighbor_count=1,
         prefilter_valid_count=4,
         segment_id=0,
@@ -552,9 +769,51 @@ def test_parallel_cached_context_hit_accounting_excludes_owner_trace() -> None:
     assert diagnostics.n_cache_hits == 3
 
 
+def test_fit_key_for_obs_uses_precomputed_key_without_rebuilding(
+    monkeypatch,
+) -> None:
+    def fail_indices_key(_indices: np.ndarray) -> tuple[int, ...]:
+        raise AssertionError('_indices_key should not be called')
+
+    monkeypatch.setattr(physical_center_mod, '_indices_key', fail_indices_key)
+    diagnostics = PhysicalRuntimeDiagnostics()
+
+    key = physical_center_mod._fit_key_for_obs(
+        np.asarray([10, 11], dtype=np.int64),
+        precomputed_key=(10, 11),
+        runtime_diagnostics=diagnostics,
+    )
+
+    assert key == (10, 11)
+    assert diagnostics.n_precomputed_fit_key_used == 1
+    assert diagnostics.n_fit_key_built_from_indices == 0
+
+
+def test_fit_key_for_obs_records_index_build_and_sampling_counters() -> None:
+    diagnostics = PhysicalRuntimeDiagnostics()
+
+    key = physical_center_mod._fit_key_for_obs(
+        np.asarray([2, 4], dtype=np.int64),
+        runtime_diagnostics=diagnostics,
+    )
+    sampled_key = physical_center_mod._fit_key_for_obs(
+        np.asarray([4], dtype=np.int64),
+        runtime_diagnostics=diagnostics,
+        after_sampling=True,
+        count_missing_precomputed=False,
+    )
+
+    assert key == (2, 4)
+    assert sampled_key == (4,)
+    assert diagnostics.n_fit_key_built_from_indices == 2
+    assert diagnostics.n_fit_key_built_after_sampling == 1
+    assert diagnostics.n_fit_key_missing_precomputed == 1
+
+
 def test_fit_task_cache_preserves_specific_prefit_failure_reason() -> None:
     plan = physical_center_mod._ObservationPlan(
         obs_indices=np.arange(4, dtype=np.int64),
+        obs_key=(0, 1, 2, 3),
         neighbor_count=1,
         prefilter_valid_count=4,
         segment_id=0,
@@ -597,6 +856,7 @@ def test_prefit_task_failure_does_not_record_ransac_fit_call() -> None:
     diagnostics = PhysicalRuntimeDiagnostics()
     plan = physical_center_mod._ObservationPlan(
         obs_indices=np.arange(4, dtype=np.int64),
+        obs_key=(0, 1, 2, 3),
         neighbor_count=1,
         prefilter_valid_count=4,
         segment_id=0,
@@ -645,6 +905,7 @@ def test_assign_model_prediction_batch_matches_single_trace_assignment() -> None
     )
     plan = physical_center_mod._ObservationPlan(
         obs_indices=np.arange(3, dtype=np.int64),
+        obs_key=(0, 1, 2),
         neighbor_count=1,
         prefilter_valid_count=3,
         segment_id=0,
@@ -703,6 +964,7 @@ def test_assign_model_prediction_batch_handles_vector_shift_and_invalid() -> Non
     )
     plan = physical_center_mod._ObservationPlan(
         obs_indices=np.arange(4, dtype=np.int64),
+        obs_key=(0, 1, 2, 3),
         neighbor_count=1,
         prefilter_valid_count=4,
         segment_id=0,
@@ -1328,6 +1590,168 @@ def test_thread_fit_executor_propagates_worker_fit_runtime_error(monkeypatch) ->
         )
 
 
+def _saved_signed_geometry(
+    *,
+    offset_abs_m: np.ndarray,
+    offset_signed_m: np.ndarray,
+    geometry_valid_mask: np.ndarray,
+) -> physical_center_mod.CoarseGeometry:
+    offsets = np.asarray(offset_abs_m, dtype=np.float32)
+    n_traces = int(offsets.size)
+    return physical_center_mod.CoarseGeometry(
+        source_x_m=np.zeros((n_traces,), dtype=np.float32),
+        source_y_m=np.zeros((n_traces,), dtype=np.float32),
+        receiver_x_m=offsets.astype(np.float32, copy=True),
+        receiver_y_m=np.zeros((n_traces,), dtype=np.float32),
+        offset_abs_geom_m=offsets,
+        geometry_valid_mask=np.asarray(geometry_valid_mask, dtype=np.bool_),
+        offset_signed_geom_m=np.asarray(offset_signed_m, dtype=np.float32),
+    )
+
+
+def _saved_geometry_plan_pair(
+    *,
+    trace_idx: int,
+    offset_abs_m: np.ndarray,
+    offset_signed_m: np.ndarray,
+    geometry_valid_mask: np.ndarray,
+    cfg: object,
+) -> tuple[
+    physical_center_mod._ObservationPlan,
+    physical_center_mod._ObservationPlan,
+]:
+    obs = np.arange(int(np.asarray(offset_abs_m).size), dtype=np.int64)
+    geometry = _saved_signed_geometry(
+        offset_abs_m=offset_abs_m,
+        offset_signed_m=offset_signed_m,
+        geometry_valid_mask=geometry_valid_mask,
+    )
+    labels = physical_center_mod._signed_offset_side_labels(
+        offset_signed_m,
+        finite_mask=geometry.geometry_valid_mask,
+    )
+    group = physical_center_mod.SourceGroup(
+        group_id=0,
+        source_key_x=0,
+        source_key_y=0,
+        source_x_m=0.0,
+        source_y_m=0.0,
+        trace_indices=obs,
+    )
+    cache = physical_center_mod._ObservationPlanCache(offset_signed_labels=labels)
+    contexts = physical_center_mod._build_group_observation_contexts(
+        groups=(group,),
+        groups_by_id={0: group},
+        valid_for_fit=np.ones((obs.size,), dtype=np.bool_),
+        cfg=cfg,
+        use_neighbor_context=False,
+        offset_signed_labels=labels,
+        plan_cache=cache,
+    )
+    fast = physical_center_mod._build_observation_plan(
+        trace_idx=trace_idx,
+        target_group_id=0,
+        group_context_by_id=contexts,
+        geometry=geometry,
+        offset_abs_m=offset_abs_m,
+        offset_signed_m=offset_signed_m,
+        cfg=cfg,
+        plan_cache=cache,
+    )
+    legacy = _legacy_build_observation_plan(
+        trace_idx=trace_idx,
+        target_group_id=0,
+        group_context_by_id=contexts,
+        geometry=geometry,
+        offset_abs_m=offset_abs_m,
+        offset_signed_m=None,
+        cfg=cfg,
+    )
+    assert fast is not None
+    assert legacy is not None
+    return fast, legacy
+
+
+@pytest.mark.parametrize('split_by_offset_gap', [False, True])
+def test_saved_geometry_signed_offset_fast_path_matches_legacy_edge_cases(
+    split_by_offset_gap: bool,
+) -> None:
+    cfg = _physical_cfg(
+        {
+            'physical_trend': {
+                'use_geometry_offset': True,
+                'segment_by_offset_sign': True,
+                'split_by_offset_gap': split_by_offset_gap,
+            },
+            'neighbor_context': {'enabled': False},
+            'two_piece_ransac': {'min_pts': 2},
+        }
+    )
+    offset_abs_m = np.asarray(
+        [
+            100.0,
+            110.0,
+            120.0,
+            130.0,
+            500.0,
+            510.0,
+            520.0,
+            530.0,
+            1000.0,
+            1010.0,
+            1020.0,
+            1030.0,
+        ],
+        dtype=np.float32,
+    )
+    offset_signed_m = np.asarray(
+        [
+            -100.0,
+            -110.0,
+            -120.0,
+            -130.0,
+            0.0,
+            np.nan,
+            np.nan,
+            0.0,
+            1000.0,
+            1010.0,
+            1020.0,
+            1030.0,
+        ],
+        dtype=np.float32,
+    )
+    geometry_valid_mask = np.asarray(
+        [True, True, True, True, True, False, True, True, True, True, True, True]
+    )
+
+    for trace_idx in (0, 5, 8):
+        fast, legacy = _saved_geometry_plan_pair(
+            trace_idx=trace_idx,
+            offset_abs_m=offset_abs_m,
+            offset_signed_m=offset_signed_m,
+            geometry_valid_mask=geometry_valid_mask,
+            cfg=cfg,
+        )
+        np.testing.assert_array_equal(fast.obs_indices, legacy.obs_indices)
+        assert fast.obs_key == tuple(fast.obs_indices.tolist())
+        assert fast.side == legacy.side
+        assert fast.relaxed == legacy.relaxed
+        assert fast.segment_id == legacy.segment_id
+
+    sparse_fast, sparse_legacy = _saved_geometry_plan_pair(
+        trace_idx=3,
+        offset_abs_m=np.asarray([100.0, 110.0, 120.0, 130.0], dtype=np.float32),
+        offset_signed_m=np.asarray([np.nan, np.nan, np.nan, 130.0], dtype=np.float32),
+        geometry_valid_mask=np.asarray([False, False, False, True]),
+        cfg=cfg,
+    )
+    np.testing.assert_array_equal(sparse_fast.obs_indices, sparse_legacy.obs_indices)
+    assert sparse_fast.side == sparse_legacy.side
+    assert sparse_fast.relaxed == sparse_legacy.relaxed
+    assert sparse_fast.segment_id == sparse_legacy.segment_id
+
+
 def test_physical_center_uses_saved_signed_offset_for_side_segmentation(
     monkeypatch,
 ) -> None:
@@ -1519,6 +1943,7 @@ def _legacy_build_observation_plan(
     if prefilter_valid_count < min_fit_obs:
         return physical_center_mod._ObservationPlan(
             obs_indices=valid_obs,
+            obs_key=tuple(np.asarray(valid_obs, dtype=np.int64).tolist()),
             neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=-1,
@@ -1558,6 +1983,7 @@ def _legacy_build_observation_plan(
     if int(segment_obs.size) >= min_fit_obs:
         return physical_center_mod._ObservationPlan(
             obs_indices=segment_obs,
+            obs_key=tuple(np.asarray(segment_obs, dtype=np.int64).tolist()),
             neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=segment_id,
@@ -1571,6 +1997,7 @@ def _legacy_build_observation_plan(
     ):
         return physical_center_mod._ObservationPlan(
             obs_indices=side_obs,
+            obs_key=tuple(np.asarray(side_obs, dtype=np.int64).tolist()),
             neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=0,
@@ -1581,6 +2008,7 @@ def _legacy_build_observation_plan(
     if side_reliable and int(valid_obs.size) >= min_fit_obs:
         return physical_center_mod._ObservationPlan(
             obs_indices=valid_obs,
+            obs_key=tuple(np.asarray(valid_obs, dtype=np.int64).tolist()),
             neighbor_count=neighbor_count,
             prefilter_valid_count=prefilter_valid_count,
             segment_id=0,
@@ -1590,6 +2018,7 @@ def _legacy_build_observation_plan(
 
     return physical_center_mod._ObservationPlan(
         obs_indices=segment_obs,
+        obs_key=tuple(np.asarray(segment_obs, dtype=np.int64).tolist()),
         neighbor_count=neighbor_count,
         prefilter_valid_count=prefilter_valid_count,
         segment_id=segment_id,

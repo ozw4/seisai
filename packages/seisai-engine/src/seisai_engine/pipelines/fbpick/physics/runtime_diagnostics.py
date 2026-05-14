@@ -76,6 +76,7 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'n_side_contexts_built',
     'n_side_context_cache_hits',
     'n_side_context_cache_misses',
+    'n_side_context_lookup_calls',
     'n_gap_contexts_built',
     'n_gap_context_cache_hits',
     'n_gap_context_cache_misses',
@@ -84,6 +85,10 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'n_gap_trace_in_obs',
     'n_gap_trace_not_in_obs',
     'n_side_gap_precomputed_fit_keys',
+    'n_precomputed_fit_key_used',
+    'n_fit_key_built_from_indices',
+    'n_fit_key_built_after_sampling',
+    'n_fit_key_missing_precomputed',
     'n_non_anchor_groups',
     'n_reused_predictions',
     'n_t0_shifted_groups',
@@ -192,6 +197,7 @@ _SIDE_GAP_COUNTER_KEYS = frozenset(
         'n_side_contexts_built',
         'n_side_context_cache_hits',
         'n_side_context_cache_misses',
+        'n_side_context_lookup_calls',
         'n_gap_contexts_built',
         'n_gap_context_cache_hits',
         'n_gap_context_cache_misses',
@@ -200,6 +206,10 @@ _SIDE_GAP_COUNTER_KEYS = frozenset(
         'n_gap_trace_in_obs',
         'n_gap_trace_not_in_obs',
         'n_side_gap_precomputed_fit_keys',
+        'n_precomputed_fit_key_used',
+        'n_fit_key_built_from_indices',
+        'n_fit_key_built_after_sampling',
+        'n_fit_key_missing_precomputed',
     }
 )
 
@@ -225,6 +235,7 @@ class PhysicalRuntimeDiagnostics:
     n_side_contexts_built: int = 0
     n_side_context_cache_hits: int = 0
     n_side_context_cache_misses: int = 0
+    n_side_context_lookup_calls: int = 0
     n_gap_contexts_built: int = 0
     n_gap_context_cache_hits: int = 0
     n_gap_context_cache_misses: int = 0
@@ -233,6 +244,10 @@ class PhysicalRuntimeDiagnostics:
     n_gap_trace_in_obs: int = 0
     n_gap_trace_not_in_obs: int = 0
     n_side_gap_precomputed_fit_keys: int = 0
+    n_precomputed_fit_key_used: int = 0
+    n_fit_key_built_from_indices: int = 0
+    n_fit_key_built_after_sampling: int = 0
+    n_fit_key_missing_precomputed: int = 0
     n_non_anchor_groups: int = 0
     n_reused_predictions: int = 0
     n_t0_shifted_groups: int = 0
@@ -625,6 +640,7 @@ class PhysicalRuntimeDiagnostics:
             'n_side_contexts_built': int(self.n_side_contexts_built),
             'n_side_context_cache_hits': int(self.n_side_context_cache_hits),
             'n_side_context_cache_misses': int(self.n_side_context_cache_misses),
+            'n_side_context_lookup_calls': int(self.n_side_context_lookup_calls),
             'n_gap_contexts_built': int(self.n_gap_contexts_built),
             'n_gap_context_cache_hits': int(self.n_gap_context_cache_hits),
             'n_gap_context_cache_misses': int(self.n_gap_context_cache_misses),
@@ -634,6 +650,16 @@ class PhysicalRuntimeDiagnostics:
             'n_gap_trace_not_in_obs': int(self.n_gap_trace_not_in_obs),
             'n_side_gap_precomputed_fit_keys': int(
                 self.n_side_gap_precomputed_fit_keys
+            ),
+            'n_precomputed_fit_key_used': int(self.n_precomputed_fit_key_used),
+            'n_fit_key_built_from_indices': int(
+                self.n_fit_key_built_from_indices
+            ),
+            'n_fit_key_built_after_sampling': int(
+                self.n_fit_key_built_after_sampling
+            ),
+            'n_fit_key_missing_precomputed': int(
+                self.n_fit_key_missing_precomputed
             ),
             'n_non_anchor_groups': int(self.n_non_anchor_groups),
             'n_reused_predictions': int(self.n_reused_predictions),
@@ -782,6 +808,7 @@ class PhysicalRuntimeDiagnostics:
             'n_side_contexts_built',
             'n_side_context_cache_hits',
             'n_side_context_cache_misses',
+            'n_side_context_lookup_calls',
             'n_gap_contexts_built',
             'n_gap_context_cache_hits',
             'n_gap_context_cache_misses',
@@ -790,6 +817,10 @@ class PhysicalRuntimeDiagnostics:
             'n_gap_trace_in_obs',
             'n_gap_trace_not_in_obs',
             'n_side_gap_precomputed_fit_keys',
+            'n_precomputed_fit_key_used',
+            'n_fit_key_built_from_indices',
+            'n_fit_key_built_after_sampling',
+            'n_fit_key_missing_precomputed',
             'n_non_anchor_groups',
             'n_reused_predictions',
             'n_t0_shifted_groups',
@@ -850,6 +881,7 @@ def runtime_summary_from_npz_fields(
         'n_side_contexts_built',
         'n_side_context_cache_hits',
         'n_side_context_cache_misses',
+        'n_side_context_lookup_calls',
         'n_gap_contexts_built',
         'n_gap_context_cache_hits',
         'n_gap_context_cache_misses',
@@ -858,6 +890,10 @@ def runtime_summary_from_npz_fields(
         'n_gap_trace_in_obs',
         'n_gap_trace_not_in_obs',
         'n_side_gap_precomputed_fit_keys',
+        'n_precomputed_fit_key_used',
+        'n_fit_key_built_from_indices',
+        'n_fit_key_built_after_sampling',
+        'n_fit_key_missing_precomputed',
         'n_non_anchor_groups',
         'n_reused_predictions',
         'n_t0_shifted_groups',

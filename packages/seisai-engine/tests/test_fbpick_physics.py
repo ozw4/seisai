@@ -354,9 +354,14 @@ def test_physical_runtime_diagnostics_initializes_with_zero_counts() -> None:
     assert summary['fit_executor_tasks'] == 0
     assert summary['n_source_groups'] == 0
     assert summary['n_side_contexts_built'] == 0
+    assert summary['n_side_context_lookup_calls'] == 0
     assert summary['n_gap_contexts_built'] == 0
     assert summary['n_gap_fast_path_calls'] == 0
     assert summary['n_gap_fallback_calls'] == 0
+    assert summary['n_precomputed_fit_key_used'] == 0
+    assert summary['n_fit_key_built_from_indices'] == 0
+    assert summary['n_fit_key_built_after_sampling'] == 0
+    assert summary['n_fit_key_missing_precomputed'] == 0
     assert summary['side_obs_count_p50'] == 0.0
     assert summary['gap_segment_obs_count_p50'] == 0.0
     assert summary['n_unique_fit_contexts'] == 0
