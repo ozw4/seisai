@@ -35,6 +35,7 @@ def test_runtime_speedup_source_configs_live_only_under_experiments() -> None:
         'B202_side_on_gap_off',
         'B203_side_off_gap_on',
         'B204_side_off_gap_off',
+        'C301_side_gap_context_precompute_control',
     }
     assert not list(LEGACY_CONFIG_DIR.glob('*.yaml'))
 

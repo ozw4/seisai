@@ -27,7 +27,9 @@ from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_OFFSET_SOURCE_HEADER,
     PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT,
     PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
     PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR,
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST,
     PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE,
     build_geometry_two_piece_physical_center,
 )
@@ -2339,6 +2341,182 @@ def test_geometry_missing_falls_back_to_existing_trend_without_crashing() -> Non
     assert np.all(
         result.physical_model_failure_reason
         == np.uint8(PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID)
+    )
+
+
+def test_assign_fallback_all_vectorized_matches_scalar_fallback() -> None:
+    _coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.linspace(50.0, 1200.0, 4, dtype=np.float32),
+        with_geometry=False,
+    )
+    trend = replace(
+        trend,
+        trend_center_i=np.asarray([10, -1, -1, table.n_samples_orig], dtype=np.int32),
+        trend_center_sec=np.asarray([0.010, np.nan, np.nan, 1.0], dtype=np.float32),
+    )
+    feasible = replace(
+        feasible,
+        feasible_lo_sec=np.asarray([np.nan, 0.100, np.nan, 0.300], dtype=np.float32),
+        feasible_hi_sec=np.asarray([np.nan, 0.120, np.nan, 0.200], dtype=np.float32),
+    )
+    merged = replace(
+        merged,
+        robust_pick_i=np.asarray(
+            [300, 300, -5, table.n_samples_orig + 20],
+            dtype=np.int32,
+        ),
+    )
+
+    result = physical_center_mod._assign_fallback_all(
+        failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+    )
+    expected = [
+        physical_center_mod._fallback_center_for_trace(
+            idx,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+        for idx in range(int(table.n_traces))
+    ]
+
+    np.testing.assert_array_equal(
+        result.physical_center_i,
+        np.asarray(
+            [center_i for center_i, _center_t, _status in expected],
+            dtype=np.int32,
+        ),
+    )
+    np.testing.assert_allclose(
+        result.physical_center_t_sec,
+        np.asarray([center_t for _center_i, center_t, _status in expected]),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_array_equal(
+        result.physical_model_status,
+        np.asarray(
+            [status for _center_i, _center_t, status in expected],
+            dtype=np.uint8,
+        ),
+    )
+    np.testing.assert_array_equal(
+        result.physical_runtime_fit_source,
+        np.asarray(
+            [
+                PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
+                PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
+                PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST,
+                PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST,
+            ],
+            dtype=np.uint8,
+        ),
+    )
+
+
+def test_geometry_invalid_fallback_large_trace_count_completes() -> None:
+    n_traces = 100_000
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.linspace(50.0, 1200.0, n_traces, dtype=np.float32),
+        with_geometry=False,
+    )
+    trend = _with_invalid_trend_centers(trend)
+    feasible = replace(
+        feasible,
+        feasible_lo_sec=np.full((n_traces,), np.nan, dtype=np.float32),
+        feasible_hi_sec=np.full((n_traces,), np.nan, dtype=np.float32),
+    )
+    diagnostics = PhysicalRuntimeDiagnostics()
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(),
+        runtime_diagnostics=diagnostics,
+    )
+
+    assert diagnostics.n_fit_calls == 0
+    assert result.physical_center_i.shape == (n_traces,)
+    assert np.all(
+        result.physical_model_status
+        == np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST)
+    )
+
+
+def test_geometry_invalid_done_logged_after_fallback_assign_all() -> None:
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.linspace(50.0, 1200.0, 12, dtype=np.float32),
+        with_geometry=False,
+    )
+    progress = _RecordingProgressReporter()
+
+    build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(),
+        progress=progress,
+    )
+
+    fallback_start = next(
+        idx
+        for idx, (event, fields) in enumerate(progress.events)
+        if event == 'physical-center.stage_start'
+        and fields.get('stage') == 'fallback_assign_all'
+    )
+    fallback_done = next(
+        idx
+        for idx, (event, fields) in enumerate(progress.events)
+        if event == 'physical-center.stage_done'
+        and fields.get('stage') == 'fallback_assign_all'
+    )
+    physical_done = next(
+        idx
+        for idx, (event, fields) in enumerate(progress.events)
+        if event == 'physical-center.done'
+        and fields.get('status') == 'geometry_invalid'
+    )
+
+    assert fallback_start < fallback_done < physical_done
+
+
+def test_geometry_invalid_can_use_robust_fallback() -> None:
+    coarse_npz, table, feasible, trend, merged = _make_inputs(
+        offsets_m=np.linspace(50.0, 1200.0, 12, dtype=np.float32),
+        with_geometry=False,
+    )
+    trend = _with_invalid_trend_centers(trend)
+    merged = replace(merged, robust_pick_i=(table.coarse_pick_i + 3).astype(np.int32))
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {'physical_runtime': {'geometry_invalid_fallback': 'robust'}}
+        ),
+    )
+
+    np.testing.assert_array_equal(result.fine_center_i, merged.robust_pick_i)
+    assert np.all(
+        result.physical_model_status
+        == np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST)
+    )
+    assert np.all(
+        result.physical_runtime_fit_source
+        == np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST)
     )
 
 

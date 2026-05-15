@@ -44,20 +44,22 @@ from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
     PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
+    PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
     PHYSICAL_OFFSET_SOURCE_HEADER,
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST,
 )
 from seisai_engine.pipelines.fbpick.physics.pick_table import (
     normalize_coarse_pick_table,
+)
+from seisai_engine.pipelines.fbpick.physics.progress import (
+    ConsoleProgressReporter,
 )
 from seisai_engine.pipelines.fbpick.physics.run import (
     build_robust_payload_from_coarse,
     derive_physics_runtime_summary_path,
     run_physics_lite,
-)
-from seisai_engine.pipelines.fbpick.physics.progress import (
-    ConsoleProgressReporter,
 )
 from seisai_engine.pipelines.fbpick.physics.runtime_diagnostics import (
     PhysicalRuntimeDiagnostics,
@@ -77,6 +79,14 @@ _ANCHOR_OPTIONAL_KEYS = {
     'anchor_source_distance_p90_m',
     'anchor_source_distance_max_m',
 }
+
+
+class _RecordingProgressReporter:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def emit(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
 
 
 def _make_coarse_payload(
@@ -444,6 +454,9 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.two_piece_irls.q_hi == 0.85
     assert cfg.physical_projection.mode == 'model'
     assert cfg.physical_runtime.fit_policy == 'full'
+    assert cfg.physical_runtime.trend_result_mode == 'eager'
+    assert cfg.physical_runtime.geometry_invalid_fallback == 'existing_trend'
+    assert cfg.physical_runtime.group_invalid_fallback == 'existing_trend'
     assert cfg.physical_runtime.diagnostics_enabled is True
     assert cfg.physical_runtime.write_runtime_summary is True
     assert cfg.physical_runtime.diagnostics.enabled is True
@@ -575,10 +588,13 @@ def test_load_physics_lite_config_accepts_two_piece_irls_fit_kind() -> None:
 def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> None:
     cfg = load_physics_lite_config(
         {
-            'physical_runtime': {
-                'fit_policy': 'anchor_source_xy',
-                'anchor_selection': {
-                    'enabled': True,
+                'physical_runtime': {
+                    'fit_policy': 'anchor_source_xy',
+                    'trend_result_mode': 'lazy',
+                    'geometry_invalid_fallback': 'robust',
+                    'group_invalid_fallback': 'robust',
+                    'anchor_selection': {
+                        'enabled': True,
                     'mode': 'source_xy_stride',
                     'anchor_stride_source_groups': 3,
                     'anchor_spacing_m': None,
@@ -639,6 +655,9 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
     )
 
     assert cfg.physical_runtime.fit_policy == 'anchor_source_xy'
+    assert cfg.physical_runtime.trend_result_mode == 'lazy'
+    assert cfg.physical_runtime.geometry_invalid_fallback == 'robust'
+    assert cfg.physical_runtime.group_invalid_fallback == 'robust'
     assert cfg.physical_runtime.anchor_selection.enabled is True
     assert cfg.physical_runtime.anchor_selection.anchor_stride_source_groups == 3
     assert cfg.physical_runtime.anchor_selection.include_first is False
@@ -756,6 +775,18 @@ def test_physical_center_example_config_enables_physical_trend() -> None:
         (
             {'physical_runtime': {'fit_policy': 'cached'}},
             'physical_runtime.fit_policy',
+        ),
+        (
+            {'physical_runtime': {'trend_result_mode': 'always'}},
+            'physical_runtime.trend_result_mode',
+        ),
+        (
+            {'physical_runtime': {'geometry_invalid_fallback': 'clip'}},
+            'physical_runtime.geometry_invalid_fallback',
+        ),
+        (
+            {'physical_runtime': {'group_invalid_fallback': 'skip'}},
+            'physical_runtime.group_invalid_fallback',
         ),
         (
             {
@@ -1803,6 +1834,202 @@ def test_run_physics_lite_end_to_end_outputs_full_covering_robust_picks(
     assert np.any(robust['robust_source'][18:24] == np.uint8(ROBUST_SOURCE_TREND_FILL))
     assert np.any(robust['reason_mask'][18:24] & np.uint8(REASON_MASK_FILLED_FROM_TREND))
     assert np.all(np.isfinite(robust['robust_pick_t_sec']))
+
+
+def test_run_physics_lite_lazy_geometry_invalid_robust_skips_trend_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    n_traces = 12
+    coarse_pick_i = np.arange(80, 80 + n_traces, dtype=np.int32)
+    coarse_path = save_coarse_npz(
+        tmp_path / 'lazy_missing_geometry.coarse.npz',
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full((n_traces,), 0.95, dtype=np.float32),
+            offsets_m=np.linspace(50.0, 400.0, n_traces, dtype=np.float32),
+        ),
+    )
+    progress = _RecordingProgressReporter()
+
+    def fail_build_trend(*_args, **_kwargs):
+        raise AssertionError('trend_result should not be materialized')
+
+    monkeypatch.setattr(
+        'seisai_engine.pipelines.fbpick.physics.run.build_trend_result',
+        fail_build_trend,
+    )
+
+    out_path = run_physics_lite(
+        coarse_path,
+        cfg={
+            'physical_trend': {
+                'enabled': True,
+                'fit_kind': 'two_piece_irls_autobreak',
+                'use_geometry_offset': True,
+            },
+            'physical_runtime': {
+                'trend_result_mode': 'lazy',
+                'geometry_invalid_fallback': 'robust',
+                'progress': {'enabled': True, 'level': 'stage'},
+            },
+        },
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+        progress=progress,
+    )
+    robust = load_robust_npz(out_path)
+    summary = json.loads(
+        derive_physics_runtime_summary_path(out_path).read_text(encoding='utf-8')
+    )
+    stage_starts = [
+        fields.get('stage')
+        for event, fields in progress.events
+        if event == 'physics.stage_start'
+    ]
+    fallback_done_idx = next(
+        idx
+        for idx, (event, fields) in enumerate(progress.events)
+        if event == 'physical-center.stage_done'
+        and fields.get('stage') == 'fallback_assign_all'
+    )
+    physical_done_idx = next(
+        idx
+        for idx, (event, fields) in enumerate(progress.events)
+        if event == 'physical-center.done'
+        and fields.get('status') == 'geometry_invalid'
+    )
+
+    assert 'geometry_preflight' in stage_starts
+    assert 'trend_result' not in stage_starts
+    assert fallback_done_idx < physical_done_idx
+    assert (
+        int(np.asarray(robust['physical_runtime_trend_result_materialized']).item())
+        == 0
+    )
+    assert summary['trend_result_materialized'] is False
+    assert int(np.asarray(robust['n_fit_calls']).item()) == 0
+    np.testing.assert_array_equal(
+        robust['trend_center_i'],
+        np.full((n_traces,), -1, dtype=np.int32),
+    )
+    assert np.all(np.isnan(robust['trend_center_t_sec']))
+    np.testing.assert_array_equal(robust['physical_center_i'], coarse_pick_i)
+    np.testing.assert_array_equal(robust['fine_center_i'], coarse_pick_i)
+    assert np.all(
+        robust['physical_model_status']
+        == np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST)
+    )
+    assert np.all(
+        robust['physical_model_failure_reason']
+        == np.uint8(PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID)
+    )
+    assert np.all(
+        robust['physical_runtime_fit_source']
+        == np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST)
+    )
+
+
+def test_run_physics_lite_lazy_group_invalid_robust_skips_trend_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    n_traces = 12
+    coarse_pick_i = np.arange(90, 90 + n_traces, dtype=np.int32)
+    offsets_m = np.linspace(50.0, 400.0, n_traces, dtype=np.float32)
+    geometry = _make_physical_geometry(offsets_m)
+    geometry['geometry_valid_mask'] = np.zeros((n_traces,), dtype=np.bool_)
+    coarse_path = save_coarse_npz(
+        tmp_path / 'lazy_empty_source_groups.coarse.npz',
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full((n_traces,), 0.95, dtype=np.float32),
+            offsets_m=offsets_m,
+        ),
+        **geometry,
+    )
+    progress = _RecordingProgressReporter()
+
+    def fail_build_trend(*_args, **_kwargs):
+        raise AssertionError('trend_result should not be materialized')
+
+    monkeypatch.setattr(
+        'seisai_engine.pipelines.fbpick.physics.run.build_trend_result',
+        fail_build_trend,
+    )
+
+    out_path = run_physics_lite(
+        coarse_path,
+        cfg={
+            'physical_trend': {
+                'enabled': True,
+                'fit_kind': 'two_piece_irls_autobreak',
+                'use_geometry_offset': True,
+            },
+            'physical_runtime': {
+                'trend_result_mode': 'lazy',
+                'group_invalid_fallback': 'robust',
+                'progress': {'enabled': True, 'level': 'stage'},
+            },
+        },
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+        progress=progress,
+    )
+    robust = load_robust_npz(out_path)
+    summary = json.loads(
+        derive_physics_runtime_summary_path(out_path).read_text(encoding='utf-8')
+    )
+    stage_starts = [
+        fields.get('stage')
+        for event, fields in progress.events
+        if event == 'physics.stage_start'
+    ]
+    preflight_done = next(
+        fields
+        for event, fields in progress.events
+        if event == 'physics.stage_done'
+        and fields.get('stage') == 'geometry_preflight'
+    )
+    fallback_done = next(
+        fields
+        for event, fields in progress.events
+        if event == 'physical-center.stage_done'
+        and fields.get('stage') == 'fallback_assign_all'
+    )
+
+    assert 'geometry_preflight' in stage_starts
+    assert 'trend_result' not in stage_starts
+    assert preflight_done['geometry_loaded'] is True
+    assert preflight_done['groups'] == 0
+    assert preflight_done['fallback_reason'] == 'source_group_empty'
+    assert preflight_done['fallback'] == 'robust'
+    assert preflight_done['lazy_robust_fallback'] is True
+    assert fallback_done['reason'] == 'source_group_empty'
+    assert fallback_done['fallback'] == 'robust'
+    assert (
+        int(np.asarray(robust['physical_runtime_trend_result_materialized']).item())
+        == 0
+    )
+    assert summary['trend_result_materialized'] is False
+    assert int(np.asarray(robust['n_fit_calls']).item()) == 0
+    np.testing.assert_array_equal(
+        robust['trend_center_i'],
+        np.full((n_traces,), -1, dtype=np.int32),
+    )
+    assert np.all(np.isnan(robust['trend_center_t_sec']))
+    np.testing.assert_array_equal(robust['physical_center_i'], coarse_pick_i)
+    np.testing.assert_array_equal(robust['fine_center_i'], coarse_pick_i)
+    assert np.all(
+        robust['physical_model_status']
+        == np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST)
+    )
+    assert np.all(
+        robust['physical_runtime_fit_source']
+        == np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST)
+    )
 
 
 def test_run_physics_lite_allows_disabling_runtime_diagnostics(

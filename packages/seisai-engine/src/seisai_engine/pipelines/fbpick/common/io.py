@@ -287,14 +287,22 @@ def _validate_pick_time_pair(
     dt_sec: float,
     n_samples_orig: int,
 ) -> None:
-    if np.any(pick_i < 0) or np.any(pick_i >= int(n_samples_orig)):
+    valid_mask = np.ones(pick_i.shape, dtype=np.bool_)
+    if pick_key == 'trend_center_i':
+        sentinel_mask = (pick_i == np.int32(-1)) & np.isnan(pick_t_sec)
+        valid_mask = ~sentinel_mask
+        if not bool(np.any(valid_mask)):
+            return
+    pick_valid = pick_i[valid_mask]
+    time_valid = pick_t_sec[valid_mask]
+    if np.any(pick_valid < 0) or np.any(pick_valid >= int(n_samples_orig)):
         msg = f'{pick_key} must lie in [0, n_samples_orig)'
         raise ValueError(msg)
-    if not np.all(np.isfinite(pick_t_sec)):
+    if not np.all(np.isfinite(time_valid)):
         msg = f'{time_key} must be finite'
         raise ValueError(msg)
-    expected_t_sec = pick_i.astype(np.float32) * np.float32(dt_sec)
-    if not np.array_equal(pick_t_sec, expected_t_sec):
+    expected_t_sec = pick_valid.astype(np.float32) * np.float32(dt_sec)
+    if not np.array_equal(time_valid, expected_t_sec):
         msg = f'{time_key} must equal {pick_key} * dt_sec'
         raise ValueError(msg)
 

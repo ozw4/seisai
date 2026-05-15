@@ -134,8 +134,19 @@ __all__ = [
     'PHYSICAL_RUNTIME_FIT_SOURCE_LABELS',
     'PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE',
     'PhysicalCenterResult',
+    'PhysicalCenterFallbackPreflight',
     'build_geometry_two_piece_physical_center',
+    'preflight_geometry_two_piece_fallback',
 ]
+
+
+@dataclass(frozen=True)
+class PhysicalCenterFallbackPreflight:
+    status: str | None
+    reason: str | None
+    fallback_mode: str | None
+    geometry_loaded: bool
+    groups: int | None
 
 
 @dataclass(frozen=True)
@@ -524,17 +535,130 @@ def _assign_fallback_all(
     merged: MergeResult,
 ) -> PhysicalCenterResult:
     arrays = _allocate_result_arrays(table)
-    for trace_idx in range(int(table.n_traces)):
-        _assign_fallback(
-            arrays,
-            trace_idx,
-            failure_reason=failure_reason,
-            runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            merged=merged,
-        )
+    n = int(table.n_traces)
+    n_samples = int(table.n_samples_orig)
+    dt = float(table.dt_scalar_sec)
+
+    trend_i = _as_vector(
+        'trend.trend_center_i',
+        trend.trend_center_i,
+        n_traces=n,
+        dtype=np.int64,
+    )
+    trend_t = _as_vector(
+        'trend.trend_center_sec',
+        trend.trend_center_sec,
+        n_traces=n,
+        dtype=np.float32,
+    )
+    robust_i = _as_vector(
+        'merged.robust_pick_i',
+        merged.robust_pick_i,
+        n_traces=n,
+        dtype=np.int64,
+    )
+    lo_sec = _as_vector(
+        'feasible.feasible_lo_sec',
+        feasible.feasible_lo_sec,
+        n_traces=n,
+        dtype=np.float32,
+    )
+    hi_sec = _as_vector(
+        'feasible.feasible_hi_sec',
+        feasible.feasible_hi_sec,
+        n_traces=n,
+        dtype=np.float32,
+    )
+
+    center_i = np.clip(robust_i, 0, n_samples - 1).astype(np.int32)
+    status = np.full(
+        (n,),
+        np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST),
+        dtype=np.uint8,
+    )
+    fit_source = np.full(
+        (n,),
+        np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST),
+        dtype=np.uint8,
+    )
+
+    valid_band = np.isfinite(lo_sec) & np.isfinite(hi_sec) & (lo_sec <= hi_sec)
+    if bool(np.any(valid_band)):
+        lo_i = np.zeros((n,), dtype=np.int64)
+        hi_i = np.full((n,), n_samples - 1, dtype=np.int64)
+        with np.errstate(invalid='ignore'):
+            lo_i[valid_band] = np.clip(
+                np.ceil(lo_sec[valid_band] / np.float32(dt)),
+                0,
+                n_samples - 1,
+            ).astype(np.int64)
+            hi_i[valid_band] = np.clip(
+                np.floor(hi_sec[valid_band] / np.float32(dt)),
+                0,
+                n_samples - 1,
+            ).astype(np.int64)
+        valid_band &= lo_i <= hi_i
+        if bool(np.any(valid_band)):
+            clipped_i = np.clip(robust_i, lo_i, hi_i).astype(np.int32)
+            center_i[valid_band] = clipped_i[valid_band]
+            status[valid_band] = np.uint8(
+                PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP
+            )
+            fit_source[valid_band] = np.uint8(
+                PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
+            )
+
+    valid_trend = (
+        (trend_i >= 0)
+        & (trend_i < n_samples)
+        & np.isfinite(trend_t)
+    )
+    center_i[valid_trend] = trend_i[valid_trend].astype(np.int32)
+    status[valid_trend] = np.uint8(
+        PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND
+    )
+    fit_source[valid_trend] = np.uint8(
+        PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
+    )
+
+    arrays['physical_center_i'][:] = center_i
+    arrays['physical_center_t_sec'][:] = (
+        center_i.astype(np.float64) * dt
+    )
+    arrays['physical_model_status'][:] = status
+    arrays['physical_model_failure_reason'][:] = np.uint8(failure_reason)
+    arrays['physical_runtime_fit_source'][:] = fit_source
+    return _finalize_result(arrays)
+
+
+def _assign_robust_fallback_all(
+    *,
+    failure_reason: int,
+    table: CoarsePickTable,
+    merged: MergeResult,
+) -> PhysicalCenterResult:
+    arrays = _allocate_result_arrays(table)
+    n = int(table.n_traces)
+    n_samples = int(table.n_samples_orig)
+    dt = float(table.dt_scalar_sec)
+    robust_i = _as_vector(
+        'merged.robust_pick_i',
+        merged.robust_pick_i,
+        n_traces=n,
+        dtype=np.int64,
+    )
+    center_i = np.clip(robust_i, 0, n_samples - 1).astype(np.int32)
+    arrays['physical_center_i'][:] = center_i
+    arrays['physical_center_t_sec'][:] = (
+        center_i.astype(np.float64) * dt
+    )
+    arrays['physical_model_status'][:] = np.uint8(
+        PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST
+    )
+    arrays['physical_model_failure_reason'][:] = np.uint8(failure_reason)
+    arrays['physical_runtime_fit_source'][:] = np.uint8(
+        PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST
+    )
     return _finalize_result(arrays)
 
 
@@ -567,6 +691,84 @@ def _build_disabled_result(
         PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
     )
     return _finalize_result(arrays)
+
+
+def _assign_configured_fallback_all(
+    *,
+    fallback_mode: str,
+    failure_reason: int,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+) -> PhysicalCenterResult:
+    if str(fallback_mode) == 'robust':
+        return _assign_robust_fallback_all(
+            failure_reason=failure_reason,
+            table=table,
+            merged=merged,
+        )
+    return _assign_fallback_all(
+        failure_reason=failure_reason,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+    )
+
+
+def _emit_fallback_all_and_done(
+    *,
+    status: str,
+    reason: str,
+    fallback_mode: str,
+    failure_reason: int,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    reporter: object,
+    context: Mapping[str, object],
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+) -> PhysicalCenterResult:
+    n = int(table.n_traces)
+    reporter.emit(
+        'physical-center.stage_start',
+        **context,
+        stage='fallback_assign_all',
+        reason=reason,
+        fallback=fallback_mode,
+    )
+    stage_start = time.perf_counter()
+    with (
+        runtime_diagnostics.time_block('fallback_sec')
+        if runtime_diagnostics is not None
+        else nullcontext()
+    ):
+        result = _assign_configured_fallback_all(
+            fallback_mode=fallback_mode,
+            failure_reason=failure_reason,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+        )
+    reporter.emit(
+        'physical-center.stage_done',
+        **context,
+        stage='fallback_assign_all',
+        reason=reason,
+        fallback=fallback_mode,
+        elapsed=time.perf_counter() - stage_start,
+        n_traces=n,
+    )
+    reporter.emit(
+        'physical-center.done',
+        **context,
+        status=status,
+        n_traces=n,
+    )
+    return result
 
 
 def _apply_anchor_selection_diagnostics(
@@ -3361,6 +3563,78 @@ def _load_source_group_geometry_from_npz(
     )
 
 
+def preflight_geometry_two_piece_fallback(
+    *,
+    coarse_npz: Mapping[str, np.ndarray],
+    table: CoarsePickTable,
+    cfg: PhysicsLiteConfig,
+) -> PhysicalCenterFallbackPreflight:
+    n = int(table.n_traces)
+    use_geometry_offset = bool(cfg.physical_trend.use_geometry_offset)
+    try:
+        geometry = load_coarse_geometry_from_npz(coarse_npz, n_traces=n)
+    except (KeyError, TypeError, ValueError):
+        geometry = None
+
+    if use_geometry_offset and geometry is None:
+        return PhysicalCenterFallbackPreflight(
+            status='geometry_invalid',
+            reason='geometry_invalid',
+            fallback_mode=str(cfg.physical_runtime.geometry_invalid_fallback),
+            geometry_loaded=False,
+            groups=None,
+        )
+
+    source_grouping_invalid = False
+    groups: tuple[SourceGroup, ...] = ()
+    source_group_geometry = geometry
+    if source_group_geometry is None and not use_geometry_offset:
+        source_group_geometry = _load_source_group_geometry_from_npz(
+            coarse_npz,
+            n_traces=n,
+        )
+    if source_group_geometry is not None:
+        coord_group_tol_m = float(cfg.physical_trend.coord_group_tol_m)
+        source_xy_degenerate = is_source_xy_degenerate(
+            source_group_geometry,
+            table=table,
+            coord_group_tol_m=coord_group_tol_m,
+        )
+        if source_xy_degenerate and use_geometry_offset:
+            source_grouping_invalid = True
+        if not source_xy_degenerate:
+            groups = build_source_groups(
+                source_group_geometry,
+                coord_group_tol_m=coord_group_tol_m,
+            )
+    if len(groups) == 0 and not use_geometry_offset:
+        groups = _build_table_source_groups(table, n_traces=n)
+
+    if source_grouping_invalid:
+        return PhysicalCenterFallbackPreflight(
+            status='geometry_invalid',
+            reason='source_xy_degenerate',
+            fallback_mode=str(cfg.physical_runtime.geometry_invalid_fallback),
+            geometry_loaded=geometry is not None,
+            groups=len(groups),
+        )
+    if len(groups) == 0:
+        return PhysicalCenterFallbackPreflight(
+            status='geometry_invalid',
+            reason='source_group_empty',
+            fallback_mode=str(cfg.physical_runtime.group_invalid_fallback),
+            geometry_loaded=geometry is not None,
+            groups=0,
+        )
+    return PhysicalCenterFallbackPreflight(
+        status=None,
+        reason=None,
+        fallback_mode=None,
+        geometry_loaded=geometry is not None,
+        groups=len(groups),
+    )
+
+
 def build_geometry_two_piece_physical_center(
     *,
     coarse_npz: Mapping[str, np.ndarray],
@@ -3447,13 +3721,14 @@ def build_geometry_two_piece_physical_center(
     )
 
     if not bool(cfg.physical_trend.enabled):
+        result = _build_disabled_result(table, trend)
         reporter.emit(
             'physical-center.done',
             **context,
             status='disabled',
             n_traces=n,
         )
-        return _build_disabled_result(table, trend)
+        return result
 
     reporter.emit('physical-center.stage_start', **context, stage='geometry_load')
     stage_start = time.perf_counter()
@@ -3476,18 +3751,18 @@ def build_geometry_two_piece_physical_center(
 
     use_geometry_offset = bool(cfg.physical_trend.use_geometry_offset)
     if use_geometry_offset and geometry is None:
-        reporter.emit(
-            'physical-center.done',
-            **context,
+        return _emit_fallback_all_and_done(
             status='geometry_invalid',
-            n_traces=n,
-        )
-        return _assign_fallback_all(
+            reason='geometry_invalid',
+            fallback_mode=str(cfg.physical_runtime.geometry_invalid_fallback),
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
             table=table,
             feasible=feasible,
             trend=trend,
             merged=merged,
+            reporter=reporter,
+            context=context,
+            runtime_diagnostics=runtime_diagnostics,
         )
 
     segment_by_offset_sign = bool(cfg.physical_trend.segment_by_offset_sign)
@@ -3534,6 +3809,7 @@ def build_geometry_two_piece_physical_center(
         if runtime_diagnostics is not None
         else nullcontext()
     ):
+        source_grouping_invalid = False
         source_groups_from_geometry = False
         groups: tuple[SourceGroup, ...] = ()
         source_group_geometry = geometry
@@ -3550,19 +3826,7 @@ def build_geometry_two_piece_physical_center(
                 coord_group_tol_m=coord_group_tol_m,
             )
             if source_xy_degenerate and use_geometry_offset:
-                reporter.emit(
-                    'physical-center.done',
-                    **context,
-                    status='geometry_invalid',
-                    n_traces=n,
-                )
-                return _assign_fallback_all(
-                    failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
-                    table=table,
-                    feasible=feasible,
-                    trend=trend,
-                    merged=merged,
-                )
+                source_grouping_invalid = True
             if not source_xy_degenerate:
                 groups = build_source_groups(
                     source_group_geometry,
@@ -3579,19 +3843,34 @@ def build_geometry_two_piece_physical_center(
         groups=len(groups),
     )
 
-    if len(groups) == 0:
-        reporter.emit(
-            'physical-center.done',
-            **context,
+    if source_grouping_invalid:
+        return _emit_fallback_all_and_done(
             status='geometry_invalid',
-            n_traces=n,
-        )
-        return _assign_fallback_all(
+            reason='source_xy_degenerate',
+            fallback_mode=str(cfg.physical_runtime.geometry_invalid_fallback),
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
             table=table,
             feasible=feasible,
             trend=trend,
             merged=merged,
+            reporter=reporter,
+            context=context,
+            runtime_diagnostics=runtime_diagnostics,
+        )
+
+    if len(groups) == 0:
+        return _emit_fallback_all_and_done(
+            status='geometry_invalid',
+            reason='source_group_empty',
+            fallback_mode=str(cfg.physical_runtime.group_invalid_fallback),
+            failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+            reporter=reporter,
+            context=context,
+            runtime_diagnostics=runtime_diagnostics,
         )
 
     if runtime_diagnostics is not None:

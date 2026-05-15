@@ -77,6 +77,7 @@ def test_runtime_speedup_configs_live_in_expected_directory() -> None:
         "B202_side_on_gap_off.yaml",
         "B203_side_off_gap_on.yaml",
         "B204_side_off_gap_off.yaml",
+        "C301_side_gap_context_precompute_control.yaml",
     }
     assert not (CONFIG_DIR / "runtime_speedup").exists()
 

@@ -241,6 +241,9 @@ class PhysicalRuntimeDiagnosticsCfg:
 @dataclass(frozen=True)
 class PhysicalRuntimeCfg:
     fit_policy: str = 'full'
+    trend_result_mode: str = 'eager'
+    geometry_invalid_fallback: str = 'existing_trend'
+    group_invalid_fallback: str = 'existing_trend'
     diagnostics_enabled: bool = True
     write_runtime_summary: bool = True
     diagnostics: PhysicalRuntimeDiagnosticsCfg = PhysicalRuntimeDiagnosticsCfg()
@@ -694,6 +697,17 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
     )
     return PhysicalRuntimeCfg(
         fit_policy=optional_str(cfg, 'fit_policy', 'full'),
+        trend_result_mode=optional_str(cfg, 'trend_result_mode', 'eager'),
+        geometry_invalid_fallback=optional_str(
+            cfg,
+            'geometry_invalid_fallback',
+            'existing_trend',
+        ),
+        group_invalid_fallback=optional_str(
+            cfg,
+            'group_invalid_fallback',
+            'existing_trend',
+        ),
         diagnostics_enabled=bool(diagnostics.enabled),
         write_runtime_summary=bool(diagnostics.save_json),
         diagnostics=diagnostics,
@@ -848,6 +862,24 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
         msg = (
             "physical_runtime.fit_policy must be 'full' or 'anchor_source_xy', "
             f'got {cfg.fit_policy!r}'
+        )
+        raise ValueError(msg)
+    if cfg.trend_result_mode not in {'eager', 'lazy', 'disabled'}:
+        msg = (
+            "physical_runtime.trend_result_mode must be 'eager', 'lazy', "
+            f"or 'disabled', got {cfg.trend_result_mode!r}"
+        )
+        raise ValueError(msg)
+    if cfg.geometry_invalid_fallback not in {'existing_trend', 'robust'}:
+        msg = (
+            'physical_runtime.geometry_invalid_fallback must be '
+            f"'existing_trend' or 'robust', got {cfg.geometry_invalid_fallback!r}"
+        )
+        raise ValueError(msg)
+    if cfg.group_invalid_fallback not in {'existing_trend', 'robust'}:
+        msg = (
+            'physical_runtime.group_invalid_fallback must be '
+            f"'existing_trend' or 'robust', got {cfg.group_invalid_fallback!r}"
         )
         raise ValueError(msg)
     anchor = cfg.anchor_selection
