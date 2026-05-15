@@ -24,7 +24,7 @@ window_center:
   npz_key: physical_center_i
   fallback_npz_key: null
 infer:
-  ckpt_path: /workspace/proc/fbpick/site54/fbpick_coarse_train_out/ckpt/best.pt
+  ckpt_path: /workspace/proc/fbpick/site54/fbpick_fine_train_oof_out/ckpt/best.pt
   device: auto
   batch_size: 1
   num_workers: 0
