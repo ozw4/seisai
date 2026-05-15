@@ -38,8 +38,17 @@ from seisai_engine.pipelines.fbpick.physics.runtime_diagnostics import (
 from seisai_engine.pipelines.fbpick.physics.trend import TrendResult
 from seisai_pick.trend.trend_fit_strategy import (
     PiecewiseLinearTrend,
+    TwoPieceIRLSAutoBreakStrategy,
     TwoPieceRansacAutoBreakStrategy,
 )
+
+
+class _RecordingProgressReporter:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def emit(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
 
 
 def _two_piece_time_sec(offsets_m: np.ndarray) -> np.ndarray:
@@ -732,6 +741,51 @@ def test_physical_center_calls_existing_two_piece_ransac(monkeypatch) -> None:
     assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
 
 
+def test_physical_center_can_use_two_piece_irls_with_pmax_weights(monkeypatch) -> None:
+    calls: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+
+    def fake_fit(
+        self,
+        x_abs: torch.Tensor,
+        y_sec: torch.Tensor,
+        w_conf: torch.Tensor,
+    ):
+        calls.append(
+            (
+                x_abs.detach().cpu().numpy().copy(),
+                y_sec.detach().cpu().numpy().copy(),
+                w_conf.detach().cpu().numpy().copy(),
+            )
+        )
+        return _fake_piecewise_model()
+
+    monkeypatch.setattr(TwoPieceIRLSAutoBreakStrategy, 'fit', fake_fit)
+    pmax = np.linspace(0.1, 0.95, 12, dtype=np.float32)
+    inputs = _make_inputs(
+        offsets_m=np.linspace(50.0, 1600.0, 12, dtype=np.float32),
+        pmax=pmax,
+    )
+    coarse_npz, table, feasible, trend, merged = inputs
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=_physical_cfg(
+            {
+                'physical_trend': {'fit_kind': 'two_piece_irls_autobreak'},
+                'two_piece_irls': {'min_pts': 3, 'n_break_cand': 8, 'iters': 3},
+            }
+        ),
+    )
+
+    assert len(calls) == 1
+    np.testing.assert_allclose(calls[0][2], pmax)
+    assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+
+
 def test_parallel_cached_context_hit_accounting_excludes_owner_trace() -> None:
     diagnostics = PhysicalRuntimeDiagnostics()
     plan = physical_center_mod._ObservationPlan(
@@ -752,6 +806,7 @@ def test_parallel_cached_context_hit_accounting_excludes_owner_trace() -> None:
         assignments=(),
         x_obs=np.arange(4, dtype=np.float32),
         y_obs=np.arange(4, dtype=np.float32),
+        w_obs=np.ones((4,), dtype=np.float32),
     )
 
     physical_center_mod._record_cached_context_hits(
@@ -842,6 +897,7 @@ def test_fit_task_cache_preserves_specific_prefit_failure_reason() -> None:
         plan=plan,
         x_obs=np.asarray([0.0, 20.0, 40.0, 60.0], dtype=np.float32),
         y_obs=np.asarray([0.0, 0.02, 0.04, 0.06], dtype=np.float32),
+        w_obs=np.ones((4,), dtype=np.float32),
         min_pts=3,
         min_offset_spread_m=1.0,
         cache=cache,
@@ -872,6 +928,7 @@ def test_prefit_task_failure_does_not_record_ransac_fit_call() -> None:
         assignments=(),
         x_obs=np.arange(4, dtype=np.float32),
         y_obs=np.arange(4, dtype=np.float32),
+        w_obs=np.ones((4,), dtype=np.float32),
     )
     task_result = physical_center_mod._FitTaskResult(
         fit_key=work_item.fit_key,
@@ -1485,6 +1542,7 @@ def test_thread_fit_executor_matches_serial_unique_contexts(monkeypatch) -> None
     }
     serial_diagnostics = PhysicalRuntimeDiagnostics()
     parallel_diagnostics = PhysicalRuntimeDiagnostics()
+    progress = _RecordingProgressReporter()
     original_torch_threads = torch.get_num_threads()
     caller_torch_threads = 2 if original_torch_threads != 2 else 1
     worker_torch_threads = 1 if caller_torch_threads != 1 else 2
@@ -1521,6 +1579,7 @@ def test_thread_fit_executor_matches_serial_unique_contexts(monkeypatch) -> None
                 }
             ),
             runtime_diagnostics=parallel_diagnostics,
+            progress=progress,
         )
         assert torch.get_num_threads() == caller_torch_threads
     finally:
@@ -1558,6 +1617,12 @@ def test_thread_fit_executor_matches_serial_unique_contexts(monkeypatch) -> None
     assert summary['fit_executor_max_workers'] == 2
     assert summary['fit_executor_tasks'] == 2
     assert summary['fit_executor_wall_sec'] >= 0.0
+    fit_progress_events = [
+        fields for event, fields in progress.events if event == 'fit.progress'
+    ]
+    assert fit_progress_events
+    assert fit_progress_events[-1]['done'] == 2
+    assert fit_progress_events[-1]['total'] == 2
 
 
 def test_thread_fit_executor_propagates_worker_fit_runtime_error(monkeypatch) -> None:

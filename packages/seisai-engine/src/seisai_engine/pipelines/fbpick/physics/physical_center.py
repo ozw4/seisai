@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 import numpy as np
 import torch
-from seisai_pick.trend.trend_fit_strategy import TwoPieceRansacAutoBreakStrategy
+from seisai_pick.trend.trend_fit_strategy import (
+    TwoPieceIRLSAutoBreakStrategy,
+    TwoPieceRansacAutoBreakStrategy,
+)
 
 from .config import PhysicsLiteConfig
 from .feasible import FeasibleBandResult, compute_velocity_t0_band_from_arrays
@@ -24,6 +27,7 @@ from .geometry import (
 )
 from .merge import MergeResult
 from .pick_table import CoarsePickTable
+from .progress import NullProgressReporter, build_progress_reporter
 from .runtime_diagnostics import PhysicalRuntimeDiagnostics
 from .runtime_policy import (
     SourceXYAnchorSelectionResult,
@@ -269,6 +273,7 @@ class _FitContextWorkItem:
     assignments: tuple[_TracePlanAssignment, ...]
     x_obs: np.ndarray
     y_obs: np.ndarray
+    w_obs: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -280,8 +285,11 @@ class _FitContextWorkResult:
 
 @dataclass(frozen=True)
 class _FitTaskCfgValues:
+    fit_kind: str
     n_iter: int
     inlier_th_ms: float
+    irls_huber_c: float
+    irls_iters: int
     min_pts: int
     n_break_cand: int
     q_lo: float
@@ -298,6 +306,7 @@ class _FitTask:
     fit_key: tuple[int, ...]
     x_obs: np.ndarray
     y_obs: np.ndarray
+    w_obs: np.ndarray
     obs_count_before_sampling: int
     cfg_values: _FitTaskCfgValues
 
@@ -1186,7 +1195,7 @@ def _build_observation_plan(
     valid_obs_key = group_context.valid_obs_key
     neighbor_count = int(group_context.neighbor_count)
     prefilter_valid_count = int(group_context.prefilter_valid_count)
-    min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
+    min_fit_obs = 2 * _fit_min_pts(cfg)
 
     if prefilter_valid_count < min_fit_obs:
         return _ObservationPlan(
@@ -1315,7 +1324,27 @@ def _tensor_to_numpy(value) -> np.ndarray:
     return np.asarray(value)
 
 
-def _fit_strategy(cfg: PhysicsLiteConfig) -> TwoPieceRansacAutoBreakStrategy:
+_PhysicalFitStrategy = TwoPieceRansacAutoBreakStrategy | TwoPieceIRLSAutoBreakStrategy
+
+
+def _fit_min_pts(cfg: PhysicsLiteConfig) -> int:
+    if cfg.physical_trend.fit_kind == 'two_piece_irls_autobreak':
+        return int(cfg.two_piece_irls.min_pts)
+    return int(cfg.two_piece_ransac.min_pts)
+
+
+def _fit_strategy(cfg: PhysicsLiteConfig) -> _PhysicalFitStrategy:
+    if cfg.physical_trend.fit_kind == 'two_piece_irls_autobreak':
+        return TwoPieceIRLSAutoBreakStrategy(
+            huber_c=float(cfg.two_piece_irls.huber_c),
+            iters=int(cfg.two_piece_irls.iters),
+            min_pts=int(cfg.two_piece_irls.min_pts),
+            n_break_cand=int(cfg.two_piece_irls.n_break_cand),
+            q_lo=float(cfg.two_piece_irls.q_lo),
+            q_hi=float(cfg.two_piece_irls.q_hi),
+            slope_eps=float(cfg.two_piece_irls.slope_eps),
+            sort_offsets=bool(cfg.two_piece_irls.sort_offsets),
+        )
     return TwoPieceRansacAutoBreakStrategy(
         n_iter=int(cfg.two_piece_ransac.n_iter),
         inlier_th_ms=float(cfg.two_piece_ransac.inlier_th_ms),
@@ -1327,6 +1356,29 @@ def _fit_strategy(cfg: PhysicsLiteConfig) -> TwoPieceRansacAutoBreakStrategy:
         slope_eps=float(cfg.two_piece_ransac.slope_eps),
         sort_offsets=bool(cfg.two_piece_ransac.sort_offsets),
     )
+
+
+def _confidence_weights_for_obs(coarse_pmax_obs: np.ndarray) -> np.ndarray:
+    w = np.asarray(coarse_pmax_obs, dtype=np.float32)
+    if w.ndim != 1:
+        w = w.reshape(-1)
+    good = np.isfinite(w) & (w > np.float32(0.0))
+    if not bool(np.any(good)):
+        return np.ones_like(w, dtype=np.float32)
+    fill = np.float32(np.median(w[good].astype(np.float64, copy=False)))
+    out = np.where(good, w, fill).astype(np.float32, copy=False)
+    return np.clip(out, np.float32(1.0e-6), None)
+
+
+def _fit_strategy_model(
+    strategy: _PhysicalFitStrategy,
+    x_tensor: torch.Tensor,
+    y_tensor: torch.Tensor,
+    w_tensor: torch.Tensor,
+):
+    if isinstance(strategy, TwoPieceIRLSAutoBreakStrategy):
+        return strategy.fit(x_tensor, y_tensor, w_tensor)
+    return strategy.fit(x_tensor, y_tensor)
 
 
 def _median_time_position(local_positions: np.ndarray, y_obs: np.ndarray) -> int:
@@ -1630,16 +1682,40 @@ def _offset_spread_failure_reason(
 
 def _fit_task_cfg_values(cfg: PhysicsLiteConfig) -> _FitTaskCfgValues:
     executor = cfg.physical_runtime.fit_executor
+    is_irls = cfg.physical_trend.fit_kind == 'two_piece_irls_autobreak'
     return _FitTaskCfgValues(
+        fit_kind=str(cfg.physical_trend.fit_kind),
         n_iter=int(cfg.two_piece_ransac.n_iter),
         inlier_th_ms=float(cfg.two_piece_ransac.inlier_th_ms),
-        min_pts=int(cfg.two_piece_ransac.min_pts),
-        n_break_cand=int(cfg.two_piece_ransac.n_break_cand),
-        q_lo=float(cfg.two_piece_ransac.q_lo),
-        q_hi=float(cfg.two_piece_ransac.q_hi),
+        irls_huber_c=float(cfg.two_piece_irls.huber_c),
+        irls_iters=int(cfg.two_piece_irls.iters),
+        min_pts=_fit_min_pts(cfg),
+        n_break_cand=(
+            int(cfg.two_piece_irls.n_break_cand)
+            if is_irls
+            else int(cfg.two_piece_ransac.n_break_cand)
+        ),
+        q_lo=(
+            float(cfg.two_piece_irls.q_lo)
+            if is_irls
+            else float(cfg.two_piece_ransac.q_lo)
+        ),
+        q_hi=(
+            float(cfg.two_piece_irls.q_hi)
+            if is_irls
+            else float(cfg.two_piece_ransac.q_hi)
+        ),
         seed=int(cfg.two_piece_ransac.seed),
-        slope_eps=float(cfg.two_piece_ransac.slope_eps),
-        sort_offsets=bool(cfg.two_piece_ransac.sort_offsets),
+        slope_eps=(
+            float(cfg.two_piece_irls.slope_eps)
+            if is_irls
+            else float(cfg.two_piece_ransac.slope_eps)
+        ),
+        sort_offsets=(
+            bool(cfg.two_piece_irls.sort_offsets)
+            if is_irls
+            else bool(cfg.two_piece_ransac.sort_offsets)
+        ),
         min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
         torch_num_threads_per_worker=int(executor.torch_num_threads_per_worker),
     )
@@ -1654,6 +1730,7 @@ def _fit_task_from_work_item(
         fit_key=work_item.fit_key,
         x_obs=np.asarray(work_item.x_obs, dtype=np.float32),
         y_obs=np.asarray(work_item.y_obs, dtype=np.float32),
+        w_obs=np.asarray(work_item.w_obs, dtype=np.float32),
         obs_count_before_sampling=int(work_item.obs_count_before_sampling),
         cfg_values=cfg_values,
     )
@@ -1661,7 +1738,18 @@ def _fit_task_from_work_item(
 
 def _strategy_from_fit_task_cfg(
     cfg_values: _FitTaskCfgValues,
-) -> TwoPieceRansacAutoBreakStrategy:
+) -> _PhysicalFitStrategy:
+    if cfg_values.fit_kind == 'two_piece_irls_autobreak':
+        return TwoPieceIRLSAutoBreakStrategy(
+            huber_c=float(cfg_values.irls_huber_c),
+            iters=int(cfg_values.irls_iters),
+            min_pts=int(cfg_values.min_pts),
+            n_break_cand=int(cfg_values.n_break_cand),
+            q_lo=float(cfg_values.q_lo),
+            q_hi=float(cfg_values.q_hi),
+            slope_eps=float(cfg_values.slope_eps),
+            sort_offsets=bool(cfg_values.sort_offsets),
+        )
     return TwoPieceRansacAutoBreakStrategy(
         n_iter=int(cfg_values.n_iter),
         inlier_th_ms=float(cfg_values.inlier_th_ms),
@@ -1679,6 +1767,7 @@ def _run_fit_task(task: _FitTask) -> _FitTaskResult:
     cfg_values = task.cfg_values
     x_obs = np.asarray(task.x_obs, dtype=np.float32)
     y_obs = np.asarray(task.y_obs, dtype=np.float32)
+    w_obs = np.asarray(task.w_obs, dtype=np.float32)
     spread_failure_reason = _offset_spread_failure_reason(
         x_obs,
         min_pts=int(cfg_values.min_pts),
@@ -1699,9 +1788,11 @@ def _run_fit_task(task: _FitTask) -> _FitTaskResult:
 
     strategy = _strategy_from_fit_task_cfg(cfg_values)
     start = time.perf_counter()
-    trend_model = strategy.fit(
+    trend_model = _fit_strategy_model(
+        strategy,
         torch.as_tensor(x_obs, dtype=torch.float32),
         torch.as_tensor(y_obs, dtype=torch.float32),
+        torch.as_tensor(w_obs, dtype=torch.float32),
     )
     elapsed = time.perf_counter() - start
     if trend_model is None:
@@ -1741,40 +1832,136 @@ def _set_fit_worker_torch_num_threads(num_threads: int) -> None:
     torch.set_num_threads(int(num_threads))
 
 
+def _fit_progress_fields(
+    *,
+    done: int,
+    total: int,
+    start_sec: float,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    force: bool = False,
+) -> dict[str, object]:
+    elapsed = max(0.0, time.perf_counter() - float(start_sec))
+    rate = (float(done) / elapsed) if elapsed > 0.0 else 0.0
+    remaining = max(0, int(total) - int(done))
+    eta = (float(remaining) / rate) if rate > 0.0 else 0.0
+    fields: dict[str, object] = {
+        'done': int(done),
+        'total': int(total),
+        'elapsed': elapsed,
+        'rate': rate,
+        'eta': eta,
+        'force': force,
+    }
+    if runtime_diagnostics is not None:
+        fields.update(
+            {
+                'cache_hit': int(runtime_diagnostics.n_cache_hits),
+                'cache_miss': int(runtime_diagnostics.n_cache_misses),
+                'n_fit_calls': int(runtime_diagnostics.n_fit_calls),
+                'fit_total_sec': float(runtime_diagnostics.ransac_fit_total_sec),
+            }
+        )
+    return fields
+
+
 def _run_fit_tasks_with_executor(
     tasks: list[_FitTask],
     *,
     cfg: PhysicsLiteConfig,
+    progress: object | None = None,
+    progress_context: Mapping[str, object] | None = None,
+    progress_start_done: int = 0,
+    progress_total: int | None = None,
+    progress_start_sec: float | None = None,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+    progress_cache_miss_base: int = 0,
+    progress_fit_calls_base: int = 0,
+    progress_fit_total_sec_base: float = 0.0,
 ) -> dict[tuple[int, ...], _FitTaskResult]:
+    reporter = (
+        progress
+        if progress is not None
+        else build_progress_reporter(cfg.physical_runtime.progress)
+    )
+    context = dict(progress_context or {})
+    total = len(tasks) if progress_total is None else int(progress_total)
+    start_sec = time.perf_counter() if progress_start_sec is None else progress_start_sec
+    fit_calls_done = 0
+    fit_total_sec = float(progress_fit_total_sec_base)
     executor_cfg = cfg.physical_runtime.fit_executor
     if str(executor_cfg.backend) == 'thread':
         with ThreadPoolExecutor(max_workers=executor_cfg.max_workers) as executor:
-            results = executor.map(
-                _run_fit_task,
-                tasks,
-                chunksize=int(executor_cfg.chunksize),
-            )
-            return {result.fit_key: result for result in results}
+            futures = [executor.submit(_run_fit_task, task) for task in tasks]
+            out: dict[tuple[int, ...], _FitTaskResult] = {}
+            for completed, future in enumerate(as_completed(futures), start=1):
+                result = future.result()
+                out[result.fit_key] = result
+                if bool(result.fit_attempted):
+                    fit_calls_done += 1
+                    fit_total_sec += float(result.elapsed_sec)
+                fields = _fit_progress_fields(
+                    done=int(progress_start_done) + completed,
+                    total=total,
+                    start_sec=start_sec,
+                    runtime_diagnostics=runtime_diagnostics,
+                    force=int(progress_start_done) + completed >= total,
+                )
+                fields.update(
+                    {
+                        'cache_miss': int(progress_cache_miss_base) + completed,
+                        'n_fit_calls': int(progress_fit_calls_base) + fit_calls_done,
+                        'fit_total_sec': fit_total_sec,
+                    }
+                )
+                reporter.emit(
+                    'fit.progress',
+                    **context,
+                    **fields,
+                )
+            return out
 
     with ProcessPoolExecutor(
         max_workers=executor_cfg.max_workers,
         initializer=_set_fit_worker_torch_num_threads,
         initargs=(int(executor_cfg.torch_num_threads_per_worker),),
     ) as executor:
-        results = executor.map(
-            _run_fit_task,
-            tasks,
-            chunksize=int(executor_cfg.chunksize),
-        )
-        return {result.fit_key: result for result in results}
+        futures = [executor.submit(_run_fit_task, task) for task in tasks]
+        out: dict[tuple[int, ...], _FitTaskResult] = {}
+        for completed, future in enumerate(as_completed(futures), start=1):
+            result = future.result()
+            out[result.fit_key] = result
+            if bool(result.fit_attempted):
+                fit_calls_done += 1
+                fit_total_sec += float(result.elapsed_sec)
+            fields = _fit_progress_fields(
+                done=int(progress_start_done) + completed,
+                total=total,
+                start_sec=start_sec,
+                runtime_diagnostics=runtime_diagnostics,
+                force=int(progress_start_done) + completed >= total,
+            )
+            fields.update(
+                {
+                    'cache_miss': int(progress_cache_miss_base) + completed,
+                    'n_fit_calls': int(progress_fit_calls_base) + fit_calls_done,
+                    'fit_total_sec': fit_total_sec,
+                }
+            )
+            reporter.emit(
+                'fit.progress',
+                **context,
+                **fields,
+            )
+        return out
 
 
 def _fit_model_for_plan(
     *,
-    strategy: TwoPieceRansacAutoBreakStrategy,
+    strategy: _PhysicalFitStrategy,
     plan: _ObservationPlan,
     x_obs: np.ndarray,
     y_obs: np.ndarray,
+    w_obs: np.ndarray,
     min_pts: int,
     min_offset_spread_m: float,
     cache: dict[tuple[int, ...], _FitCacheEntry],
@@ -1801,14 +1988,25 @@ def _fit_model_for_plan(
         try:
             x_tensor = torch.as_tensor(x_obs, dtype=torch.float32)
             y_tensor = torch.as_tensor(y_obs, dtype=torch.float32)
+            w_tensor = torch.as_tensor(w_obs, dtype=torch.float32)
             if runtime_diagnostics is None:
-                trend_model = strategy.fit(x_tensor, y_tensor)
+                trend_model = _fit_strategy_model(
+                    strategy,
+                    x_tensor,
+                    y_tensor,
+                    w_tensor,
+                )
             else:
                 with runtime_diagnostics.time_ransac_fit(
                     obs_count=int(np.asarray(x_obs).size),
                     obs_count_before=obs_count_before_sampling,
                 ):
-                    trend_model = strategy.fit(x_tensor, y_tensor)
+                    trend_model = _fit_strategy_model(
+                        strategy,
+                        x_tensor,
+                        y_tensor,
+                        w_tensor,
+                    )
         except (TypeError, ValueError, RuntimeError):
             trend_model = None
 
@@ -2264,6 +2462,7 @@ def _build_fit_context_work_items(
     *,
     offset_abs_m: np.ndarray,
     pick_t_sec: np.ndarray,
+    coarse_pmax: np.ndarray,
     runtime_fit_source: int,
 ) -> list[_FitContextWorkItem]:
     work_items: list[_FitContextWorkItem] = []
@@ -2286,6 +2485,9 @@ def _build_fit_context_work_items(
                 assignments=tuple(assignments),
                 x_obs=np.asarray(offset_abs_m[obs_indices], dtype=np.float32),
                 y_obs=np.asarray(pick_t_sec[obs_indices], dtype=np.float32),
+                w_obs=_confidence_weights_for_obs(
+                    np.asarray(coarse_pmax, dtype=np.float32)[obs_indices]
+                ),
             )
         )
     return work_items
@@ -2323,7 +2525,7 @@ def _fit_and_assign_context_work_item(
     trend: TrendResult,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
-    strategy: TwoPieceRansacAutoBreakStrategy,
+    strategy: _PhysicalFitStrategy,
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
 ) -> _FitContextWorkResult:
@@ -2332,7 +2534,8 @@ def _fit_and_assign_context_work_item(
         plan=work_item.fit_plan,
         x_obs=work_item.x_obs,
         y_obs=work_item.y_obs,
-        min_pts=int(cfg.two_piece_ransac.min_pts),
+        w_obs=work_item.w_obs,
+        min_pts=_fit_min_pts(cfg),
         min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
         cache=fit_cache,
         runtime_diagnostics=runtime_diagnostics,
@@ -2510,10 +2713,15 @@ def _fit_and_assign_context_work_items(
     trend: TrendResult,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
-    strategy: TwoPieceRansacAutoBreakStrategy,
+    strategy: _PhysicalFitStrategy,
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    progress: object | None = None,
+    progress_context: Mapping[str, object] | None = None,
 ) -> dict[tuple[int, ...], _FitContextWorkResult]:
+    reporter = progress if progress is not None else NullProgressReporter()
+    context = dict(progress_context or {})
+    fit_start = time.perf_counter()
     if bool(cfg.physical_runtime.fit_executor.enabled) and work_items:
         return _fit_and_assign_context_work_items_parallel(
             work_items,
@@ -2526,10 +2734,20 @@ def _fit_and_assign_context_work_items(
             cfg=cfg,
             fit_cache=fit_cache,
             runtime_diagnostics=runtime_diagnostics,
+            progress=reporter,
+            progress_context=context,
+            progress_start_sec=fit_start,
         )
 
     results: dict[tuple[int, ...], _FitContextWorkResult] = {}
-    for work_item in work_items:
+    total = len(work_items)
+    reporter.emit(
+        'physical-center.fit_start',
+        **context,
+        work_items=total,
+        executor='serial',
+    )
+    for done, work_item in enumerate(work_items, start=1):
         results[work_item.fit_key] = _fit_and_assign_context_work_item(
             arrays=arrays,
             work_item=work_item,
@@ -2542,6 +2760,17 @@ def _fit_and_assign_context_work_items(
             strategy=strategy,
             fit_cache=fit_cache,
             runtime_diagnostics=runtime_diagnostics,
+        )
+        reporter.emit(
+            'fit.progress',
+            **context,
+            **_fit_progress_fields(
+                done=done,
+                total=total,
+                start_sec=fit_start,
+                runtime_diagnostics=runtime_diagnostics,
+                force=done >= total,
+            ),
         )
     return results
 
@@ -2619,7 +2848,22 @@ def _fit_and_assign_context_work_items_parallel(
     cfg: PhysicsLiteConfig,
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    progress: object | None = None,
+    progress_context: Mapping[str, object] | None = None,
+    progress_start_sec: float | None = None,
 ) -> dict[tuple[int, ...], _FitContextWorkResult]:
+    reporter = progress if progress is not None else NullProgressReporter()
+    context = dict(progress_context or {})
+    fit_start = time.perf_counter() if progress_start_sec is None else progress_start_sec
+    total = len(work_items)
+    done = 0
+    reporter.emit(
+        'physical-center.fit_start',
+        **context,
+        work_items=total,
+        executor=str(cfg.physical_runtime.fit_executor.backend),
+        max_workers=cfg.physical_runtime.fit_executor.max_workers,
+    )
     results: dict[tuple[int, ...], _FitContextWorkResult] = {}
     pending_items: list[_FitContextWorkItem] = []
     tasks: list[_FitTask] = []
@@ -2655,10 +2899,46 @@ def _fit_and_assign_context_work_items_parallel(
             fit_failure_reason=fit_failure_reason,
             runtime_diagnostics=runtime_diagnostics,
         )
+        done += 1
+        reporter.emit(
+            'fit.progress',
+            **context,
+            **_fit_progress_fields(
+                done=done,
+                total=total,
+                start_sec=fit_start,
+                runtime_diagnostics=runtime_diagnostics,
+                force=done >= total,
+            ),
+        )
 
     if tasks:
         start = time.perf_counter()
-        task_results_by_key = _run_fit_tasks_with_executor(tasks, cfg=cfg)
+        task_results_by_key = _run_fit_tasks_with_executor(
+            tasks,
+            cfg=cfg,
+            progress=reporter,
+            progress_context=context,
+            progress_start_done=done,
+            progress_total=total,
+            progress_start_sec=fit_start,
+            runtime_diagnostics=runtime_diagnostics,
+            progress_cache_miss_base=(
+                int(runtime_diagnostics.n_cache_misses)
+                if runtime_diagnostics is not None
+                else 0
+            ),
+            progress_fit_calls_base=(
+                int(runtime_diagnostics.n_fit_calls)
+                if runtime_diagnostics is not None
+                else 0
+            ),
+            progress_fit_total_sec_base=(
+                float(runtime_diagnostics.ransac_fit_total_sec)
+                if runtime_diagnostics is not None
+                else 0.0
+            ),
+        )
         wall_sec = time.perf_counter() - start
         if runtime_diagnostics is not None:
             runtime_diagnostics.record_fit_executor_run(
@@ -2676,6 +2956,7 @@ def _fit_and_assign_context_work_items_parallel(
                 work_item=work_item,
                 task_result=task_result,
             )
+            done += 1
             results[work_item.fit_key] = _assign_fit_context_work_item_outcome(
                 arrays=arrays,
                 work_item=work_item,
@@ -3089,7 +3370,15 @@ def build_geometry_two_piece_physical_center(
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+    progress: object | None = None,
+    progress_context: Mapping[str, object] | None = None,
 ) -> PhysicalCenterResult:
+    reporter = (
+        progress
+        if progress is not None
+        else build_progress_reporter(cfg.physical_runtime.progress)
+    )
+    context = dict(progress_context or {})
     _validate_table(table)
     n = int(table.n_traces)
     n_samples = int(table.n_samples_orig)
@@ -3141,10 +3430,33 @@ def build_geometry_two_piece_physical_center(
             backend=str(fit_executor.backend),
             max_workers=fit_executor.max_workers,
         )
+    sampling = cfg.physical_runtime.observation_sampling
+    fit_executor = cfg.physical_runtime.fit_executor
+    reporter.emit(
+        'physical-center.start',
+        **context,
+        fit_kind=str(cfg.physical_trend.fit_kind),
+        fit_policy=str(cfg.physical_runtime.fit_policy),
+        groups='pending',
+        sampling=('on' if bool(sampling.enabled) else 'off'),
+        executor=(
+            f'{fit_executor.backend}:{fit_executor.max_workers}'
+            if bool(fit_executor.enabled)
+            else 'serial'
+        ),
+    )
 
     if not bool(cfg.physical_trend.enabled):
+        reporter.emit(
+            'physical-center.done',
+            **context,
+            status='disabled',
+            n_traces=n,
+        )
         return _build_disabled_result(table, trend)
 
+    reporter.emit('physical-center.stage_start', **context, stage='geometry_load')
+    stage_start = time.perf_counter()
     with (
         runtime_diagnostics.time_block('geometry_load_sec')
         if runtime_diagnostics is not None
@@ -3154,9 +3466,22 @@ def build_geometry_two_piece_physical_center(
             geometry = load_coarse_geometry_from_npz(coarse_npz, n_traces=n)
         except (KeyError, TypeError, ValueError):
             geometry = None
+    reporter.emit(
+        'physical-center.stage_done',
+        **context,
+        stage='geometry_load',
+        elapsed=time.perf_counter() - stage_start,
+        geometry_loaded=geometry is not None,
+    )
 
     use_geometry_offset = bool(cfg.physical_trend.use_geometry_offset)
     if use_geometry_offset and geometry is None:
+        reporter.emit(
+            'physical-center.done',
+            **context,
+            status='geometry_invalid',
+            n_traces=n,
+        )
         return _assign_fallback_all(
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
             table=table,
@@ -3202,6 +3527,8 @@ def build_geometry_two_piece_physical_center(
             offset_signed_m = None
         offset_source = PHYSICAL_OFFSET_SOURCE_HEADER
 
+    reporter.emit('physical-center.stage_start', **context, stage='source_grouping')
+    stage_start = time.perf_counter()
     with (
         runtime_diagnostics.time_block('source_grouping_sec')
         if runtime_diagnostics is not None
@@ -3223,6 +3550,12 @@ def build_geometry_two_piece_physical_center(
                 coord_group_tol_m=coord_group_tol_m,
             )
             if source_xy_degenerate and use_geometry_offset:
+                reporter.emit(
+                    'physical-center.done',
+                    **context,
+                    status='geometry_invalid',
+                    n_traces=n,
+                )
                 return _assign_fallback_all(
                     failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
                     table=table,
@@ -3238,8 +3571,21 @@ def build_geometry_two_piece_physical_center(
                 source_groups_from_geometry = len(groups) > 0
         if len(groups) == 0 and not use_geometry_offset:
             groups = _build_table_source_groups(table, n_traces=n)
+    reporter.emit(
+        'physical-center.stage_done',
+        **context,
+        stage='source_grouping',
+        elapsed=time.perf_counter() - stage_start,
+        groups=len(groups),
+    )
 
     if len(groups) == 0:
+        reporter.emit(
+            'physical-center.done',
+            **context,
+            status='geometry_invalid',
+            n_traces=n,
+        )
         return _assign_fallback_all(
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
             table=table,
@@ -3251,6 +3597,8 @@ def build_geometry_two_piece_physical_center(
     if runtime_diagnostics is not None:
         runtime_diagnostics.set_source_groups(len(groups))
 
+    reporter.emit('physical-center.stage_start', **context, stage='source_group_ordering')
+    stage_start = time.perf_counter()
     with (
         runtime_diagnostics.time_block('source_group_ordering_sec')
         if runtime_diagnostics is not None
@@ -3262,6 +3610,12 @@ def build_geometry_two_piece_physical_center(
             group_id_by_trace[
                 np.asarray(group.trace_indices, dtype=np.int64)
             ] = np.int32(group.group_id)
+    reporter.emit(
+        'physical-center.stage_done',
+        **context,
+        stage='source_group_ordering',
+        elapsed=time.perf_counter() - stage_start,
+    )
 
     pick_t_sec = _as_vector(
         'table.coarse_pick_t_sec',
@@ -3269,6 +3623,12 @@ def build_geometry_two_piece_physical_center(
         n_traces=n,
         dtype=np.float32,
     )
+    reporter.emit(
+        'physical-center.stage_start',
+        **context,
+        stage='valid_mask_velocity_prefilter',
+    )
+    stage_start = time.perf_counter()
     with (
         runtime_diagnostics.time_block('valid_mask_build_sec')
         if runtime_diagnostics is not None
@@ -3282,10 +3642,19 @@ def build_geometry_two_piece_physical_center(
             feasible=feasible,
             cfg=cfg,
         )
+    reporter.emit(
+        'physical-center.stage_done',
+        **context,
+        stage='valid_mask_velocity_prefilter',
+        elapsed=time.perf_counter() - stage_start,
+        valid=int(np.count_nonzero(valid_for_fit)),
+    )
 
     observation_plan_cache = _ObservationPlanCache(
         offset_signed_labels=offset_signed_labels,
     )
+    reporter.emit('physical-center.stage_start', **context, stage='neighbor_plan')
+    stage_start = time.perf_counter()
     with (
         runtime_diagnostics.time_block('neighbor_plan_sec')
         if runtime_diagnostics is not None
@@ -3301,8 +3670,17 @@ def build_geometry_two_piece_physical_center(
             plan_cache=observation_plan_cache,
             runtime_diagnostics=runtime_diagnostics,
         )
+    reporter.emit(
+        'physical-center.stage_done',
+        **context,
+        stage='neighbor_plan',
+        elapsed=time.perf_counter() - stage_start,
+        contexts=len(group_context_by_id),
+    )
 
     arrays = _allocate_result_arrays(table)
+    reporter.emit('physical-center.stage_start', **context, stage='anchor_selection')
+    stage_start = time.perf_counter()
     with (
         runtime_diagnostics.time_block('anchor_selection_sec')
         if runtime_diagnostics is not None
@@ -3314,9 +3692,16 @@ def build_geometry_two_piece_physical_center(
             cfg=cfg,
             runtime_diagnostics=runtime_diagnostics,
         )
+    reporter.emit(
+        'physical-center.stage_done',
+        **context,
+        stage='anchor_selection',
+        elapsed=time.perf_counter() - stage_start,
+        enabled=anchor_selection is not None,
+    )
     strategy = _fit_strategy(cfg)
     fit_cache: dict[tuple[int, ...], _FitCacheEntry] = {}
-    min_fit_obs = 2 * int(cfg.two_piece_ransac.min_pts)
+    min_fit_obs = 2 * _fit_min_pts(cfg)
 
     if cfg.physical_runtime.fit_policy == 'anchor_source_xy':
         if anchor_selection is None:
@@ -3379,7 +3764,15 @@ def build_geometry_two_piece_physical_center(
             anchor_assignments_by_fit,
             offset_abs_m=offset_abs_m,
             pick_t_sec=pick_t_sec,
+            coarse_pmax=table.coarse_pmax,
             runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+        )
+        reporter.emit(
+            'physical-center.contexts_built',
+            **context,
+            phase='anchor',
+            work_items=len(anchor_work_items),
+            unique_keys=len(anchor_assignments_by_fit),
         )
         anchor_fit_calls_before = (
             int(runtime_diagnostics.n_fit_calls)
@@ -3398,6 +3791,8 @@ def build_geometry_two_piece_physical_center(
             strategy=strategy,
             fit_cache=fit_cache,
             runtime_diagnostics=runtime_diagnostics,
+            progress=reporter,
+            progress_context=context,
         )
         if runtime_diagnostics is not None:
             anchor_fit_call_delta = max(
@@ -3425,11 +3820,11 @@ def build_geometry_two_piece_physical_center(
             int,
             dict[tuple[int, int, bool], _AnchorModelContext],
         ] = {}
-        for model_key, context in anchor_models.items():
+        for model_key, anchor_context in anchor_models.items():
             anchor_group_id, side, segment_id, relaxed = model_key
             anchor_models_by_group_id.setdefault(int(anchor_group_id), {}).setdefault(
                 (int(side), int(segment_id), bool(relaxed)),
-                context,
+                anchor_context,
             )
 
         for group in groups:
@@ -3517,7 +3912,7 @@ def build_geometry_two_piece_physical_center(
                     )
                     arrays['physical_model_side'][trace_idx] = np.int8(plan.side)
 
-                context = None
+                anchor_context = None
                 key = None
                 if runtime_diagnostics is not None:
                     runtime_diagnostics.record_compatible_anchor_search_candidates(
@@ -3529,12 +3924,14 @@ def build_geometry_two_piece_physical_center(
                     and distance_ok
                 ):
                     key = _anchor_model_key(nearest_anchor_id, plan)
-                    context = compatible_anchor_context_by_plan_key.get(
+                    anchor_context = compatible_anchor_context_by_plan_key.get(
                         (int(plan.side), int(plan.segment_id), bool(plan.relaxed))
                     )
 
-                if context is not None and plan is not None and key is not None:
-                    reuse_items.setdefault(key, []).append((trace_idx, plan, context))
+                if anchor_context is not None and plan is not None and key is not None:
+                    reuse_items.setdefault(key, []).append(
+                        (trace_idx, plan, anchor_context)
+                    )
                     continue
                 if runtime_diagnostics is not None:
                     runtime_diagnostics.record_no_compatible_anchor_context()
@@ -3582,9 +3979,17 @@ def build_geometry_two_piece_physical_center(
                     fallback_full_assignments_by_fit,
                     offset_abs_m=offset_abs_m,
                     pick_t_sec=pick_t_sec,
+                    coarse_pmax=table.coarse_pmax,
                     runtime_fit_source=(
                         PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR
                     ),
+                )
+                reporter.emit(
+                    'physical-center.contexts_built',
+                    **context,
+                    phase='fallback_full',
+                    work_items=len(fallback_full_work_items),
+                    unique_keys=len(fallback_full_assignments_by_fit),
                 )
                 _fit_and_assign_context_work_items(
                     fallback_full_work_items,
@@ -3598,6 +4003,8 @@ def build_geometry_two_piece_physical_center(
                     strategy=strategy,
                     fit_cache=fit_cache,
                     runtime_diagnostics=runtime_diagnostics,
+                    progress=reporter,
+                    progress_context=context,
                 )
 
             non_anchor_mode = str(cfg.physical_runtime.anchor_reuse.non_anchor_mode)
@@ -3609,15 +4016,15 @@ def build_geometry_two_piece_physical_center(
                         [trace_idx for trace_idx, _plan, _context in items],
                         dtype=np.int64,
                     )
-                    context = items[0][2]
+                    anchor_context = items[0][2]
                     plan_by_trace = {
                         int(trace_idx): plan for trace_idx, plan, _context in items
                     }
                     valid = _assign_model_prediction_batch(
                         arrays,
                         trace_indices,
-                        trend_model=context.trend_model,
-                        diagnostics=context.diagnostics,
+                        trend_model=anchor_context.trend_model,
+                        diagnostics=anchor_context.diagnostics,
                         plan_by_trace=plan_by_trace,
                         offset_abs_m=offset_abs_m,
                         dt=dt,
@@ -3647,14 +4054,14 @@ def build_geometry_two_piece_physical_center(
                     [trace_idx for trace_idx, _plan, _context in items],
                     dtype=np.int64,
                 )
-                context = items[0][2]
+                anchor_context = items[0][2]
                 with (
                     runtime_diagnostics.time_block('t0_shift_sec')
                     if runtime_diagnostics is not None
                     else nullcontext()
                 ):
                     stats = _compute_reuse_t0_shift_stats(
-                        trend_model=context.trend_model,
+                        trend_model=anchor_context.trend_model,
                         trace_indices=key_trace_indices,
                         offset_abs_m=offset_abs_m,
                         pick_t_sec=pick_t_sec,
@@ -3713,7 +4120,15 @@ def build_geometry_two_piece_physical_center(
                     refit_assignments_by_fit,
                     offset_abs_m=offset_abs_m,
                     pick_t_sec=pick_t_sec,
+                    coarse_pmax=table.coarse_pmax,
                     runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT,
+                )
+                reporter.emit(
+                    'physical-center.contexts_built',
+                    **context,
+                    phase='adaptive_refit',
+                    work_items=len(refit_work_items),
+                    unique_keys=len(refit_assignments_by_fit),
                 )
                 refit_results = _fit_and_assign_context_work_items(
                     refit_work_items,
@@ -3727,6 +4142,8 @@ def build_geometry_two_piece_physical_center(
                     strategy=strategy,
                     fit_cache=fit_cache,
                     runtime_diagnostics=runtime_diagnostics,
+                    progress=reporter,
+                    progress_context=context,
                 )
                 assigned_count = sum(
                     len(result.valid_trace_indices)
@@ -3782,15 +4199,15 @@ def build_geometry_two_piece_physical_center(
                     [trace_idx for trace_idx, _plan, _context in items],
                     dtype=np.int64,
                 )
-                context = items[0][2]
+                anchor_context = items[0][2]
                 plan_by_trace = {
                     int(trace_idx): plan for trace_idx, plan, _context in items
                 }
                 valid = _assign_model_prediction_batch(
                     arrays,
                     trace_indices,
-                    trend_model=context.trend_model,
-                    diagnostics=context.diagnostics,
+                    trend_model=anchor_context.trend_model,
+                    diagnostics=anchor_context.diagnostics,
                     plan_by_trace=plan_by_trace,
                     offset_abs_m=offset_abs_m,
                     dt=dt,
@@ -3861,8 +4278,22 @@ def build_geometry_two_piece_physical_center(
                 full_fit_call_count_estimate=len(groups)
             )
             runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))
+        reporter.emit(
+            'physical-center.done',
+            **context,
+            status='ok',
+            n_traces=n,
+            n_source_groups=len(groups),
+            n_unique_fit_contexts=len(fit_cache),
+        )
         return _finalize_result(arrays)
 
+    reporter.emit(
+        'physical-center.stage_start',
+        **context,
+        stage='fit_context_preparation',
+    )
+    stage_start = time.perf_counter()
     fit_context_assignments: dict[tuple[int, ...], list[_TracePlanAssignment]] = {}
     for trace_idx in range(n):
         assignment = _prepare_trace_plan_assignment(
@@ -3888,12 +4319,26 @@ def build_geometry_two_piece_physical_center(
             fit_context_assignments.setdefault(assignment.fit_key, []).append(
                 assignment
             )
+    reporter.emit(
+        'physical-center.stage_done',
+        **context,
+        stage='fit_context_preparation',
+        elapsed=time.perf_counter() - stage_start,
+        unique_keys=len(fit_context_assignments),
+    )
 
     work_items = _build_fit_context_work_items(
         fit_context_assignments,
         offset_abs_m=offset_abs_m,
         pick_t_sec=pick_t_sec,
+        coarse_pmax=table.coarse_pmax,
         runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT,
+    )
+    reporter.emit(
+        'physical-center.contexts_built',
+        **context,
+        work_items=len(work_items),
+        unique_keys=len(fit_context_assignments),
     )
     _fit_and_assign_context_work_items(
         work_items,
@@ -3907,9 +4352,19 @@ def build_geometry_two_piece_physical_center(
         strategy=strategy,
         fit_cache=fit_cache,
         runtime_diagnostics=runtime_diagnostics,
+        progress=reporter,
+        progress_context=context,
     )
 
     if runtime_diagnostics is not None:
         runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))
 
+    reporter.emit(
+        'physical-center.done',
+        **context,
+        status='ok',
+        n_traces=n,
+        n_source_groups=len(groups),
+        n_unique_fit_contexts=len(fit_cache),
+    )
     return _finalize_result(arrays)

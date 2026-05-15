@@ -26,6 +26,36 @@ class _DummyModel:
         return self
 
 
+class _DummyProgressReporter:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def emit(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
+
+
+def _fake_physics_cfg(
+    cfg: dict[str, object],
+    *,
+    enabled: bool | None = None,
+) -> SimpleNamespace:
+    progress_raw = {}
+    runtime_raw = cfg.get('physical_runtime')
+    if isinstance(runtime_raw, dict) and isinstance(runtime_raw.get('progress'), dict):
+        progress_raw = runtime_raw['progress']
+    progress_enabled = bool(progress_raw.get('enabled', False))
+    if enabled is not None:
+        progress_enabled = bool(enabled)
+    return SimpleNamespace(
+        physical_runtime=SimpleNamespace(
+            progress=SimpleNamespace(
+                enabled=progress_enabled,
+                level=progress_raw.get('level', 'sgy'),
+            )
+        )
+    )
+
+
 def _block_heavy_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     for prefix in ('segyio', 'timm'):
         for name in list(sys.modules):
@@ -223,10 +253,13 @@ def test_run_fbpick_physics_cli_is_thin_wrapper(
     cfg_path.write_text('placeholder: true\n', encoding='utf-8')
     captured: dict[str, object] = {}
 
-    def _fake_run_physics_lite(coarse_npz_path, *, cfg, out_path):
+    reporter = _DummyProgressReporter()
+
+    def _fake_run_physics_lite(coarse_npz_path, *, cfg, out_path, **kwargs):
         captured['coarse_npz_path'] = coarse_npz_path
         captured['cfg'] = cfg
         captured['out_path'] = out_path
+        captured['kwargs'] = kwargs
         return Path(out_path)
 
     runtime = SimpleNamespace(
@@ -239,6 +272,8 @@ def test_run_fbpick_physics_cli_is_thin_wrapper(
             },
             tmp_path,
         ),
+        build_progress_reporter=lambda progress_cfg: reporter,
+        load_physics_lite_config=_fake_physics_cfg,
         resolve_cfg_paths=lambda cfg, base_dir, *, keys: None,
         run_physics_lite=_fake_run_physics_lite,
     )
@@ -250,6 +285,7 @@ def test_run_fbpick_physics_cli_is_thin_wrapper(
     assert captured['coarse_npz_path'] == 'input.coarse.npz'
     assert captured['cfg']['paths']['coarse_npz_path'] == 'input.coarse.npz'
     assert captured['out_path'] == 'output.robust.npz'
+    assert captured['kwargs'] == {}
     assert capsys.readouterr().out.strip() == 'output.robust.npz'
 
 
@@ -276,12 +312,15 @@ def test_run_fbpick_physics_batch_cli_loops_over_multiple_inputs(
     for coarse_path in coarse_paths:
         coarse_path.touch()
 
-    def _fake_run_physics_lite(coarse_npz_path, *, cfg, out_path):
+    reporter = _DummyProgressReporter()
+
+    def _fake_run_physics_lite(coarse_npz_path, *, cfg, out_path, **kwargs):
         captured_calls.append(
             {
                 'coarse_npz_path': coarse_npz_path,
                 'cfg': cfg,
                 'out_path': out_path,
+                'kwargs': kwargs,
             }
         )
         path = Path(out_path)
@@ -300,7 +339,9 @@ def test_run_fbpick_physics_batch_cli_loops_over_multiple_inputs(
             },
             tmp_path,
         ),
+        build_progress_reporter=lambda progress_cfg: reporter,
         expand_cfg_listfiles=lambda cfg, *, keys: None,
+        load_physics_lite_config=_fake_physics_cfg,
         resolve_cfg_paths=lambda cfg, base_dir, *, keys: None,
         run_physics_lite=_fake_run_physics_lite,
     )
@@ -329,10 +370,67 @@ def test_run_fbpick_physics_batch_cli_loops_over_multiple_inputs(
         str(out_paths[0]),
         str(out_paths[1]),
     ]
+    assert [call['kwargs'] for call in captured_calls] == [{}, {}]
     assert capsys.readouterr().out.strip().splitlines() == [
         str(out_paths[0]),
         str(out_paths[1]),
     ]
+
+
+def test_run_fbpick_physics_batch_cli_progress_keeps_stdout_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_cli_module('run_fbpick_physics_batch.py', monkeypatch)
+    cfg_path = tmp_path / 'config_run_fbpick_physics_batch.yaml'
+    cfg_path.write_text('placeholder: true\n', encoding='utf-8')
+    coarse_dir = tmp_path / 'coarse_out'
+    out_dir = tmp_path / 'physics_out'
+    coarse_dir.mkdir()
+    coarse_path = coarse_dir / 'site54__survey_a.coarse.npz'
+    out_path = out_dir / 'site54__survey_a.robust.npz'
+    coarse_path.touch()
+    reporter = _DummyProgressReporter()
+    captured: dict[str, object] = {}
+
+    def _fake_run_physics_lite(coarse_npz_path, *, cfg, out_path, **kwargs):
+        captured['kwargs'] = kwargs
+        path = Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        return path
+
+    runtime = SimpleNamespace(
+        load_cfg_with_base_dir=lambda path: (
+            {
+                'paths': {
+                    'segy_files': ['site54/survey_a.sgy'],
+                    'coarse_npz_dir': str(coarse_dir),
+                    'out_dir': str(out_dir),
+                }
+            },
+            tmp_path,
+        ),
+        build_progress_reporter=lambda progress_cfg: reporter,
+        expand_cfg_listfiles=lambda cfg, *, keys: None,
+        load_physics_lite_config=_fake_physics_cfg,
+        resolve_cfg_paths=lambda cfg, base_dir, *, keys: None,
+        run_physics_lite=_fake_run_physics_lite,
+    )
+    monkeypatch.setattr(module, '_load_runtime', lambda: runtime)
+
+    result = module.run_pipeline(cfg_path, progress=True, progress_level='fit')
+
+    assert result == out_path
+    assert capsys.readouterr().out.strip() == str(out_path)
+    assert reporter.events[0][0] == 'physics-batch.start'
+    assert reporter.events[-1][0] == 'physics-batch.done'
+    assert captured['kwargs']['progress'] is reporter
+    context = captured['kwargs']['progress_context']
+    assert context['batch_index'] == 1
+    assert context['batch_total'] == 1
+    assert context['segy'] == 'site54/survey_a.sgy'
 
 
 def test_run_fbpick_fine_train_cli_is_thin_wrapper(

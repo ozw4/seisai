@@ -9,7 +9,7 @@ keep_reject: {}
 robust_center: {}
 physical_trend:
   enabled: true
-  fit_kind: two_piece_ransac_autobreak
+  fit_kind: two_piece_irls_autobreak
   use_geometry_offset: true
   min_offset_spread_m: 1.0
   coord_group_tol_m: 1.0
@@ -55,3 +55,12 @@ two_piece_ransac:
   sort_offsets: true
 physical_projection:
   mode: model
+two_piece_irls:
+  huber_c: 1.345
+  iters: 5
+  min_pts: 8
+  n_break_cand: 64
+  q_lo: 0.15
+  q_hi: 0.85
+  slope_eps: 1.0e-06
+  sort_offsets: true

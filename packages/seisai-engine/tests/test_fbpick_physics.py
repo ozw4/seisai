@@ -4,6 +4,7 @@ import inspect
 import json
 import math
 from dataclasses import replace
+from io import StringIO
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +55,9 @@ from seisai_engine.pipelines.fbpick.physics.run import (
     build_robust_payload_from_coarse,
     derive_physics_runtime_summary_path,
     run_physics_lite,
+)
+from seisai_engine.pipelines.fbpick.physics.progress import (
+    ConsoleProgressReporter,
 )
 from seisai_engine.pipelines.fbpick.physics.runtime_diagnostics import (
     PhysicalRuntimeDiagnostics,
@@ -330,6 +334,16 @@ def _physical_trend_blocks() -> dict[str, object]:
             'slope_eps': 1.0e-5,
             'sort_offsets': False,
         },
+        'two_piece_irls': {
+            'huber_c': 1.2,
+            'iters': 4,
+            'min_pts': 9,
+            'n_break_cand': 24,
+            'q_lo': 0.1,
+            'q_hi': 0.9,
+            'slope_eps': 2.0e-5,
+            'sort_offsets': False,
+        },
         'physical_projection': {
             'mode': 'model',
         },
@@ -423,6 +437,11 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.physical_prefilter.vmax_m_s == 6000.0
     assert cfg.two_piece_ransac.q_lo == 0.15
     assert cfg.two_piece_ransac.q_hi == 0.85
+    assert cfg.two_piece_irls.huber_c == pytest.approx(1.345)
+    assert cfg.two_piece_irls.iters == 5
+    assert cfg.two_piece_irls.min_pts == 8
+    assert cfg.two_piece_irls.q_lo == 0.15
+    assert cfg.two_piece_irls.q_hi == 0.85
     assert cfg.physical_projection.mode == 'model'
     assert cfg.physical_runtime.fit_policy == 'full'
     assert cfg.physical_runtime.diagnostics_enabled is True
@@ -471,6 +490,15 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.physical_runtime.fit_executor.max_workers is None
     assert cfg.physical_runtime.fit_executor.torch_num_threads_per_worker == 1
     assert cfg.physical_runtime.fit_executor.chunksize == 1
+    assert cfg.physical_runtime.progress.enabled is False
+    assert cfg.physical_runtime.progress.level == 'sgy'
+    assert cfg.physical_runtime.progress.interval_sec == 10.0
+    assert cfg.physical_runtime.progress.min_interval_fit_calls == 25
+    assert cfg.physical_runtime.progress.stream == 'stderr'
+    assert cfg.physical_runtime.progress.use_tqdm == 'auto'
+    assert cfg.physical_runtime.progress.print_on_non_tty is True
+    assert cfg.physical_runtime.progress.include_stage_events is True
+    assert cfg.physical_runtime.progress.include_summary is True
 
 
 def test_load_physics_lite_config_accepts_nested_diagnostics_block() -> None:
@@ -508,8 +536,40 @@ def test_load_physics_lite_config_accepts_physical_trend_blocks() -> None:
     assert cfg.physical_prefilter.use_existing_feasible_mask is True
     assert cfg.two_piece_ransac.n_iter == 300
     assert cfg.two_piece_ransac.sort_offsets is False
+    assert cfg.two_piece_irls.huber_c == pytest.approx(1.2)
+    assert cfg.two_piece_irls.iters == 4
+    assert cfg.two_piece_irls.min_pts == 9
+    assert cfg.two_piece_irls.sort_offsets is False
     assert cfg.physical_runtime.fit_policy == 'full'
     assert cfg.physical_runtime.anchor_selection.enabled is False
+
+
+def test_load_physics_lite_config_accepts_two_piece_irls_fit_kind() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_trend': {'fit_kind': 'two_piece_irls_autobreak'},
+            'two_piece_irls': {
+                'huber_c': 1.4,
+                'iters': 6,
+                'min_pts': 5,
+                'n_break_cand': 12,
+                'q_lo': 0.2,
+                'q_hi': 0.7,
+                'slope_eps': 1.0e-4,
+                'sort_offsets': False,
+            },
+        }
+    )
+
+    assert cfg.physical_trend.fit_kind == 'two_piece_irls_autobreak'
+    assert cfg.two_piece_irls.huber_c == pytest.approx(1.4)
+    assert cfg.two_piece_irls.iters == 6
+    assert cfg.two_piece_irls.min_pts == 5
+    assert cfg.two_piece_irls.n_break_cand == 12
+    assert cfg.two_piece_irls.q_lo == pytest.approx(0.2)
+    assert cfg.two_piece_irls.q_hi == pytest.approx(0.7)
+    assert cfg.two_piece_irls.slope_eps == pytest.approx(1.0e-4)
+    assert cfg.two_piece_irls.sort_offsets is False
 
 
 def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> None:
@@ -563,6 +623,17 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
                     'torch_num_threads_per_worker': 1,
                     'chunksize': 2,
                 },
+                'progress': {
+                    'enabled': True,
+                    'level': 'fit',
+                    'interval_sec': 0.5,
+                    'min_interval_fit_calls': 3,
+                    'stream': 'stderr',
+                    'use_tqdm': 'false',
+                    'print_on_non_tty': True,
+                    'include_stage_events': False,
+                    'include_summary': False,
+                },
             },
         }
     )
@@ -597,6 +668,13 @@ def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> No
     assert cfg.physical_runtime.fit_executor.backend == 'thread'
     assert cfg.physical_runtime.fit_executor.max_workers == 2
     assert cfg.physical_runtime.fit_executor.chunksize == 2
+    assert cfg.physical_runtime.progress.enabled is True
+    assert cfg.physical_runtime.progress.level == 'fit'
+    assert cfg.physical_runtime.progress.interval_sec == pytest.approx(0.5)
+    assert cfg.physical_runtime.progress.min_interval_fit_calls == 3
+    assert cfg.physical_runtime.progress.use_tqdm == 'false'
+    assert cfg.physical_runtime.progress.include_stage_events is False
+    assert cfg.physical_runtime.progress.include_summary is False
 
 
 def test_physical_center_example_config_enables_physical_trend() -> None:
@@ -832,6 +910,26 @@ def test_physical_center_example_config_enables_physical_trend() -> None:
             {'physical_runtime': {'fit_executor': {'chunksize': 0}}},
             'physical_runtime.fit_executor.chunksize',
         ),
+        (
+            {'physical_runtime': {'progress': {'level': 'verbose'}}},
+            'physical_runtime.progress.level',
+        ),
+        (
+            {'physical_runtime': {'progress': {'interval_sec': 0.0}}},
+            'physical_runtime.progress.interval_sec',
+        ),
+        (
+            {'physical_runtime': {'progress': {'min_interval_fit_calls': 0}}},
+            'physical_runtime.progress.min_interval_fit_calls',
+        ),
+        (
+            {'physical_runtime': {'progress': {'stream': 'file'}}},
+            'physical_runtime.progress.stream',
+        ),
+        (
+            {'physical_runtime': {'progress': {'use_tqdm': 'yes'}}},
+            'physical_runtime.progress.use_tqdm',
+        ),
     ],
 )
 def test_load_physics_lite_config_rejects_invalid_physical_trend_blocks(
@@ -864,6 +962,74 @@ def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
     assert out['physical_runtime']['anchor_selection']['enabled'] is False
     assert out['physical_runtime']['anchor_reuse']['enabled'] is True
     assert out['physical_runtime']['fit_executor']['enabled'] is False
+
+
+def test_console_progress_reporter_throttles_fit_progress() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_runtime': {
+                'progress': {
+                    'enabled': True,
+                    'level': 'fit',
+                    'interval_sec': 100.0,
+                    'min_interval_fit_calls': 3,
+                }
+            }
+        }
+    )
+    stream = StringIO()
+    reporter = ConsoleProgressReporter(
+        cfg.physical_runtime.progress,
+        stream_obj=stream,
+    )
+
+    reporter.emit('fit.progress', done=1, total=10, elapsed=1.0, rate=1.0, eta=9.0)
+    reporter.emit('fit.progress', done=2, total=10, elapsed=2.0, rate=1.0, eta=8.0)
+    reporter.emit('fit.progress', done=4, total=10, elapsed=4.0, rate=1.0, eta=6.0)
+
+    lines = stream.getvalue().strip().splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith('[fit] 1/10 done')
+    assert lines[1].startswith('[fit] 4/10 done')
+
+
+def test_console_progress_reporter_can_suppress_non_tty_output() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_runtime': {
+                'progress': {
+                    'enabled': True,
+                    'level': 'sgy',
+                    'print_on_non_tty': False,
+                }
+            }
+        }
+    )
+    stream = StringIO()
+
+    ConsoleProgressReporter(cfg.physical_runtime.progress, stream_obj=stream).emit(
+        'physics.start',
+        coarse='input.coarse.npz',
+    )
+
+    assert stream.getvalue() == ''
+
+
+def test_console_progress_reporter_defaults_to_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg = load_physics_lite_config(
+        {'physical_runtime': {'progress': {'enabled': True, 'level': 'sgy'}}}
+    )
+
+    ConsoleProgressReporter(cfg.physical_runtime.progress).emit(
+        'physics.start',
+        coarse='input.coarse.npz',
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert '[physics] start coarse=input.coarse.npz' in captured.err
 
 
 def test_normalize_coarse_pick_table_preserves_contract(tmp_path: Path) -> None:

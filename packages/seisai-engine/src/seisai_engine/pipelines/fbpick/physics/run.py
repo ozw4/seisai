@@ -19,6 +19,7 @@ from .feasible import compute_feasible_band
 from .merge import apply_keep_reject_fill
 from .physical_center import build_geometry_two_piece_physical_center
 from .pick_table import normalize_coarse_pick_table
+from .progress import build_progress_reporter
 from .runtime_diagnostics import (
     PhysicalRuntimeDiagnostics,
     derive_physics_runtime_summary_path,
@@ -44,6 +45,17 @@ def derive_robust_npz_path(coarse_npz_path: str | Path) -> Path:
     return path.with_name(f'{stem}.robust.npz')
 
 
+def _status_counts_line(values: np.ndarray) -> str:
+    arr = np.asarray(values, dtype=np.uint8).reshape(-1)
+    if arr.size == 0:
+        return ''
+    unique, counts = np.unique(arr, return_counts=True)
+    return ','.join(
+        f'{int(status)}:{int(count)}'
+        for status, count in zip(unique.tolist(), counts.tolist(), strict=True)
+    )
+
+
 def build_robust_payload_from_coarse(
     coarse_npz: Mapping[str, np.ndarray],
     *,
@@ -52,9 +64,17 @@ def build_robust_payload_from_coarse(
     iter_id: int | str | None = '',
     repo_root: Path | None = None,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+    progress: Any | None = None,
+    progress_context: Mapping[str, object] | None = None,
 ) -> dict[str, np.ndarray]:
     typed_cfg = load_physics_lite_config(cfg)
     canonical_cfg = physics_lite_config_to_dict(typed_cfg)
+    reporter = (
+        progress
+        if progress is not None
+        else build_progress_reporter(typed_cfg.physical_runtime.progress)
+    )
+    progress_fields = dict(progress_context or {})
     if runtime_diagnostics is None and bool(
         typed_cfg.physical_runtime.diagnostics_enabled
     ):
@@ -65,11 +85,54 @@ def build_robust_payload_from_coarse(
         )
 
     if runtime_diagnostics is None:
+        reporter.emit('physics.stage_start', **progress_fields, stage='normalize_table')
+        stage_start = perf_counter()
         table = normalize_coarse_pick_table(coarse_npz)
+        reporter.emit(
+            'physics.stage_done',
+            **progress_fields,
+            stage='normalize_table',
+            elapsed=perf_counter() - stage_start,
+            n_traces=int(table.n_traces),
+        )
+        reporter.emit('physics.stage_start', **progress_fields, stage='feasible_band')
+        stage_start = perf_counter()
         feasible = compute_feasible_band(table, typed_cfg.feasible_band)
+        reporter.emit(
+            'physics.stage_done',
+            **progress_fields,
+            stage='feasible_band',
+            elapsed=perf_counter() - stage_start,
+        )
+        reporter.emit('physics.stage_start', **progress_fields, stage='trend_result')
+        stage_start = perf_counter()
         trend = build_trend_result(table, feasible, typed_cfg)
+        reporter.emit(
+            'physics.stage_done',
+            **progress_fields,
+            stage='trend_result',
+            elapsed=perf_counter() - stage_start,
+        )
+        reporter.emit('physics.stage_start', **progress_fields, stage='confidence')
+        stage_start = perf_counter()
         confidence = compute_confidence_terms(table, feasible, trend, typed_cfg)
+        reporter.emit(
+            'physics.stage_done',
+            **progress_fields,
+            stage='confidence',
+            elapsed=perf_counter() - stage_start,
+        )
+        reporter.emit('physics.stage_start', **progress_fields, stage='merge')
+        stage_start = perf_counter()
         merged = apply_keep_reject_fill(table, feasible, trend, confidence, typed_cfg)
+        reporter.emit(
+            'physics.stage_done',
+            **progress_fields,
+            stage='merge',
+            elapsed=perf_counter() - stage_start,
+        )
+        reporter.emit('physics.stage_start', **progress_fields, stage='physical_center')
+        stage_start = perf_counter()
         physical = build_geometry_two_piece_physical_center(
             coarse_npz=coarse_npz,
             table=table,
@@ -77,16 +140,51 @@ def build_robust_payload_from_coarse(
             trend=trend,
             merged=merged,
             cfg=typed_cfg,
+            progress=reporter,
+            progress_context=progress_fields,
+        )
+        reporter.emit(
+            'physics.stage_done',
+            **progress_fields,
+            stage='physical_center',
+            elapsed=perf_counter() - stage_start,
         )
     else:
         with runtime_diagnostics.time_physics():
+            reporter.emit('physics.stage_start', **progress_fields, stage='normalize_table')
+            stage_start = perf_counter()
             with runtime_diagnostics.time_block('normalize_table_sec'):
                 table = normalize_coarse_pick_table(coarse_npz)
             runtime_diagnostics.set_traces(int(table.n_traces))
+            reporter.emit(
+                'physics.stage_done',
+                **progress_fields,
+                stage='normalize_table',
+                elapsed=perf_counter() - stage_start,
+                n_traces=int(table.n_traces),
+            )
+            reporter.emit('physics.stage_start', **progress_fields, stage='feasible_band')
+            stage_start = perf_counter()
             with runtime_diagnostics.time_block('feasible_band_sec'):
                 feasible = compute_feasible_band(table, typed_cfg.feasible_band)
+            reporter.emit(
+                'physics.stage_done',
+                **progress_fields,
+                stage='feasible_band',
+                elapsed=perf_counter() - stage_start,
+            )
+            reporter.emit('physics.stage_start', **progress_fields, stage='trend_result')
+            stage_start = perf_counter()
             with runtime_diagnostics.time_block('trend_result_sec'):
                 trend = build_trend_result(table, feasible, typed_cfg)
+            reporter.emit(
+                'physics.stage_done',
+                **progress_fields,
+                stage='trend_result',
+                elapsed=perf_counter() - stage_start,
+            )
+            reporter.emit('physics.stage_start', **progress_fields, stage='confidence')
+            stage_start = perf_counter()
             with runtime_diagnostics.time_block('confidence_sec'):
                 confidence = compute_confidence_terms(
                     table,
@@ -94,6 +192,14 @@ def build_robust_payload_from_coarse(
                     trend,
                     typed_cfg,
                 )
+            reporter.emit(
+                'physics.stage_done',
+                **progress_fields,
+                stage='confidence',
+                elapsed=perf_counter() - stage_start,
+            )
+            reporter.emit('physics.stage_start', **progress_fields, stage='merge')
+            stage_start = perf_counter()
             with runtime_diagnostics.time_block('merge_sec'):
                 merged = apply_keep_reject_fill(
                     table,
@@ -102,6 +208,14 @@ def build_robust_payload_from_coarse(
                     confidence,
                     typed_cfg,
                 )
+            reporter.emit(
+                'physics.stage_done',
+                **progress_fields,
+                stage='merge',
+                elapsed=perf_counter() - stage_start,
+            )
+            reporter.emit('physics.stage_start', **progress_fields, stage='physical_center')
+            stage_start = perf_counter()
             with runtime_diagnostics.time_physical_center():
                 physical = build_geometry_two_piece_physical_center(
                     coarse_npz=coarse_npz,
@@ -111,7 +225,15 @@ def build_robust_payload_from_coarse(
                     merged=merged,
                     cfg=typed_cfg,
                     runtime_diagnostics=runtime_diagnostics,
+                    progress=reporter,
+                    progress_context=progress_fields,
                 )
+            reporter.emit(
+                'physics.stage_done',
+                **progress_fields,
+                stage='physical_center',
+                elapsed=perf_counter() - stage_start,
+            )
 
     payload = {
         'dt_sec': np.asarray(table.dt_scalar_sec, dtype=np.float32),
@@ -272,9 +394,29 @@ def run_physics_lite(
     source_model_id: str | None = None,
     iter_id: int | str | None = '',
     repo_root: Path | None = None,
+    progress: Any | None = None,
+    progress_context: Mapping[str, object] | None = None,
 ) -> Path:
     coarse_path = Path(coarse_npz_path).expanduser().resolve()
     typed_cfg = load_physics_lite_config(cfg)
+    reporter = (
+        progress
+        if progress is not None
+        else build_progress_reporter(typed_cfg.physical_runtime.progress)
+    )
+    progress_fields = dict(progress_context or {})
+    target_path = (
+        derive_robust_npz_path(coarse_path) if out_path is None else Path(out_path)
+    )
+    run_start = perf_counter()
+    reporter.emit(
+        'physics.start',
+        **progress_fields,
+        coarse=coarse_path,
+        out=target_path,
+        fit_kind=str(typed_cfg.physical_trend.fit_kind),
+        fit_policy=str(typed_cfg.physical_runtime.fit_policy),
+    )
     runtime_diagnostics = (
         PhysicalRuntimeDiagnostics(
             detailed_timing=bool(
@@ -284,11 +426,23 @@ def run_physics_lite(
         if bool(typed_cfg.physical_runtime.diagnostics_enabled)
         else None
     )
+    reporter.emit(
+        'physics.stage_start',
+        **progress_fields,
+        stage='load_coarse_npz',
+    )
+    stage_start = perf_counter()
     if runtime_diagnostics is None:
         coarse = load_coarse_npz(coarse_path)
     else:
         with runtime_diagnostics.time_block('load_coarse_npz_sec'):
             coarse = load_coarse_npz(coarse_path)
+    reporter.emit(
+        'physics.stage_done',
+        **progress_fields,
+        stage='load_coarse_npz',
+        elapsed=perf_counter() - stage_start,
+    )
     payload = build_robust_payload_from_coarse(
         coarse,
         cfg=cfg,
@@ -296,20 +450,64 @@ def run_physics_lite(
         iter_id=iter_id,
         repo_root=repo_root,
         runtime_diagnostics=runtime_diagnostics,
+        progress=reporter,
+        progress_context=progress_fields,
     )
-    target_path = (
-        derive_robust_npz_path(coarse_path) if out_path is None else Path(out_path)
-    )
+    reporter.emit('physics.stage_start', **progress_fields, stage='save_robust_npz')
+    stage_start = perf_counter()
     if runtime_diagnostics is None:
         saved_path = save_robust_npz(target_path, **payload)
     else:
         with runtime_diagnostics.time_block('save_robust_npz_sec'):
             saved_path = save_robust_npz(target_path, **payload)
+    reporter.emit(
+        'physics.stage_done',
+        **progress_fields,
+        stage='save_robust_npz',
+        elapsed=perf_counter() - stage_start,
+        out=saved_path,
+    )
     summary = (
         runtime_diagnostics.to_summary()
         if runtime_diagnostics is not None
         else runtime_summary_from_npz_fields(payload)
     )
+    summary_path = None
     if summary is not None and bool(typed_cfg.physical_runtime.write_runtime_summary):
-        write_physics_runtime_summary(saved_path, summary)
+        reporter.emit('physics.stage_start', **progress_fields, stage='runtime_summary')
+        stage_start = perf_counter()
+        summary_path = write_physics_runtime_summary(saved_path, summary)
+        reporter.emit(
+            'physics.stage_done',
+            **progress_fields,
+            stage='runtime_summary',
+            elapsed=perf_counter() - stage_start,
+            summary=summary_path,
+        )
+    summary_fields: dict[str, object] = {}
+    if summary is not None:
+        for key in (
+            'n_traces',
+            'n_source_groups',
+            'n_unique_fit_contexts',
+            'n_fit_calls',
+            'cache_hit_rate',
+            'physics_total_sec',
+            'physical_center_total_sec',
+            'ransac_fit_total_sec',
+        ):
+            if key in summary:
+                summary_fields[key] = summary[key]
+    if 'physical_model_status' in payload:
+        summary_fields['status_counts'] = _status_counts_line(
+            payload['physical_model_status']
+        )
+    reporter.emit(
+        'physics.done',
+        **progress_fields,
+        elapsed=perf_counter() - run_start,
+        out=saved_path,
+        summary=summary_path,
+        **summary_fields,
+    )
     return saved_path

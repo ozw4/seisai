@@ -20,6 +20,7 @@ __all__ = [
     'PhysicalFitExecutorCfg',
     'PhysicalObservationSamplingCfg',
     'PhysicalPrefilterCfg',
+    'PhysicalProgressCfg',
     'PhysicalProjectionCfg',
     'PhysicalRuntimeCfg',
     'PhysicalRuntimeDiagnosticsCfg',
@@ -31,6 +32,7 @@ __all__ = [
     'PhysicsResidualStaticsCfg',
     'PhysicsRobustCenterCfg',
     'PhysicsTrendCfg',
+    'TwoPieceIrlsCfg',
     'TwoPieceRansacCfg',
     'load_physics_lite_config',
     'physics_lite_config_to_dict',
@@ -140,6 +142,18 @@ class TwoPieceRansacCfg:
 
 
 @dataclass(frozen=True)
+class TwoPieceIrlsCfg:
+    huber_c: float = 1.345
+    iters: int = 5
+    min_pts: int = 8
+    n_break_cand: int = 64
+    q_lo: float = 0.15
+    q_hi: float = 0.85
+    slope_eps: float = 1.0e-6
+    sort_offsets: bool = True
+
+
+@dataclass(frozen=True)
 class PhysicalProjectionCfg:
     mode: str = 'model'
 
@@ -203,6 +217,19 @@ class PhysicalFitExecutorCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalProgressCfg:
+    enabled: bool = False
+    level: str = 'sgy'
+    interval_sec: float = 10.0
+    min_interval_fit_calls: int = 25
+    stream: str = 'stderr'
+    use_tqdm: str = 'auto'
+    print_on_non_tty: bool = True
+    include_stage_events: bool = True
+    include_summary: bool = True
+
+
+@dataclass(frozen=True)
 class PhysicalRuntimeDiagnosticsCfg:
     enabled: bool = True
     detailed_timing: bool = False
@@ -225,6 +252,7 @@ class PhysicalRuntimeCfg:
         PhysicalObservationSamplingCfg()
     )
     fit_executor: PhysicalFitExecutorCfg = PhysicalFitExecutorCfg()
+    progress: PhysicalProgressCfg = PhysicalProgressCfg()
 
 
 @dataclass(frozen=True)
@@ -238,6 +266,7 @@ class PhysicsLiteConfig:
     neighbor_context: NeighborContextCfg = NeighborContextCfg()
     physical_prefilter: PhysicalPrefilterCfg = PhysicalPrefilterCfg()
     two_piece_ransac: TwoPieceRansacCfg = TwoPieceRansacCfg()
+    two_piece_irls: TwoPieceIrlsCfg = TwoPieceIrlsCfg()
     physical_projection: PhysicalProjectionCfg = PhysicalProjectionCfg()
     physical_runtime: PhysicalRuntimeCfg = PhysicalRuntimeCfg()
 
@@ -467,6 +496,19 @@ def _load_two_piece_ransac_cfg(cfg: dict[str, Any]) -> TwoPieceRansacCfg:
     )
 
 
+def _load_two_piece_irls_cfg(cfg: dict[str, Any]) -> TwoPieceIrlsCfg:
+    return TwoPieceIrlsCfg(
+        huber_c=float(optional_float(cfg, 'huber_c', 1.345)),
+        iters=int(optional_int(cfg, 'iters', 5)),
+        min_pts=int(optional_int(cfg, 'min_pts', 8)),
+        n_break_cand=int(optional_int(cfg, 'n_break_cand', 64)),
+        q_lo=float(optional_float(cfg, 'q_lo', 0.15)),
+        q_hi=float(optional_float(cfg, 'q_hi', 0.85)),
+        slope_eps=float(optional_float(cfg, 'slope_eps', 1.0e-6)),
+        sort_offsets=bool(optional_bool(cfg, 'sort_offsets', default=True)),
+    )
+
+
 def _load_physical_projection_cfg(cfg: dict[str, Any]) -> PhysicalProjectionCfg:
     mode = optional_str(cfg, 'mode', 'model')
     if mode is None:
@@ -592,6 +634,36 @@ def _load_physical_fit_executor_cfg(cfg: dict[str, Any]) -> PhysicalFitExecutorC
     )
 
 
+def _load_physical_progress_cfg(cfg: dict[str, Any]) -> PhysicalProgressCfg:
+    level = optional_str(cfg, 'level', 'sgy')
+    stream = optional_str(cfg, 'stream', 'stderr')
+    use_tqdm = optional_str(cfg, 'use_tqdm', 'auto')
+    if level is None:
+        msg = 'physical_runtime.progress.level must not be null'
+        raise TypeError(msg)
+    if stream is None:
+        msg = 'physical_runtime.progress.stream must not be null'
+        raise TypeError(msg)
+    if use_tqdm is None:
+        msg = 'physical_runtime.progress.use_tqdm must not be null'
+        raise TypeError(msg)
+    return PhysicalProgressCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=False)),
+        level=str(level),
+        interval_sec=float(optional_float(cfg, 'interval_sec', 10.0)),
+        min_interval_fit_calls=int(
+            optional_int(cfg, 'min_interval_fit_calls', 25)
+        ),
+        stream=str(stream),
+        use_tqdm=str(use_tqdm),
+        print_on_non_tty=bool(optional_bool(cfg, 'print_on_non_tty', default=True)),
+        include_stage_events=bool(
+            optional_bool(cfg, 'include_stage_events', default=True)
+        ),
+        include_summary=bool(optional_bool(cfg, 'include_summary', default=True)),
+    )
+
+
 def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
     diagnostics_raw = _require_dict(
         cfg.get('diagnostics'),
@@ -661,13 +733,23 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
                 key='physical_runtime.fit_executor',
             )
         ),
+        progress=_load_physical_progress_cfg(
+            _require_dict(
+                cfg.get('progress'),
+                key='physical_runtime.progress',
+            )
+        ),
     )
 
 
 def _validate_physical_trend_cfg(cfg: PhysicalTrendCfg) -> None:
-    if cfg.fit_kind != 'two_piece_ransac_autobreak':
+    if cfg.fit_kind not in {
+        'two_piece_ransac_autobreak',
+        'two_piece_irls_autobreak',
+    }:
         msg = (
-            "physical_trend.fit_kind must be 'two_piece_ransac_autobreak', "
+            "physical_trend.fit_kind must be 'two_piece_ransac_autobreak' or "
+            "'two_piece_irls_autobreak', "
             f'got {cfg.fit_kind!r}'
         )
         raise ValueError(msg)
@@ -738,6 +820,21 @@ def _validate_two_piece_ransac_cfg(cfg: TwoPieceRansacCfg) -> None:
         msg = 'two_piece_ransac requires 0 <= q_lo < q_hi <= 1'
         raise ValueError(msg)
     _validate_nonnegative_float('two_piece_ransac.slope_eps', cfg.slope_eps)
+
+
+def _validate_two_piece_irls_cfg(cfg: TwoPieceIrlsCfg) -> None:
+    _validate_positive_float('two_piece_irls.huber_c', cfg.huber_c)
+    _validate_positive_int('two_piece_irls.iters', cfg.iters)
+    if int(cfg.min_pts) < 2:
+        msg = 'two_piece_irls.min_pts must be >= 2'
+        raise ValueError(msg)
+    _validate_positive_int('two_piece_irls.n_break_cand', cfg.n_break_cand)
+    q_lo = _validate_finite_float('two_piece_irls.q_lo', cfg.q_lo)
+    q_hi = _validate_finite_float('two_piece_irls.q_hi', cfg.q_hi)
+    if not 0.0 <= q_lo < q_hi <= 1.0:
+        msg = 'two_piece_irls requires 0 <= q_lo < q_hi <= 1'
+        raise ValueError(msg)
+    _validate_nonnegative_float('two_piece_irls.slope_eps', cfg.slope_eps)
 
 
 def _validate_physical_projection_cfg(cfg: PhysicalProjectionCfg) -> None:
@@ -893,6 +990,33 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
         'physical_runtime.fit_executor.chunksize',
         executor.chunksize,
     )
+    progress = cfg.progress
+    if progress.level not in {'none', 'batch', 'sgy', 'stage', 'fit'}:
+        msg = (
+            "physical_runtime.progress.level must be 'none', 'batch', 'sgy', "
+            f"'stage', or 'fit', got {progress.level!r}"
+        )
+        raise ValueError(msg)
+    _validate_positive_float(
+        'physical_runtime.progress.interval_sec',
+        progress.interval_sec,
+    )
+    _validate_positive_int(
+        'physical_runtime.progress.min_interval_fit_calls',
+        progress.min_interval_fit_calls,
+    )
+    if progress.stream not in {'stderr', 'stdout'}:
+        msg = (
+            "physical_runtime.progress.stream must be 'stderr' or 'stdout', "
+            f'got {progress.stream!r}'
+        )
+        raise ValueError(msg)
+    if progress.use_tqdm not in {'auto', 'true', 'false'}:
+        msg = (
+            "physical_runtime.progress.use_tqdm must be 'auto', 'true', or "
+            f"'false', got {progress.use_tqdm!r}"
+        )
+        raise ValueError(msg)
 
 
 def _validate_robust_center_cfg(cfg: PhysicsRobustCenterCfg) -> None:
@@ -926,6 +1050,7 @@ def _validate_physical_cfg(cfg: PhysicsLiteConfig) -> None:
     _validate_neighbor_context_cfg(cfg.neighbor_context)
     _validate_physical_prefilter_cfg(cfg.physical_prefilter)
     _validate_two_piece_ransac_cfg(cfg.two_piece_ransac)
+    _validate_two_piece_irls_cfg(cfg.two_piece_irls)
     _validate_physical_projection_cfg(cfg.physical_projection)
     _validate_physical_runtime_cfg(cfg.physical_runtime)
 
@@ -1024,6 +1149,9 @@ def load_physics_lite_config(cfg: dict[str, Any] | None) -> PhysicsLiteConfig:
         ),
         two_piece_ransac=_load_two_piece_ransac_cfg(
             _require_dict(raw.get('two_piece_ransac'), key='two_piece_ransac')
+        ),
+        two_piece_irls=_load_two_piece_irls_cfg(
+            _require_dict(raw.get('two_piece_irls'), key='two_piece_irls')
         ),
         physical_projection=_load_physical_projection_cfg(
             _require_dict(raw.get('physical_projection'), key='physical_projection')
