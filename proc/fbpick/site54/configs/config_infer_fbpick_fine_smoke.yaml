@@ -21,7 +21,7 @@ transform:
   center_index: 128
   standardize_eps: 1.0e-08
 window_center:
-  npz_key: robust_pick_i
+  npz_key: physical_center_i
   fallback_npz_key: null
 infer:
   ckpt_path: /workspace/proc/fbpick/site54/fbpick_fine_train_oof_out/ckpt/best.pt

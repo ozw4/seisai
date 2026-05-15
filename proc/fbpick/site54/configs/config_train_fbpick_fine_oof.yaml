@@ -6,39 +6,41 @@ paths:
   infer_fb_files: /workspace/proc/fbpick/site54/oof/lists/oof_train_fb_all.txt
   infer_robust_npz_files: /workspace/proc/fbpick/site54/oof/lists/oof_train_robust_all.txt
   out_dir: /workspace/proc/fbpick/site54/fbpick_fine_train_oof_out
-
 dataset:
   max_trials: 2048
   use_header_cache: true
   verbose: true
   progress: true
-  primary_keys: [ffid]
+  primary_keys:
+  - ffid
   secondary_key_fixed: false
   waveform_mode: eager
   train_endian: big
   infer_endian: big
-
 transform:
   trace_len: 128
   time_len: 256
   center_index: 128
-  standardize_eps: 1.0e-8
-
+  standardize_eps: 1.0e-08
 window_center:
-  npz_key: robust_pick_i
+  npz_key: physical_center_i
   fallback_npz_key: null
-
 center_augment:
   enabled: true
   train_only: true
   p_no_jitter: 0.7
   uniform_jitter_samples:
-    - {prob: 0.20, lo: -32, hi: 32}
-    - {prob: 0.08, lo: -64, hi: 64}
-    - {prob: 0.02, lo: -128, hi: 128}
+  - prob: 0.2
+    lo: -32
+    hi: 32
+  - prob: 0.08
+    lo: -64
+    hi: 64
+  - prob: 0.02
+    lo: -128
+    hi: 128
   clip_to_record: true
   require_fb_inside: true
-
 train:
   seed: 0
   epochs: 30
@@ -47,33 +49,28 @@ train:
   num_workers: 0
   max_norm: 1.0
   use_amp: true
-  lr: 1.0e-4
+  lr: 0.0001
   weight_decay: 0.0
   fb_sigma_ms: 3.0
   sigma_samples_min: 1.5
   sigma_samples_max: 12.0
-
 infer:
   seed: 0
   batch_size: 8
   num_workers: 0
   max_batches: 16
-
 vis:
   n: 8
   out_subdir: vis
-
 ckpt:
   save_best_only: true
   metric: infer_loss
   mode: min
-
 model:
   backbone: resnet18
   pretrained: false
   in_chans: 1
   out_chans: 1
-
 init:
   coarse_ckpt_path: null
   use_coarse_init: false
