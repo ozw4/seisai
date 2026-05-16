@@ -43,6 +43,19 @@ physical_runtime:
     save_per_trace_context: false
   observation_sampling:
     enabled: false
+  trend_result_mode: lazy
+  geometry_invalid_fallback: robust
+  group_invalid_fallback: robust
+  progress:
+    enabled: true
+    level: fit
+    interval_sec: 5.0
+    min_interval_fit_calls: 10
+    stream: stderr
+    use_tqdm: auto
+    print_on_non_tty: true
+    include_stage_events: true
+    include_summary: true
 two_piece_ransac:
   n_iter: 200
   inlier_th_ms: 40.0
