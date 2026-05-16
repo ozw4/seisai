@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -60,6 +60,52 @@ def _status_counts_line(values: np.ndarray) -> str:
     )
 
 
+def _payload_scalar(payload: Mapping[str, np.ndarray], key: str) -> object | None:
+    if key not in payload:
+        return None
+    return np.asarray(payload[key]).item()
+
+
+def _add_trend_runtime_summary_fields(
+    summary: dict[str, object],
+    payload: Mapping[str, np.ndarray],
+) -> None:
+    materialized = _payload_scalar(
+        payload,
+        'physical_runtime_trend_result_materialized',
+    )
+    computed = _payload_scalar(payload, 'physical_runtime_trend_result_computed')
+    elapsed = _payload_scalar(
+        payload,
+        'physical_runtime_trend_result_elapsed_sec',
+    )
+    started_before = _payload_scalar(
+        payload,
+        'physical_runtime_physical_center_started_before_trend_result',
+    )
+    mode = _payload_scalar(payload, 'physical_runtime_trend_result_mode')
+    reason = _payload_scalar(payload, 'physical_runtime_trend_result_reason')
+    legacy_output = _payload_scalar(payload, 'physical_runtime_legacy_trend_output')
+
+    if materialized is not None:
+        summary['trend_result_materialized'] = bool(int(materialized))
+    if computed is not None:
+        summary['trend_result_computed'] = bool(int(computed))
+    if elapsed is not None:
+        summary['trend_result_elapsed_sec'] = float(elapsed)
+    if started_before is not None:
+        summary['physical_center_started_before_trend_result'] = bool(
+            int(started_before)
+        )
+    if mode is not None:
+        summary['trend_result_mode'] = str(mode)
+    if reason is not None:
+        reason_str = str(reason)
+        summary['trend_result_reason'] = reason_str if reason_str else None
+    if legacy_output is not None:
+        summary['legacy_trend_output'] = str(legacy_output)
+
+
 def _build_unmaterialized_trend(table) -> TrendResult:
     n = int(table.n_traces)
     return TrendResult(
@@ -73,6 +119,57 @@ def _build_unmaterialized_trend(table) -> TrendResult:
         trend_center_i=np.full((n,), -1, dtype=np.int32),
         filled_mask=np.zeros((n,), dtype=np.bool_),
     )
+
+
+class LazyTrendResultProvider:
+    def __init__(
+        self,
+        *,
+        mode: str,
+        build_fn: Callable[[], TrendResult],
+        progress: Any,
+        progress_context: Mapping[str, object],
+    ) -> None:
+        self.mode = str(mode)
+        self._build_fn = build_fn
+        self._progress = progress
+        self._progress_context = dict(progress_context)
+        self._trend_result: TrendResult | None = None
+        self.computed = False
+        self.reason: str | None = None
+        self.elapsed_sec = 0.0
+
+    @property
+    def trend_result(self) -> TrendResult | None:
+        return self._trend_result
+
+    def get(self, reason: str) -> TrendResult:
+        if self.mode == 'disabled':
+            msg = 'trend_result is disabled but was requested'
+            raise RuntimeError(msg)
+        if self._trend_result is None:
+            self.reason = str(reason)
+            lazy = self.mode != 'eager'
+            self._progress.emit(
+                'physics.stage_start',
+                **self._progress_context,
+                stage='trend_result',
+                lazy=lazy,
+                reason=self.reason,
+            )
+            stage_start = perf_counter()
+            self._trend_result = self._build_fn()
+            self.elapsed_sec = perf_counter() - stage_start
+            self.computed = True
+            self._progress.emit(
+                'physics.stage_done',
+                **self._progress_context,
+                stage='trend_result',
+                lazy=lazy,
+                reason=self.reason,
+                elapsed=self.elapsed_sec,
+            )
+        return self._trend_result
 
 
 def _build_coarse_observed_confidence(table) -> ConfidenceResult:
@@ -109,6 +206,12 @@ def _build_coarse_observed_merge(table, confidence: ConfidenceResult) -> MergeRe
         used_theoretical_mask=np.zeros((n,), dtype=np.bool_),
         reason_mask=np.zeros((n,), dtype=np.uint8),
     )
+
+
+def _physical_center_first_enabled(typed_cfg) -> bool:
+    return bool(typed_cfg.physical_trend.enabled) and str(
+        typed_cfg.physical_runtime.trend_result_mode
+    ) in {'lazy', 'disabled'}
 
 
 def _should_use_lazy_robust_fallback_path(
@@ -211,33 +314,27 @@ def build_robust_payload_from_coarse(
             stage='feasible_band',
             elapsed=perf_counter() - stage_start,
         )
-        trend_materialized = True
-        if _should_use_lazy_robust_fallback_path(
-            coarse_npz,
-            table=table,
-            typed_cfg=typed_cfg,
-            reporter=reporter,
-            progress_fields=progress_fields,
-        ):
-            trend_materialized = False
+        trend_provider = LazyTrendResultProvider(
+            mode=str(typed_cfg.physical_runtime.trend_result_mode),
+            build_fn=lambda: build_trend_result(table, feasible, typed_cfg),
+            progress=reporter,
+            progress_context=progress_fields,
+        )
+        physical_center_first = _physical_center_first_enabled(typed_cfg)
+        if physical_center_first:
+            _should_use_lazy_robust_fallback_path(
+                coarse_npz,
+                table=table,
+                typed_cfg=typed_cfg,
+                reporter=reporter,
+                progress_fields=progress_fields,
+            )
             trend = _build_unmaterialized_trend(table)
             confidence = _build_coarse_observed_confidence(table)
             merged = _build_coarse_observed_merge(table, confidence)
         else:
             _raise_if_trend_materialization_disabled(typed_cfg)
-            reporter.emit(
-                'physics.stage_start',
-                **progress_fields,
-                stage='trend_result',
-            )
-            stage_start = perf_counter()
-            trend = build_trend_result(table, feasible, typed_cfg)
-            reporter.emit(
-                'physics.stage_done',
-                **progress_fields,
-                stage='trend_result',
-                elapsed=perf_counter() - stage_start,
-            )
+            trend = trend_provider.get(reason='eager')
             reporter.emit('physics.stage_start', **progress_fields, stage='confidence')
             stage_start = perf_counter()
             confidence = compute_confidence_terms(table, feasible, trend, typed_cfg)
@@ -271,6 +368,7 @@ def build_robust_payload_from_coarse(
             trend=trend,
             merged=merged,
             cfg=typed_cfg,
+            trend_provider=trend_provider if physical_center_first else None,
             progress=reporter,
             progress_context=progress_fields,
         )
@@ -280,9 +378,21 @@ def build_robust_payload_from_coarse(
             stage='physical_center',
             elapsed=perf_counter() - stage_start,
         )
+        if (
+            physical_center_first
+            and str(typed_cfg.physical_runtime.legacy_trend_output) == 'always'
+        ):
+            trend = trend_provider.get(reason='legacy_trend_output')
+        elif physical_center_first and trend_provider.trend_result is not None:
+            trend = trend_provider.trend_result
+        trend_materialized = bool(trend_provider.computed)
     else:
         with runtime_diagnostics.time_physics():
-            reporter.emit('physics.stage_start', **progress_fields, stage='normalize_table')
+            reporter.emit(
+                'physics.stage_start',
+                **progress_fields,
+                stage='normalize_table',
+            )
             stage_start = perf_counter()
             with runtime_diagnostics.time_block('normalize_table_sec'):
                 table = normalize_coarse_pick_table(coarse_npz)
@@ -294,7 +404,11 @@ def build_robust_payload_from_coarse(
                 elapsed=perf_counter() - stage_start,
                 n_traces=int(table.n_traces),
             )
-            reporter.emit('physics.stage_start', **progress_fields, stage='feasible_band')
+            reporter.emit(
+                'physics.stage_start',
+                **progress_fields,
+                stage='feasible_band',
+            )
             stage_start = perf_counter()
             with runtime_diagnostics.time_block('feasible_band_sec'):
                 feasible = compute_feasible_band(table, typed_cfg.feasible_band)
@@ -304,34 +418,31 @@ def build_robust_payload_from_coarse(
                 stage='feasible_band',
                 elapsed=perf_counter() - stage_start,
             )
-            trend_materialized = True
-            if _should_use_lazy_robust_fallback_path(
-                coarse_npz,
-                table=table,
-                typed_cfg=typed_cfg,
-                reporter=reporter,
-                progress_fields=progress_fields,
-            ):
-                trend_materialized = False
+            def _build_trend_result_for_provider() -> TrendResult:
+                with runtime_diagnostics.time_block('trend_result_sec'):
+                    return build_trend_result(table, feasible, typed_cfg)
+
+            trend_provider = LazyTrendResultProvider(
+                mode=str(typed_cfg.physical_runtime.trend_result_mode),
+                build_fn=_build_trend_result_for_provider,
+                progress=reporter,
+                progress_context=progress_fields,
+            )
+            physical_center_first = _physical_center_first_enabled(typed_cfg)
+            if physical_center_first:
+                _should_use_lazy_robust_fallback_path(
+                    coarse_npz,
+                    table=table,
+                    typed_cfg=typed_cfg,
+                    reporter=reporter,
+                    progress_fields=progress_fields,
+                )
                 trend = _build_unmaterialized_trend(table)
                 confidence = _build_coarse_observed_confidence(table)
                 merged = _build_coarse_observed_merge(table, confidence)
             else:
                 _raise_if_trend_materialization_disabled(typed_cfg)
-                reporter.emit(
-                    'physics.stage_start',
-                    **progress_fields,
-                    stage='trend_result',
-                )
-                stage_start = perf_counter()
-                with runtime_diagnostics.time_block('trend_result_sec'):
-                    trend = build_trend_result(table, feasible, typed_cfg)
-                reporter.emit(
-                    'physics.stage_done',
-                    **progress_fields,
-                    stage='trend_result',
-                    elapsed=perf_counter() - stage_start,
-                )
+                trend = trend_provider.get(reason='eager')
                 reporter.emit(
                     'physics.stage_start',
                     **progress_fields,
@@ -367,7 +478,11 @@ def build_robust_payload_from_coarse(
                     stage='merge',
                     elapsed=perf_counter() - stage_start,
                 )
-            reporter.emit('physics.stage_start', **progress_fields, stage='physical_center')
+            reporter.emit(
+                'physics.stage_start',
+                **progress_fields,
+                stage='physical_center',
+            )
             stage_start = perf_counter()
             with runtime_diagnostics.time_physical_center():
                 physical = build_geometry_two_piece_physical_center(
@@ -377,6 +492,7 @@ def build_robust_payload_from_coarse(
                     trend=trend,
                     merged=merged,
                     cfg=typed_cfg,
+                    trend_provider=trend_provider if physical_center_first else None,
                     runtime_diagnostics=runtime_diagnostics,
                     progress=reporter,
                     progress_context=progress_fields,
@@ -387,7 +503,17 @@ def build_robust_payload_from_coarse(
                 stage='physical_center',
                 elapsed=perf_counter() - stage_start,
             )
+            if (
+                physical_center_first
+                and str(typed_cfg.physical_runtime.legacy_trend_output) == 'always'
+            ):
+                trend = trend_provider.get(reason='legacy_trend_output')
+            elif physical_center_first and trend_provider.trend_result is not None:
+                trend = trend_provider.trend_result
+            trend_materialized = bool(trend_provider.computed)
 
+    legacy_trend_output = str(typed_cfg.physical_runtime.legacy_trend_output)
+    include_trend_output = legacy_trend_output != 'omit' or bool(trend_materialized)
     payload = {
         'dt_sec': np.asarray(table.dt_scalar_sec, dtype=np.float32),
         'n_samples_orig': np.asarray(table.n_samples_orig, dtype=np.int32),
@@ -408,8 +534,6 @@ def build_robust_payload_from_coarse(
         'conf_prob1': np.asarray(confidence.conf_prob1, dtype=np.float32),
         'conf_trend1': np.asarray(confidence.conf_trend1, dtype=np.float32),
         'conf_rs1': np.asarray(confidence.conf_rs1, dtype=np.float32),
-        'trend_center_i': np.asarray(trend.trend_center_i, dtype=np.int32),
-        'trend_center_t_sec': np.asarray(trend.trend_center_sec, dtype=np.float32),
         'physical_center_i': np.asarray(physical.physical_center_i, dtype=np.int32),
         'physical_center_t_sec': np.asarray(
             physical.physical_center_t_sec,
@@ -498,6 +622,25 @@ def build_robust_payload_from_coarse(
             int(bool(trend_materialized)),
             dtype=np.int64,
         ),
+        'physical_runtime_trend_result_computed': np.asarray(
+            int(bool(trend_materialized)),
+            dtype=np.int64,
+        ),
+        'physical_runtime_trend_result_elapsed_sec': np.asarray(
+            float(trend_provider.elapsed_sec),
+            dtype=np.float64,
+        ),
+        'physical_runtime_physical_center_started_before_trend_result': np.asarray(
+            int(bool(physical_center_first)),
+            dtype=np.int64,
+        ),
+        'physical_runtime_trend_result_mode': np.asarray(
+            str(typed_cfg.physical_runtime.trend_result_mode)
+        ),
+        'physical_runtime_trend_result_reason': np.asarray(
+            '' if trend_provider.reason is None else str(trend_provider.reason)
+        ),
+        'physical_runtime_legacy_trend_output': np.asarray(legacy_trend_output),
         'lineage': build_lineage_payload(
             canonical_cfg,
             repo_root=repo_root,
@@ -505,6 +648,16 @@ def build_robust_payload_from_coarse(
             iter_id=iter_id,
         ),
     }
+    if include_trend_output:
+        payload.update(
+            {
+                'trend_center_i': np.asarray(trend.trend_center_i, dtype=np.int32),
+                'trend_center_t_sec': np.asarray(
+                    trend.trend_center_sec,
+                    dtype=np.float32,
+                ),
+            }
+        )
     if (
         bool(typed_cfg.physical_runtime.anchor_selection.enabled)
         or typed_cfg.physical_runtime.fit_policy == 'anchor_source_xy'
@@ -629,17 +782,8 @@ def run_physics_lite(
         if runtime_diagnostics is not None
         else runtime_summary_from_npz_fields(payload)
     )
-    if (
-        summary is not None
-        and 'physical_runtime_trend_result_materialized' in payload
-    ):
-        summary['trend_result_materialized'] = bool(
-            int(
-                np.asarray(
-                    payload['physical_runtime_trend_result_materialized']
-                ).item()
-            )
-        )
+    if summary is not None:
+        _add_trend_runtime_summary_fields(summary, payload)
     summary_path = None
     if summary is not None and bool(typed_cfg.physical_runtime.write_runtime_summary):
         reporter.emit('physics.stage_start', **progress_fields, stage='runtime_summary')
