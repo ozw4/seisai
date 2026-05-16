@@ -8,16 +8,20 @@ from typing import Any
 import numpy as np
 
 from seisai_engine.pipelines.fbpick.common import (
+    ROBUST_SOURCE_COARSE_OBSERVED,
     build_lineage_payload,
     load_coarse_npz,
     save_robust_npz,
 )
 
-from .confidence import compute_confidence_terms
+from .confidence import ConfidenceResult, compute_confidence_terms
 from .config import load_physics_lite_config, physics_lite_config_to_dict
 from .feasible import compute_feasible_band
-from .merge import apply_keep_reject_fill
-from .physical_center import build_geometry_two_piece_physical_center
+from .merge import MergeResult, apply_keep_reject_fill
+from .physical_center import (
+    build_geometry_two_piece_physical_center,
+    preflight_geometry_two_piece_fallback,
+)
 from .pick_table import normalize_coarse_pick_table
 from .progress import build_progress_reporter
 from .runtime_diagnostics import (
@@ -26,7 +30,7 @@ from .runtime_diagnostics import (
     runtime_summary_from_npz_fields,
     write_physics_runtime_summary,
 )
-from .trend import build_trend_result
+from .trend import TrendResult, build_trend_result
 
 __all__ = [
     'build_robust_payload_from_coarse',
@@ -54,6 +58,109 @@ def _status_counts_line(values: np.ndarray) -> str:
         f'{int(status)}:{int(count)}'
         for status, count in zip(unique.tolist(), counts.tolist(), strict=True)
     )
+
+
+def _build_unmaterialized_trend(table) -> TrendResult:
+    n = int(table.n_traces)
+    return TrendResult(
+        seed_mask=np.zeros((n,), dtype=np.bool_),
+        seed_threshold=np.float32(np.nan),
+        local_center_sec=np.full((n,), np.nan, dtype=np.float32),
+        local_center_valid=np.zeros((n,), dtype=np.bool_),
+        local_discard_mask=np.zeros((n,), dtype=np.bool_),
+        global_center_sec=np.full((n,), np.nan, dtype=np.float32),
+        trend_center_sec=np.full((n,), np.nan, dtype=np.float32),
+        trend_center_i=np.full((n,), -1, dtype=np.int32),
+        filled_mask=np.zeros((n,), dtype=np.bool_),
+    )
+
+
+def _build_coarse_observed_confidence(table) -> ConfidenceResult:
+    n = int(table.n_traces)
+    conf_prob1 = np.clip(
+        np.asarray(table.coarse_pmax, dtype=np.float32),
+        0.0,
+        1.0,
+    ).astype(np.float32, copy=False)
+    conf_trend1 = np.ones((n,), dtype=np.float32)
+    conf_rs1 = np.ones((n,), dtype=np.float32)
+    return ConfidenceResult(
+        conf_prob1=conf_prob1,
+        conf_trend1=conf_trend1,
+        conf_rs1=conf_rs1,
+        total_score=conf_prob1.copy(),
+    )
+
+
+def _build_coarse_observed_merge(table, confidence: ConfidenceResult) -> MergeResult:
+    n = int(table.n_traces)
+    return MergeResult(
+        keep_mask=np.ones((n,), dtype=np.bool_),
+        reject_mask=np.zeros((n,), dtype=np.bool_),
+        score_threshold=np.float32(0.0),
+        robust_pick_i=np.asarray(table.coarse_pick_i, dtype=np.int32).copy(),
+        robust_pick_t_sec=np.asarray(table.coarse_pick_t_sec, dtype=np.float32).copy(),
+        robust_conf=np.asarray(confidence.total_score, dtype=np.float32).copy(),
+        robust_source=np.full(
+            (n,),
+            np.uint8(ROBUST_SOURCE_COARSE_OBSERVED),
+            dtype=np.uint8,
+        ),
+        used_theoretical_mask=np.zeros((n,), dtype=np.bool_),
+        reason_mask=np.zeros((n,), dtype=np.uint8),
+    )
+
+
+def _should_use_lazy_robust_fallback_path(
+    coarse_npz: Mapping[str, np.ndarray],
+    *,
+    table,
+    typed_cfg,
+    reporter: Any,
+    progress_fields: Mapping[str, object],
+) -> bool:
+    runtime = typed_cfg.physical_runtime
+    if str(runtime.trend_result_mode) not in {'lazy', 'disabled'}:
+        return False
+    if not bool(typed_cfg.physical_trend.enabled):
+        return False
+
+    reporter.emit(
+        'physics.stage_start',
+        **progress_fields,
+        stage='geometry_preflight',
+    )
+    stage_start = perf_counter()
+    preflight = preflight_geometry_two_piece_fallback(
+        coarse_npz=coarse_npz,
+        table=table,
+        cfg=typed_cfg,
+    )
+    use_lazy_robust = (
+        preflight.status is not None and str(preflight.fallback_mode) == 'robust'
+    )
+    reporter.emit(
+        'physics.stage_done',
+        **progress_fields,
+        stage='geometry_preflight',
+        elapsed=perf_counter() - stage_start,
+        geometry_loaded=preflight.geometry_loaded,
+        groups=preflight.groups,
+        fallback_detected=preflight.status is not None,
+        fallback_reason=preflight.reason,
+        fallback=preflight.fallback_mode,
+        lazy_robust_fallback=use_lazy_robust,
+    )
+    return use_lazy_robust
+
+
+def _raise_if_trend_materialization_disabled(typed_cfg) -> None:
+    if str(typed_cfg.physical_runtime.trend_result_mode) == 'disabled':
+        msg = (
+            "physical_runtime.trend_result_mode='disabled' cannot materialize "
+            'trend_result for this input'
+        )
+        raise ValueError(msg)
 
 
 def build_robust_payload_from_coarse(
@@ -104,33 +211,57 @@ def build_robust_payload_from_coarse(
             stage='feasible_band',
             elapsed=perf_counter() - stage_start,
         )
-        reporter.emit('physics.stage_start', **progress_fields, stage='trend_result')
-        stage_start = perf_counter()
-        trend = build_trend_result(table, feasible, typed_cfg)
-        reporter.emit(
-            'physics.stage_done',
-            **progress_fields,
-            stage='trend_result',
-            elapsed=perf_counter() - stage_start,
-        )
-        reporter.emit('physics.stage_start', **progress_fields, stage='confidence')
-        stage_start = perf_counter()
-        confidence = compute_confidence_terms(table, feasible, trend, typed_cfg)
-        reporter.emit(
-            'physics.stage_done',
-            **progress_fields,
-            stage='confidence',
-            elapsed=perf_counter() - stage_start,
-        )
-        reporter.emit('physics.stage_start', **progress_fields, stage='merge')
-        stage_start = perf_counter()
-        merged = apply_keep_reject_fill(table, feasible, trend, confidence, typed_cfg)
-        reporter.emit(
-            'physics.stage_done',
-            **progress_fields,
-            stage='merge',
-            elapsed=perf_counter() - stage_start,
-        )
+        trend_materialized = True
+        if _should_use_lazy_robust_fallback_path(
+            coarse_npz,
+            table=table,
+            typed_cfg=typed_cfg,
+            reporter=reporter,
+            progress_fields=progress_fields,
+        ):
+            trend_materialized = False
+            trend = _build_unmaterialized_trend(table)
+            confidence = _build_coarse_observed_confidence(table)
+            merged = _build_coarse_observed_merge(table, confidence)
+        else:
+            _raise_if_trend_materialization_disabled(typed_cfg)
+            reporter.emit(
+                'physics.stage_start',
+                **progress_fields,
+                stage='trend_result',
+            )
+            stage_start = perf_counter()
+            trend = build_trend_result(table, feasible, typed_cfg)
+            reporter.emit(
+                'physics.stage_done',
+                **progress_fields,
+                stage='trend_result',
+                elapsed=perf_counter() - stage_start,
+            )
+            reporter.emit('physics.stage_start', **progress_fields, stage='confidence')
+            stage_start = perf_counter()
+            confidence = compute_confidence_terms(table, feasible, trend, typed_cfg)
+            reporter.emit(
+                'physics.stage_done',
+                **progress_fields,
+                stage='confidence',
+                elapsed=perf_counter() - stage_start,
+            )
+            reporter.emit('physics.stage_start', **progress_fields, stage='merge')
+            stage_start = perf_counter()
+            merged = apply_keep_reject_fill(
+                table,
+                feasible,
+                trend,
+                confidence,
+                typed_cfg,
+            )
+            reporter.emit(
+                'physics.stage_done',
+                **progress_fields,
+                stage='merge',
+                elapsed=perf_counter() - stage_start,
+            )
         reporter.emit('physics.stage_start', **progress_fields, stage='physical_center')
         stage_start = perf_counter()
         physical = build_geometry_two_piece_physical_center(
@@ -173,47 +304,69 @@ def build_robust_payload_from_coarse(
                 stage='feasible_band',
                 elapsed=perf_counter() - stage_start,
             )
-            reporter.emit('physics.stage_start', **progress_fields, stage='trend_result')
-            stage_start = perf_counter()
-            with runtime_diagnostics.time_block('trend_result_sec'):
-                trend = build_trend_result(table, feasible, typed_cfg)
-            reporter.emit(
-                'physics.stage_done',
-                **progress_fields,
-                stage='trend_result',
-                elapsed=perf_counter() - stage_start,
-            )
-            reporter.emit('physics.stage_start', **progress_fields, stage='confidence')
-            stage_start = perf_counter()
-            with runtime_diagnostics.time_block('confidence_sec'):
-                confidence = compute_confidence_terms(
-                    table,
-                    feasible,
-                    trend,
-                    typed_cfg,
+            trend_materialized = True
+            if _should_use_lazy_robust_fallback_path(
+                coarse_npz,
+                table=table,
+                typed_cfg=typed_cfg,
+                reporter=reporter,
+                progress_fields=progress_fields,
+            ):
+                trend_materialized = False
+                trend = _build_unmaterialized_trend(table)
+                confidence = _build_coarse_observed_confidence(table)
+                merged = _build_coarse_observed_merge(table, confidence)
+            else:
+                _raise_if_trend_materialization_disabled(typed_cfg)
+                reporter.emit(
+                    'physics.stage_start',
+                    **progress_fields,
+                    stage='trend_result',
                 )
-            reporter.emit(
-                'physics.stage_done',
-                **progress_fields,
-                stage='confidence',
-                elapsed=perf_counter() - stage_start,
-            )
-            reporter.emit('physics.stage_start', **progress_fields, stage='merge')
-            stage_start = perf_counter()
-            with runtime_diagnostics.time_block('merge_sec'):
-                merged = apply_keep_reject_fill(
-                    table,
-                    feasible,
-                    trend,
-                    confidence,
-                    typed_cfg,
+                stage_start = perf_counter()
+                with runtime_diagnostics.time_block('trend_result_sec'):
+                    trend = build_trend_result(table, feasible, typed_cfg)
+                reporter.emit(
+                    'physics.stage_done',
+                    **progress_fields,
+                    stage='trend_result',
+                    elapsed=perf_counter() - stage_start,
                 )
-            reporter.emit(
-                'physics.stage_done',
-                **progress_fields,
-                stage='merge',
-                elapsed=perf_counter() - stage_start,
-            )
+                reporter.emit(
+                    'physics.stage_start',
+                    **progress_fields,
+                    stage='confidence',
+                )
+                stage_start = perf_counter()
+                with runtime_diagnostics.time_block('confidence_sec'):
+                    confidence = compute_confidence_terms(
+                        table,
+                        feasible,
+                        trend,
+                        typed_cfg,
+                    )
+                reporter.emit(
+                    'physics.stage_done',
+                    **progress_fields,
+                    stage='confidence',
+                    elapsed=perf_counter() - stage_start,
+                )
+                reporter.emit('physics.stage_start', **progress_fields, stage='merge')
+                stage_start = perf_counter()
+                with runtime_diagnostics.time_block('merge_sec'):
+                    merged = apply_keep_reject_fill(
+                        table,
+                        feasible,
+                        trend,
+                        confidence,
+                        typed_cfg,
+                    )
+                reporter.emit(
+                    'physics.stage_done',
+                    **progress_fields,
+                    stage='merge',
+                    elapsed=perf_counter() - stage_start,
+                )
             reporter.emit('physics.stage_start', **progress_fields, stage='physical_center')
             stage_start = perf_counter()
             with runtime_diagnostics.time_physical_center():
@@ -340,6 +493,10 @@ def build_robust_payload_from_coarse(
         'physical_runtime_fit_source': np.asarray(
             physical.physical_runtime_fit_source,
             dtype=np.uint8,
+        ),
+        'physical_runtime_trend_result_materialized': np.asarray(
+            int(bool(trend_materialized)),
+            dtype=np.int64,
         ),
         'lineage': build_lineage_payload(
             canonical_cfg,
@@ -472,6 +629,17 @@ def run_physics_lite(
         if runtime_diagnostics is not None
         else runtime_summary_from_npz_fields(payload)
     )
+    if (
+        summary is not None
+        and 'physical_runtime_trend_result_materialized' in payload
+    ):
+        summary['trend_result_materialized'] = bool(
+            int(
+                np.asarray(
+                    payload['physical_runtime_trend_result_materialized']
+                ).item()
+            )
+        )
     summary_path = None
     if summary is not None and bool(typed_cfg.physical_runtime.write_runtime_summary):
         reporter.emit('physics.stage_start', **progress_fields, stage='runtime_summary')
