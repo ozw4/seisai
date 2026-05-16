@@ -862,13 +862,13 @@ class PhysicalRuntimeDiagnostics:
 
 def runtime_summary_from_npz_fields(
     payload: dict[str, np.ndarray],
-) -> dict[str, float | int | str] | None:
+) -> dict[str, object] | None:
     if (
         'physics_total_sec' not in payload
         and 'physical_runtime_physics_total_sec' not in payload
     ):
         return None
-    summary: dict[str, float | int | str] = {}
+    summary: dict[str, object] = {}
     int_keys = {
         'n_traces',
         'n_fit_contexts',
@@ -946,6 +946,43 @@ def runtime_summary_from_npz_fields(
                 summary[key] = str(value)
             else:
                 summary[key] = int(value) if key in int_keys else float(value)
+    if 'physical_runtime_trend_result_materialized' in payload:
+        materialized = np.asarray(
+            payload['physical_runtime_trend_result_materialized']
+        ).item()
+        summary['trend_result_materialized'] = bool(int(materialized))
+    if 'physical_runtime_trend_result_computed' in payload:
+        computed = np.asarray(
+            payload['physical_runtime_trend_result_computed']
+        ).item()
+        summary['trend_result_computed'] = bool(int(computed))
+    if 'physical_runtime_trend_result_elapsed_sec' in payload:
+        summary['trend_result_elapsed_sec'] = float(
+            np.asarray(payload['physical_runtime_trend_result_elapsed_sec']).item()
+        )
+    if 'physical_runtime_physical_center_started_before_trend_result' in payload:
+        summary['physical_center_started_before_trend_result'] = bool(
+            int(
+                np.asarray(
+                    payload[
+                        'physical_runtime_physical_center_started_before_trend_result'
+                    ]
+                ).item()
+            )
+        )
+    if 'physical_runtime_trend_result_mode' in payload:
+        summary['trend_result_mode'] = str(
+            np.asarray(payload['physical_runtime_trend_result_mode']).item()
+        )
+    if 'physical_runtime_trend_result_reason' in payload:
+        reason = str(
+            np.asarray(payload['physical_runtime_trend_result_reason']).item()
+        )
+        summary['trend_result_reason'] = reason if reason else None
+    if 'physical_runtime_legacy_trend_output' in payload:
+        summary['legacy_trend_output'] = str(
+            np.asarray(payload['physical_runtime_legacy_trend_output']).item()
+        )
     return summary
 
 

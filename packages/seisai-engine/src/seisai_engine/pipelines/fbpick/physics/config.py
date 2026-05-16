@@ -242,6 +242,7 @@ class PhysicalRuntimeDiagnosticsCfg:
 class PhysicalRuntimeCfg:
     fit_policy: str = 'full'
     trend_result_mode: str = 'eager'
+    legacy_trend_output: str = 'auto'
     geometry_invalid_fallback: str = 'existing_trend'
     group_invalid_fallback: str = 'existing_trend'
     diagnostics_enabled: bool = True
@@ -698,6 +699,7 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
     return PhysicalRuntimeCfg(
         fit_policy=optional_str(cfg, 'fit_policy', 'full'),
         trend_result_mode=optional_str(cfg, 'trend_result_mode', 'eager'),
+        legacy_trend_output=optional_str(cfg, 'legacy_trend_output', 'auto'),
         geometry_invalid_fallback=optional_str(
             cfg,
             'geometry_invalid_fallback',
@@ -870,6 +872,12 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
             f"or 'disabled', got {cfg.trend_result_mode!r}"
         )
         raise ValueError(msg)
+    if cfg.legacy_trend_output not in {'auto', 'always', 'omit'}:
+        msg = (
+            "physical_runtime.legacy_trend_output must be 'auto', 'always', "
+            f"or 'omit', got {cfg.legacy_trend_output!r}"
+        )
+        raise ValueError(msg)
     if cfg.geometry_invalid_fallback not in {'existing_trend', 'robust'}:
         msg = (
             'physical_runtime.geometry_invalid_fallback must be '
@@ -880,6 +888,30 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
         msg = (
             'physical_runtime.group_invalid_fallback must be '
             f"'existing_trend' or 'robust', got {cfg.group_invalid_fallback!r}"
+        )
+        raise ValueError(msg)
+    if (
+        cfg.trend_result_mode == 'disabled'
+        and cfg.geometry_invalid_fallback == 'existing_trend'
+    ):
+        msg = (
+            "physical_runtime.trend_result_mode='disabled' cannot be combined "
+            "with geometry_invalid_fallback='existing_trend'"
+        )
+        raise ValueError(msg)
+    if (
+        cfg.trend_result_mode == 'disabled'
+        and cfg.group_invalid_fallback == 'existing_trend'
+    ):
+        msg = (
+            "physical_runtime.trend_result_mode='disabled' cannot be combined "
+            "with group_invalid_fallback='existing_trend'"
+        )
+        raise ValueError(msg)
+    if cfg.trend_result_mode == 'disabled' and cfg.legacy_trend_output == 'always':
+        msg = (
+            "physical_runtime.trend_result_mode='disabled' cannot be combined "
+            "with legacy_trend_output='always'"
         )
         raise ValueError(msg)
     anchor = cfg.anchor_selection

@@ -382,6 +382,15 @@ def _is_valid_pick_i(value: int, *, n_samples_orig: int) -> bool:
     return 0 <= int(value) < int(n_samples_orig)
 
 
+def _existing_fallback_trend(
+    trend: TrendResult,
+    trend_provider: object | None = None,
+) -> TrendResult:
+    if trend_provider is None:
+        return trend
+    return trend_provider.get(reason='fallback_existing_trend')
+
+
 def _fallback_center_for_trace(
     trace_idx: int,
     *,
@@ -389,10 +398,12 @@ def _fallback_center_for_trace(
     feasible: FeasibleBandResult,
     trend: TrendResult,
     merged: MergeResult,
+    trend_provider: object | None = None,
 ) -> tuple[int, np.float32, int]:
     n_samples = int(table.n_samples_orig)
     dt = float(table.dt_scalar_sec)
     idx = int(trace_idx)
+    trend = _existing_fallback_trend(trend, trend_provider)
 
     trend_i = int(np.asarray(trend.trend_center_i, dtype=np.int64)[idx])
     trend_t = float(np.asarray(trend.trend_center_sec, dtype=np.float32)[idx])
@@ -485,12 +496,14 @@ def _assign_fallback(
     feasible: FeasibleBandResult,
     trend: TrendResult,
     merged: MergeResult,
+    trend_provider: object | None = None,
 ) -> None:
     center_i, center_t, fallback_status = _fallback_center_for_trace(
         trace_idx,
         table=table,
         feasible=feasible,
         trend=trend,
+        trend_provider=trend_provider,
         merged=merged,
     )
     arrays['physical_center_i'][trace_idx] = np.int32(center_i)
@@ -533,7 +546,9 @@ def _assign_fallback_all(
     feasible: FeasibleBandResult,
     trend: TrendResult,
     merged: MergeResult,
+    trend_provider: object | None = None,
 ) -> PhysicalCenterResult:
+    trend = _existing_fallback_trend(trend, trend_provider)
     arrays = _allocate_result_arrays(table)
     n = int(table.n_traces)
     n_samples = int(table.n_samples_orig)
@@ -701,6 +716,7 @@ def _assign_configured_fallback_all(
     feasible: FeasibleBandResult,
     trend: TrendResult,
     merged: MergeResult,
+    trend_provider: object | None = None,
 ) -> PhysicalCenterResult:
     if str(fallback_mode) == 'robust':
         return _assign_robust_fallback_all(
@@ -713,6 +729,7 @@ def _assign_configured_fallback_all(
         table=table,
         feasible=feasible,
         trend=trend,
+        trend_provider=trend_provider,
         merged=merged,
     )
 
@@ -730,6 +747,7 @@ def _emit_fallback_all_and_done(
     reporter: object,
     context: Mapping[str, object],
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    trend_provider: object | None = None,
 ) -> PhysicalCenterResult:
     n = int(table.n_traces)
     reporter.emit(
@@ -751,6 +769,7 @@ def _emit_fallback_all_and_done(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
         )
     reporter.emit(
@@ -2087,7 +2106,11 @@ def _run_fit_tasks_with_executor(
     )
     context = dict(progress_context or {})
     total = len(tasks) if progress_total is None else int(progress_total)
-    start_sec = time.perf_counter() if progress_start_sec is None else progress_start_sec
+    start_sec = (
+        time.perf_counter()
+        if progress_start_sec is None
+        else progress_start_sec
+    )
     fit_calls_done = 0
     fit_total_sec = float(progress_fit_total_sec_base)
     executor_cfg = cfg.physical_runtime.fit_executor
@@ -2475,6 +2498,7 @@ def _prepare_trace_plan_assignment(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
+    trend_provider: object | None = None,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
     observation_plan_cache: _ObservationPlanCache,
@@ -2493,6 +2517,7 @@ def _prepare_trace_plan_assignment(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
         )
         return None
@@ -2516,6 +2541,7 @@ def _prepare_trace_plan_assignment(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
         )
         return None
@@ -2535,6 +2561,7 @@ def _prepare_trace_plan_assignment(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
         )
         return None
@@ -2590,6 +2617,7 @@ def _assign_prepared_model_prediction_batch(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
+    trend_provider: object | None = None,
     merged: MergeResult,
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     t0_shift_sec: float | np.ndarray = 0.0,
@@ -2654,6 +2682,7 @@ def _assign_prepared_model_prediction_batch(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
         )
     return valid, diagnostics
@@ -2703,6 +2732,7 @@ def _assign_fit_context_fallback(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
+    trend_provider: object | None = None,
     merged: MergeResult,
 ) -> None:
     for trace_idx in np.asarray(work_item.trace_indices, dtype=np.int64).tolist():
@@ -2713,6 +2743,7 @@ def _assign_fit_context_fallback(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
         )
 
@@ -2725,6 +2756,7 @@ def _fit_and_assign_context_work_item(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
+    trend_provider: object | None = None,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
     strategy: _PhysicalFitStrategy,
@@ -2757,6 +2789,7 @@ def _fit_and_assign_context_work_item(
         table=table,
         feasible=feasible,
         trend=trend,
+        trend_provider=trend_provider,
         merged=merged,
         fit_cache=fit_cache,
         trend_model=trend_model,
@@ -2774,6 +2807,7 @@ def _assign_fit_context_work_item_outcome(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
+    trend_provider: object | None = None,
     merged: MergeResult,
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     trend_model: object | None,
@@ -2789,6 +2823,7 @@ def _assign_fit_context_work_item_outcome(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
         )
         return _FitContextWorkResult(
@@ -2805,6 +2840,7 @@ def _assign_fit_context_work_item_outcome(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
         )
         return _FitContextWorkResult(
@@ -2836,6 +2872,7 @@ def _assign_fit_context_work_item_outcome(
         table=table,
         feasible=feasible,
         trend=trend,
+        trend_provider=trend_provider,
         merged=merged,
         fit_cache=fit_cache,
         runtime_diagnostics=runtime_diagnostics,
@@ -2867,6 +2904,7 @@ def _prepare_fit_context_assignments_for_trace_indices(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
+    trend_provider: object | None = None,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
     observation_plan_cache: _ObservationPlanCache,
@@ -2892,6 +2930,7 @@ def _prepare_fit_context_assignments_for_trace_indices(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
             cfg=cfg,
             observation_plan_cache=observation_plan_cache,
@@ -2913,6 +2952,7 @@ def _fit_and_assign_context_work_items(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
+    trend_provider: object | None = None,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
     strategy: _PhysicalFitStrategy,
@@ -2932,6 +2972,7 @@ def _fit_and_assign_context_work_items(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
             cfg=cfg,
             fit_cache=fit_cache,
@@ -2957,6 +2998,7 @@ def _fit_and_assign_context_work_items(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
             cfg=cfg,
             strategy=strategy,
@@ -3046,6 +3088,7 @@ def _fit_and_assign_context_work_items_parallel(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
+    trend_provider: object | None = None,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
@@ -3056,7 +3099,11 @@ def _fit_and_assign_context_work_items_parallel(
 ) -> dict[tuple[int, ...], _FitContextWorkResult]:
     reporter = progress if progress is not None else NullProgressReporter()
     context = dict(progress_context or {})
-    fit_start = time.perf_counter() if progress_start_sec is None else progress_start_sec
+    fit_start = (
+        time.perf_counter()
+        if progress_start_sec is None
+        else progress_start_sec
+    )
     total = len(work_items)
     done = 0
     reporter.emit(
@@ -3094,6 +3141,7 @@ def _fit_and_assign_context_work_items_parallel(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
             fit_cache=fit_cache,
             trend_model=entry.model,
@@ -3166,6 +3214,7 @@ def _fit_and_assign_context_work_items_parallel(
                 table=table,
                 feasible=feasible,
                 trend=trend,
+                trend_provider=trend_provider,
                 merged=merged,
                 fit_cache=fit_cache,
                 trend_model=task_result.trend_model,
@@ -3206,6 +3255,7 @@ def _fallback_no_compatible_anchor(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
     trend: TrendResult,
+    trend_provider: object | None = None,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
 ) -> None:
@@ -3227,6 +3277,7 @@ def _fallback_no_compatible_anchor(
         table=table,
         feasible=feasible,
         trend=trend,
+        trend_provider=trend_provider,
         merged=merged,
     )
 
@@ -3643,6 +3694,7 @@ def build_geometry_two_piece_physical_center(
     trend: TrendResult,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
+    trend_provider: object | None = None,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
     progress: object | None = None,
     progress_context: Mapping[str, object] | None = None,
@@ -3759,6 +3811,7 @@ def build_geometry_two_piece_physical_center(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
             reporter=reporter,
             context=context,
@@ -3852,6 +3905,7 @@ def build_geometry_two_piece_physical_center(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
             reporter=reporter,
             context=context,
@@ -3867,6 +3921,7 @@ def build_geometry_two_piece_physical_center(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
             reporter=reporter,
             context=context,
@@ -3876,7 +3931,11 @@ def build_geometry_two_piece_physical_center(
     if runtime_diagnostics is not None:
         runtime_diagnostics.set_source_groups(len(groups))
 
-    reporter.emit('physical-center.stage_start', **context, stage='source_group_ordering')
+    reporter.emit(
+        'physical-center.stage_start',
+        **context,
+        stage='source_group_ordering',
+    )
     stage_start = time.perf_counter()
     with (
         runtime_diagnostics.time_block('source_group_ordering_sec')
@@ -4032,6 +4091,7 @@ def build_geometry_two_piece_physical_center(
                 table=table,
                 feasible=feasible,
                 trend=trend,
+                trend_provider=trend_provider,
                 merged=merged,
                 cfg=cfg,
                 observation_plan_cache=observation_plan_cache,
@@ -4065,6 +4125,7 @@ def build_geometry_two_piece_physical_center(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
             cfg=cfg,
             strategy=strategy,
@@ -4164,6 +4225,7 @@ def build_geometry_two_piece_physical_center(
                         table=table,
                         feasible=feasible,
                         trend=trend,
+                        trend_provider=trend_provider,
                         merged=merged,
                     )
                     continue
@@ -4228,6 +4290,7 @@ def build_geometry_two_piece_physical_center(
                         table=table,
                         feasible=feasible,
                         trend=trend,
+                        trend_provider=trend_provider,
                         merged=merged,
                         cfg=cfg,
                     )
@@ -4247,6 +4310,7 @@ def build_geometry_two_piece_physical_center(
                         table=table,
                         feasible=feasible,
                         trend=trend,
+                        trend_provider=trend_provider,
                         merged=merged,
                         cfg=cfg,
                         observation_plan_cache=observation_plan_cache,
@@ -4277,6 +4341,7 @@ def build_geometry_two_piece_physical_center(
                     table=table,
                     feasible=feasible,
                     trend=trend,
+                    trend_provider=trend_provider,
                     merged=merged,
                     cfg=cfg,
                     strategy=strategy,
@@ -4322,6 +4387,7 @@ def build_geometry_two_piece_physical_center(
                             table=table,
                             feasible=feasible,
                             trend=trend,
+                            trend_provider=trend_provider,
                             merged=merged,
                         )
                 continue
@@ -4388,6 +4454,7 @@ def build_geometry_two_piece_physical_center(
                         table=table,
                         feasible=feasible,
                         trend=trend,
+                        trend_provider=trend_provider,
                         merged=merged,
                         cfg=cfg,
                         observation_plan_cache=observation_plan_cache,
@@ -4416,6 +4483,7 @@ def build_geometry_two_piece_physical_center(
                     table=table,
                     feasible=feasible,
                     trend=trend,
+                    trend_provider=trend_provider,
                     merged=merged,
                     cfg=cfg,
                     strategy=strategy,
@@ -4465,6 +4533,7 @@ def build_geometry_two_piece_physical_center(
                             table=table,
                             feasible=feasible,
                             trend=trend,
+                            trend_provider=trend_provider,
                             merged=merged,
                         )
                     continue
@@ -4508,6 +4577,7 @@ def build_geometry_two_piece_physical_center(
                         table=table,
                         feasible=feasible,
                         trend=trend,
+                        trend_provider=trend_provider,
                         merged=merged,
                     )
                 if use_shift:
@@ -4588,6 +4658,7 @@ def build_geometry_two_piece_physical_center(
             table=table,
             feasible=feasible,
             trend=trend,
+            trend_provider=trend_provider,
             merged=merged,
             cfg=cfg,
             observation_plan_cache=observation_plan_cache,
@@ -4626,6 +4697,7 @@ def build_geometry_two_piece_physical_center(
         table=table,
         feasible=feasible,
         trend=trend,
+        trend_provider=trend_provider,
         merged=merged,
         cfg=cfg,
         strategy=strategy,

@@ -433,6 +433,9 @@ _ROBUST_RUNTIME_DIAGNOSTIC_STRING_KEYS = frozenset(
         'anchor_selection_mode',
         'fit_executor_backend',
         'observation_sampling_method',
+        'physical_runtime_legacy_trend_output',
+        'physical_runtime_trend_result_mode',
+        'physical_runtime_trend_result_reason',
     }
 )
 
