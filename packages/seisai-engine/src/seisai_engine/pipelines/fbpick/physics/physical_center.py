@@ -133,8 +133,8 @@ __all__ = [
     'PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT',
     'PHYSICAL_RUNTIME_FIT_SOURCE_LABELS',
     'PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE',
-    'PhysicalCenterResult',
     'PhysicalCenterFallbackPreflight',
+    'PhysicalCenterResult',
     'build_geometry_two_piece_physical_center',
     'preflight_geometry_two_piece_fallback',
 ]
@@ -255,6 +255,32 @@ class _FitCacheEntry:
     fit_failed: bool
     diagnostics_computed: bool = False
     failure_reason: int | None = None
+
+
+@dataclass(frozen=True)
+class _PendingTrendFallbackRecord:
+    failure_reason: int
+    runtime_fit_source: int
+
+
+@dataclass
+class _PendingTrendFallback:
+    records: dict[int, _PendingTrendFallbackRecord] = field(default_factory=dict)
+
+    def add(
+        self,
+        trace_idx: int,
+        *,
+        failure_reason: int,
+        runtime_fit_source: int,
+    ) -> None:
+        self.records[int(trace_idx)] = _PendingTrendFallbackRecord(
+            failure_reason=int(failure_reason),
+            runtime_fit_source=int(runtime_fit_source),
+        )
+
+    def clear(self) -> None:
+        self.records.clear()
 
 
 @dataclass(frozen=True)
@@ -391,29 +417,101 @@ def _existing_fallback_trend(
     return trend_provider.get(reason='fallback_existing_trend')
 
 
-def _fallback_center_for_trace(
+def _use_full_trend_for_fallback_all(
+    trend_provider: object | None,
+    *,
+    n_traces: int,
+) -> bool:
+    if trend_provider is None:
+        return True
+    mode = str(getattr(trend_provider, 'fallback_existing_trend_mode', 'full'))
+    if mode == 'robust':
+        return False
+    if mode != 'partial':
+        return True
+
+    partial_cfg = getattr(trend_provider, '_partial_cfg', None)
+    if partial_cfg is None or not bool(partial_cfg.enabled):
+        return True
+    too_many = int(n_traces) > int(partial_cfg.max_traces)
+    provider_n_traces = getattr(trend_provider, '_n_traces', None)
+    total_traces = int(provider_n_traces) if provider_n_traces is not None else 0
+    if total_traces > 0:
+        too_many = too_many or (
+            float(n_traces) / float(total_traces)
+            > float(partial_cfg.max_fraction)
+        )
+    if not too_many:
+        return True
+    fallback = str(partial_cfg.fallback_if_too_many)
+    if fallback == 'full':
+        return True
+    if fallback == 'error':
+        msg = (
+            'partial trend fallback target count exceeds configured '
+            f'limits: n_targets={int(n_traces)}'
+        )
+        raise RuntimeError(msg)
+    record_too_many = getattr(
+        trend_provider,
+        'record_partial_too_many_robust_fallback',
+        None,
+    )
+    if record_too_many is not None:
+        record_too_many(int(n_traces))
+    return False
+
+
+def _partial_fallback_center_for_trace(
+    trace_idx: int,
+    *,
+    n_samples: int,
+    dt: float,
+    trend_provider: object | None,
+) -> tuple[bool, tuple[int, np.float32, int] | None]:
+    if trend_provider is None:
+        return False, None
+    get_partial = getattr(trend_provider, 'get_partial', None)
+    if get_partial is None:
+        return False, None
+    partial = get_partial(
+        np.asarray([int(trace_idx)], dtype=np.int64),
+        reason='fallback_existing_trend',
+    )
+    if partial is None:
+        return False, None
+
+    valid = np.asarray(partial.valid_mask, dtype=np.bool_).reshape(-1)
+    center_i = np.asarray(partial.center_i, dtype=np.int64).reshape(-1)
+    center_t = np.asarray(partial.center_t_sec, dtype=np.float32).reshape(-1)
+    if valid.size != 1 or center_i.size != 1 or center_t.size != 1:
+        msg = 'partial trend fallback must return one result per requested trace'
+        raise ValueError(msg)
+    sample_i = int(center_i[0])
+    sample_t = float(center_t[0])
+    if (
+        bool(valid[0])
+        and _is_valid_pick_i(sample_i, n_samples_orig=n_samples)
+        and np.isfinite(sample_t)
+    ):
+        return True, (
+            sample_i,
+            np.float32(sample_i * dt),
+            PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
+        )
+    return True, None
+
+
+def _fallback_center_without_existing_trend(
     trace_idx: int,
     *,
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
-    trend: TrendResult,
     merged: MergeResult,
-    trend_provider: object | None = None,
 ) -> tuple[int, np.float32, int]:
     n_samples = int(table.n_samples_orig)
     dt = float(table.dt_scalar_sec)
     idx = int(trace_idx)
-    trend = _existing_fallback_trend(trend, trend_provider)
-
-    trend_i = int(np.asarray(trend.trend_center_i, dtype=np.int64)[idx])
-    trend_t = float(np.asarray(trend.trend_center_sec, dtype=np.float32)[idx])
-    if _is_valid_pick_i(trend_i, n_samples_orig=n_samples) and np.isfinite(trend_t):
-        return (
-            trend_i,
-            np.float32(trend_i * dt),
-            PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
-        )
-
     robust_i = int(np.asarray(merged.robust_pick_i, dtype=np.int64)[idx])
     lo_sec = float(np.asarray(feasible.feasible_lo_sec, dtype=np.float32)[idx])
     hi_sec = float(np.asarray(feasible.feasible_hi_sec, dtype=np.float32)[idx])
@@ -435,6 +533,49 @@ def _fallback_center_for_trace(
         robust_i,
         np.float32(robust_i * dt),
         PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
+    )
+
+
+def _fallback_center_for_trace(
+    trace_idx: int,
+    *,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    trend_provider: object | None = None,
+) -> tuple[int, np.float32, int]:
+    n_samples = int(table.n_samples_orig)
+    dt = float(table.dt_scalar_sec)
+    idx = int(trace_idx)
+    partial_attempted, partial_center = _partial_fallback_center_for_trace(
+        idx,
+        n_samples=n_samples,
+        dt=dt,
+        trend_provider=trend_provider,
+    )
+    if partial_center is not None:
+        return partial_center
+
+    if not partial_attempted:
+        trend = _existing_fallback_trend(trend, trend_provider)
+
+        trend_i = int(np.asarray(trend.trend_center_i, dtype=np.int64)[idx])
+        trend_t = float(np.asarray(trend.trend_center_sec, dtype=np.float32)[idx])
+        if _is_valid_pick_i(trend_i, n_samples_orig=n_samples) and np.isfinite(
+            trend_t
+        ):
+            return (
+                trend_i,
+                np.float32(trend_i * dt),
+                PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
+            )
+
+    return _fallback_center_without_existing_trend(
+        idx,
+        table=table,
+        feasible=feasible,
+        merged=merged,
     )
 
 
@@ -486,6 +627,67 @@ def _finalize_result(arrays: dict[str, np.ndarray]) -> PhysicalCenterResult:
     return PhysicalCenterResult(**arrays)
 
 
+def _should_defer_partial_existing_trend(
+    trend_provider: object | None,
+) -> bool:
+    if trend_provider is None:
+        return False
+    mode = str(getattr(trend_provider, 'fallback_existing_trend_mode', 'full'))
+    if mode != 'partial':
+        return False
+    if getattr(trend_provider, 'get_partial', None) is None:
+        return False
+    partial_cfg = getattr(trend_provider, '_partial_cfg', None)
+    return partial_cfg is None or bool(partial_cfg.enabled)
+
+
+def _assign_fallback_values(
+    arrays: dict[str, np.ndarray],
+    trace_idx: int,
+    *,
+    center_i: int,
+    center_t: np.float32,
+    fallback_status: int,
+    failure_reason: int,
+    runtime_fit_source: int,
+) -> None:
+    arrays['physical_center_i'][trace_idx] = np.int32(center_i)
+    arrays['physical_center_t_sec'][trace_idx] = np.float32(center_t)
+    arrays['physical_model_status'][trace_idx] = np.uint8(fallback_status)
+    arrays['physical_model_failure_reason'][trace_idx] = np.uint8(failure_reason)
+    source = int(runtime_fit_source)
+    if fallback_status == PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST:
+        source = PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST
+    arrays['physical_runtime_fit_source'][trace_idx] = np.uint8(source)
+
+
+def _assign_deferred_existing_trend_placeholder(
+    arrays: dict[str, np.ndarray],
+    trace_idx: int,
+    *,
+    failure_reason: int,
+    runtime_fit_source: int,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    merged: MergeResult,
+) -> None:
+    center_i, center_t, _fallback_status = _fallback_center_without_existing_trend(
+        trace_idx,
+        table=table,
+        feasible=feasible,
+        merged=merged,
+    )
+    _assign_fallback_values(
+        arrays,
+        trace_idx,
+        center_i=center_i,
+        center_t=center_t,
+        fallback_status=PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
+        failure_reason=failure_reason,
+        runtime_fit_source=runtime_fit_source,
+    )
+
+
 def _assign_fallback(
     arrays: dict[str, np.ndarray],
     trace_idx: int,
@@ -497,7 +699,28 @@ def _assign_fallback(
     trend: TrendResult,
     merged: MergeResult,
     trend_provider: object | None = None,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> None:
+    if (
+        pending_trend_fallback is not None
+        and _should_defer_partial_existing_trend(trend_provider)
+    ):
+        pending_trend_fallback.add(
+            trace_idx,
+            failure_reason=failure_reason,
+            runtime_fit_source=runtime_fit_source,
+        )
+        _assign_deferred_existing_trend_placeholder(
+            arrays,
+            trace_idx,
+            failure_reason=failure_reason,
+            runtime_fit_source=runtime_fit_source,
+            table=table,
+            feasible=feasible,
+            merged=merged,
+        )
+        return
+
     center_i, center_t, fallback_status = _fallback_center_for_trace(
         trace_idx,
         table=table,
@@ -506,14 +729,15 @@ def _assign_fallback(
         trend_provider=trend_provider,
         merged=merged,
     )
-    arrays['physical_center_i'][trace_idx] = np.int32(center_i)
-    arrays['physical_center_t_sec'][trace_idx] = np.float32(center_t)
-    arrays['physical_model_status'][trace_idx] = np.uint8(fallback_status)
-    arrays['physical_model_failure_reason'][trace_idx] = np.uint8(failure_reason)
-    source = int(runtime_fit_source)
-    if fallback_status == PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST:
-        source = PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST
-    arrays['physical_runtime_fit_source'][trace_idx] = np.uint8(source)
+    _assign_fallback_values(
+        arrays,
+        trace_idx,
+        center_i=center_i,
+        center_t=center_t,
+        fallback_status=fallback_status,
+        failure_reason=failure_reason,
+        runtime_fit_source=runtime_fit_source,
+    )
 
 
 def _assign_robust_fallback(
@@ -539,6 +763,148 @@ def _assign_robust_fallback(
     )
 
 
+def _partial_fallback_lookup(
+    partial: object,
+) -> dict[int, tuple[bool, int, float]]:
+    indices = np.asarray(partial.indices, dtype=np.int64).reshape(-1)
+    center_i = np.asarray(partial.center_i, dtype=np.int64).reshape(-1)
+    center_t = np.asarray(
+        partial.center_t_sec,
+        dtype=np.float32,
+    ).reshape(-1)
+    valid = np.asarray(partial.valid_mask, dtype=np.bool_).reshape(-1)
+    if not (
+        indices.shape == center_i.shape == center_t.shape == valid.shape
+    ):
+        msg = 'partial trend fallback arrays must have matching 1D shapes'
+        raise ValueError(msg)
+    return {
+        int(trace_idx): (bool(valid[pos]), int(center_i[pos]), float(center_t[pos]))
+        for pos, trace_idx in enumerate(indices.tolist())
+    }
+
+
+def _apply_pending_trend_fallback(
+    arrays: dict[str, np.ndarray],
+    *,
+    pending_trend_fallback: _PendingTrendFallback | None,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    trend_provider: object | None,
+) -> None:
+    if pending_trend_fallback is None or not pending_trend_fallback.records:
+        return
+
+    pending_items = [
+        (trace_idx, record)
+        for trace_idx, record in pending_trend_fallback.records.items()
+        if int(arrays['physical_model_status'][int(trace_idx)])
+        == PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND
+    ]
+    pending_trend_fallback.clear()
+    if not pending_items:
+        return
+
+    indices = np.asarray(
+        [trace_idx for trace_idx, _record in pending_items],
+        dtype=np.int64,
+    )
+    get_partial = (
+        None
+        if trend_provider is None
+        else getattr(trend_provider, 'get_partial', None)
+    )
+    partial = (
+        get_partial(indices, reason='fallback_existing_trend')
+        if get_partial is not None
+        else None
+    )
+    if partial is None:
+        trend = _existing_fallback_trend(trend, trend_provider)
+        for trace_idx, record in pending_items:
+            center_i, center_t, fallback_status = _fallback_center_for_trace(
+                trace_idx,
+                table=table,
+                feasible=feasible,
+                trend=trend,
+                trend_provider=None,
+                merged=merged,
+            )
+            _assign_fallback_values(
+                arrays,
+                trace_idx,
+                center_i=center_i,
+                center_t=center_t,
+                fallback_status=fallback_status,
+                failure_reason=record.failure_reason,
+                runtime_fit_source=record.runtime_fit_source,
+            )
+        return
+
+    partial_by_trace = _partial_fallback_lookup(partial)
+    n_samples = int(table.n_samples_orig)
+    dt = float(table.dt_scalar_sec)
+    for trace_idx, record in pending_items:
+        partial_value = partial_by_trace.get(int(trace_idx))
+        if partial_value is not None:
+            valid, center_i, center_t_sec = partial_value
+            if (
+                valid
+                and _is_valid_pick_i(center_i, n_samples_orig=n_samples)
+                and np.isfinite(center_t_sec)
+            ):
+                _assign_fallback_values(
+                    arrays,
+                    trace_idx,
+                    center_i=center_i,
+                    center_t=np.float32(center_i * dt),
+                    fallback_status=PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
+                    failure_reason=record.failure_reason,
+                    runtime_fit_source=record.runtime_fit_source,
+                )
+                continue
+
+        center_i, center_t, fallback_status = _fallback_center_without_existing_trend(
+            trace_idx,
+            table=table,
+            feasible=feasible,
+            merged=merged,
+        )
+        _assign_fallback_values(
+            arrays,
+            trace_idx,
+            center_i=center_i,
+            center_t=center_t,
+            fallback_status=fallback_status,
+            failure_reason=record.failure_reason,
+            runtime_fit_source=record.runtime_fit_source,
+        )
+
+
+def _finalize_result_with_pending_trend_fallback(
+    arrays: dict[str, np.ndarray],
+    *,
+    pending_trend_fallback: _PendingTrendFallback | None,
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    trend: TrendResult,
+    merged: MergeResult,
+    trend_provider: object | None,
+) -> PhysicalCenterResult:
+    _apply_pending_trend_fallback(
+        arrays,
+        pending_trend_fallback=pending_trend_fallback,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        trend_provider=trend_provider,
+    )
+    return _finalize_result(arrays)
+
+
 def _assign_fallback_all(
     *,
     failure_reason: int,
@@ -548,24 +914,16 @@ def _assign_fallback_all(
     merged: MergeResult,
     trend_provider: object | None = None,
 ) -> PhysicalCenterResult:
-    trend = _existing_fallback_trend(trend, trend_provider)
     arrays = _allocate_result_arrays(table)
     n = int(table.n_traces)
     n_samples = int(table.n_samples_orig)
     dt = float(table.dt_scalar_sec)
-
-    trend_i = _as_vector(
-        'trend.trend_center_i',
-        trend.trend_center_i,
+    use_full_trend = _use_full_trend_for_fallback_all(
+        trend_provider,
         n_traces=n,
-        dtype=np.int64,
     )
-    trend_t = _as_vector(
-        'trend.trend_center_sec',
-        trend.trend_center_sec,
-        n_traces=n,
-        dtype=np.float32,
-    )
+    if use_full_trend:
+        trend = _existing_fallback_trend(trend, trend_provider)
     robust_i = _as_vector(
         'merged.robust_pick_i',
         merged.robust_pick_i,
@@ -623,18 +981,31 @@ def _assign_fallback_all(
                 PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
             )
 
-    valid_trend = (
-        (trend_i >= 0)
-        & (trend_i < n_samples)
-        & np.isfinite(trend_t)
-    )
-    center_i[valid_trend] = trend_i[valid_trend].astype(np.int32)
-    status[valid_trend] = np.uint8(
-        PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND
-    )
-    fit_source[valid_trend] = np.uint8(
-        PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
-    )
+    if use_full_trend:
+        trend_i = _as_vector(
+            'trend.trend_center_i',
+            trend.trend_center_i,
+            n_traces=n,
+            dtype=np.int64,
+        )
+        trend_t = _as_vector(
+            'trend.trend_center_sec',
+            trend.trend_center_sec,
+            n_traces=n,
+            dtype=np.float32,
+        )
+        valid_trend = (
+            (trend_i >= 0)
+            & (trend_i < n_samples)
+            & np.isfinite(trend_t)
+        )
+        center_i[valid_trend] = trend_i[valid_trend].astype(np.int32)
+        status[valid_trend] = np.uint8(
+            PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND
+        )
+        fit_source[valid_trend] = np.uint8(
+            PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
+        )
 
     arrays['physical_center_i'][:] = center_i
     arrays['physical_center_t_sec'][:] = (
@@ -2504,6 +2875,7 @@ def _prepare_trace_plan_assignment(
     observation_plan_cache: _ObservationPlanCache,
     min_fit_obs: int,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> _TracePlanAssignment | None:
     arrays['physical_offset_source'][trace_idx] = np.uint8(offset_source)
     if (
@@ -2519,6 +2891,7 @@ def _prepare_trace_plan_assignment(
             trend=trend,
             trend_provider=trend_provider,
             merged=merged,
+            pending_trend_fallback=pending_trend_fallback,
         )
         return None
 
@@ -2543,6 +2916,7 @@ def _prepare_trace_plan_assignment(
             trend=trend,
             trend_provider=trend_provider,
             merged=merged,
+            pending_trend_fallback=pending_trend_fallback,
         )
         return None
 
@@ -2563,6 +2937,7 @@ def _prepare_trace_plan_assignment(
             trend=trend,
             trend_provider=trend_provider,
             merged=merged,
+            pending_trend_fallback=pending_trend_fallback,
         )
         return None
 
@@ -2622,6 +2997,7 @@ def _assign_prepared_model_prediction_batch(
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     t0_shift_sec: float | np.ndarray = 0.0,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> tuple[np.ndarray, tuple[float, float, float, float, float, float, float] | None]:
     if not items:
         return np.zeros((0,), dtype=np.bool_), None
@@ -2684,6 +3060,7 @@ def _assign_prepared_model_prediction_batch(
             trend=trend,
             trend_provider=trend_provider,
             merged=merged,
+            pending_trend_fallback=pending_trend_fallback,
         )
     return valid, diagnostics
 
@@ -2734,6 +3111,7 @@ def _assign_fit_context_fallback(
     trend: TrendResult,
     trend_provider: object | None = None,
     merged: MergeResult,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> None:
     for trace_idx in np.asarray(work_item.trace_indices, dtype=np.int64).tolist():
         _assign_fallback(
@@ -2745,6 +3123,7 @@ def _assign_fit_context_fallback(
             trend=trend,
             trend_provider=trend_provider,
             merged=merged,
+            pending_trend_fallback=pending_trend_fallback,
         )
 
 
@@ -2762,6 +3141,7 @@ def _fit_and_assign_context_work_item(
     strategy: _PhysicalFitStrategy,
     fit_cache: dict[tuple[int, ...], _FitCacheEntry],
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> _FitContextWorkResult:
     trend_model, diagnostics, fit_failure_reason = _fit_model_for_plan(
         strategy=strategy,
@@ -2796,6 +3176,7 @@ def _fit_and_assign_context_work_item(
         diagnostics=diagnostics,
         fit_failure_reason=fit_failure_reason,
         runtime_diagnostics=runtime_diagnostics,
+        pending_trend_fallback=pending_trend_fallback,
     )
 
 
@@ -2814,6 +3195,7 @@ def _assign_fit_context_work_item_outcome(
     diagnostics: tuple[float, float, float, float, float, float, float] | None,
     fit_failure_reason: int | None,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> _FitContextWorkResult:
     if fit_failure_reason is not None:
         _assign_fit_context_fallback(
@@ -2825,6 +3207,7 @@ def _assign_fit_context_work_item_outcome(
             trend=trend,
             trend_provider=trend_provider,
             merged=merged,
+            pending_trend_fallback=pending_trend_fallback,
         )
         return _FitContextWorkResult(
             trend_model=None,
@@ -2842,6 +3225,7 @@ def _assign_fit_context_work_item_outcome(
             trend=trend,
             trend_provider=trend_provider,
             merged=merged,
+            pending_trend_fallback=pending_trend_fallback,
         )
         return _FitContextWorkResult(
             trend_model=None,
@@ -2876,6 +3260,7 @@ def _assign_fit_context_work_item_outcome(
         merged=merged,
         fit_cache=fit_cache,
         runtime_diagnostics=runtime_diagnostics,
+        pending_trend_fallback=pending_trend_fallback,
     )
     return _FitContextWorkResult(
         trend_model=trend_model,
@@ -2910,6 +3295,7 @@ def _prepare_fit_context_assignments_for_trace_indices(
     observation_plan_cache: _ObservationPlanCache,
     min_fit_obs: int,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> tuple[
     dict[tuple[int, ...], list[_TracePlanAssignment]],
     list[_TracePlanAssignment],
@@ -2936,6 +3322,7 @@ def _prepare_fit_context_assignments_for_trace_indices(
             observation_plan_cache=observation_plan_cache,
             min_fit_obs=min_fit_obs,
             runtime_diagnostics=runtime_diagnostics,
+            pending_trend_fallback=pending_trend_fallback,
         )
         if assignment is None:
             continue
@@ -2960,6 +3347,7 @@ def _fit_and_assign_context_work_items(
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
     progress: object | None = None,
     progress_context: Mapping[str, object] | None = None,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> dict[tuple[int, ...], _FitContextWorkResult]:
     reporter = progress if progress is not None else NullProgressReporter()
     context = dict(progress_context or {})
@@ -2980,6 +3368,7 @@ def _fit_and_assign_context_work_items(
             progress=reporter,
             progress_context=context,
             progress_start_sec=fit_start,
+            pending_trend_fallback=pending_trend_fallback,
         )
 
     results: dict[tuple[int, ...], _FitContextWorkResult] = {}
@@ -3004,6 +3393,7 @@ def _fit_and_assign_context_work_items(
             strategy=strategy,
             fit_cache=fit_cache,
             runtime_diagnostics=runtime_diagnostics,
+            pending_trend_fallback=pending_trend_fallback,
         )
         reporter.emit(
             'fit.progress',
@@ -3096,6 +3486,7 @@ def _fit_and_assign_context_work_items_parallel(
     progress: object | None = None,
     progress_context: Mapping[str, object] | None = None,
     progress_start_sec: float | None = None,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> dict[tuple[int, ...], _FitContextWorkResult]:
     reporter = progress if progress is not None else NullProgressReporter()
     context = dict(progress_context or {})
@@ -3148,6 +3539,7 @@ def _fit_and_assign_context_work_items_parallel(
             diagnostics=entry.diagnostics,
             fit_failure_reason=fit_failure_reason,
             runtime_diagnostics=runtime_diagnostics,
+            pending_trend_fallback=pending_trend_fallback,
         )
         done += 1
         reporter.emit(
@@ -3221,6 +3613,7 @@ def _fit_and_assign_context_work_items_parallel(
                 diagnostics=task_result.diagnostics,
                 fit_failure_reason=task_result.failure_reason,
                 runtime_diagnostics=runtime_diagnostics,
+                pending_trend_fallback=pending_trend_fallback,
             )
 
     return results
@@ -3258,6 +3651,7 @@ def _fallback_no_compatible_anchor(
     trend_provider: object | None = None,
     merged: MergeResult,
     cfg: PhysicsLiteConfig,
+    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> None:
     fallback = str(cfg.physical_runtime.anchor_reuse.fallback_if_no_compatible_segment)
     if fallback == 'robust':
@@ -3279,6 +3673,7 @@ def _fallback_no_compatible_anchor(
         trend=trend,
         trend_provider=trend_provider,
         merged=merged,
+        pending_trend_fallback=pending_trend_fallback,
     )
 
 
@@ -4017,6 +4412,7 @@ def build_geometry_two_piece_physical_center(
     )
 
     arrays = _allocate_result_arrays(table)
+    pending_trend_fallback = _PendingTrendFallback()
     reporter.emit('physical-center.stage_start', **context, stage='anchor_selection')
     stage_start = time.perf_counter()
     with (
@@ -4097,6 +4493,7 @@ def build_geometry_two_piece_physical_center(
                 observation_plan_cache=observation_plan_cache,
                 min_fit_obs=min_fit_obs,
                 runtime_diagnostics=runtime_diagnostics,
+                pending_trend_fallback=pending_trend_fallback,
             )
         )
         anchor_work_items = _build_fit_context_work_items(
@@ -4133,6 +4530,7 @@ def build_geometry_two_piece_physical_center(
             runtime_diagnostics=runtime_diagnostics,
             progress=reporter,
             progress_context=context,
+            pending_trend_fallback=pending_trend_fallback,
         )
         if runtime_diagnostics is not None:
             anchor_fit_call_delta = max(
@@ -4227,6 +4625,7 @@ def build_geometry_two_piece_physical_center(
                         trend=trend,
                         trend_provider=trend_provider,
                         merged=merged,
+                        pending_trend_fallback=pending_trend_fallback,
                     )
                     continue
 
@@ -4293,6 +4692,7 @@ def build_geometry_two_piece_physical_center(
                         trend_provider=trend_provider,
                         merged=merged,
                         cfg=cfg,
+                        pending_trend_fallback=pending_trend_fallback,
                     )
 
             if fallback_full_trace_indices:
@@ -4316,6 +4716,7 @@ def build_geometry_two_piece_physical_center(
                         observation_plan_cache=observation_plan_cache,
                         min_fit_obs=min_fit_obs,
                         runtime_diagnostics=runtime_diagnostics,
+                        pending_trend_fallback=pending_trend_fallback,
                     )
                 )
                 fallback_full_work_items = _build_fit_context_work_items(
@@ -4349,6 +4750,7 @@ def build_geometry_two_piece_physical_center(
                     runtime_diagnostics=runtime_diagnostics,
                     progress=reporter,
                     progress_context=context,
+                    pending_trend_fallback=pending_trend_fallback,
                 )
 
             non_anchor_mode = str(cfg.physical_runtime.anchor_reuse.non_anchor_mode)
@@ -4389,6 +4791,7 @@ def build_geometry_two_piece_physical_center(
                             trend=trend,
                             trend_provider=trend_provider,
                             merged=merged,
+                            pending_trend_fallback=pending_trend_fallback,
                         )
                 continue
 
@@ -4460,6 +4863,7 @@ def build_geometry_two_piece_physical_center(
                         observation_plan_cache=observation_plan_cache,
                         min_fit_obs=min_fit_obs,
                         runtime_diagnostics=runtime_diagnostics,
+                        pending_trend_fallback=pending_trend_fallback,
                     )
                 )
                 refit_work_items = _build_fit_context_work_items(
@@ -4491,6 +4895,7 @@ def build_geometry_two_piece_physical_center(
                     runtime_diagnostics=runtime_diagnostics,
                     progress=reporter,
                     progress_context=context,
+                    pending_trend_fallback=pending_trend_fallback,
                 )
                 assigned_count = sum(
                     len(result.valid_trace_indices)
@@ -4535,6 +4940,7 @@ def build_geometry_two_piece_physical_center(
                             trend=trend,
                             trend_provider=trend_provider,
                             merged=merged,
+                            pending_trend_fallback=pending_trend_fallback,
                         )
                     continue
 
@@ -4579,6 +4985,7 @@ def build_geometry_two_piece_physical_center(
                         trend=trend,
                         trend_provider=trend_provider,
                         merged=merged,
+                        pending_trend_fallback=pending_trend_fallback,
                     )
                 if use_shift:
                     group_shift_ms_values.append(float(stats.t0_shift_sec) * 1000.0)
@@ -4627,6 +5034,15 @@ def build_geometry_two_piece_physical_center(
                 full_fit_call_count_estimate=len(groups)
             )
             runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))
+        result = _finalize_result_with_pending_trend_fallback(
+            arrays,
+            pending_trend_fallback=pending_trend_fallback,
+            table=table,
+            feasible=feasible,
+            trend=trend,
+            merged=merged,
+            trend_provider=trend_provider,
+        )
         reporter.emit(
             'physical-center.done',
             **context,
@@ -4635,7 +5051,7 @@ def build_geometry_two_piece_physical_center(
             n_source_groups=len(groups),
             n_unique_fit_contexts=len(fit_cache),
         )
-        return _finalize_result(arrays)
+        return result
 
     reporter.emit(
         'physical-center.stage_start',
@@ -4664,6 +5080,7 @@ def build_geometry_two_piece_physical_center(
             observation_plan_cache=observation_plan_cache,
             min_fit_obs=min_fit_obs,
             runtime_diagnostics=runtime_diagnostics,
+            pending_trend_fallback=pending_trend_fallback,
         )
         if assignment is not None:
             fit_context_assignments.setdefault(assignment.fit_key, []).append(
@@ -4705,11 +5122,21 @@ def build_geometry_two_piece_physical_center(
         runtime_diagnostics=runtime_diagnostics,
         progress=reporter,
         progress_context=context,
+        pending_trend_fallback=pending_trend_fallback,
     )
 
     if runtime_diagnostics is not None:
         runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))
 
+    result = _finalize_result_with_pending_trend_fallback(
+        arrays,
+        pending_trend_fallback=pending_trend_fallback,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        trend_provider=trend_provider,
+    )
     reporter.emit(
         'physical-center.done',
         **context,
@@ -4718,4 +5145,4 @@ def build_geometry_two_piece_physical_center(
         n_source_groups=len(groups),
         n_unique_fit_contexts=len(fit_cache),
     )
-    return _finalize_result(arrays)
+    return result

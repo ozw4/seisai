@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 
 import numpy as np
 
@@ -8,7 +9,12 @@ from .config import PhysicsLiteConfig
 from .feasible import FeasibleBandResult
 from .pick_table import CoarsePickTable
 
-__all__ = ['TrendResult', 'build_trend_result']
+__all__ = [
+    'PartialTrendFallbackResult',
+    'TrendResult',
+    'build_partial_trend_fallback',
+    'build_trend_result',
+]
 
 
 @dataclass(frozen=True)
@@ -22,6 +28,19 @@ class TrendResult:
     trend_center_sec: np.ndarray
     trend_center_i: np.ndarray
     filled_mask: np.ndarray
+
+
+@dataclass(frozen=True)
+class PartialTrendFallbackResult:
+    indices: np.ndarray
+    center_i: np.ndarray
+    center_t_sec: np.ndarray
+    valid_mask: np.ndarray
+    fallback_to_robust_mask: np.ndarray
+    elapsed_sec: float
+    n_targets: int
+    n_valid: int
+    n_robust: int
 
 
 def _lower_quantile_threshold(values: np.ndarray, frac: float) -> float:
@@ -63,7 +82,10 @@ def _fit_weighted_line(
     yy = np.asarray(y, dtype=np.float64)
     ww = np.asarray(weights, dtype=np.float64)
     if xx.shape != yy.shape or xx.shape != ww.shape or xx.ndim != 1:
-        msg = f'x/y/weights must be 1D and same shape, got {xx.shape}, {yy.shape}, {ww.shape}'
+        msg = (
+            'x/y/weights must be 1D and same shape, '
+            f'got {xx.shape}, {yy.shape}, {ww.shape}'
+        )
         raise ValueError(msg)
 
     valid = np.isfinite(xx) & np.isfinite(yy) & np.isfinite(ww) & (ww > 0.0)
@@ -111,7 +133,8 @@ def _predict_local_center_sec(
     slope, intercept = fit
     slope = float(np.clip(slope, slope_lo, slope_hi))
     intercept = _weighted_median(
-        np.asarray(y_window_sec, dtype=np.float64) - slope * np.asarray(x_window_m, dtype=np.float64),
+        np.asarray(y_window_sec, dtype=np.float64)
+        - slope * np.asarray(x_window_m, dtype=np.float64),
         weight_window,
     )
 
@@ -170,7 +193,10 @@ def _local_inversion_mask(
     center = np.asarray(local_center_i, dtype=np.float32)
     valid = np.asarray(local_valid, dtype=np.bool_)
     if center.shape != valid.shape or center.ndim != 1:
-        msg = f'local_center_i/local_valid must be 1D and same shape, got {center.shape}, {valid.shape}'
+        msg = (
+            'local_center_i/local_valid must be 1D and same shape, '
+            f'got {center.shape}, {valid.shape}'
+        )
         raise ValueError(msg)
     if int(center.shape[0]) < 2:
         return np.zeros(center.shape, dtype=np.bool_)
@@ -253,8 +279,15 @@ def _fill_trend_centers(
     local = np.asarray(local_center_sec, dtype=np.float32)
     valid = np.asarray(local_valid, dtype=np.bool_)
     global_center = np.asarray(global_center_sec, dtype=np.float32)
-    if local.shape != valid.shape or local.shape != global_center.shape or local.ndim != 1:
-        msg = f'local/valid/global must be 1D and same shape, got {local.shape}, {valid.shape}, {global_center.shape}'
+    if (
+        local.shape != valid.shape
+        or local.shape != global_center.shape
+        or local.ndim != 1
+    ):
+        msg = (
+            'local/valid/global must be 1D and same shape, '
+            f'got {local.shape}, {valid.shape}, {global_center.shape}'
+        )
         raise ValueError(msg)
 
     filled = (~valid).astype(np.bool_, copy=False)
@@ -271,6 +304,204 @@ def _fill_trend_centers(
     return global_center.copy(), np.ones(local.shape, dtype=np.bool_)
 
 
+def _empty_partial_trend_fallback(
+    indices: np.ndarray,
+    *,
+    start_sec: float,
+    fallback_to_robust: bool,
+) -> PartialTrendFallbackResult:
+    target = np.asarray(indices, dtype=np.int64)
+    n_targets = int(target.size)
+    valid = np.zeros((n_targets,), dtype=np.bool_)
+    robust = np.full((n_targets,), bool(fallback_to_robust), dtype=np.bool_)
+    return PartialTrendFallbackResult(
+        indices=target.copy(),
+        center_i=np.full((n_targets,), -1, dtype=np.int32),
+        center_t_sec=np.full((n_targets,), np.nan, dtype=np.float32),
+        valid_mask=valid,
+        fallback_to_robust_mask=robust,
+        elapsed_sec=float(perf_counter() - start_sec),
+        n_targets=n_targets,
+        n_valid=0,
+        n_robust=int(np.count_nonzero(robust)),
+    )
+
+
+def build_partial_trend_fallback(
+    table: CoarsePickTable,
+    feasible: FeasibleBandResult,
+    cfg: PhysicsLiteConfig,
+    target_indices: np.ndarray,
+) -> PartialTrendFallbackResult | None:
+    start_sec = perf_counter()
+    targets = np.asarray(target_indices, dtype=np.int64).reshape(-1)
+    if targets.size == 0:
+        return _empty_partial_trend_fallback(
+            targets,
+            start_sec=start_sec,
+            fallback_to_robust=False,
+        )
+    if bool(np.any((targets < 0) | (targets >= int(table.n_traces)))):
+        msg = 'partial trend fallback indices must be within trace bounds'
+        raise IndexError(msg)
+
+    partial_cfg = cfg.physical_runtime.partial_trend_fallback
+    if not bool(partial_cfg.enabled):
+        return None
+
+    n_targets = int(targets.size)
+    too_many = n_targets > int(partial_cfg.max_traces)
+    if int(table.n_traces) > 0:
+        too_many = too_many or (
+            (float(n_targets) / float(table.n_traces))
+            > float(partial_cfg.max_fraction)
+        )
+    if too_many:
+        fallback = str(partial_cfg.fallback_if_too_many)
+        if fallback == 'full':
+            return None
+        if fallback == 'error':
+            msg = (
+                'partial trend fallback target count exceeds configured '
+                f'limits: n_targets={n_targets}'
+            )
+            raise RuntimeError(msg)
+        return _empty_partial_trend_fallback(
+            targets,
+            start_sec=start_sec,
+            fallback_to_robust=True,
+        )
+
+    feasible_mask = np.asarray(feasible.feasible_mask, dtype=np.bool_)
+    if feasible_mask.shape != (table.n_traces,):
+        msg = (
+            f'feasible_mask must have shape {(table.n_traces,)}, '
+            f'got {feasible_mask.shape}'
+        )
+        raise ValueError(msg)
+    pmax = np.clip(np.asarray(table.coarse_pmax, dtype=np.float32), 0.0, 1.0)
+    offset_abs_m = np.abs(np.asarray(table.offset_m, dtype=np.float32)).astype(
+        np.float64,
+        copy=False,
+    )
+    times_sec = np.asarray(table.coarse_pick_t_sec, dtype=np.float32).astype(
+        np.float64,
+        copy=False,
+    )
+    finite_seed = (
+        feasible_mask
+        & np.isfinite(offset_abs_m)
+        & np.isfinite(times_sec)
+        & np.isfinite(pmax)
+    )
+    if not bool(np.any(finite_seed)):
+        return _empty_partial_trend_fallback(
+            targets,
+            start_sec=start_sec,
+            fallback_to_robust=True,
+        )
+    try:
+        seed_threshold = np.float32(
+            _lower_quantile_threshold(
+                pmax[finite_seed],
+                frac=float(cfg.keep_reject.drop_low_frac),
+            )
+        )
+    except ValueError:
+        return _empty_partial_trend_fallback(
+            targets,
+            start_sec=start_sec,
+            fallback_to_robust=True,
+        )
+    seed_mask = finite_seed & (pmax >= seed_threshold)
+    if not bool(np.any(seed_mask)):
+        return _empty_partial_trend_fallback(
+            targets,
+            start_sec=start_sec,
+            fallback_to_robust=True,
+        )
+
+    weights = np.maximum(pmax.astype(np.float64, copy=False), 1.0e-6)
+    slope_lo = 1.0 / float(cfg.trend.trend_local_vmax_mps)
+    slope_hi = 1.0 / float(cfg.trend.trend_local_vmin_mps)
+    local_half_win = int(cfg.trend.trend_local_section_len) * int(
+        cfg.trend.trend_local_stride
+    )
+
+    global_center_sec = np.full((n_targets,), np.nan, dtype=np.float32)
+    if bool(partial_cfg.use_global_fallback):
+        try:
+            global_center_sec = _build_global_center_sec(
+                offset_abs_m=offset_abs_m[seed_mask],
+                seed_times_sec=times_sec[seed_mask],
+                seed_weights=weights[seed_mask],
+                target_offsets_abs_m=offset_abs_m[targets],
+                cfg=cfg,
+            )
+        except (TypeError, ValueError, FloatingPointError):
+            global_center_sec = np.full((n_targets,), np.nan, dtype=np.float32)
+
+    center_i = np.full((n_targets,), -1, dtype=np.int32)
+    center_t_sec = np.full((n_targets,), np.nan, dtype=np.float32)
+    valid = np.zeros((n_targets,), dtype=np.bool_)
+    dt = float(table.dt_scalar_sec)
+    n_samples = int(table.n_samples_orig)
+
+    for pos, trace_idx in enumerate(targets.tolist()):
+        idx = int(trace_idx)
+        pred: float | None = None
+        lo = max(0, idx - local_half_win)
+        hi = min(int(table.n_traces), idx + local_half_win + 1)
+        window_seed = np.flatnonzero(seed_mask[lo:hi]) + lo
+        if int(window_seed.size) >= int(cfg.trend.trend_min_pts):
+            try:
+                pred = _predict_local_center_sec(
+                    x_window_m=offset_abs_m[window_seed],
+                    y_window_sec=times_sec[window_seed],
+                    weight_window=weights[window_seed],
+                    x_target_m=float(offset_abs_m[idx]),
+                    slope_lo=slope_lo,
+                    slope_hi=slope_hi,
+                    huber_c=float(cfg.trend.trend_local_huber_c),
+                    iters=int(cfg.trend.trend_local_iters),
+                )
+            except (TypeError, ValueError, FloatingPointError):
+                pred = None
+
+        global_pred = float(global_center_sec[pos])
+        if pred is not None and np.isfinite(pred) and np.isfinite(global_pred):
+            local_i = float(pred) / dt
+            global_i = global_pred / dt
+            if (
+                abs(local_i - global_i)
+                >= float(cfg.robust_center.local_global_diff_th_samples)
+            ):
+                pred = global_pred
+        if pred is None or not np.isfinite(pred):
+            pred = global_pred if np.isfinite(global_pred) else None
+        if pred is None or not np.isfinite(pred):
+            continue
+
+        sample_i = int(np.rint(float(pred) / dt))
+        sample_i = int(np.clip(sample_i, 0, n_samples - 1))
+        center_i[pos] = np.int32(sample_i)
+        center_t_sec[pos] = np.float32(sample_i * dt)
+        valid[pos] = True
+
+    fallback_to_robust = ~valid
+    return PartialTrendFallbackResult(
+        indices=targets.copy(),
+        center_i=center_i,
+        center_t_sec=center_t_sec,
+        valid_mask=valid,
+        fallback_to_robust_mask=fallback_to_robust.astype(np.bool_, copy=False),
+        elapsed_sec=float(perf_counter() - start_sec),
+        n_targets=n_targets,
+        n_valid=int(np.count_nonzero(valid)),
+        n_robust=int(np.count_nonzero(fallback_to_robust)),
+    )
+
+
 def build_trend_result(
     table: CoarsePickTable,
     feasible: FeasibleBandResult,
@@ -278,7 +509,10 @@ def build_trend_result(
 ) -> TrendResult:
     feasible_mask = np.asarray(feasible.feasible_mask, dtype=np.bool_)
     if feasible_mask.shape != (table.n_traces,):
-        msg = f'feasible_mask must have shape {(table.n_traces,)}, got {feasible_mask.shape}'
+        msg = (
+            f'feasible_mask must have shape {(table.n_traces,)}, '
+            f'got {feasible_mask.shape}'
+        )
         raise ValueError(msg)
 
     pmax = np.clip(np.asarray(table.coarse_pmax, dtype=np.float32), 0.0, 1.0)
