@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-import pkgutil
+from pathlib import Path
 
 import pytest
 
@@ -17,7 +17,10 @@ PACKAGE_ROOTS = [
 
 # Optional dependency, GPU-heavy module, or intentionally side-effectful module only.
 # Each skipped module must have a reason in the value.
-SKIP_MODULES: dict[str, str] = {}
+SKIP_MODULES: dict[str, str] = {
+    'seisai_pick.detection.example': 'example modules are outside import smoke scope',
+    'seisai_transforms.signal_ops.example': 'example modules are outside import smoke scope',
+}
 
 
 def skip_reason_for(module_name: str) -> str | None:
@@ -29,18 +32,25 @@ def skip_reason_for(module_name: str) -> str | None:
     return None
 
 
-def collect_package_modules(package_name: str, package_path) -> list[str]:
+def module_name_from_path(package_name: str, package_path: Path, py_file: Path) -> str:
+    if py_file.name == '__init__.py':
+        relative = py_file.parent.relative_to(package_path)
+    else:
+        relative = py_file.relative_to(package_path).with_suffix('')
+
+    if not relative.parts:
+        return package_name
+
+    return '.'.join((package_name, *relative.parts))
+
+
+def collect_package_modules(package_name: str, package_paths) -> list[str]:
     modules: list[str] = []
 
-    for module_info in pkgutil.iter_modules(package_path, prefix=f'{package_name}.'):
-        modules.append(module_info.name)
-
-        if not module_info.ispkg or skip_reason_for(module_info.name) is not None:
-            continue
-
-        package = importlib.import_module(module_info.name)
-        if hasattr(package, '__path__'):
-            modules.extend(collect_package_modules(module_info.name, package.__path__))
+    for package_path_str in package_paths:
+        package_path = Path(package_path_str)
+        for py_file in package_path.rglob('*.py'):
+            modules.append(module_name_from_path(package_name, package_path, py_file))
 
     return modules
 
@@ -58,7 +68,18 @@ def collect_modules() -> list[str]:
         if hasattr(package, '__path__'):
             modules.extend(collect_package_modules(package_name, package.__path__))
 
-    return modules
+    return sorted(set(modules))
+
+
+def test_import_smoke_collects_namespace_subpackage_modules() -> None:
+    modules = set(collect_modules())
+
+    assert 'seisai_models.ops.channels' in modules
+    assert 'seisai_models.nn.blocks' in modules
+    assert 'seisai_models.models.encdec2d' in modules
+    assert 'seisai_transforms.signal_ops.scaling.standardize' in modules
+    assert 'seisai_pick.trend.trend_fit' in modules
+    assert 'seisai_engine.postprocess.trend_prior_op' in modules
 
 
 @pytest.mark.parametrize('module_name', collect_modules())

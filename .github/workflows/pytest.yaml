@@ -42,7 +42,7 @@ jobs:
 
       - name: Run critical Ruff checks
         run: |
-          python -m ruff check --select F,E9 .
+          python -m ruff check --select F,E9 --no-fix .
 
       - name: Run tests
         env:
