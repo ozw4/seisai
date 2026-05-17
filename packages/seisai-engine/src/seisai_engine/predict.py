@@ -32,6 +32,18 @@ class _NoRandRNG:
     bit_generator = object()
 
 
+def _tile_starts(full: int, tile_size: int, overlap_size: int) -> list[int]:
+    stride = tile_size - overlap_size
+    starts = [0]
+    while starts[-1] + tile_size < full:
+        nxt = starts[-1] + stride
+        if nxt + tile_size >= full:
+            starts.append(max(full - tile_size, 0))
+            break
+        starts.append(nxt)
+    return sorted(set(starts))
+
+
 @torch.no_grad()
 def _run_tiled(
     model: torch.nn.Module,
@@ -60,17 +72,6 @@ def _run_tiled(
     assert tiles_per_batch > 0
     assert stride_h > 0
     assert stride_w > 0
-
-    def _tile_starts(full: int, tile_size: int, overlap_size: int) -> list[int]:
-        stride = tile_size - overlap_size
-        starts = [0]
-        while starts[-1] + tile_size < full:
-            nxt = starts[-1] + stride
-            if nxt + tile_size >= full:
-                starts.append(max(full - tile_size, 0))
-                break
-            starts.append(nxt)
-        return sorted(set(starts))
 
     # Hann 窓ベースの 2D 重み(中心が大きく、端が小さい)
     def _make_tile_weight(
@@ -289,17 +290,6 @@ def infer_tiled_chw_stream_cpuaccum(
     if tiles_per_batch <= 0:
         msg = 'tiles_per_batch must be > 0'
         raise ValueError(msg)
-
-    def _tile_starts(full: int, tile_size: int, overlap_size: int) -> list[int]:
-        stride = tile_size - overlap_size
-        starts = [0]
-        while starts[-1] + tile_size < full:
-            nxt = starts[-1] + stride
-            if nxt + tile_size >= full:
-                starts.append(max(full - tile_size, 0))
-                break
-            starts.append(nxt)
-        return sorted(set(starts))
 
     def _make_tile_weight_cpu(tile_h: int, tile_w: int) -> torch.Tensor:
         wy = torch.hann_window(
