@@ -289,11 +289,8 @@ def plot_ffid_psn512_trendlines(
     # map trend centers to win512 sample coordinates -> seconds
     y_raw_512 = _to_win512_sample(c_raw_g, w0_g, up_factor=up_factor)
     y_used_512 = _to_win512_sample(c_used_g, w0_g, up_factor=up_factor)
-    y_global_512 = _to_win512_sample(c_global_g, w0_g, up_factor=up_factor)
-
     raw_512_sec = y_raw_512 * dt_sec_out
     used_512_sec = y_used_512 * dt_sec_out
-    global_512_sec = y_global_512 * dt_sec_out
 
     # pick overlay already in win512 sample coordinates
     pick_win512_plot = np.asarray(pick_win512_g, dtype=np.float32)

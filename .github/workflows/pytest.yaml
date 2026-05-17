@@ -38,7 +38,11 @@ jobs:
           for p in seisai-utils seisai-transforms seisai-pick seisai-dataset seisai-models seisai-engine; do
             pip install -e "packages/$p"
           done
-          pip install -U pytest
+          pip install -U pytest ruff
+
+      - name: Run critical Ruff checks
+        run: |
+          python -m ruff check --select F,E9 .
 
       - name: Run tests
         env:

@@ -5,7 +5,6 @@ import math
 from dataclasses import asdict
 from pathlib import Path
 
-import torch
 from seisai_utils.config import optional_float, optional_str, require_dict
 from seisai_utils.listfiles import expand_cfg_listfiles
 from seisai_utils.viz_pair import PairTriptychVisConfig

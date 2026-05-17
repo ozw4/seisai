@@ -6,27 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import segyio
 import torch
 from common.npz_io import npz_1d, npz_scalar_float, npz_scalar_int
 from common.paths import (
     resolve_sidecar_path as _resolve_sidecar_path_common,
-    stage4_pred_crd_path as _stage4_pred_crd_path,
-    stage4_pred_npz_path as _stage4_pred_npz_path,
-    stage4_pred_out_dir as _stage4_pred_out_dir,
     stem_without_win512 as _stem_without_win512_common,
     win512_lookup_key as _win512_lookup_key,
 )
-from common.segy_io import (
-    load_traces_by_indices,
-    read_trace_field,
-    require_expected_samples,
-    require_matching_tracecount,
-)
 from jogsarar_shared import (
     TilePerTraceStandardize,
-    build_key_to_indices,
-    compute_residual_statics_metrics,
     find_segy_files,
 )
 from jogsarar_viz.noop import save_stage4_gather_viz_noop
@@ -34,8 +22,6 @@ from stage4.cfg import DEFAULT_STAGE4_CFG, Stage4Cfg
 from stage4.model import load_psn_model_and_eps
 from stage4.process_one import process_one_pair as _process_one_pair
 from seisai_engine.predict import infer_tiled_chw
-from seisai_pick.pickio.io_grstat import numpy2fbcrd
-from seisai_pick.snap_picks_to_phase import snap_picks_to_phase
 
 
 def _stem_without_win512(stem: str) -> str:

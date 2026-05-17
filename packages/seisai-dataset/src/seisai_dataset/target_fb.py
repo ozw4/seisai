@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 import numpy as np
-from seisai_transforms.augment import _spatial_stretch_sameH
+from seisai_transforms.kernels import _spatial_stretch
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,6 @@ class FBTargetBuilder:
             g /= g.max(axis=1, keepdims=True) + 1e-12
             target[valid] = g.astype(np.float32)
         if did_space:
-            target = _spatial_stretch_sameH(target, f_h)
+            target = _spatial_stretch(target, f_h)
         target = target.astype(np.float32, copy=False)
         return target[None, ...]

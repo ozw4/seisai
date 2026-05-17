@@ -6,7 +6,6 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-import torch
 from seisai_utils.config import (
     optional_bool,
     optional_float,

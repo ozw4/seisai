@@ -145,7 +145,7 @@ def _replace_seq_conv_bn_to_2x(
             print(f'[inflate] {seq.__class__.__name__}[{bn_idx}]: BN channels → 2')
 
 
-def _find_backbone_first_conv(bb: nn.Module) -> Tuple[nn.Conv2d | None, str]:
+def _find_backbone_first_conv(bb: nn.Module) -> tuple[nn.Conv2d | None, str]:
     """Find the first Conv2d that consumes the raw feature map inside a backbone.
     Supports common patterns:
       - stem_0 (ConvNeXt/timm FeatureListNet variants)
@@ -219,10 +219,10 @@ def _inflate_conv_in_channels(
     )
 
     # 重み生成ロジック
-    if '_make_inflated_weight' in globals():
-        new_weight = _make_inflated_weight(conv, target_in_ch, init_mode)
+    make_inflated_weight = globals().get('_make_inflated_weight')
+    if make_inflated_weight is not None:
+        new_weight = make_inflated_weight(conv, target_in_ch, init_mode)
     else:
-        # フォールバック: 依存関数が無い環境でも動くようにここで生成
         device, dtype = conv.weight.device, conv.weight.dtype
         if init_mode == 'zeros':
             new_weight = torch.zeros(
