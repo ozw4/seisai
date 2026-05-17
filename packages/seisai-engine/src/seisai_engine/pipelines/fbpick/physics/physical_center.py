@@ -16,6 +16,11 @@ from .geometry import (
     split_offset_gap_segments,
 )
 from .merge import MergeResult
+from .physical_center_context import (
+    PhysicalCenterBuildContext,
+    PhysicalCenterInputs,
+    PhysicalCenterWorkspace,
+)
 from .physical_center_context_fit import (
     _assign_fit_context_fallback,
     _assign_fit_context_work_item_outcome,
@@ -70,6 +75,7 @@ from .physical_center_fit import (
     _strategy_from_fit_task_cfg,
 )
 from .physical_center_geometry import (
+    PhysicalCenterGeometryContext,
     _signed_offset_side_labels,
     _SignedOffsetSideLabels,
     build_physical_center_geometry_context,
@@ -371,24 +377,20 @@ def _selection_group_maps(
 
 def _fallback_no_compatible_anchor(
     *,
-    arrays: dict[str, np.ndarray],
+    inputs: PhysicalCenterInputs,
+    workspace: PhysicalCenterWorkspace,
     trace_idx: int,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    trend_provider: object | None = None,
-    merged: MergeResult,
-    cfg: PhysicsLiteConfig,
-    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> None:
+    arrays = workspace.arrays
+    cfg = inputs.cfg
     fallback = str(cfg.physical_runtime.anchor_reuse.fallback_if_no_compatible_segment)
     if fallback == 'robust':
         _assign_robust_fallback(
             arrays,
             trace_idx,
             failure_reason=PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
-            table=table,
-            merged=merged,
+            table=inputs.table,
+            merged=inputs.merged,
         )
         return
     _assign_fallback(
@@ -396,12 +398,12 @@ def _fallback_no_compatible_anchor(
         trace_idx,
         failure_reason=PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
         runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
-        table=table,
-        feasible=feasible,
-        trend=trend,
-        trend_provider=trend_provider,
-        merged=merged,
-        pending_trend_fallback=pending_trend_fallback,
+        table=inputs.table,
+        feasible=inputs.feasible,
+        trend=inputs.trend,
+        trend_provider=inputs.trend_provider,
+        merged=inputs.merged,
+        pending_trend_fallback=workspace.pending_trend_fallback,
     )
 
 
@@ -702,6 +704,15 @@ def build_geometry_two_piece_physical_center(
     progress: object | None = None,
     progress_context: Mapping[str, object] | None = None,
 ) -> PhysicalCenterResult:
+    inputs = PhysicalCenterInputs(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=cfg,
+        trend_provider=trend_provider,
+    )
     reporter = (
         progress
         if progress is not None
@@ -808,11 +819,7 @@ def build_geometry_two_piece_physical_center(
             reason='geometry_invalid',
             fallback_mode=str(cfg.physical_runtime.geometry_invalid_fallback),
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
+            inputs=inputs,
             reporter=reporter,
             context=context,
             runtime_diagnostics=runtime_diagnostics,
@@ -856,11 +863,7 @@ def build_geometry_two_piece_physical_center(
             reason='source_xy_degenerate',
             fallback_mode=str(cfg.physical_runtime.geometry_invalid_fallback),
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
+            inputs=inputs,
             reporter=reporter,
             context=context,
             runtime_diagnostics=runtime_diagnostics,
@@ -872,11 +875,7 @@ def build_geometry_two_piece_physical_center(
             reason='source_group_empty',
             fallback_mode=str(cfg.physical_runtime.group_invalid_fallback),
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
+            inputs=inputs,
             reporter=reporter,
             context=context,
             runtime_diagnostics=runtime_diagnostics,
@@ -910,6 +909,19 @@ def build_geometry_two_piece_physical_center(
         **context,
         stage='source_group_ordering',
         elapsed=time.perf_counter() - stage_start,
+    )
+    geometry_context = PhysicalCenterGeometryContext(
+        geometry=geometry,
+        offset_abs_m=offset_abs_m,
+        offset_signed_m=offset_signed_m,
+        offset_signed_labels=offset_signed_labels,
+        offset_source=offset_source,
+        groups=groups,
+        groups_by_id=groups_by_id,
+        group_id_by_trace=group_id_by_trace,
+        source_grouping_invalid=source_group_build.source_grouping_invalid,
+        source_groups_from_geometry=source_groups_from_geometry,
+        geometry_required_missing=False,
     )
 
     pick_t_sec = _as_vector(
@@ -973,8 +985,23 @@ def build_geometry_two_piece_physical_center(
         contexts=len(group_context_by_id),
     )
 
+    min_fit_obs = 2 * _fit_min_pts(cfg)
+    build_context = PhysicalCenterBuildContext(
+        geometry_context=geometry_context,
+        pick_t_sec=pick_t_sec,
+        valid_for_fit=valid_for_fit,
+        group_context_by_id=group_context_by_id,
+        observation_plan_cache=observation_plan_cache,
+        min_fit_obs=min_fit_obs,
+    )
     arrays = _allocate_result_arrays(table)
     pending_trend_fallback = _PendingTrendFallback()
+    workspace = PhysicalCenterWorkspace(
+        arrays=arrays,
+        fit_cache={},
+        runtime_diagnostics=runtime_diagnostics,
+        pending_trend_fallback=pending_trend_fallback,
+    )
     reporter.emit('physical-center.stage_start', **context, stage='anchor_selection')
     stage_start = time.perf_counter()
     with (
@@ -996,8 +1023,7 @@ def build_geometry_two_piece_physical_center(
         enabled=anchor_selection is not None,
     )
     strategy = _fit_strategy(cfg)
-    fit_cache: dict[tuple[int, ...], _FitCacheEntry] = {}
-    min_fit_obs = 2 * _fit_min_pts(cfg)
+    fit_cache = workspace.fit_cache
 
     if cfg.physical_runtime.fit_policy == 'anchor_source_xy':
         if anchor_selection is None:
@@ -1038,24 +1064,9 @@ def build_geometry_two_piece_physical_center(
         anchor_assignments_by_fit, anchor_assignments = (
             _prepare_fit_context_assignments_for_trace_indices(
                 anchor_trace_indices,
-                arrays=arrays,
-                group_id_by_trace=group_id_by_trace,
-                group_context_by_id=group_context_by_id,
-                geometry=geometry,
-                offset_abs_m=offset_abs_m,
-                offset_signed_m=offset_signed_m,
-                offset_source=offset_source,
-                pick_t_sec=pick_t_sec,
-                table=table,
-                feasible=feasible,
-                trend=trend,
-                trend_provider=trend_provider,
-                merged=merged,
-                cfg=cfg,
-                observation_plan_cache=observation_plan_cache,
-                min_fit_obs=min_fit_obs,
-                runtime_diagnostics=runtime_diagnostics,
-                pending_trend_fallback=pending_trend_fallback,
+                inputs=inputs,
+                build_context=build_context,
+                workspace=workspace,
             )
         )
         anchor_work_items = _build_fit_context_work_items(
@@ -1079,21 +1090,13 @@ def build_geometry_two_piece_physical_center(
         )
         anchor_results = _fit_and_assign_context_work_items(
             anchor_work_items,
-            arrays=arrays,
-            offset_abs_m=offset_abs_m,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
-            cfg=cfg,
+            inputs=inputs,
+            build_context=build_context,
+            workspace=workspace,
             strategy=strategy,
-            fit_cache=fit_cache,
-            runtime_diagnostics=runtime_diagnostics,
             progress=reporter,
             progress_context=context,
             fit_model_for_plan=_fit_model_for_plan,
-            pending_trend_fallback=pending_trend_fallback,
         )
         if runtime_diagnostics is not None:
             anchor_fit_call_delta = max(
@@ -1247,39 +1250,18 @@ def build_geometry_two_piece_physical_center(
                     fallback_full_trace_indices.append(trace_idx)
                 else:
                     _fallback_no_compatible_anchor(
-                        arrays=arrays,
+                        inputs=inputs,
+                        workspace=workspace,
                         trace_idx=trace_idx,
-                        table=table,
-                        feasible=feasible,
-                        trend=trend,
-                        trend_provider=trend_provider,
-                        merged=merged,
-                        cfg=cfg,
-                        pending_trend_fallback=pending_trend_fallback,
                     )
 
             if fallback_full_trace_indices:
                 fallback_full_assignments_by_fit, _fallback_full_assignments = (
                     _prepare_fit_context_assignments_for_trace_indices(
                         np.asarray(fallback_full_trace_indices, dtype=np.int64),
-                        arrays=arrays,
-                        group_id_by_trace=group_id_by_trace,
-                        group_context_by_id=group_context_by_id,
-                        geometry=geometry,
-                        offset_abs_m=offset_abs_m,
-                        offset_signed_m=offset_signed_m,
-                        offset_source=offset_source,
-                        pick_t_sec=pick_t_sec,
-                        table=table,
-                        feasible=feasible,
-                        trend=trend,
-                        trend_provider=trend_provider,
-                        merged=merged,
-                        cfg=cfg,
-                        observation_plan_cache=observation_plan_cache,
-                        min_fit_obs=min_fit_obs,
-                        runtime_diagnostics=runtime_diagnostics,
-                        pending_trend_fallback=pending_trend_fallback,
+                        inputs=inputs,
+                        build_context=build_context,
+                        workspace=workspace,
                     )
                 )
                 fallback_full_work_items = _build_fit_context_work_items(
@@ -1300,21 +1282,13 @@ def build_geometry_two_piece_physical_center(
                 )
                 _fit_and_assign_context_work_items(
                     fallback_full_work_items,
-                    arrays=arrays,
-                    offset_abs_m=offset_abs_m,
-                    table=table,
-                    feasible=feasible,
-                    trend=trend,
-                    trend_provider=trend_provider,
-                    merged=merged,
-                    cfg=cfg,
+                    inputs=inputs,
+                    build_context=build_context,
+                    workspace=workspace,
                     strategy=strategy,
-                    fit_cache=fit_cache,
-                    runtime_diagnostics=runtime_diagnostics,
                     progress=reporter,
                     progress_context=context,
                     fit_model_for_plan=_fit_model_for_plan,
-                    pending_trend_fallback=pending_trend_fallback,
                 )
 
             non_anchor_mode = str(cfg.physical_runtime.anchor_reuse.non_anchor_mode)
@@ -1410,24 +1384,9 @@ def build_geometry_two_piece_physical_center(
                 refit_assignments_by_fit, _refit_assignments = (
                     _prepare_fit_context_assignments_for_trace_indices(
                         group_trace_indices,
-                        arrays=arrays,
-                        group_id_by_trace=group_id_by_trace,
-                        group_context_by_id=group_context_by_id,
-                        geometry=geometry,
-                        offset_abs_m=offset_abs_m,
-                        offset_signed_m=offset_signed_m,
-                        offset_source=offset_source,
-                        pick_t_sec=pick_t_sec,
-                        table=table,
-                        feasible=feasible,
-                        trend=trend,
-                        trend_provider=trend_provider,
-                        merged=merged,
-                        cfg=cfg,
-                        observation_plan_cache=observation_plan_cache,
-                        min_fit_obs=min_fit_obs,
-                        runtime_diagnostics=runtime_diagnostics,
-                        pending_trend_fallback=pending_trend_fallback,
+                        inputs=inputs,
+                        build_context=build_context,
+                        workspace=workspace,
                     )
                 )
                 refit_work_items = _build_fit_context_work_items(
@@ -1446,21 +1405,13 @@ def build_geometry_two_piece_physical_center(
                 )
                 refit_results = _fit_and_assign_context_work_items(
                     refit_work_items,
-                    arrays=arrays,
-                    offset_abs_m=offset_abs_m,
-                    table=table,
-                    feasible=feasible,
-                    trend=trend,
-                    trend_provider=trend_provider,
-                    merged=merged,
-                    cfg=cfg,
+                    inputs=inputs,
+                    build_context=build_context,
+                    workspace=workspace,
                     strategy=strategy,
-                    fit_cache=fit_cache,
-                    runtime_diagnostics=runtime_diagnostics,
                     progress=reporter,
                     progress_context=context,
                     fit_model_for_plan=_fit_model_for_plan,
-                    pending_trend_fallback=pending_trend_fallback,
                 )
                 assigned_count = sum(
                     len(result.valid_trace_indices)
@@ -1627,24 +1578,9 @@ def build_geometry_two_piece_physical_center(
     fit_context_assignments, _fit_context_ordered_assignments = (
         _prepare_fit_context_assignments_for_trace_indices(
             np.arange(n, dtype=np.int64),
-            arrays=arrays,
-            group_id_by_trace=group_id_by_trace,
-            group_context_by_id=group_context_by_id,
-            geometry=geometry,
-            offset_abs_m=offset_abs_m,
-            offset_signed_m=offset_signed_m,
-            offset_source=offset_source,
-            pick_t_sec=pick_t_sec,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
-            cfg=cfg,
-            observation_plan_cache=observation_plan_cache,
-            min_fit_obs=min_fit_obs,
-            runtime_diagnostics=runtime_diagnostics,
-            pending_trend_fallback=pending_trend_fallback,
+            inputs=inputs,
+            build_context=build_context,
+            workspace=workspace,
         )
     )
     reporter.emit(
@@ -1670,21 +1606,13 @@ def build_geometry_two_piece_physical_center(
     )
     _fit_and_assign_context_work_items(
         work_items,
-        arrays=arrays,
-        offset_abs_m=offset_abs_m,
-        table=table,
-        feasible=feasible,
-        trend=trend,
-        trend_provider=trend_provider,
-        merged=merged,
-        cfg=cfg,
+        inputs=inputs,
+        build_context=build_context,
+        workspace=workspace,
         strategy=strategy,
-        fit_cache=fit_cache,
-        runtime_diagnostics=runtime_diagnostics,
         progress=reporter,
         progress_context=context,
         fit_model_for_plan=_fit_model_for_plan,
-        pending_trend_fallback=pending_trend_fallback,
     )
 
     if runtime_diagnostics is not None:

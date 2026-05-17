@@ -10,6 +10,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from .physical_center_context import (
+    PhysicalCenterBuildContext,
+    PhysicalCenterInputs,
+    PhysicalCenterWorkspace,
+)
 from .physical_center_fallback import _assign_fallback
 from .physical_center_fit import (
     _confidence_weights_for_obs,
@@ -120,26 +125,16 @@ def _build_observation_plan(  # noqa: PLR0913
 
 def _prepare_trace_plan_assignment(  # noqa: PLR0913
     *,
-    arrays: dict[str, np.ndarray],
+    inputs: PhysicalCenterInputs,
+    build_context: PhysicalCenterBuildContext,
+    workspace: PhysicalCenterWorkspace,
     trace_idx: int,
-    group_id_by_trace: np.ndarray,
-    group_context_by_id: Mapping[int, _GroupObservationContext],
-    geometry: CoarseGeometry | None,
-    offset_abs_m: np.ndarray,
-    offset_signed_m: np.ndarray | None,
-    offset_source: int,
-    pick_t_sec: np.ndarray,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    trend_provider: object | None = None,
-    merged: MergeResult,
-    cfg: PhysicsLiteConfig,
-    observation_plan_cache: _ObservationPlanCache,
-    min_fit_obs: int,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
-    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> _TracePlanAssignment | None:
+    arrays = workspace.arrays
+    offset_abs_m = build_context.offset_abs_m
+    offset_source = build_context.offset_source
+    group_id_by_trace = build_context.group_id_by_trace
+    runtime_diagnostics = workspace.runtime_diagnostics
     arrays['physical_offset_source'][trace_idx] = np.uint8(offset_source)
     if (
         not np.isfinite(offset_abs_m[trace_idx])
@@ -149,37 +144,37 @@ def _prepare_trace_plan_assignment(  # noqa: PLR0913
             arrays,
             trace_idx,
             failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
-            pending_trend_fallback=pending_trend_fallback,
+            table=inputs.table,
+            feasible=inputs.feasible,
+            trend=inputs.trend,
+            trend_provider=inputs.trend_provider,
+            merged=inputs.merged,
+            pending_trend_fallback=workspace.pending_trend_fallback,
         )
         return None
 
     plan = _build_observation_plan(
         trace_idx=trace_idx,
         target_group_id=int(group_id_by_trace[trace_idx]),
-        group_context_by_id=group_context_by_id,
-        geometry=geometry,
+        group_context_by_id=build_context.group_context_by_id,
+        geometry=build_context.geometry,
         offset_abs_m=offset_abs_m,
-        offset_signed_m=offset_signed_m,
-        cfg=cfg,
+        offset_signed_m=build_context.offset_signed_m,
+        cfg=inputs.cfg,
         runtime_diagnostics=runtime_diagnostics,
-        plan_cache=observation_plan_cache,
+        plan_cache=build_context.observation_plan_cache,
     )
     if plan is None:
         _assign_fallback(
             arrays,
             trace_idx,
             failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
-            pending_trend_fallback=pending_trend_fallback,
+            table=inputs.table,
+            feasible=inputs.feasible,
+            trend=inputs.trend,
+            trend_provider=inputs.trend_provider,
+            merged=inputs.merged,
+            pending_trend_fallback=workspace.pending_trend_fallback,
         )
         return None
 
@@ -190,17 +185,17 @@ def _prepare_trace_plan_assignment(  # noqa: PLR0913
     arrays['physical_model_segment_id'][trace_idx] = np.int32(plan.segment_id)
     arrays['physical_model_side'][trace_idx] = np.int8(plan.side)
 
-    if int(plan.obs_indices.size) < int(min_fit_obs):
+    if int(plan.obs_indices.size) < int(build_context.min_fit_obs):
         _assign_fallback(
             arrays,
             trace_idx,
             failure_reason=PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
-            pending_trend_fallback=pending_trend_fallback,
+            table=inputs.table,
+            feasible=inputs.feasible,
+            trend=inputs.trend,
+            trend_provider=inputs.trend_provider,
+            merged=inputs.merged,
+            pending_trend_fallback=workspace.pending_trend_fallback,
         )
         return None
 
@@ -213,10 +208,10 @@ def _prepare_trace_plan_assignment(  # noqa: PLR0913
         obs_indices = _sample_observation_indices_for_fit(
             obs_indices=plan.obs_indices,
             offset_abs_m=offset_abs_m,
-            pick_t_sec=pick_t_sec,
-            coarse_pmax=table.coarse_pmax,
-            cfg=cfg,
-            min_required_obs=int(min_fit_obs),
+            pick_t_sec=build_context.pick_t_sec,
+            coarse_pmax=inputs.table.coarse_pmax,
+            cfg=inputs.cfg,
+            min_required_obs=int(build_context.min_fit_obs),
         )
     sampling_changed = obs_indices is not plan.obs_indices
     precomputed_fit_key = None if sampling_changed else plan.obs_key
@@ -308,21 +303,16 @@ def _assign_fit_context_fallback(  # noqa: PLR0913
 
 def _fit_and_assign_context_work_item(  # noqa: PLR0913
     *,
-    arrays: dict[str, np.ndarray],
+    inputs: PhysicalCenterInputs,
+    build_context: PhysicalCenterBuildContext,
+    workspace: PhysicalCenterWorkspace,
     work_item: _FitContextWorkItem,
-    offset_abs_m: np.ndarray,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    trend_provider: object | None = None,
-    merged: MergeResult,
-    cfg: PhysicsLiteConfig,
     strategy: _PhysicalFitStrategy,
-    fit_cache: dict[tuple[int, ...], _FitCacheEntry],
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
     fit_model_for_plan: _FitModelForPlan | None = None,
-    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> _FitContextWorkResult:
+    cfg = inputs.cfg
+    fit_cache = workspace.fit_cache
+    runtime_diagnostics = workspace.runtime_diagnostics
     fit_model = (
         _fit_model_for_plan
         if fit_model_for_plan is None
@@ -348,20 +338,20 @@ def _fit_and_assign_context_work_item(  # noqa: PLR0913
         runtime_diagnostics.record_cache_hit(int(work_item.trace_indices.size) - 1)
 
     return _assign_fit_context_work_item_outcome(
-        arrays=arrays,
+        arrays=workspace.arrays,
         work_item=work_item,
-        offset_abs_m=offset_abs_m,
-        table=table,
-        feasible=feasible,
-        trend=trend,
-        trend_provider=trend_provider,
-        merged=merged,
+        offset_abs_m=build_context.offset_abs_m,
+        table=inputs.table,
+        feasible=inputs.feasible,
+        trend=inputs.trend,
+        trend_provider=inputs.trend_provider,
+        merged=inputs.merged,
         fit_cache=fit_cache,
         trend_model=trend_model,
         diagnostics=diagnostics,
         fit_failure_reason=fit_failure_reason,
         runtime_diagnostics=runtime_diagnostics,
-        pending_trend_fallback=pending_trend_fallback,
+        pending_trend_fallback=workspace.pending_trend_fallback,
     )
 
 
@@ -463,24 +453,9 @@ def _assign_fit_context_work_item_outcome(  # noqa: PLR0913
 def _prepare_fit_context_assignments_for_trace_indices(  # noqa: PLR0913
     trace_indices: np.ndarray,
     *,
-    arrays: dict[str, np.ndarray],
-    group_id_by_trace: np.ndarray,
-    group_context_by_id: Mapping[int, _GroupObservationContext],
-    geometry: CoarseGeometry | None,
-    offset_abs_m: np.ndarray,
-    offset_signed_m: np.ndarray | None,
-    offset_source: int,
-    pick_t_sec: np.ndarray,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    trend_provider: object | None = None,
-    merged: MergeResult,
-    cfg: PhysicsLiteConfig,
-    observation_plan_cache: _ObservationPlanCache,
-    min_fit_obs: int,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
-    pending_trend_fallback: _PendingTrendFallback | None = None,
+    inputs: PhysicalCenterInputs,
+    build_context: PhysicalCenterBuildContext,
+    workspace: PhysicalCenterWorkspace,
 ) -> tuple[
     dict[tuple[int, ...], list[_TracePlanAssignment]],
     list[_TracePlanAssignment],
@@ -489,25 +464,10 @@ def _prepare_fit_context_assignments_for_trace_indices(  # noqa: PLR0913
     ordered: list[_TracePlanAssignment] = []
     for trace_idx in np.asarray(trace_indices, dtype=np.int64).tolist():
         assignment = _prepare_trace_plan_assignment(
-            arrays=arrays,
+            inputs=inputs,
+            build_context=build_context,
+            workspace=workspace,
             trace_idx=int(trace_idx),
-            group_id_by_trace=group_id_by_trace,
-            group_context_by_id=group_context_by_id,
-            geometry=geometry,
-            offset_abs_m=offset_abs_m,
-            offset_signed_m=offset_signed_m,
-            offset_source=offset_source,
-            pick_t_sec=pick_t_sec,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
-            cfg=cfg,
-            observation_plan_cache=observation_plan_cache,
-            min_fit_obs=min_fit_obs,
-            runtime_diagnostics=runtime_diagnostics,
-            pending_trend_fallback=pending_trend_fallback,
         )
         if assignment is None:
             continue
@@ -519,42 +479,28 @@ def _prepare_fit_context_assignments_for_trace_indices(  # noqa: PLR0913
 def _fit_and_assign_context_work_items(  # noqa: PLR0913
     work_items: list[_FitContextWorkItem],
     *,
-    arrays: dict[str, np.ndarray],
-    offset_abs_m: np.ndarray,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    trend_provider: object | None = None,
-    merged: MergeResult,
-    cfg: PhysicsLiteConfig,
+    inputs: PhysicalCenterInputs,
+    build_context: PhysicalCenterBuildContext,
+    workspace: PhysicalCenterWorkspace,
     strategy: _PhysicalFitStrategy,
-    fit_cache: dict[tuple[int, ...], _FitCacheEntry],
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
     progress: object | None = None,
     progress_context: Mapping[str, object] | None = None,
     fit_model_for_plan: _FitModelForPlan | None = None,
-    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> dict[tuple[int, ...], _FitContextWorkResult]:
+    cfg = inputs.cfg
+    runtime_diagnostics = workspace.runtime_diagnostics
     reporter = progress if progress is not None else NullProgressReporter()
     context = dict(progress_context or {})
     fit_start = time.perf_counter()
     if bool(cfg.physical_runtime.fit_executor.enabled) and work_items:
         return _fit_and_assign_context_work_items_parallel(
             work_items,
-            arrays=arrays,
-            offset_abs_m=offset_abs_m,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
-            cfg=cfg,
-            fit_cache=fit_cache,
-            runtime_diagnostics=runtime_diagnostics,
+            inputs=inputs,
+            build_context=build_context,
+            workspace=workspace,
             progress=reporter,
             progress_context=context,
             progress_start_sec=fit_start,
-            pending_trend_fallback=pending_trend_fallback,
         )
 
     results: dict[tuple[int, ...], _FitContextWorkResult] = {}
@@ -567,20 +513,12 @@ def _fit_and_assign_context_work_items(  # noqa: PLR0913
     )
     for done, work_item in enumerate(work_items, start=1):
         results[work_item.fit_key] = _fit_and_assign_context_work_item(
-            arrays=arrays,
+            inputs=inputs,
+            build_context=build_context,
+            workspace=workspace,
             work_item=work_item,
-            offset_abs_m=offset_abs_m,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
-            cfg=cfg,
             strategy=strategy,
-            fit_cache=fit_cache,
-            runtime_diagnostics=runtime_diagnostics,
             fit_model_for_plan=fit_model_for_plan,
-            pending_trend_fallback=pending_trend_fallback,
         )
         reporter.emit(
             'fit.progress',
@@ -660,21 +598,18 @@ def _cache_entry_from_fit_task_result(
 def _fit_and_assign_context_work_items_parallel(  # noqa: PLR0913
     work_items: list[_FitContextWorkItem],
     *,
-    arrays: dict[str, np.ndarray],
-    offset_abs_m: np.ndarray,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    trend_provider: object | None = None,
-    merged: MergeResult,
-    cfg: PhysicsLiteConfig,
-    fit_cache: dict[tuple[int, ...], _FitCacheEntry],
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
+    inputs: PhysicalCenterInputs,
+    build_context: PhysicalCenterBuildContext,
+    workspace: PhysicalCenterWorkspace,
     progress: object | None = None,
     progress_context: Mapping[str, object] | None = None,
     progress_start_sec: float | None = None,
-    pending_trend_fallback: _PendingTrendFallback | None = None,
 ) -> dict[tuple[int, ...], _FitContextWorkResult]:
+    cfg = inputs.cfg
+    arrays = workspace.arrays
+    fit_cache = workspace.fit_cache
+    runtime_diagnostics = workspace.runtime_diagnostics
+    offset_abs_m = build_context.offset_abs_m
     reporter = progress if progress is not None else NullProgressReporter()
     context = dict(progress_context or {})
     fit_start = (
@@ -716,17 +651,17 @@ def _fit_and_assign_context_work_items_parallel(  # noqa: PLR0913
             arrays=arrays,
             work_item=work_item,
             offset_abs_m=offset_abs_m,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
+            table=inputs.table,
+            feasible=inputs.feasible,
+            trend=inputs.trend,
+            trend_provider=inputs.trend_provider,
+            merged=inputs.merged,
             fit_cache=fit_cache,
             trend_model=entry.model,
             diagnostics=entry.diagnostics,
             fit_failure_reason=fit_failure_reason,
             runtime_diagnostics=runtime_diagnostics,
-            pending_trend_fallback=pending_trend_fallback,
+            pending_trend_fallback=workspace.pending_trend_fallback,
         )
         done += 1
         reporter.emit(
@@ -790,17 +725,17 @@ def _fit_and_assign_context_work_items_parallel(  # noqa: PLR0913
                 arrays=arrays,
                 work_item=work_item,
                 offset_abs_m=offset_abs_m,
-                table=table,
-                feasible=feasible,
-                trend=trend,
-                trend_provider=trend_provider,
-                merged=merged,
+                table=inputs.table,
+                feasible=inputs.feasible,
+                trend=inputs.trend,
+                trend_provider=inputs.trend_provider,
+                merged=inputs.merged,
                 fit_cache=fit_cache,
                 trend_model=task_result.trend_model,
                 diagnostics=task_result.diagnostics,
                 fit_failure_reason=task_result.failure_reason,
                 runtime_diagnostics=runtime_diagnostics,
-                pending_trend_fallback=pending_trend_fallback,
+                pending_trend_fallback=workspace.pending_trend_fallback,
             )
 
     return results
