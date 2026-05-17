@@ -19,6 +19,7 @@ __all__ = [
     'PhysicalAnchorSelectionCfg',
     'PhysicalFitExecutorCfg',
     'PhysicalObservationSamplingCfg',
+    'PhysicalPartialTrendFallbackCfg',
     'PhysicalPrefilterCfg',
     'PhysicalProgressCfg',
     'PhysicalProjectionCfg',
@@ -217,6 +218,18 @@ class PhysicalFitExecutorCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalPartialTrendFallbackCfg:
+    enabled: bool = True
+    max_fraction: float = 0.05
+    max_traces: int = 50_000
+    cluster_consecutive_indices: bool = True
+    use_global_fallback: bool = True
+    fallback_if_too_many: str = 'robust'
+    local_window_from_trend_config: bool = True
+    emit_progress: bool = True
+
+
+@dataclass(frozen=True)
 class PhysicalProgressCfg:
     enabled: bool = False
     level: str = 'sgy'
@@ -242,6 +255,7 @@ class PhysicalRuntimeDiagnosticsCfg:
 class PhysicalRuntimeCfg:
     fit_policy: str = 'full'
     trend_result_mode: str = 'eager'
+    fallback_existing_trend_mode: str = 'full'
     legacy_trend_output: str = 'auto'
     geometry_invalid_fallback: str = 'existing_trend'
     group_invalid_fallback: str = 'existing_trend'
@@ -256,6 +270,9 @@ class PhysicalRuntimeCfg:
         PhysicalObservationSamplingCfg()
     )
     fit_executor: PhysicalFitExecutorCfg = PhysicalFitExecutorCfg()
+    partial_trend_fallback: PhysicalPartialTrendFallbackCfg = (
+        PhysicalPartialTrendFallbackCfg()
+    )
     progress: PhysicalProgressCfg = PhysicalProgressCfg()
 
 
@@ -638,6 +655,34 @@ def _load_physical_fit_executor_cfg(cfg: dict[str, Any]) -> PhysicalFitExecutorC
     )
 
 
+def _load_physical_partial_trend_fallback_cfg(
+    cfg: dict[str, Any],
+) -> PhysicalPartialTrendFallbackCfg:
+    fallback_if_too_many = optional_str(cfg, 'fallback_if_too_many', 'robust')
+    if fallback_if_too_many is None:
+        msg = (
+            'physical_runtime.partial_trend_fallback.fallback_if_too_many '
+            'must not be null'
+        )
+        raise TypeError(msg)
+    return PhysicalPartialTrendFallbackCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=True)),
+        max_fraction=float(optional_float(cfg, 'max_fraction', 0.05)),
+        max_traces=int(optional_int(cfg, 'max_traces', 50_000)),
+        cluster_consecutive_indices=bool(
+            optional_bool(cfg, 'cluster_consecutive_indices', default=True)
+        ),
+        use_global_fallback=bool(
+            optional_bool(cfg, 'use_global_fallback', default=True)
+        ),
+        fallback_if_too_many=str(fallback_if_too_many),
+        local_window_from_trend_config=bool(
+            optional_bool(cfg, 'local_window_from_trend_config', default=True)
+        ),
+        emit_progress=bool(optional_bool(cfg, 'emit_progress', default=True)),
+    )
+
+
 def _load_physical_progress_cfg(cfg: dict[str, Any]) -> PhysicalProgressCfg:
     level = optional_str(cfg, 'level', 'sgy')
     stream = optional_str(cfg, 'stream', 'stderr')
@@ -699,6 +744,11 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
     return PhysicalRuntimeCfg(
         fit_policy=optional_str(cfg, 'fit_policy', 'full'),
         trend_result_mode=optional_str(cfg, 'trend_result_mode', 'eager'),
+        fallback_existing_trend_mode=optional_str(
+            cfg,
+            'fallback_existing_trend_mode',
+            'full',
+        ),
         legacy_trend_output=optional_str(cfg, 'legacy_trend_output', 'auto'),
         geometry_invalid_fallback=optional_str(
             cfg,
@@ -747,6 +797,12 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
             _require_dict(
                 cfg.get('fit_executor'),
                 key='physical_runtime.fit_executor',
+            )
+        ),
+        partial_trend_fallback=_load_physical_partial_trend_fallback_cfg(
+            _require_dict(
+                cfg.get('partial_trend_fallback'),
+                key='physical_runtime.partial_trend_fallback',
             )
         ),
         progress=_load_physical_progress_cfg(
@@ -859,6 +915,29 @@ def _validate_physical_projection_cfg(cfg: PhysicalProjectionCfg) -> None:
         raise ValueError(msg)
 
 
+def _validate_physical_partial_trend_fallback_cfg(
+    cfg: PhysicalPartialTrendFallbackCfg,
+) -> None:
+    _validate_nonnegative_float(
+        'physical_runtime.partial_trend_fallback.max_fraction',
+        cfg.max_fraction,
+    )
+    if float(cfg.max_fraction) > 1.0:
+        msg = 'physical_runtime.partial_trend_fallback.max_fraction must be <= 1'
+        raise ValueError(msg)
+    _validate_positive_int(
+        'physical_runtime.partial_trend_fallback.max_traces',
+        cfg.max_traces,
+    )
+    if cfg.fallback_if_too_many not in {'robust', 'full', 'error'}:
+        msg = (
+            'physical_runtime.partial_trend_fallback.fallback_if_too_many '
+            "must be 'robust', 'full', or 'error', "
+            f'got {cfg.fallback_if_too_many!r}'
+        )
+        raise ValueError(msg)
+
+
 def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
     if cfg.fit_policy not in {'full', 'anchor_source_xy'}:
         msg = (
@@ -870,6 +949,13 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
         msg = (
             "physical_runtime.trend_result_mode must be 'eager', 'lazy', "
             f"or 'disabled', got {cfg.trend_result_mode!r}"
+        )
+        raise ValueError(msg)
+    if cfg.fallback_existing_trend_mode not in {'full', 'partial', 'robust'}:
+        msg = (
+            "physical_runtime.fallback_existing_trend_mode must be 'full', "
+            "'partial', or 'robust', "
+            f'got {cfg.fallback_existing_trend_mode!r}'
         )
         raise ValueError(msg)
     if cfg.legacy_trend_output not in {'auto', 'always', 'omit'}:
@@ -914,6 +1000,7 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
             "with legacy_trend_output='always'"
         )
         raise ValueError(msg)
+    _validate_physical_partial_trend_fallback_cfg(cfg.partial_trend_fallback)
     anchor = cfg.anchor_selection
     if anchor.mode != 'source_xy_stride':
         msg = (

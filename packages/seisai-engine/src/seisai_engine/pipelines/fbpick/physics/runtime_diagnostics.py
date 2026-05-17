@@ -983,6 +983,52 @@ def runtime_summary_from_npz_fields(
         summary['legacy_trend_output'] = str(
             np.asarray(payload['physical_runtime_legacy_trend_output']).item()
         )
+    if 'physical_runtime_fallback_existing_trend_mode' in payload:
+        summary['fallback_existing_trend_mode'] = str(
+            np.asarray(
+                payload['physical_runtime_fallback_existing_trend_mode']
+            ).item()
+        )
+    if 'physical_runtime_partial_trend_fallback_enabled' in payload:
+        summary['partial_trend_fallback_enabled'] = bool(
+            int(
+                np.asarray(
+                    payload['physical_runtime_partial_trend_fallback_enabled']
+                ).item()
+            )
+        )
+    if 'physical_runtime_partial_trend_fallback_n_targets' in payload:
+        summary['partial_trend_fallback_n_targets'] = int(
+            np.asarray(
+                payload['physical_runtime_partial_trend_fallback_n_targets']
+            ).item()
+        )
+    if 'physical_runtime_partial_trend_fallback_n_valid' in payload:
+        summary['partial_trend_fallback_n_valid'] = int(
+            np.asarray(
+                payload['physical_runtime_partial_trend_fallback_n_valid']
+            ).item()
+        )
+    if 'physical_runtime_partial_trend_fallback_n_robust' in payload:
+        summary['partial_trend_fallback_n_robust'] = int(
+            np.asarray(
+                payload['physical_runtime_partial_trend_fallback_n_robust']
+            ).item()
+        )
+    if 'physical_runtime_partial_trend_fallback_elapsed_sec' in payload:
+        summary['partial_trend_fallback_elapsed_sec'] = float(
+            np.asarray(
+                payload['physical_runtime_partial_trend_fallback_elapsed_sec']
+            ).item()
+        )
+    if 'physical_runtime_partial_trend_fallback_too_many' in payload:
+        summary['partial_trend_fallback_too_many'] = bool(
+            int(
+                np.asarray(
+                    payload['physical_runtime_partial_trend_fallback_too_many']
+                ).item()
+            )
+        )
     return summary
 
 

@@ -30,7 +30,12 @@ from .runtime_diagnostics import (
     runtime_summary_from_npz_fields,
     write_physics_runtime_summary,
 )
-from .trend import TrendResult, build_trend_result
+from .trend import (
+    PartialTrendFallbackResult,
+    TrendResult,
+    build_partial_trend_fallback,
+    build_trend_result,
+)
 
 __all__ = [
     'build_robust_payload_from_coarse',
@@ -86,6 +91,34 @@ def _add_trend_runtime_summary_fields(
     mode = _payload_scalar(payload, 'physical_runtime_trend_result_mode')
     reason = _payload_scalar(payload, 'physical_runtime_trend_result_reason')
     legacy_output = _payload_scalar(payload, 'physical_runtime_legacy_trend_output')
+    fallback_existing_trend_mode = _payload_scalar(
+        payload,
+        'physical_runtime_fallback_existing_trend_mode',
+    )
+    partial_enabled = _payload_scalar(
+        payload,
+        'physical_runtime_partial_trend_fallback_enabled',
+    )
+    partial_n_targets = _payload_scalar(
+        payload,
+        'physical_runtime_partial_trend_fallback_n_targets',
+    )
+    partial_n_valid = _payload_scalar(
+        payload,
+        'physical_runtime_partial_trend_fallback_n_valid',
+    )
+    partial_n_robust = _payload_scalar(
+        payload,
+        'physical_runtime_partial_trend_fallback_n_robust',
+    )
+    partial_elapsed = _payload_scalar(
+        payload,
+        'physical_runtime_partial_trend_fallback_elapsed_sec',
+    )
+    partial_too_many = _payload_scalar(
+        payload,
+        'physical_runtime_partial_trend_fallback_too_many',
+    )
 
     if materialized is not None:
         summary['trend_result_materialized'] = bool(int(materialized))
@@ -104,6 +137,22 @@ def _add_trend_runtime_summary_fields(
         summary['trend_result_reason'] = reason_str if reason_str else None
     if legacy_output is not None:
         summary['legacy_trend_output'] = str(legacy_output)
+    if fallback_existing_trend_mode is not None:
+        summary['fallback_existing_trend_mode'] = str(
+            fallback_existing_trend_mode
+        )
+    if partial_enabled is not None:
+        summary['partial_trend_fallback_enabled'] = bool(int(partial_enabled))
+    if partial_n_targets is not None:
+        summary['partial_trend_fallback_n_targets'] = int(partial_n_targets)
+    if partial_n_valid is not None:
+        summary['partial_trend_fallback_n_valid'] = int(partial_n_valid)
+    if partial_n_robust is not None:
+        summary['partial_trend_fallback_n_robust'] = int(partial_n_robust)
+    if partial_elapsed is not None:
+        summary['partial_trend_fallback_elapsed_sec'] = float(partial_elapsed)
+    if partial_too_many is not None:
+        summary['partial_trend_fallback_too_many'] = bool(int(partial_too_many))
 
 
 def _build_unmaterialized_trend(table) -> TrendResult:
@@ -127,17 +176,32 @@ class LazyTrendResultProvider:
         *,
         mode: str,
         build_fn: Callable[[], TrendResult],
+        build_partial_fn: Callable[[np.ndarray], PartialTrendFallbackResult | None]
+        | None = None,
+        fallback_existing_trend_mode: str = 'full',
+        partial_cfg: Any | None = None,
+        n_traces: int | None = None,
         progress: Any,
         progress_context: Mapping[str, object],
     ) -> None:
         self.mode = str(mode)
         self._build_fn = build_fn
+        self._build_partial_fn = build_partial_fn
+        self.fallback_existing_trend_mode = str(fallback_existing_trend_mode)
+        self._partial_cfg = partial_cfg
+        self._n_traces = None if n_traces is None else int(n_traces)
         self._progress = progress
         self._progress_context = dict(progress_context)
         self._trend_result: TrendResult | None = None
+        self._partial_cache: dict[int, tuple[int, np.float32, bool]] = {}
         self.computed = False
         self.reason: str | None = None
         self.elapsed_sec = 0.0
+        self.partial_elapsed_sec = 0.0
+        self.partial_n_targets = 0
+        self.partial_n_valid = 0
+        self.partial_n_robust = 0
+        self.partial_too_many = False
 
     @property
     def trend_result(self) -> TrendResult | None:
@@ -170,6 +234,221 @@ class LazyTrendResultProvider:
                 elapsed=self.elapsed_sec,
             )
         return self._trend_result
+
+    def _partial_too_many(self, n_targets: int) -> bool:
+        partial_cfg = self._partial_cfg
+        if partial_cfg is None:
+            return False
+        if int(n_targets) > int(partial_cfg.max_traces):
+            return True
+        if self._n_traces is None or self._n_traces <= 0:
+            return False
+        return (
+            float(n_targets) / float(self._n_traces)
+            > float(partial_cfg.max_fraction)
+        )
+
+    @staticmethod
+    def _partial_result_from_cache(
+        indices: np.ndarray,
+        cache: Mapping[int, tuple[int, np.float32, bool]],
+    ) -> PartialTrendFallbackResult:
+        requested = np.asarray(indices, dtype=np.int64).reshape(-1)
+        center_i = np.full((requested.size,), -1, dtype=np.int32)
+        center_t_sec = np.full((requested.size,), np.nan, dtype=np.float32)
+        valid = np.zeros((requested.size,), dtype=np.bool_)
+        for pos, trace_idx in enumerate(requested.tolist()):
+            cached_i, cached_t, cached_valid = cache[int(trace_idx)]
+            if bool(cached_valid):
+                center_i[pos] = np.int32(cached_i)
+                center_t_sec[pos] = np.float32(cached_t)
+                valid[pos] = True
+        fallback_to_robust = ~valid
+        return PartialTrendFallbackResult(
+            indices=requested.copy(),
+            center_i=center_i,
+            center_t_sec=center_t_sec,
+            valid_mask=valid,
+            fallback_to_robust_mask=fallback_to_robust.astype(
+                np.bool_,
+                copy=False,
+            ),
+            elapsed_sec=0.0,
+            n_targets=int(requested.size),
+            n_valid=int(np.count_nonzero(valid)),
+            n_robust=int(np.count_nonzero(fallback_to_robust)),
+        )
+
+    def _cache_robust_partial(self, indices: np.ndarray) -> None:
+        for trace_idx in np.asarray(indices, dtype=np.int64).reshape(-1).tolist():
+            self._partial_cache[int(trace_idx)] = (-1, np.float32(np.nan), False)
+
+    def _record_partial_robust_targets(self, n_targets: int) -> None:
+        self.partial_n_targets += int(n_targets)
+        self.partial_n_robust += int(n_targets)
+
+    def record_partial_too_many_robust_fallback(self, n_targets: int) -> None:
+        self.partial_too_many = True
+        self._record_partial_robust_targets(n_targets)
+
+    def get_partial(
+        self,
+        indices: np.ndarray,
+        *,
+        reason: str,
+    ) -> PartialTrendFallbackResult | None:
+        requested = np.asarray(indices, dtype=np.int64).reshape(-1)
+        if requested.size == 0:
+            return self._partial_result_from_cache(requested, self._partial_cache)
+
+        mode = str(self.fallback_existing_trend_mode)
+        if mode == 'full':
+            return None
+        missing = np.asarray(
+            [
+                int(trace_idx)
+                for trace_idx in np.unique(requested)
+                if int(trace_idx) not in self._partial_cache
+            ],
+            dtype=np.int64,
+        )
+        if mode == 'robust':
+            self._cache_robust_partial(missing)
+            return self._partial_result_from_cache(requested, self._partial_cache)
+        if mode != 'partial':
+            return None
+
+        if missing.size > 0:
+            partial_cfg = self._partial_cfg
+            if partial_cfg is not None and not bool(partial_cfg.enabled):
+                return None
+            n_effective_targets = len(self._partial_cache) + int(missing.size)
+            if self._partial_too_many(n_effective_targets):
+                fallback = (
+                    'robust'
+                    if partial_cfg is None
+                    else str(partial_cfg.fallback_if_too_many)
+                )
+                if fallback == 'full':
+                    self.partial_too_many = True
+                    return None
+                if fallback == 'error':
+                    msg = (
+                        'partial trend fallback target count exceeds '
+                        f'configured limits: n_targets={n_effective_targets}'
+                    )
+                    raise RuntimeError(msg)
+                self._cache_robust_partial(missing)
+                self.record_partial_too_many_robust_fallback(int(missing.size))
+                return self._partial_result_from_cache(
+                    requested,
+                    self._partial_cache,
+                )
+
+            if self._build_partial_fn is None:
+                return None
+            emit_progress = (
+                True if partial_cfg is None else bool(partial_cfg.emit_progress)
+            )
+            if emit_progress:
+                self._progress.emit(
+                    'physics.stage_start',
+                    **self._progress_context,
+                    stage='partial_trend_fallback',
+                    lazy=True,
+                    reason=str(reason),
+                    n_targets=int(missing.size),
+                )
+            stage_start = perf_counter()
+            result = self._build_partial_fn(missing)
+            elapsed = perf_counter() - stage_start
+            if result is None:
+                if emit_progress:
+                    self._progress.emit(
+                        'physics.stage_done',
+                        **self._progress_context,
+                        stage='partial_trend_fallback',
+                        lazy=True,
+                        reason=str(reason),
+                        elapsed=elapsed,
+                        n_targets=int(missing.size),
+                        fallback='full',
+                    )
+                return None
+            self.partial_elapsed_sec += float(elapsed)
+            self.partial_n_targets += int(result.n_targets)
+            self.partial_n_valid += int(result.n_valid)
+            self.partial_n_robust += int(result.n_robust)
+            for pos, trace_idx in enumerate(
+                np.asarray(result.indices, dtype=np.int64).reshape(-1).tolist()
+            ):
+                valid = bool(np.asarray(result.valid_mask, dtype=np.bool_)[pos])
+                center_i = int(np.asarray(result.center_i, dtype=np.int64)[pos])
+                center_t = np.float32(
+                    np.asarray(result.center_t_sec, dtype=np.float32)[pos]
+                )
+                self._partial_cache[int(trace_idx)] = (center_i, center_t, valid)
+            if emit_progress:
+                self._progress.emit(
+                    'physics.stage_done',
+                    **self._progress_context,
+                    stage='partial_trend_fallback',
+                    lazy=True,
+                    reason=str(reason),
+                    elapsed=elapsed,
+                    n_targets=int(result.n_targets),
+                    n_valid=int(result.n_valid),
+                    n_robust=int(result.n_robust),
+                )
+        return self._partial_result_from_cache(requested, self._partial_cache)
+
+
+def _partial_trend_fallback_runtime_fields(
+    *,
+    typed_cfg,
+    trend_provider: LazyTrendResultProvider,
+) -> dict[str, np.ndarray]:
+    partial_cfg = typed_cfg.physical_runtime.partial_trend_fallback
+    return {
+        'physical_runtime_fallback_existing_trend_mode': np.asarray(
+            str(typed_cfg.physical_runtime.fallback_existing_trend_mode)
+        ),
+        'physical_runtime_partial_trend_fallback_enabled': np.asarray(
+            int(bool(partial_cfg.enabled)),
+            dtype=np.int64,
+        ),
+        'physical_runtime_partial_trend_fallback_max_fraction': np.asarray(
+            float(partial_cfg.max_fraction),
+            dtype=np.float64,
+        ),
+        'physical_runtime_partial_trend_fallback_max_traces': np.asarray(
+            int(partial_cfg.max_traces),
+            dtype=np.int64,
+        ),
+        'physical_runtime_partial_trend_fallback_fallback_if_too_many': (
+            np.asarray(str(partial_cfg.fallback_if_too_many))
+        ),
+        'physical_runtime_partial_trend_fallback_n_targets': np.asarray(
+            int(trend_provider.partial_n_targets),
+            dtype=np.int64,
+        ),
+        'physical_runtime_partial_trend_fallback_n_valid': np.asarray(
+            int(trend_provider.partial_n_valid),
+            dtype=np.int64,
+        ),
+        'physical_runtime_partial_trend_fallback_n_robust': np.asarray(
+            int(trend_provider.partial_n_robust),
+            dtype=np.int64,
+        ),
+        'physical_runtime_partial_trend_fallback_elapsed_sec': np.asarray(
+            float(trend_provider.partial_elapsed_sec),
+            dtype=np.float64,
+        ),
+        'physical_runtime_partial_trend_fallback_too_many': np.asarray(
+            int(bool(trend_provider.partial_too_many)),
+            dtype=np.int64,
+        ),
+    }
 
 
 def _build_coarse_observed_confidence(table) -> ConfidenceResult:
@@ -317,6 +596,17 @@ def build_robust_payload_from_coarse(
         trend_provider = LazyTrendResultProvider(
             mode=str(typed_cfg.physical_runtime.trend_result_mode),
             build_fn=lambda: build_trend_result(table, feasible, typed_cfg),
+            build_partial_fn=lambda indices: build_partial_trend_fallback(
+                table,
+                feasible,
+                typed_cfg,
+                indices,
+            ),
+            fallback_existing_trend_mode=str(
+                typed_cfg.physical_runtime.fallback_existing_trend_mode
+            ),
+            partial_cfg=typed_cfg.physical_runtime.partial_trend_fallback,
+            n_traces=int(table.n_traces),
             progress=reporter,
             progress_context=progress_fields,
         )
@@ -422,9 +712,26 @@ def build_robust_payload_from_coarse(
                 with runtime_diagnostics.time_block('trend_result_sec'):
                     return build_trend_result(table, feasible, typed_cfg)
 
+            def _build_partial_trend_fallback_for_provider(
+                indices: np.ndarray,
+            ) -> PartialTrendFallbackResult | None:
+                with runtime_diagnostics.time_block('partial_trend_fallback_sec'):
+                    return build_partial_trend_fallback(
+                        table,
+                        feasible,
+                        typed_cfg,
+                        indices,
+                    )
+
             trend_provider = LazyTrendResultProvider(
                 mode=str(typed_cfg.physical_runtime.trend_result_mode),
                 build_fn=_build_trend_result_for_provider,
+                build_partial_fn=_build_partial_trend_fallback_for_provider,
+                fallback_existing_trend_mode=str(
+                    typed_cfg.physical_runtime.fallback_existing_trend_mode
+                ),
+                partial_cfg=typed_cfg.physical_runtime.partial_trend_fallback,
+                n_traces=int(table.n_traces),
                 progress=reporter,
                 progress_context=progress_fields,
             )
@@ -648,6 +955,12 @@ def build_robust_payload_from_coarse(
             iter_id=iter_id,
         ),
     }
+    payload.update(
+        _partial_trend_fallback_runtime_fields(
+            typed_cfg=typed_cfg,
+            trend_provider=trend_provider,
+        )
+    )
     if include_trend_output:
         payload.update(
             {
