@@ -74,6 +74,7 @@ from .physical_center_fit import (
     _stable_observation_seed,
     _strategy_from_fit_task_cfg,
 )
+from .physical_center_full_fit import run_full_fit_policy
 from .physical_center_geometry import (
     PhysicalCenterGeometryContext,
     _signed_offset_side_labels,
@@ -1569,43 +1570,7 @@ def build_geometry_two_piece_physical_center(
         )
         return result
 
-    reporter.emit(
-        'physical-center.stage_start',
-        **context,
-        stage='fit_context_preparation',
-    )
-    stage_start = time.perf_counter()
-    fit_context_assignments, _fit_context_ordered_assignments = (
-        _prepare_fit_context_assignments_for_trace_indices(
-            np.arange(n, dtype=np.int64),
-            inputs=inputs,
-            build_context=build_context,
-            workspace=workspace,
-        )
-    )
-    reporter.emit(
-        'physical-center.stage_done',
-        **context,
-        stage='fit_context_preparation',
-        elapsed=time.perf_counter() - stage_start,
-        unique_keys=len(fit_context_assignments),
-    )
-
-    work_items = _build_fit_context_work_items(
-        fit_context_assignments,
-        offset_abs_m=offset_abs_m,
-        pick_t_sec=pick_t_sec,
-        coarse_pmax=table.coarse_pmax,
-        runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT,
-    )
-    reporter.emit(
-        'physical-center.contexts_built',
-        **context,
-        work_items=len(work_items),
-        unique_keys=len(fit_context_assignments),
-    )
-    _fit_and_assign_context_work_items(
-        work_items,
+    return run_full_fit_policy(
         inputs=inputs,
         build_context=build_context,
         workspace=workspace,
@@ -1614,25 +1579,3 @@ def build_geometry_two_piece_physical_center(
         progress_context=context,
         fit_model_for_plan=_fit_model_for_plan,
     )
-
-    if runtime_diagnostics is not None:
-        runtime_diagnostics.set_unique_fit_contexts(len(fit_cache))
-
-    result = _finalize_result_with_pending_trend_fallback(
-        arrays,
-        pending_trend_fallback=pending_trend_fallback,
-        table=table,
-        feasible=feasible,
-        trend=trend,
-        merged=merged,
-        trend_provider=trend_provider,
-    )
-    reporter.emit(
-        'physical-center.done',
-        **context,
-        status='ok',
-        n_traces=n,
-        n_source_groups=len(groups),
-        n_unique_fit_contexts=len(fit_cache),
-    )
-    return result
