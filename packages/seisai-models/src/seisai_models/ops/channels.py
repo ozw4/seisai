@@ -219,32 +219,36 @@ def _inflate_conv_in_channels(
     )
 
     # 重み生成ロジック
-    device, dtype = conv.weight.device, conv.weight.dtype
-    if init_mode == 'zeros':
-        new_weight = torch.zeros(
-            (out_ch, target_in_ch, kH, kW), device=device, dtype=dtype
-        )
-    elif init_mode == 'random':
-        new_weight = torch.empty(
-            (out_ch, target_in_ch, kH, kW), device=device, dtype=dtype
-        )
-        nn.init.kaiming_normal_(new_weight, nonlinearity='relu')
-    elif init_mode == 'duplicate':
-        old_w = conv.weight.data  # (out_ch, old_in, kH, kW)
-        repeats = target_in_ch // old_in
-        remainder = target_in_ch % old_in
-        chunks = []
-        if repeats > 0:
-            chunks.append(old_w.repeat(1, repeats, 1, 1))
-        if remainder > 0:
-            mean_w = old_w.mean(dim=1, keepdim=True)
-            chunks.append(mean_w.repeat(1, remainder, 1, 1))
-        new_weight = torch.cat(chunks, dim=1) if len(chunks) > 1 else chunks[0]
-        # fan-in を揃えるためスケール
-        new_weight = new_weight * (float(old_in) / float(target_in_ch))
+    make_inflated_weight = globals().get('_make_inflated_weight')
+    if make_inflated_weight is not None:
+        new_weight = make_inflated_weight(conv, target_in_ch, init_mode)
     else:
-        msg = f"Unsupported init_mode '{init_mode}'"
-        raise ValueError(msg)
+        device, dtype = conv.weight.device, conv.weight.dtype
+        if init_mode == 'zeros':
+            new_weight = torch.zeros(
+                (out_ch, target_in_ch, kH, kW), device=device, dtype=dtype
+            )
+        elif init_mode == 'random':
+            new_weight = torch.empty(
+                (out_ch, target_in_ch, kH, kW), device=device, dtype=dtype
+            )
+            nn.init.kaiming_normal_(new_weight, nonlinearity='relu')
+        elif init_mode == 'duplicate':
+            old_w = conv.weight.data  # (out_ch, old_in, kH, kW)
+            repeats = target_in_ch // old_in
+            remainder = target_in_ch % old_in
+            chunks = []
+            if repeats > 0:
+                chunks.append(old_w.repeat(1, repeats, 1, 1))
+            if remainder > 0:
+                mean_w = old_w.mean(dim=1, keepdim=True)
+                chunks.append(mean_w.repeat(1, remainder, 1, 1))
+            new_weight = torch.cat(chunks, dim=1) if len(chunks) > 1 else chunks[0]
+            # fan-in を揃えるためスケール
+            new_weight = new_weight * (float(old_in) / float(target_in_ch))
+        else:
+            msg = f"Unsupported init_mode '{init_mode}'"
+            raise ValueError(msg)
 
     # in-place swap
     conv.in_channels = target_in_ch
