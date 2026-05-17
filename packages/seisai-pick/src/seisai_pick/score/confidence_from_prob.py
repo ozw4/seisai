@@ -109,7 +109,7 @@ def trace_confidence_from_prob_local_window(
         t_prob = t_prob.unsqueeze(0)
         squeezed = True
 
-    B, H, W = (int(t_prob.size(0)), int(t_prob.size(1)), int(t_prob.size(2)))
+    B, _, W = (int(t_prob.size(0)), int(t_prob.size(1)), int(t_prob.size(2)))
     if W <= 0:
         msg = f'W must be positive, got {W}'
         raise ValueError(msg)

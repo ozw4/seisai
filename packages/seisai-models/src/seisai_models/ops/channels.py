@@ -145,7 +145,7 @@ def _replace_seq_conv_bn_to_2x(
             print(f'[inflate] {seq.__class__.__name__}[{bn_idx}]: BN channels → 2')
 
 
-def _find_backbone_first_conv(bb: nn.Module) -> Tuple[nn.Conv2d | None, str]:
+def _find_backbone_first_conv(bb: nn.Module) -> tuple[nn.Conv2d | None, str]:
     """Find the first Conv2d that consumes the raw feature map inside a backbone.
     Supports common patterns:
       - stem_0 (ConvNeXt/timm FeatureListNet variants)
@@ -219,36 +219,32 @@ def _inflate_conv_in_channels(
     )
 
     # 重み生成ロジック
-    if '_make_inflated_weight' in globals():
-        new_weight = _make_inflated_weight(conv, target_in_ch, init_mode)
+    device, dtype = conv.weight.device, conv.weight.dtype
+    if init_mode == 'zeros':
+        new_weight = torch.zeros(
+            (out_ch, target_in_ch, kH, kW), device=device, dtype=dtype
+        )
+    elif init_mode == 'random':
+        new_weight = torch.empty(
+            (out_ch, target_in_ch, kH, kW), device=device, dtype=dtype
+        )
+        nn.init.kaiming_normal_(new_weight, nonlinearity='relu')
+    elif init_mode == 'duplicate':
+        old_w = conv.weight.data  # (out_ch, old_in, kH, kW)
+        repeats = target_in_ch // old_in
+        remainder = target_in_ch % old_in
+        chunks = []
+        if repeats > 0:
+            chunks.append(old_w.repeat(1, repeats, 1, 1))
+        if remainder > 0:
+            mean_w = old_w.mean(dim=1, keepdim=True)
+            chunks.append(mean_w.repeat(1, remainder, 1, 1))
+        new_weight = torch.cat(chunks, dim=1) if len(chunks) > 1 else chunks[0]
+        # fan-in を揃えるためスケール
+        new_weight = new_weight * (float(old_in) / float(target_in_ch))
     else:
-        # フォールバック: 依存関数が無い環境でも動くようにここで生成
-        device, dtype = conv.weight.device, conv.weight.dtype
-        if init_mode == 'zeros':
-            new_weight = torch.zeros(
-                (out_ch, target_in_ch, kH, kW), device=device, dtype=dtype
-            )
-        elif init_mode == 'random':
-            new_weight = torch.empty(
-                (out_ch, target_in_ch, kH, kW), device=device, dtype=dtype
-            )
-            nn.init.kaiming_normal_(new_weight, nonlinearity='relu')
-        elif init_mode == 'duplicate':
-            old_w = conv.weight.data  # (out_ch, old_in, kH, kW)
-            repeats = target_in_ch // old_in
-            remainder = target_in_ch % old_in
-            chunks = []
-            if repeats > 0:
-                chunks.append(old_w.repeat(1, repeats, 1, 1))
-            if remainder > 0:
-                mean_w = old_w.mean(dim=1, keepdim=True)
-                chunks.append(mean_w.repeat(1, remainder, 1, 1))
-            new_weight = torch.cat(chunks, dim=1) if len(chunks) > 1 else chunks[0]
-            # fan-in を揃えるためスケール
-            new_weight = new_weight * (float(old_in) / float(target_in_ch))
-        else:
-            msg = f"Unsupported init_mode '{init_mode}'"
-            raise ValueError(msg)
+        msg = f"Unsupported init_mode '{init_mode}'"
+        raise ValueError(msg)
 
     # in-place swap
     conv.in_channels = target_in_ch

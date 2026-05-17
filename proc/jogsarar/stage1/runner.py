@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import segyio
 import torch
 from common.paths import stage1_out_dir as _stage1_out_dir
 from jogsarar_shared import (
