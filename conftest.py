@@ -31,6 +31,7 @@ def _clear_issue_forge_skip_publish_for_smoke(
 ) -> None:
     if request.node.nodeid == VENDOR_SMOKE_NODEID:
         monkeypatch.delenv('CODEX_FLOW_SKIP_PUBLISH', raising=False)
+        monkeypatch.delenv('CODEX_FLOW_LIGHT_ISSUE_REVIEW', raising=False)
         monkeypatch.delenv('CODEX_RUN_REASONING_EFFORT', raising=False)
 
         original_run = subprocess.run

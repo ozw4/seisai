@@ -4,7 +4,7 @@ import time
 from collections.abc import Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -18,14 +18,91 @@ from .feasible import FeasibleBandResult, compute_velocity_t0_band_from_arrays
 from .geometry import (
     CoarseGeometry,
     SourceGroup,
-    build_source_groups,
-    is_source_xy_degenerate,
-    load_coarse_geometry_from_npz,
-    select_nearest_source_groups,
     signed_offset_side_from_geometry,
     split_offset_gap_segments,
 )
 from .merge import MergeResult
+from .physical_center_fallback import (
+    _allocate_result_arrays,
+    _as_bool_vector,
+    _as_vector,
+    _assign_fallback,
+    _assign_robust_fallback,
+    _build_disabled_result,
+    _emit_fallback_all_and_done,
+    _finalize_result_with_pending_trend_fallback,
+    _PendingTrendFallback,
+)
+from .physical_center_geometry import (
+    _signed_offset_side_labels,
+    _SignedOffsetSideLabels,
+    build_physical_center_geometry_context,
+    build_physical_center_offset_context,
+    build_physical_center_source_group_build,
+    build_physical_center_source_group_context,
+    load_physical_center_geometry,
+)
+from .physical_center_observation import (
+    _append_index,
+    _build_gap_segment_context,
+    _build_group_observation_contexts,
+    _build_side_observation_context,
+    _concat_group_traces,
+    _filtered_obs_key,
+    _gap_context_key,
+    _GapSegmentContext,
+    _GroupObservationContext,
+    _index_key_contains,
+    _indices_key,
+    _obs_key_or_build,
+    _obs_with_target_gap_segment,
+    _obs_with_target_labeled_side,
+    _obs_with_target_side,
+    _obs_with_target_signed_offset_side,
+    _ObservationPlan,
+    _ObservationPlanCache,
+    _select_group_ids,
+    _side_slot,
+    _SideObservationContext,
+    _stable_unique,
+    _trace_position_map,
+)
+from .physical_center_observation import (
+    _build_observation_plan as _build_observation_plan_with_min_obs,
+)
+from .physical_center_types import (
+    PHYSICAL_MODEL_FAILURE_FIT_FAILED,
+    PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+    PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS,
+    PHYSICAL_MODEL_FAILURE_LABELS,
+    PHYSICAL_MODEL_FAILURE_NONE,
+    PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED,
+    PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
+    PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
+    PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP,
+    PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT,
+    PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
+    PHYSICAL_MODEL_STATUS_FIT_FAILED,
+    PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID,
+    PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS,
+    PHYSICAL_MODEL_STATUS_LABELS,
+    PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
+    PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
+    PHYSICAL_OFFSET_SOURCE_GEOMETRY,
+    PHYSICAL_OFFSET_SOURCE_HEADER,
+    PHYSICAL_OFFSET_SOURCE_LABELS,
+    PHYSICAL_OFFSET_SOURCE_NONE,
+    PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT,
+    PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR,
+    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST,
+    PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT,
+    PHYSICAL_RUNTIME_FIT_SOURCE_LABELS,
+    PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE,
+    PhysicalCenterFallbackPreflight,
+    PhysicalCenterResult,
+)
 from .pick_table import CoarsePickTable
 from .progress import NullProgressReporter, build_progress_reporter
 from .runtime_diagnostics import PhysicalRuntimeDiagnostics
@@ -35,73 +112,30 @@ from .runtime_policy import (
 )
 from .trend import TrendResult
 
-PHYSICAL_MODEL_STATUS_TWO_PIECE_OK = 0
-PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT = 1
-PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND = 2
-PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP = 3
-PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST = 4
-PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID = 5
-PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS = 6
-PHYSICAL_MODEL_STATUS_FIT_FAILED = 7
-PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED = 8
-
-PHYSICAL_MODEL_STATUS_LABELS = {
-    PHYSICAL_MODEL_STATUS_TWO_PIECE_OK: 'two_piece_ok',
-    PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT: 'relaxed_segment_ok',
-    PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND: 'fallback_existing_trend',
-    PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP: 'fallback_feasible_clip',
-    PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST: 'fallback_robust',
-    PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID: 'geometry_invalid',
-    PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS: 'insufficient_observations',
-    PHYSICAL_MODEL_STATUS_FIT_FAILED: 'fit_failed',
-    PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED: 'physical_disabled',
-}
-
-PHYSICAL_MODEL_FAILURE_NONE = 0
-PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED = 1
-PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID = 2
-PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS = 3
-PHYSICAL_MODEL_FAILURE_FIT_FAILED = 4
-PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID = 5
-
-PHYSICAL_MODEL_FAILURE_LABELS = {
-    PHYSICAL_MODEL_FAILURE_NONE: 'none',
-    PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED: 'physical_disabled',
-    PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID: 'geometry_invalid',
-    PHYSICAL_MODEL_FAILURE_INSUFFICIENT_OBSERVATIONS: 'insufficient_observations',
-    PHYSICAL_MODEL_FAILURE_FIT_FAILED: 'fit_failed',
-    PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID: 'prediction_invalid',
-}
-
-PHYSICAL_OFFSET_SOURCE_NONE = 0
-PHYSICAL_OFFSET_SOURCE_GEOMETRY = 1
-PHYSICAL_OFFSET_SOURCE_HEADER = 2
-
-PHYSICAL_OFFSET_SOURCE_LABELS = {
-    PHYSICAL_OFFSET_SOURCE_NONE: 'none',
-    PHYSICAL_OFFSET_SOURCE_GEOMETRY: 'geometry_offset',
-    PHYSICAL_OFFSET_SOURCE_HEADER: 'header_offset',
-}
-
-PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT = 0
-PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT = 1
-PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE = 2
-PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR = 3
-PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND = 4
-PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST = 5
-PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT = 6
-
-PHYSICAL_RUNTIME_FIT_SOURCE_LABELS = {
-    PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT: 'full_fit',
-    PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT: 'anchor_fit',
-    PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE: 'nearest_anchor_reuse',
-    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR: (
-        'fallback_full_fit_no_compatible_anchor'
-    ),
-    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND: 'fallback_existing_trend',
-    PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST: 'fallback_robust',
-    PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT: 'adaptive_refit',
-}
+_PHYSICAL_CENTER_PRIVATE_COMPAT = (
+    _append_index,
+    _build_gap_segment_context,
+    _build_side_observation_context,
+    _concat_group_traces,
+    _filtered_obs_key,
+    _GapSegmentContext,
+    _gap_context_key,
+    _index_key_contains,
+    _obs_key_or_build,
+    _obs_with_target_gap_segment,
+    _obs_with_target_labeled_side,
+    _obs_with_target_side,
+    _obs_with_target_signed_offset_side,
+    _select_group_ids,
+    _SideObservationContext,
+    _side_slot,
+    _signed_offset_side_labels,
+    _SignedOffsetSideLabels,
+    _stable_unique,
+    _trace_position_map,
+    signed_offset_side_from_geometry,
+    split_offset_gap_segments,
+)
 
 __all__ = [
     'PHYSICAL_MODEL_FAILURE_FIT_FAILED',
@@ -139,115 +173,6 @@ __all__ = [
     'preflight_geometry_two_piece_fallback',
 ]
 
-
-@dataclass(frozen=True)
-class PhysicalCenterFallbackPreflight:
-    status: str | None
-    reason: str | None
-    fallback_mode: str | None
-    geometry_loaded: bool
-    groups: int | None
-
-
-@dataclass(frozen=True)
-class PhysicalCenterResult:
-    physical_center_i: np.ndarray
-    physical_center_t_sec: np.ndarray
-    fine_center_i: np.ndarray
-    fine_center_t_sec: np.ndarray
-    physical_model_status: np.ndarray
-    physical_model_failure_reason: np.ndarray
-    physical_offset_source: np.ndarray
-    physical_model_break_offset_m: np.ndarray
-    physical_model_slope_near_s_per_m: np.ndarray
-    physical_model_slope_far_s_per_m: np.ndarray
-    physical_model_velocity_near_m_s: np.ndarray
-    physical_model_velocity_far_m_s: np.ndarray
-    physical_model_neighbor_count: np.ndarray
-    physical_prefilter_valid_count: np.ndarray
-    physical_model_segment_id: np.ndarray
-    physical_model_side: np.ndarray
-    physical_model_resid_p50_ms: np.ndarray
-    physical_model_resid_p90_ms: np.ndarray
-    physical_anchor_group_id: np.ndarray
-    physical_anchor_is_anchor: np.ndarray
-    physical_anchor_nearest_anchor_group_id: np.ndarray
-    physical_anchor_source_distance_m: np.ndarray
-    physical_runtime_t0_shift_ms: np.ndarray
-    physical_runtime_reuse_resid_p50_ms: np.ndarray
-    physical_runtime_reuse_resid_p90_ms: np.ndarray
-    physical_runtime_reuse_valid_count: np.ndarray
-    physical_runtime_refit_mask: np.ndarray
-    physical_runtime_fit_source: np.ndarray
-
-
-@dataclass(frozen=True)
-class _GroupObservationContext:
-    group_id: int
-    neighbor_group_ids: np.ndarray
-    neighbor_indices: np.ndarray
-    valid_obs_indices: np.ndarray
-    valid_obs_key: tuple[int, ...]
-    neighbor_count: int
-    prefilter_valid_count: int
-    side_context: _SideObservationContext | None = None
-
-
-@dataclass(frozen=True)
-class _ObservationPlan:
-    obs_indices: np.ndarray
-    obs_key: tuple[int, ...] | None
-    neighbor_count: int
-    prefilter_valid_count: int
-    segment_id: int
-    side: int
-    relaxed: bool
-
-
-@dataclass(frozen=True)
-class _SignedOffsetSideLabels:
-    side: np.ndarray
-    finite: np.ndarray
-
-
-@dataclass(frozen=True)
-class _SideObservationContext:
-    obs_indices_by_side: tuple[np.ndarray, np.ndarray, np.ndarray]
-    obs_key_by_side: tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]
-    finite_count: int
-    nonzero_count: int
-
-
-@dataclass(frozen=True)
-class _GapSegmentContext:
-    segment_id_by_trace_idx: dict[int, int]
-    obs_indices_by_segment_id: dict[int, np.ndarray]
-    obs_key_by_segment_id: dict[int, tuple[int, ...]]
-
-
-@dataclass
-class _ObservationPlanCache:
-    offset_signed_labels: _SignedOffsetSideLabels | None = None
-    index_members: dict[tuple[int, ...], frozenset[int]] = field(
-        default_factory=dict,
-    )
-    signed_side_context: dict[
-        tuple[int, tuple[int, ...]], _SideObservationContext
-    ] = field(default_factory=dict)
-    geometry_side: dict[
-        tuple[tuple[int, ...], int],
-        tuple[np.ndarray, tuple[int, ...], int, bool],
-    ] = field(default_factory=dict)
-    gap_segment: dict[
-        tuple[tuple[int, ...], int, float, float | None],
-        tuple[np.ndarray, tuple[int, ...], int],
-    ] = field(default_factory=dict)
-    gap_context: dict[
-        tuple[tuple[int, ...], float, float | None],
-        _GapSegmentContext,
-    ] = field(default_factory=dict)
-
-
 @dataclass(frozen=True)
 class _FitCacheEntry:
     model: object | None
@@ -255,32 +180,6 @@ class _FitCacheEntry:
     fit_failed: bool
     diagnostics_computed: bool = False
     failure_reason: int | None = None
-
-
-@dataclass(frozen=True)
-class _PendingTrendFallbackRecord:
-    failure_reason: int
-    runtime_fit_source: int
-
-
-@dataclass
-class _PendingTrendFallback:
-    records: dict[int, _PendingTrendFallbackRecord] = field(default_factory=dict)
-
-    def add(
-        self,
-        trace_idx: int,
-        *,
-        failure_reason: int,
-        runtime_fit_source: int,
-    ) -> None:
-        self.records[int(trace_idx)] = _PendingTrendFallbackRecord(
-            failure_reason=int(failure_reason),
-            runtime_fit_source=int(runtime_fit_source),
-        )
-
-    def clear(self) -> None:
-        self.records.clear()
 
 
 @dataclass(frozen=True)
@@ -389,778 +288,6 @@ def _validate_table(table: CoarsePickTable) -> None:
         raise ValueError(msg)
 
 
-def _as_vector(name: str, value: np.ndarray, *, n_traces: int, dtype) -> np.ndarray:
-    arr = np.asarray(value, dtype=dtype)
-    if arr.ndim != 1 or int(arr.shape[0]) != int(n_traces):
-        msg = f'{name} must be 1D with length n_traces'
-        raise ValueError(msg)
-    return arr
-
-
-def _as_bool_vector(name: str, value: np.ndarray, *, n_traces: int) -> np.ndarray:
-    return _as_vector(name, value, n_traces=n_traces, dtype=np.bool_).astype(
-        np.bool_,
-        copy=False,
-    )
-
-
-def _is_valid_pick_i(value: int, *, n_samples_orig: int) -> bool:
-    return 0 <= int(value) < int(n_samples_orig)
-
-
-def _existing_fallback_trend(
-    trend: TrendResult,
-    trend_provider: object | None = None,
-) -> TrendResult:
-    if trend_provider is None:
-        return trend
-    return trend_provider.get(reason='fallback_existing_trend')
-
-
-def _use_full_trend_for_fallback_all(
-    trend_provider: object | None,
-    *,
-    n_traces: int,
-) -> bool:
-    if trend_provider is None:
-        return True
-    mode = str(getattr(trend_provider, 'fallback_existing_trend_mode', 'full'))
-    if mode == 'robust':
-        return False
-    if mode != 'partial':
-        return True
-
-    partial_cfg = getattr(trend_provider, '_partial_cfg', None)
-    if partial_cfg is None or not bool(partial_cfg.enabled):
-        return True
-    too_many = int(n_traces) > int(partial_cfg.max_traces)
-    provider_n_traces = getattr(trend_provider, '_n_traces', None)
-    total_traces = int(provider_n_traces) if provider_n_traces is not None else 0
-    if total_traces > 0:
-        too_many = too_many or (
-            float(n_traces) / float(total_traces)
-            > float(partial_cfg.max_fraction)
-        )
-    if not too_many:
-        return True
-    fallback = str(partial_cfg.fallback_if_too_many)
-    if fallback == 'full':
-        return True
-    if fallback == 'error':
-        msg = (
-            'partial trend fallback target count exceeds configured '
-            f'limits: n_targets={int(n_traces)}'
-        )
-        raise RuntimeError(msg)
-    record_too_many = getattr(
-        trend_provider,
-        'record_partial_too_many_robust_fallback',
-        None,
-    )
-    if record_too_many is not None:
-        record_too_many(int(n_traces))
-    return False
-
-
-def _partial_fallback_center_for_trace(
-    trace_idx: int,
-    *,
-    n_samples: int,
-    dt: float,
-    trend_provider: object | None,
-) -> tuple[bool, tuple[int, np.float32, int] | None]:
-    if trend_provider is None:
-        return False, None
-    get_partial = getattr(trend_provider, 'get_partial', None)
-    if get_partial is None:
-        return False, None
-    partial = get_partial(
-        np.asarray([int(trace_idx)], dtype=np.int64),
-        reason='fallback_existing_trend',
-    )
-    if partial is None:
-        return False, None
-
-    valid = np.asarray(partial.valid_mask, dtype=np.bool_).reshape(-1)
-    center_i = np.asarray(partial.center_i, dtype=np.int64).reshape(-1)
-    center_t = np.asarray(partial.center_t_sec, dtype=np.float32).reshape(-1)
-    if valid.size != 1 or center_i.size != 1 or center_t.size != 1:
-        msg = 'partial trend fallback must return one result per requested trace'
-        raise ValueError(msg)
-    sample_i = int(center_i[0])
-    sample_t = float(center_t[0])
-    if (
-        bool(valid[0])
-        and _is_valid_pick_i(sample_i, n_samples_orig=n_samples)
-        and np.isfinite(sample_t)
-    ):
-        return True, (
-            sample_i,
-            np.float32(sample_i * dt),
-            PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
-        )
-    return True, None
-
-
-def _fallback_center_without_existing_trend(
-    trace_idx: int,
-    *,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    merged: MergeResult,
-) -> tuple[int, np.float32, int]:
-    n_samples = int(table.n_samples_orig)
-    dt = float(table.dt_scalar_sec)
-    idx = int(trace_idx)
-    robust_i = int(np.asarray(merged.robust_pick_i, dtype=np.int64)[idx])
-    lo_sec = float(np.asarray(feasible.feasible_lo_sec, dtype=np.float32)[idx])
-    hi_sec = float(np.asarray(feasible.feasible_hi_sec, dtype=np.float32)[idx])
-    if np.isfinite(lo_sec) and np.isfinite(hi_sec) and lo_sec <= hi_sec:
-        lo_i = int(np.ceil(lo_sec / dt))
-        hi_i = int(np.floor(hi_sec / dt))
-        lo_i = int(np.clip(lo_i, 0, n_samples - 1))
-        hi_i = int(np.clip(hi_i, 0, n_samples - 1))
-        if lo_i <= hi_i:
-            clipped_i = int(np.clip(robust_i, lo_i, hi_i))
-            return (
-                clipped_i,
-                np.float32(clipped_i * dt),
-                PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP,
-            )
-
-    robust_i = int(np.clip(robust_i, 0, n_samples - 1))
-    return (
-        robust_i,
-        np.float32(robust_i * dt),
-        PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
-    )
-
-
-def _fallback_center_for_trace(
-    trace_idx: int,
-    *,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    merged: MergeResult,
-    trend_provider: object | None = None,
-) -> tuple[int, np.float32, int]:
-    n_samples = int(table.n_samples_orig)
-    dt = float(table.dt_scalar_sec)
-    idx = int(trace_idx)
-    partial_attempted, partial_center = _partial_fallback_center_for_trace(
-        idx,
-        n_samples=n_samples,
-        dt=dt,
-        trend_provider=trend_provider,
-    )
-    if partial_center is not None:
-        return partial_center
-
-    if not partial_attempted:
-        trend = _existing_fallback_trend(trend, trend_provider)
-
-        trend_i = int(np.asarray(trend.trend_center_i, dtype=np.int64)[idx])
-        trend_t = float(np.asarray(trend.trend_center_sec, dtype=np.float32)[idx])
-        if _is_valid_pick_i(trend_i, n_samples_orig=n_samples) and np.isfinite(
-            trend_t
-        ):
-            return (
-                trend_i,
-                np.float32(trend_i * dt),
-                PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
-            )
-
-    return _fallback_center_without_existing_trend(
-        idx,
-        table=table,
-        feasible=feasible,
-        merged=merged,
-    )
-
-
-def _allocate_result_arrays(table: CoarsePickTable) -> dict[str, np.ndarray]:
-    n = int(table.n_traces)
-    return {
-        'physical_center_i': np.zeros((n,), dtype=np.int32),
-        'physical_center_t_sec': np.zeros((n,), dtype=np.float32),
-        'fine_center_i': np.zeros((n,), dtype=np.int32),
-        'fine_center_t_sec': np.zeros((n,), dtype=np.float32),
-        'physical_model_status': np.zeros((n,), dtype=np.uint8),
-        'physical_model_failure_reason': np.zeros((n,), dtype=np.uint8),
-        'physical_offset_source': np.zeros((n,), dtype=np.uint8),
-        'physical_model_break_offset_m': np.full((n,), np.nan, dtype=np.float32),
-        'physical_model_slope_near_s_per_m': np.full((n,), np.nan, dtype=np.float32),
-        'physical_model_slope_far_s_per_m': np.full((n,), np.nan, dtype=np.float32),
-        'physical_model_velocity_near_m_s': np.full((n,), np.nan, dtype=np.float32),
-        'physical_model_velocity_far_m_s': np.full((n,), np.nan, dtype=np.float32),
-        'physical_model_neighbor_count': np.zeros((n,), dtype=np.int32),
-        'physical_prefilter_valid_count': np.zeros((n,), dtype=np.int32),
-        'physical_model_segment_id': np.full((n,), -1, dtype=np.int32),
-        'physical_model_side': np.zeros((n,), dtype=np.int8),
-        'physical_model_resid_p50_ms': np.full((n,), np.nan, dtype=np.float32),
-        'physical_model_resid_p90_ms': np.full((n,), np.nan, dtype=np.float32),
-        'physical_anchor_group_id': np.full((n,), -1, dtype=np.int32),
-        'physical_anchor_is_anchor': np.zeros((n,), dtype=np.bool_),
-        'physical_anchor_nearest_anchor_group_id': np.full((n,), -1, dtype=np.int32),
-        'physical_anchor_source_distance_m': np.full((n,), np.nan, dtype=np.float32),
-        'physical_runtime_t0_shift_ms': np.full((n,), np.nan, dtype=np.float32),
-        'physical_runtime_reuse_resid_p50_ms': np.full(
-            (n,),
-            np.nan,
-            dtype=np.float32,
-        ),
-        'physical_runtime_reuse_resid_p90_ms': np.full(
-            (n,),
-            np.nan,
-            dtype=np.float32,
-        ),
-        'physical_runtime_reuse_valid_count': np.zeros((n,), dtype=np.int32),
-        'physical_runtime_refit_mask': np.zeros((n,), dtype=np.bool_),
-        'physical_runtime_fit_source': np.zeros((n,), dtype=np.uint8),
-    }
-
-
-def _finalize_result(arrays: dict[str, np.ndarray]) -> PhysicalCenterResult:
-    arrays['fine_center_i'][:] = arrays['physical_center_i']
-    arrays['fine_center_t_sec'][:] = arrays['physical_center_t_sec']
-    return PhysicalCenterResult(**arrays)
-
-
-def _should_defer_partial_existing_trend(
-    trend_provider: object | None,
-) -> bool:
-    if trend_provider is None:
-        return False
-    mode = str(getattr(trend_provider, 'fallback_existing_trend_mode', 'full'))
-    if mode != 'partial':
-        return False
-    if getattr(trend_provider, 'get_partial', None) is None:
-        return False
-    partial_cfg = getattr(trend_provider, '_partial_cfg', None)
-    return partial_cfg is None or bool(partial_cfg.enabled)
-
-
-def _assign_fallback_values(
-    arrays: dict[str, np.ndarray],
-    trace_idx: int,
-    *,
-    center_i: int,
-    center_t: np.float32,
-    fallback_status: int,
-    failure_reason: int,
-    runtime_fit_source: int,
-) -> None:
-    arrays['physical_center_i'][trace_idx] = np.int32(center_i)
-    arrays['physical_center_t_sec'][trace_idx] = np.float32(center_t)
-    arrays['physical_model_status'][trace_idx] = np.uint8(fallback_status)
-    arrays['physical_model_failure_reason'][trace_idx] = np.uint8(failure_reason)
-    source = int(runtime_fit_source)
-    if fallback_status == PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST:
-        source = PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST
-    arrays['physical_runtime_fit_source'][trace_idx] = np.uint8(source)
-
-
-def _assign_deferred_existing_trend_placeholder(
-    arrays: dict[str, np.ndarray],
-    trace_idx: int,
-    *,
-    failure_reason: int,
-    runtime_fit_source: int,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    merged: MergeResult,
-) -> None:
-    center_i, center_t, _fallback_status = _fallback_center_without_existing_trend(
-        trace_idx,
-        table=table,
-        feasible=feasible,
-        merged=merged,
-    )
-    _assign_fallback_values(
-        arrays,
-        trace_idx,
-        center_i=center_i,
-        center_t=center_t,
-        fallback_status=PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
-        failure_reason=failure_reason,
-        runtime_fit_source=runtime_fit_source,
-    )
-
-
-def _assign_fallback(
-    arrays: dict[str, np.ndarray],
-    trace_idx: int,
-    *,
-    failure_reason: int,
-    runtime_fit_source: int = PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    merged: MergeResult,
-    trend_provider: object | None = None,
-    pending_trend_fallback: _PendingTrendFallback | None = None,
-) -> None:
-    if (
-        pending_trend_fallback is not None
-        and _should_defer_partial_existing_trend(trend_provider)
-    ):
-        pending_trend_fallback.add(
-            trace_idx,
-            failure_reason=failure_reason,
-            runtime_fit_source=runtime_fit_source,
-        )
-        _assign_deferred_existing_trend_placeholder(
-            arrays,
-            trace_idx,
-            failure_reason=failure_reason,
-            runtime_fit_source=runtime_fit_source,
-            table=table,
-            feasible=feasible,
-            merged=merged,
-        )
-        return
-
-    center_i, center_t, fallback_status = _fallback_center_for_trace(
-        trace_idx,
-        table=table,
-        feasible=feasible,
-        trend=trend,
-        trend_provider=trend_provider,
-        merged=merged,
-    )
-    _assign_fallback_values(
-        arrays,
-        trace_idx,
-        center_i=center_i,
-        center_t=center_t,
-        fallback_status=fallback_status,
-        failure_reason=failure_reason,
-        runtime_fit_source=runtime_fit_source,
-    )
-
-
-def _assign_robust_fallback(
-    arrays: dict[str, np.ndarray],
-    trace_idx: int,
-    *,
-    failure_reason: int,
-    table: CoarsePickTable,
-    merged: MergeResult,
-) -> None:
-    n_samples = int(table.n_samples_orig)
-    dt = float(table.dt_scalar_sec)
-    robust_i = int(np.asarray(merged.robust_pick_i, dtype=np.int64)[int(trace_idx)])
-    robust_i = int(np.clip(robust_i, 0, n_samples - 1))
-    arrays['physical_center_i'][trace_idx] = np.int32(robust_i)
-    arrays['physical_center_t_sec'][trace_idx] = np.float32(robust_i * dt)
-    arrays['physical_model_status'][trace_idx] = np.uint8(
-        PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST
-    )
-    arrays['physical_model_failure_reason'][trace_idx] = np.uint8(failure_reason)
-    arrays['physical_runtime_fit_source'][trace_idx] = np.uint8(
-        PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST
-    )
-
-
-def _partial_fallback_lookup(
-    partial: object,
-) -> dict[int, tuple[bool, int, float]]:
-    indices = np.asarray(partial.indices, dtype=np.int64).reshape(-1)
-    center_i = np.asarray(partial.center_i, dtype=np.int64).reshape(-1)
-    center_t = np.asarray(
-        partial.center_t_sec,
-        dtype=np.float32,
-    ).reshape(-1)
-    valid = np.asarray(partial.valid_mask, dtype=np.bool_).reshape(-1)
-    if not (
-        indices.shape == center_i.shape == center_t.shape == valid.shape
-    ):
-        msg = 'partial trend fallback arrays must have matching 1D shapes'
-        raise ValueError(msg)
-    return {
-        int(trace_idx): (bool(valid[pos]), int(center_i[pos]), float(center_t[pos]))
-        for pos, trace_idx in enumerate(indices.tolist())
-    }
-
-
-def _apply_pending_trend_fallback(
-    arrays: dict[str, np.ndarray],
-    *,
-    pending_trend_fallback: _PendingTrendFallback | None,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    merged: MergeResult,
-    trend_provider: object | None,
-) -> None:
-    if pending_trend_fallback is None or not pending_trend_fallback.records:
-        return
-
-    pending_items = [
-        (trace_idx, record)
-        for trace_idx, record in pending_trend_fallback.records.items()
-        if int(arrays['physical_model_status'][int(trace_idx)])
-        == PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND
-    ]
-    pending_trend_fallback.clear()
-    if not pending_items:
-        return
-
-    indices = np.asarray(
-        [trace_idx for trace_idx, _record in pending_items],
-        dtype=np.int64,
-    )
-    get_partial = (
-        None
-        if trend_provider is None
-        else getattr(trend_provider, 'get_partial', None)
-    )
-    partial = (
-        get_partial(indices, reason='fallback_existing_trend')
-        if get_partial is not None
-        else None
-    )
-    if partial is None:
-        trend = _existing_fallback_trend(trend, trend_provider)
-        for trace_idx, record in pending_items:
-            center_i, center_t, fallback_status = _fallback_center_for_trace(
-                trace_idx,
-                table=table,
-                feasible=feasible,
-                trend=trend,
-                trend_provider=None,
-                merged=merged,
-            )
-            _assign_fallback_values(
-                arrays,
-                trace_idx,
-                center_i=center_i,
-                center_t=center_t,
-                fallback_status=fallback_status,
-                failure_reason=record.failure_reason,
-                runtime_fit_source=record.runtime_fit_source,
-            )
-        return
-
-    partial_by_trace = _partial_fallback_lookup(partial)
-    n_samples = int(table.n_samples_orig)
-    dt = float(table.dt_scalar_sec)
-    for trace_idx, record in pending_items:
-        partial_value = partial_by_trace.get(int(trace_idx))
-        if partial_value is not None:
-            valid, center_i, center_t_sec = partial_value
-            if (
-                valid
-                and _is_valid_pick_i(center_i, n_samples_orig=n_samples)
-                and np.isfinite(center_t_sec)
-            ):
-                _assign_fallback_values(
-                    arrays,
-                    trace_idx,
-                    center_i=center_i,
-                    center_t=np.float32(center_i * dt),
-                    fallback_status=PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
-                    failure_reason=record.failure_reason,
-                    runtime_fit_source=record.runtime_fit_source,
-                )
-                continue
-
-        center_i, center_t, fallback_status = _fallback_center_without_existing_trend(
-            trace_idx,
-            table=table,
-            feasible=feasible,
-            merged=merged,
-        )
-        _assign_fallback_values(
-            arrays,
-            trace_idx,
-            center_i=center_i,
-            center_t=center_t,
-            fallback_status=fallback_status,
-            failure_reason=record.failure_reason,
-            runtime_fit_source=record.runtime_fit_source,
-        )
-
-
-def _finalize_result_with_pending_trend_fallback(
-    arrays: dict[str, np.ndarray],
-    *,
-    pending_trend_fallback: _PendingTrendFallback | None,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    merged: MergeResult,
-    trend_provider: object | None,
-) -> PhysicalCenterResult:
-    _apply_pending_trend_fallback(
-        arrays,
-        pending_trend_fallback=pending_trend_fallback,
-        table=table,
-        feasible=feasible,
-        trend=trend,
-        merged=merged,
-        trend_provider=trend_provider,
-    )
-    return _finalize_result(arrays)
-
-
-def _assign_fallback_all(
-    *,
-    failure_reason: int,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    merged: MergeResult,
-    trend_provider: object | None = None,
-) -> PhysicalCenterResult:
-    arrays = _allocate_result_arrays(table)
-    n = int(table.n_traces)
-    n_samples = int(table.n_samples_orig)
-    dt = float(table.dt_scalar_sec)
-    use_full_trend = _use_full_trend_for_fallback_all(
-        trend_provider,
-        n_traces=n,
-    )
-    if use_full_trend:
-        trend = _existing_fallback_trend(trend, trend_provider)
-    robust_i = _as_vector(
-        'merged.robust_pick_i',
-        merged.robust_pick_i,
-        n_traces=n,
-        dtype=np.int64,
-    )
-    lo_sec = _as_vector(
-        'feasible.feasible_lo_sec',
-        feasible.feasible_lo_sec,
-        n_traces=n,
-        dtype=np.float32,
-    )
-    hi_sec = _as_vector(
-        'feasible.feasible_hi_sec',
-        feasible.feasible_hi_sec,
-        n_traces=n,
-        dtype=np.float32,
-    )
-
-    center_i = np.clip(robust_i, 0, n_samples - 1).astype(np.int32)
-    status = np.full(
-        (n,),
-        np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST),
-        dtype=np.uint8,
-    )
-    fit_source = np.full(
-        (n,),
-        np.uint8(PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST),
-        dtype=np.uint8,
-    )
-
-    valid_band = np.isfinite(lo_sec) & np.isfinite(hi_sec) & (lo_sec <= hi_sec)
-    if bool(np.any(valid_band)):
-        lo_i = np.zeros((n,), dtype=np.int64)
-        hi_i = np.full((n,), n_samples - 1, dtype=np.int64)
-        with np.errstate(invalid='ignore'):
-            lo_i[valid_band] = np.clip(
-                np.ceil(lo_sec[valid_band] / np.float32(dt)),
-                0,
-                n_samples - 1,
-            ).astype(np.int64)
-            hi_i[valid_band] = np.clip(
-                np.floor(hi_sec[valid_band] / np.float32(dt)),
-                0,
-                n_samples - 1,
-            ).astype(np.int64)
-        valid_band &= lo_i <= hi_i
-        if bool(np.any(valid_band)):
-            clipped_i = np.clip(robust_i, lo_i, hi_i).astype(np.int32)
-            center_i[valid_band] = clipped_i[valid_band]
-            status[valid_band] = np.uint8(
-                PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP
-            )
-            fit_source[valid_band] = np.uint8(
-                PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
-            )
-
-    if use_full_trend:
-        trend_i = _as_vector(
-            'trend.trend_center_i',
-            trend.trend_center_i,
-            n_traces=n,
-            dtype=np.int64,
-        )
-        trend_t = _as_vector(
-            'trend.trend_center_sec',
-            trend.trend_center_sec,
-            n_traces=n,
-            dtype=np.float32,
-        )
-        valid_trend = (
-            (trend_i >= 0)
-            & (trend_i < n_samples)
-            & np.isfinite(trend_t)
-        )
-        center_i[valid_trend] = trend_i[valid_trend].astype(np.int32)
-        status[valid_trend] = np.uint8(
-            PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND
-        )
-        fit_source[valid_trend] = np.uint8(
-            PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
-        )
-
-    arrays['physical_center_i'][:] = center_i
-    arrays['physical_center_t_sec'][:] = (
-        center_i.astype(np.float64) * dt
-    )
-    arrays['physical_model_status'][:] = status
-    arrays['physical_model_failure_reason'][:] = np.uint8(failure_reason)
-    arrays['physical_runtime_fit_source'][:] = fit_source
-    return _finalize_result(arrays)
-
-
-def _assign_robust_fallback_all(
-    *,
-    failure_reason: int,
-    table: CoarsePickTable,
-    merged: MergeResult,
-) -> PhysicalCenterResult:
-    arrays = _allocate_result_arrays(table)
-    n = int(table.n_traces)
-    n_samples = int(table.n_samples_orig)
-    dt = float(table.dt_scalar_sec)
-    robust_i = _as_vector(
-        'merged.robust_pick_i',
-        merged.robust_pick_i,
-        n_traces=n,
-        dtype=np.int64,
-    )
-    center_i = np.clip(robust_i, 0, n_samples - 1).astype(np.int32)
-    arrays['physical_center_i'][:] = center_i
-    arrays['physical_center_t_sec'][:] = (
-        center_i.astype(np.float64) * dt
-    )
-    arrays['physical_model_status'][:] = np.uint8(
-        PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST
-    )
-    arrays['physical_model_failure_reason'][:] = np.uint8(failure_reason)
-    arrays['physical_runtime_fit_source'][:] = np.uint8(
-        PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST
-    )
-    return _finalize_result(arrays)
-
-
-def _build_disabled_result(
-    table: CoarsePickTable,
-    trend: TrendResult,
-) -> PhysicalCenterResult:
-    arrays = _allocate_result_arrays(table)
-    center_i = _as_vector(
-        'trend.trend_center_i',
-        trend.trend_center_i,
-        n_traces=table.n_traces,
-        dtype=np.int32,
-    )
-    center_t = _as_vector(
-        'trend.trend_center_sec',
-        trend.trend_center_sec,
-        n_traces=table.n_traces,
-        dtype=np.float32,
-    )
-    arrays['physical_center_i'][:] = center_i
-    arrays['physical_center_t_sec'][:] = center_t
-    arrays['physical_model_status'][:] = np.uint8(
-        PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED
-    )
-    arrays['physical_model_failure_reason'][:] = np.uint8(
-        PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED
-    )
-    arrays['physical_runtime_fit_source'][:] = np.uint8(
-        PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND
-    )
-    return _finalize_result(arrays)
-
-
-def _assign_configured_fallback_all(
-    *,
-    fallback_mode: str,
-    failure_reason: int,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    merged: MergeResult,
-    trend_provider: object | None = None,
-) -> PhysicalCenterResult:
-    if str(fallback_mode) == 'robust':
-        return _assign_robust_fallback_all(
-            failure_reason=failure_reason,
-            table=table,
-            merged=merged,
-        )
-    return _assign_fallback_all(
-        failure_reason=failure_reason,
-        table=table,
-        feasible=feasible,
-        trend=trend,
-        trend_provider=trend_provider,
-        merged=merged,
-    )
-
-
-def _emit_fallback_all_and_done(
-    *,
-    status: str,
-    reason: str,
-    fallback_mode: str,
-    failure_reason: int,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    merged: MergeResult,
-    reporter: object,
-    context: Mapping[str, object],
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
-    trend_provider: object | None = None,
-) -> PhysicalCenterResult:
-    n = int(table.n_traces)
-    reporter.emit(
-        'physical-center.stage_start',
-        **context,
-        stage='fallback_assign_all',
-        reason=reason,
-        fallback=fallback_mode,
-    )
-    stage_start = time.perf_counter()
-    with (
-        runtime_diagnostics.time_block('fallback_sec')
-        if runtime_diagnostics is not None
-        else nullcontext()
-    ):
-        result = _assign_configured_fallback_all(
-            fallback_mode=fallback_mode,
-            failure_reason=failure_reason,
-            table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
-        )
-    reporter.emit(
-        'physical-center.stage_done',
-        **context,
-        stage='fallback_assign_all',
-        reason=reason,
-        fallback=fallback_mode,
-        elapsed=time.perf_counter() - stage_start,
-        n_traces=n,
-    )
-    reporter.emit(
-        'physical-center.done',
-        **context,
-        status=status,
-        n_traces=n,
-    )
-    return result
-
-
 def _apply_anchor_selection_diagnostics(
     arrays: dict[str, np.ndarray],
     *,
@@ -1207,709 +334,6 @@ def _apply_anchor_selection_diagnostics(
     return result
 
 
-def _stable_unique(indices: np.ndarray) -> np.ndarray:
-    arr = np.asarray(indices, dtype=np.int64)
-    if arr.ndim != 1:
-        msg = 'indices must be 1D'
-        raise ValueError(msg)
-    seen: set[int] = set()
-    out: list[int] = []
-    for value in arr.tolist():
-        item = int(value)
-        if item in seen:
-            continue
-        seen.add(item)
-        out.append(item)
-    return np.asarray(out, dtype=np.int64)
-
-
-def _append_index(indices: np.ndarray, trace_idx: int) -> np.ndarray:
-    return _stable_unique(
-        np.concatenate(
-            [
-                np.asarray(indices, dtype=np.int64),
-                np.asarray([int(trace_idx)], dtype=np.int64),
-            ]
-        )
-    )
-
-
-def _indices_key(indices: np.ndarray) -> tuple[int, ...]:
-    return tuple(np.asarray(indices, dtype=np.int64).tolist())
-
-
-def _concat_group_traces(
-    group_ids: np.ndarray,
-    *,
-    groups_by_id: Mapping[int, SourceGroup],
-) -> np.ndarray:
-    chunks: list[np.ndarray] = []
-    for group_id in np.asarray(group_ids, dtype=np.int64).tolist():
-        group = groups_by_id.get(int(group_id))
-        if group is None:
-            continue
-        chunks.append(np.asarray(group.trace_indices, dtype=np.int64))
-    if not chunks:
-        return np.zeros((0,), dtype=np.int64)
-    return _stable_unique(np.concatenate(chunks))
-
-
-def _trace_position_map(indices: np.ndarray) -> dict[int, int]:
-    return {int(trace_idx): int(pos) for pos, trace_idx in enumerate(indices.tolist())}
-
-
-def _obs_key_or_build(
-    obs_indices: np.ndarray,
-    obs_key: tuple[int, ...] | None,
-) -> tuple[int, ...]:
-    if obs_key is not None:
-        return obs_key
-    return _indices_key(obs_indices)
-
-
-def _index_key_contains(
-    *,
-    obs_key: tuple[int, ...],
-    trace_idx: int,
-    cache: _ObservationPlanCache,
-) -> bool:
-    members = cache.index_members.get(obs_key)
-    if members is None:
-        members = frozenset(obs_key)
-        cache.index_members[obs_key] = members
-    return int(trace_idx) in members
-
-
-def _side_slot(side: int) -> int:
-    value = int(side)
-    if value < -1 or value > 1:
-        msg = 'side must be -1, 0, or 1'
-        raise ValueError(msg)
-    return value + 1
-
-
-def _signed_offset_side_labels(
-    signed_offset_m: np.ndarray,
-    *,
-    zero_tol_m: float = 1.0e-6,
-    finite_mask: np.ndarray | None = None,
-) -> _SignedOffsetSideLabels:
-    signed = np.asarray(signed_offset_m, dtype=np.float32)
-    if signed.ndim != 1:
-        msg = 'signed_offset_m must be 1D'
-        raise ValueError(msg)
-
-    zero_tol = float(zero_tol_m)
-    if zero_tol < 0.0 or not np.isfinite(zero_tol):
-        msg = 'zero_tol_m must be finite and >= 0'
-        raise ValueError(msg)
-
-    finite = np.isfinite(signed)
-    if finite_mask is not None:
-        mask = np.asarray(finite_mask, dtype=np.bool_)
-        if mask.shape != signed.shape:
-            msg = 'finite_mask must have the same shape as signed_offset_m'
-            raise ValueError(msg)
-        finite = finite & mask
-
-    side = np.zeros(signed.shape, dtype=np.int8)
-    signed_valid = np.asarray(signed[finite], dtype=np.float64)
-    side[finite] = np.where(
-        np.abs(signed_valid) <= zero_tol,
-        0,
-        np.where(signed_valid < 0.0, -1, 1),
-    ).astype(np.int8)
-    return _SignedOffsetSideLabels(side=side, finite=finite)
-
-
-def _filtered_obs_key(
-    *,
-    obs_indices: np.ndarray,
-    obs_key: tuple[int, ...],
-    keep_mask: np.ndarray,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
-) -> tuple[np.ndarray, tuple[int, ...]]:
-    obs = np.asarray(obs_indices, dtype=np.int64)
-    mask = np.asarray(keep_mask, dtype=np.bool_)
-    if mask.shape != obs.shape:
-        msg = 'keep_mask must match obs_indices shape'
-        raise ValueError(msg)
-    if bool(np.all(mask)):
-        return obs, obs_key
-    filtered = obs[mask]
-    with (
-        runtime_diagnostics.time_block('side_segment_key_build_sec')
-        if runtime_diagnostics is not None
-        else nullcontext()
-    ):
-        filtered_key = _indices_key(filtered)
-    return filtered, filtered_key
-
-
-def _build_side_observation_context(
-    *,
-    labels: _SignedOffsetSideLabels,
-    obs_indices: np.ndarray,
-    obs_key: tuple[int, ...],
-    cache: _ObservationPlanCache,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
-) -> _SideObservationContext:
-    cache_key = (id(labels.side), obs_key)
-    cached = cache.signed_side_context.get(cache_key)
-    if cached is not None:
-        if runtime_diagnostics is not None:
-            runtime_diagnostics.inc('n_side_context_cache_hits')
-        return cached
-
-    if runtime_diagnostics is not None:
-        runtime_diagnostics.inc('n_side_context_cache_misses')
-    with (
-        runtime_diagnostics.time_block('side_filter_precompute_sec')
-        if runtime_diagnostics is not None
-        else nullcontext()
-    ):
-        obs = np.asarray(obs_indices, dtype=np.int64)
-        finite_count = int(np.count_nonzero(labels.finite[obs]))
-        nonzero_count = int(np.count_nonzero(labels.side[obs] != 0))
-        obs_by_side: list[np.ndarray] = []
-        key_by_side: list[tuple[int, ...]] = []
-        for side in (-1, 0, 1):
-            side_obs, side_key = _filtered_obs_key(
-                obs_indices=obs,
-                obs_key=obs_key,
-                keep_mask=labels.side[obs] == int(side),
-                runtime_diagnostics=runtime_diagnostics,
-            )
-            obs_by_side.append(side_obs)
-            key_by_side.append(side_key)
-            if runtime_diagnostics is not None:
-                runtime_diagnostics.record_side_obs_count(int(side_obs.size))
-        context = _SideObservationContext(
-            obs_indices_by_side=tuple(obs_by_side),  # type: ignore[arg-type]
-            obs_key_by_side=tuple(key_by_side),  # type: ignore[arg-type]
-            finite_count=finite_count,
-            nonzero_count=nonzero_count,
-        )
-    cache.signed_side_context[cache_key] = context
-    if runtime_diagnostics is not None:
-        runtime_diagnostics.inc('n_side_contexts_built')
-        runtime_diagnostics.inc(
-            'n_side_gap_precomputed_fit_keys',
-            len(set(context.obs_key_by_side)),
-        )
-    return context
-
-
-def _obs_with_target_labeled_side(
-    *,
-    trace_idx: int,
-    obs_indices: np.ndarray,
-    obs_key: tuple[int, ...],
-    labels: _SignedOffsetSideLabels,
-    cache: _ObservationPlanCache,
-    min_finite_count: int,
-    side_context: _SideObservationContext | None = None,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
-) -> tuple[np.ndarray, tuple[int, ...], int, bool]:
-    trace = int(trace_idx)
-    obs = np.asarray(obs_indices, dtype=np.int64)
-    if side_context is not None:
-        if runtime_diagnostics is not None:
-            runtime_diagnostics.inc('n_side_context_lookup_calls')
-        context = side_context
-    else:
-        context = _build_side_observation_context(
-            labels=labels,
-            obs_indices=obs,
-            obs_key=obs_key,
-            cache=cache,
-            runtime_diagnostics=runtime_diagnostics,
-        )
-    finite_count = int(context.finite_count)
-    nonzero_count = int(context.nonzero_count)
-    if not _index_key_contains(obs_key=obs_key, trace_idx=trace, cache=cache):
-        if bool(labels.finite[trace]):
-            finite_count += 1
-        if int(labels.side[trace]) != 0:
-            nonzero_count += 1
-
-    if finite_count < int(min_finite_count) or nonzero_count == 0:
-        return obs, obs_key, 0, False
-
-    target_side = int(labels.side[trace])
-    with (
-        runtime_diagnostics.time_block('side_filter_lookup_sec')
-        if runtime_diagnostics is not None
-        else nullcontext()
-    ):
-        side_slot = _side_slot(target_side)
-        side_obs = context.obs_indices_by_side[side_slot]
-        side_obs_key = context.obs_key_by_side[side_slot]
-    return side_obs, side_obs_key, target_side, True
-
-
-def _select_group_ids(
-    *,
-    groups: tuple[SourceGroup, ...],
-    target_group_id: int,
-    cfg: PhysicsLiteConfig,
-    use_neighbor_context: bool,
-) -> np.ndarray:
-    if not bool(use_neighbor_context) or not bool(cfg.neighbor_context.enabled):
-        return np.asarray([int(target_group_id)], dtype=np.int64)
-    return select_nearest_source_groups(
-        groups,
-        target_group_id=int(target_group_id),
-        k_neighbors=int(cfg.neighbor_context.k_neighbors),
-        max_source_distance_m=cfg.neighbor_context.max_source_distance_m,
-        include_self=bool(cfg.neighbor_context.include_self),
-    )
-
-
-def _build_group_observation_contexts(
-    *,
-    groups: tuple[SourceGroup, ...],
-    groups_by_id: Mapping[int, SourceGroup],
-    valid_for_fit: np.ndarray,
-    cfg: PhysicsLiteConfig,
-    use_neighbor_context: bool,
-    offset_signed_labels: _SignedOffsetSideLabels | None = None,
-    plan_cache: _ObservationPlanCache | None = None,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
-) -> dict[int, _GroupObservationContext]:
-    valid_mask = np.asarray(valid_for_fit, dtype=np.bool_)
-    observation_cache = (
-        plan_cache if plan_cache is not None else _ObservationPlanCache()
-    )
-    contexts: dict[int, _GroupObservationContext] = {}
-    for group in groups:
-        group_id = int(group.group_id)
-        neighbor_group_ids = _select_group_ids(
-            groups=groups,
-            target_group_id=group_id,
-            cfg=cfg,
-            use_neighbor_context=use_neighbor_context,
-        )
-        neighbor_indices = _concat_group_traces(
-            neighbor_group_ids,
-            groups_by_id=groups_by_id,
-        )
-        valid_obs_indices = neighbor_indices[valid_mask[neighbor_indices]]
-        valid_obs_key = _indices_key(valid_obs_indices)
-        side_context = None
-        if offset_signed_labels is not None and bool(
-            cfg.physical_trend.segment_by_offset_sign
-        ):
-            side_context = _build_side_observation_context(
-                labels=offset_signed_labels,
-                obs_indices=valid_obs_indices,
-                obs_key=valid_obs_key,
-                cache=observation_cache,
-                runtime_diagnostics=runtime_diagnostics,
-            )
-        contexts[group_id] = _GroupObservationContext(
-            group_id=group_id,
-            neighbor_group_ids=neighbor_group_ids,
-            neighbor_indices=neighbor_indices,
-            valid_obs_indices=valid_obs_indices,
-            valid_obs_key=valid_obs_key,
-            neighbor_count=int(neighbor_group_ids.size),
-            prefilter_valid_count=int(valid_obs_indices.size),
-            side_context=side_context,
-        )
-    return contexts
-
-
-def _obs_with_target_side(
-    *,
-    trace_idx: int,
-    obs_indices: np.ndarray,
-    geometry: CoarseGeometry,
-    obs_key: tuple[int, ...] | None = None,
-    cache: _ObservationPlanCache | None = None,
-) -> tuple[np.ndarray, tuple[int, ...], int, bool]:
-    plan_cache = cache if cache is not None else _ObservationPlanCache()
-    key = _obs_key_or_build(obs_indices, obs_key)
-    cache_key = (key, int(trace_idx))
-    cached = plan_cache.geometry_side.get(cache_key)
-    if cached is not None:
-        return cached
-
-    obs = np.asarray(obs_indices, dtype=np.int64)
-    context_indices = _append_index(obs_indices, trace_idx)
-    signed = signed_offset_side_from_geometry(geometry, context_indices)
-    if not bool(signed.reliable):
-        result = (obs, key, 0, False)
-        plan_cache.geometry_side[cache_key] = result
-        return result
-
-    pos = _trace_position_map(context_indices)
-    target_side = int(signed.side[pos[int(trace_idx)]])
-    obs_side = np.asarray(
-        [int(signed.side[pos[int(obs_idx)]]) for obs_idx in obs.tolist()],
-        dtype=np.int8,
-    )
-    side_obs, side_obs_key = _filtered_obs_key(
-        obs_indices=obs,
-        obs_key=key,
-        keep_mask=obs_side == target_side,
-    )
-    result = (side_obs, side_obs_key, target_side, True)
-    plan_cache.geometry_side[cache_key] = result
-    return result
-
-
-def _obs_with_target_signed_offset_side(
-    *,
-    trace_idx: int,
-    obs_indices: np.ndarray,
-    signed_offset_m: np.ndarray,
-    zero_tol_m: float = 1.0e-6,
-    obs_key: tuple[int, ...] | None = None,
-    cache: _ObservationPlanCache | None = None,
-    labels: _SignedOffsetSideLabels | None = None,
-    finite_mask: np.ndarray | None = None,
-    min_finite_count: int = 2,
-    side_context: _SideObservationContext | None = None,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
-) -> tuple[np.ndarray, tuple[int, ...], int, bool]:
-    plan_cache = cache if cache is not None else _ObservationPlanCache()
-    if labels is not None:
-        plan_cache.offset_signed_labels = labels
-    elif plan_cache.offset_signed_labels is None:
-        plan_cache.offset_signed_labels = _signed_offset_side_labels(
-            signed_offset_m,
-            zero_tol_m=zero_tol_m,
-            finite_mask=finite_mask,
-        )
-    key = _obs_key_or_build(obs_indices, obs_key)
-    return _obs_with_target_labeled_side(
-        trace_idx=trace_idx,
-        obs_indices=obs_indices,
-        obs_key=key,
-        labels=plan_cache.offset_signed_labels,
-        cache=plan_cache,
-        min_finite_count=int(min_finite_count),
-        side_context=side_context,
-        runtime_diagnostics=runtime_diagnostics,
-    )
-
-
-def _gap_context_key(
-    *,
-    obs_key: tuple[int, ...],
-    cfg: PhysicsLiteConfig,
-) -> tuple[tuple[int, ...], float, float | None]:
-    min_gap = cfg.physical_trend.min_gap_m
-    return (
-        obs_key,
-        float(cfg.physical_trend.gap_ratio),
-        None if min_gap is None else float(min_gap),
-    )
-
-
-def _build_gap_segment_context(
-    *,
-    obs_indices: np.ndarray,
-    obs_key: tuple[int, ...],
-    offset_abs_m: np.ndarray,
-    cfg: PhysicsLiteConfig,
-    cache: _ObservationPlanCache,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
-) -> _GapSegmentContext:
-    cache_key = _gap_context_key(obs_key=obs_key, cfg=cfg)
-    cached = cache.gap_context.get(cache_key)
-    if cached is not None:
-        if runtime_diagnostics is not None:
-            runtime_diagnostics.inc('n_gap_context_cache_hits')
-        return cached
-
-    if runtime_diagnostics is not None:
-        runtime_diagnostics.inc('n_gap_context_cache_misses')
-    with (
-        runtime_diagnostics.time_block('gap_segment_precompute_sec')
-        if runtime_diagnostics is not None
-        else nullcontext()
-    ):
-        obs = np.asarray(obs_indices, dtype=np.int64)
-        segment_id = split_offset_gap_segments(
-            np.asarray(offset_abs_m, dtype=np.float32)[obs],
-            split_by_offset_gap=bool(cfg.physical_trend.split_by_offset_gap),
-            gap_ratio=float(cfg.physical_trend.gap_ratio),
-            min_gap_m=cfg.physical_trend.min_gap_m,
-        )
-        segment_id_by_trace_idx = {
-            int(trace_idx): int(seg_id)
-            for trace_idx, seg_id in zip(
-                obs.tolist(),
-                segment_id.tolist(),
-                strict=True,
-            )
-        }
-        obs_indices_by_segment_id: dict[int, np.ndarray] = {}
-        obs_key_by_segment_id: dict[int, tuple[int, ...]] = {}
-        for seg_id in np.unique(segment_id).astype(np.int64).tolist():
-            segment_obs, segment_key = _filtered_obs_key(
-                obs_indices=obs,
-                obs_key=obs_key,
-                keep_mask=segment_id == int(seg_id),
-                runtime_diagnostics=runtime_diagnostics,
-            )
-            obs_indices_by_segment_id[int(seg_id)] = segment_obs
-            obs_key_by_segment_id[int(seg_id)] = segment_key
-            if runtime_diagnostics is not None:
-                runtime_diagnostics.record_gap_segment_obs_count(
-                    int(segment_obs.size)
-                )
-        context = _GapSegmentContext(
-            segment_id_by_trace_idx=segment_id_by_trace_idx,
-            obs_indices_by_segment_id=obs_indices_by_segment_id,
-            obs_key_by_segment_id=obs_key_by_segment_id,
-        )
-    cache.gap_context[cache_key] = context
-    if runtime_diagnostics is not None:
-        runtime_diagnostics.inc('n_gap_contexts_built')
-        runtime_diagnostics.inc(
-            'n_side_gap_precomputed_fit_keys',
-            len(context.obs_key_by_segment_id),
-        )
-    return context
-
-
-def _obs_with_target_gap_segment(
-    *,
-    trace_idx: int,
-    obs_indices: np.ndarray,
-    offset_abs_m: np.ndarray,
-    cfg: PhysicsLiteConfig,
-    obs_key: tuple[int, ...] | None = None,
-    cache: _ObservationPlanCache | None = None,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
-) -> tuple[np.ndarray, tuple[int, ...], int]:
-    plan_cache = cache if cache is not None else _ObservationPlanCache()
-    key = _obs_key_or_build(obs_indices, obs_key)
-    min_gap = cfg.physical_trend.min_gap_m
-    fallback_gap_key = (
-        key,
-        int(trace_idx),
-        float(cfg.physical_trend.gap_ratio),
-        None if min_gap is None else float(min_gap),
-    )
-    obs = np.asarray(obs_indices, dtype=np.int64)
-    if _index_key_contains(obs_key=key, trace_idx=int(trace_idx), cache=plan_cache):
-        if runtime_diagnostics is not None:
-            runtime_diagnostics.inc('n_gap_trace_in_obs')
-            runtime_diagnostics.inc('n_gap_fast_path_calls')
-        context = _build_gap_segment_context(
-            obs_indices=obs,
-            obs_key=key,
-            offset_abs_m=offset_abs_m,
-            cfg=cfg,
-            cache=plan_cache,
-            runtime_diagnostics=runtime_diagnostics,
-        )
-        with (
-            runtime_diagnostics.time_block('gap_segment_lookup_sec')
-            if runtime_diagnostics is not None
-            else nullcontext()
-        ):
-            target_segment_id = int(
-                context.segment_id_by_trace_idx[int(trace_idx)]
-            )
-            return (
-                context.obs_indices_by_segment_id[target_segment_id],
-                context.obs_key_by_segment_id[target_segment_id],
-                target_segment_id,
-            )
-
-    if runtime_diagnostics is not None:
-        runtime_diagnostics.inc('n_gap_trace_not_in_obs')
-        runtime_diagnostics.inc('n_gap_fallback_calls')
-    cached = plan_cache.gap_segment.get(fallback_gap_key)
-    if cached is not None:
-        return cached
-
-    with (
-        runtime_diagnostics.time_block('gap_segment_fallback_sec')
-        if runtime_diagnostics is not None
-        else nullcontext()
-    ):
-        context_indices = _append_index(obs_indices, trace_idx)
-        segment_id = split_offset_gap_segments(
-            np.asarray(offset_abs_m, dtype=np.float32)[context_indices],
-            split_by_offset_gap=bool(cfg.physical_trend.split_by_offset_gap),
-            gap_ratio=float(cfg.physical_trend.gap_ratio),
-            min_gap_m=cfg.physical_trend.min_gap_m,
-        )
-        pos = _trace_position_map(context_indices)
-        target_segment_id = int(segment_id[pos[int(trace_idx)]])
-        obs_segment_id = np.asarray(
-            [int(segment_id[pos[int(obs_idx)]]) for obs_idx in obs.tolist()],
-            dtype=np.int64,
-        )
-        segment_obs, segment_obs_key = _filtered_obs_key(
-            obs_indices=obs,
-            obs_key=key,
-            keep_mask=obs_segment_id == target_segment_id,
-            runtime_diagnostics=runtime_diagnostics,
-        )
-        result = (segment_obs, segment_obs_key, target_segment_id)
-    plan_cache.gap_segment[fallback_gap_key] = result
-    return result
-
-
-def _build_observation_plan(
-    *,
-    trace_idx: int,
-    target_group_id: int,
-    group_context_by_id: Mapping[int, _GroupObservationContext],
-    geometry: CoarseGeometry | None,
-    offset_abs_m: np.ndarray,
-    offset_signed_m: np.ndarray | None,
-    cfg: PhysicsLiteConfig,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
-    plan_cache: _ObservationPlanCache | None = None,
-) -> _ObservationPlan | None:
-    observation_cache = (
-        plan_cache if plan_cache is not None else _ObservationPlanCache()
-    )
-    with (
-        runtime_diagnostics.time_block('neighbor_plan_sec')
-        if runtime_diagnostics is not None
-        else nullcontext()
-    ):
-        group_context = group_context_by_id.get(int(target_group_id))
-    if group_context is None:
-        msg = f'observation context not found for group_id={int(target_group_id)}'
-        raise ValueError(msg)
-
-    valid_obs = group_context.valid_obs_indices
-    valid_obs_key = group_context.valid_obs_key
-    neighbor_count = int(group_context.neighbor_count)
-    prefilter_valid_count = int(group_context.prefilter_valid_count)
-    min_fit_obs = 2 * _fit_min_pts(cfg)
-
-    if prefilter_valid_count < min_fit_obs:
-        return _ObservationPlan(
-            obs_indices=valid_obs,
-            obs_key=valid_obs_key,
-            neighbor_count=neighbor_count,
-            prefilter_valid_count=prefilter_valid_count,
-            segment_id=-1,
-            side=0,
-            relaxed=False,
-        )
-
-    side_obs = valid_obs
-    side_obs_key = valid_obs_key
-    side = 0
-    side_reliable = False
-    with (
-        runtime_diagnostics.time_block('side_segment_build_sec')
-        if runtime_diagnostics is not None
-        else nullcontext()
-    ):
-        if bool(cfg.physical_trend.segment_by_offset_sign):
-            if offset_signed_m is not None:
-                (
-                    side_obs,
-                    side_obs_key,
-                    side,
-                    side_reliable,
-                ) = _obs_with_target_signed_offset_side(
-                    trace_idx=trace_idx,
-                    obs_indices=valid_obs,
-                    signed_offset_m=offset_signed_m,
-                    obs_key=valid_obs_key,
-                    cache=observation_cache,
-                    labels=observation_cache.offset_signed_labels,
-                    min_finite_count=(
-                        1
-                        if (
-                            geometry is not None
-                            and bool(cfg.physical_trend.use_geometry_offset)
-                            and geometry.offset_signed_geom_m is not None
-                        )
-                        else 2
-                    ),
-                    side_context=group_context.side_context,
-                    runtime_diagnostics=runtime_diagnostics,
-                )
-            elif geometry is not None:
-                (
-                    side_obs,
-                    side_obs_key,
-                    side,
-                    side_reliable,
-                ) = _obs_with_target_side(
-                    trace_idx=trace_idx,
-                    obs_indices=valid_obs,
-                    geometry=geometry,
-                    obs_key=valid_obs_key,
-                    cache=observation_cache,
-                )
-
-        segment_obs = side_obs
-        segment_obs_key = side_obs_key
-        segment_id = 0
-        if bool(cfg.physical_trend.split_by_offset_gap):
-            segment_obs, segment_obs_key, segment_id = _obs_with_target_gap_segment(
-                trace_idx=trace_idx,
-                obs_indices=side_obs,
-                obs_key=side_obs_key,
-                offset_abs_m=offset_abs_m,
-                cfg=cfg,
-                cache=observation_cache,
-                runtime_diagnostics=runtime_diagnostics,
-            )
-
-    if int(segment_obs.size) >= min_fit_obs:
-        return _ObservationPlan(
-            obs_indices=segment_obs,
-            obs_key=segment_obs_key,
-            neighbor_count=neighbor_count,
-            prefilter_valid_count=prefilter_valid_count,
-            segment_id=segment_id,
-            side=side,
-            relaxed=False,
-        )
-
-    if (
-        bool(cfg.physical_trend.split_by_offset_gap)
-        and int(side_obs.size) >= min_fit_obs
-    ):
-        return _ObservationPlan(
-            obs_indices=side_obs,
-            obs_key=side_obs_key,
-            neighbor_count=neighbor_count,
-            prefilter_valid_count=prefilter_valid_count,
-            segment_id=0,
-            side=side,
-            relaxed=True,
-        )
-
-    if side_reliable and int(valid_obs.size) >= min_fit_obs:
-        return _ObservationPlan(
-            obs_indices=valid_obs,
-            obs_key=valid_obs_key,
-            neighbor_count=neighbor_count,
-            prefilter_valid_count=prefilter_valid_count,
-            segment_id=0,
-            side=0,
-            relaxed=True,
-        )
-
-    return _ObservationPlan(
-        obs_indices=segment_obs,
-        obs_key=segment_obs_key,
-        neighbor_count=neighbor_count,
-        prefilter_valid_count=prefilter_valid_count,
-        segment_id=segment_id,
-        side=side,
-        relaxed=False,
-    )
-
-
 def _tensor_to_numpy(value) -> np.ndarray:
     if hasattr(value, 'detach'):
         return value.detach().cpu().numpy()
@@ -1923,6 +347,35 @@ def _fit_min_pts(cfg: PhysicsLiteConfig) -> int:
     if cfg.physical_trend.fit_kind == 'two_piece_irls_autobreak':
         return int(cfg.two_piece_irls.min_pts)
     return int(cfg.two_piece_ransac.min_pts)
+
+
+def _build_observation_plan(
+    *,
+    trace_idx: int,
+    target_group_id: int,
+    group_context_by_id: Mapping[int, _GroupObservationContext],
+    geometry: CoarseGeometry | None,
+    offset_abs_m: np.ndarray,
+    offset_signed_m: np.ndarray | None,
+    cfg: PhysicsLiteConfig,
+    runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
+    plan_cache: _ObservationPlanCache | None = None,
+    min_fit_obs: int | None = None,
+) -> _ObservationPlan | None:
+    return _build_observation_plan_with_min_obs(
+        trace_idx=trace_idx,
+        target_group_id=target_group_id,
+        group_context_by_id=group_context_by_id,
+        geometry=geometry,
+        offset_abs_m=offset_abs_m,
+        offset_signed_m=offset_signed_m,
+        cfg=cfg,
+        min_fit_obs=(
+            2 * _fit_min_pts(cfg) if min_fit_obs is None else int(min_fit_obs)
+        ),
+        runtime_diagnostics=runtime_diagnostics,
+        plan_cache=plan_cache,
+    )
 
 
 def _fit_strategy(cfg: PhysicsLiteConfig) -> _PhysicalFitStrategy:
@@ -3915,114 +2368,19 @@ def _adaptive_refit_triggered(
     return bool(resid_trigger or shift_trigger or insufficient_trigger)
 
 
-def _table_offset_abs_m(table: CoarsePickTable, *, n_traces: int) -> np.ndarray:
-    offset_m = _as_vector(
-        'table.offset_m',
-        table.offset_m,
-        n_traces=n_traces,
-        dtype=np.float32,
-    )
-    return np.abs(offset_m).astype(np.float32, copy=False)
-
-
-def _build_table_source_groups(
-    table: CoarsePickTable,
-    *,
-    n_traces: int,
-) -> tuple[SourceGroup, ...]:
-    shot_id = _as_vector(
-        'table.shot_id',
-        table.shot_id,
-        n_traces=n_traces,
-        dtype=np.int32,
-    )
-    groups: list[SourceGroup] = []
-    seen: set[int] = set()
-    for shot in shot_id.tolist():
-        shot_int = int(shot)
-        if shot_int in seen:
-            continue
-        seen.add(shot_int)
-        trace_indices = np.flatnonzero(shot_id == np.int32(shot_int)).astype(
-            np.int64,
-            copy=False,
-        )
-        group_id = len(groups)
-        groups.append(
-            SourceGroup(
-                group_id=group_id,
-                source_key_x=shot_int,
-                source_key_y=0,
-                source_x_m=float(group_id),
-                source_y_m=0.0,
-                trace_indices=trace_indices,
-            )
-        )
-    return tuple(groups)
-
-
-def _load_source_group_geometry_from_npz(
-    coarse_npz: Mapping[str, np.ndarray],
-    *,
-    n_traces: int,
-) -> CoarseGeometry | None:
-    if 'source_x_m' not in coarse_npz or 'source_y_m' not in coarse_npz:
-        return None
-    try:
-        source_x_m = _as_vector(
-            'source_x_m',
-            coarse_npz['source_x_m'],
-            n_traces=n_traces,
-            dtype=np.float32,
-        )
-        source_y_m = _as_vector(
-            'source_y_m',
-            coarse_npz['source_y_m'],
-            n_traces=n_traces,
-            dtype=np.float32,
-        )
-        if 'geometry_valid_mask' in coarse_npz:
-            geometry_valid_mask = _as_bool_vector(
-                'geometry_valid_mask',
-                coarse_npz['geometry_valid_mask'],
-                n_traces=n_traces,
-            )
-        else:
-            geometry_valid_mask = np.ones((n_traces,), dtype=np.bool_)
-    except (TypeError, ValueError):
-        return None
-
-    geometry_valid_mask = (
-        geometry_valid_mask
-        & np.isfinite(source_x_m)
-        & np.isfinite(source_y_m)
-    ).astype(np.bool_, copy=False)
-    zeros = np.zeros((n_traces,), dtype=np.float32)
-    return CoarseGeometry(
-        source_x_m=source_x_m,
-        source_y_m=source_y_m,
-        receiver_x_m=zeros,
-        receiver_y_m=zeros.copy(),
-        offset_abs_geom_m=zeros.copy(),
-        geometry_valid_mask=geometry_valid_mask,
-        offset_signed_geom_m=None,
-    )
-
-
 def preflight_geometry_two_piece_fallback(
     *,
     coarse_npz: Mapping[str, np.ndarray],
     table: CoarsePickTable,
     cfg: PhysicsLiteConfig,
 ) -> PhysicalCenterFallbackPreflight:
-    n = int(table.n_traces)
-    use_geometry_offset = bool(cfg.physical_trend.use_geometry_offset)
-    try:
-        geometry = load_coarse_geometry_from_npz(coarse_npz, n_traces=n)
-    except (KeyError, TypeError, ValueError):
-        geometry = None
-
-    if use_geometry_offset and geometry is None:
+    geometry_context = build_physical_center_geometry_context(
+        coarse_npz=coarse_npz,
+        table=table,
+        cfg=cfg,
+        include_offsets=False,
+    )
+    if geometry_context.geometry_required_missing:
         return PhysicalCenterFallbackPreflight(
             status='geometry_invalid',
             reason='geometry_invalid',
@@ -4031,53 +2389,28 @@ def preflight_geometry_two_piece_fallback(
             groups=None,
         )
 
-    source_grouping_invalid = False
-    groups: tuple[SourceGroup, ...] = ()
-    source_group_geometry = geometry
-    if source_group_geometry is None and not use_geometry_offset:
-        source_group_geometry = _load_source_group_geometry_from_npz(
-            coarse_npz,
-            n_traces=n,
-        )
-    if source_group_geometry is not None:
-        coord_group_tol_m = float(cfg.physical_trend.coord_group_tol_m)
-        source_xy_degenerate = is_source_xy_degenerate(
-            source_group_geometry,
-            table=table,
-            coord_group_tol_m=coord_group_tol_m,
-        )
-        if source_xy_degenerate and use_geometry_offset:
-            source_grouping_invalid = True
-        if not source_xy_degenerate:
-            groups = build_source_groups(
-                source_group_geometry,
-                coord_group_tol_m=coord_group_tol_m,
-            )
-    if len(groups) == 0 and not use_geometry_offset:
-        groups = _build_table_source_groups(table, n_traces=n)
-
-    if source_grouping_invalid:
+    if geometry_context.source_grouping_invalid:
         return PhysicalCenterFallbackPreflight(
             status='geometry_invalid',
             reason='source_xy_degenerate',
             fallback_mode=str(cfg.physical_runtime.geometry_invalid_fallback),
-            geometry_loaded=geometry is not None,
-            groups=len(groups),
+            geometry_loaded=geometry_context.geometry is not None,
+            groups=len(geometry_context.groups),
         )
-    if len(groups) == 0:
+    if len(geometry_context.groups) == 0:
         return PhysicalCenterFallbackPreflight(
             status='geometry_invalid',
             reason='source_group_empty',
             fallback_mode=str(cfg.physical_runtime.group_invalid_fallback),
-            geometry_loaded=geometry is not None,
+            geometry_loaded=geometry_context.geometry is not None,
             groups=0,
         )
     return PhysicalCenterFallbackPreflight(
         status=None,
         reason=None,
         fallback_mode=None,
-        geometry_loaded=geometry is not None,
-        groups=len(groups),
+        geometry_loaded=geometry_context.geometry is not None,
+        groups=len(geometry_context.groups),
     )
 
 
@@ -4184,10 +2517,7 @@ def build_geometry_two_piece_physical_center(
         if runtime_diagnostics is not None
         else nullcontext()
     ):
-        try:
-            geometry = load_coarse_geometry_from_npz(coarse_npz, n_traces=n)
-        except (KeyError, TypeError, ValueError):
-            geometry = None
+        geometry = load_physical_center_geometry(coarse_npz, n_traces=n)
     reporter.emit(
         'physical-center.stage_done',
         **context,
@@ -4213,42 +2543,15 @@ def build_geometry_two_piece_physical_center(
             runtime_diagnostics=runtime_diagnostics,
         )
 
-    segment_by_offset_sign = bool(cfg.physical_trend.segment_by_offset_sign)
-    offset_signed_labels = None
-    if use_geometry_offset:
-        offset_abs_m = _as_vector(
-            'geometry.offset_abs_geom_m',
-            geometry.offset_abs_geom_m,
-            n_traces=n,
-            dtype=np.float32,
-        )
-        if segment_by_offset_sign and geometry.offset_signed_geom_m is not None:
-            offset_signed_m = _as_vector(
-                'geometry.offset_signed_geom_m',
-                geometry.offset_signed_geom_m,
-                n_traces=n,
-                dtype=np.float32,
-            )
-            offset_signed_labels = _signed_offset_side_labels(
-                offset_signed_m,
-                finite_mask=geometry.geometry_valid_mask,
-            )
-        else:
-            offset_signed_m = None
-        offset_source = PHYSICAL_OFFSET_SOURCE_GEOMETRY
-    else:
-        offset_abs_m = _table_offset_abs_m(table, n_traces=n)
-        if segment_by_offset_sign:
-            offset_signed_m = _as_vector(
-                'table.offset_m',
-                table.offset_m,
-                n_traces=n,
-                dtype=np.float32,
-            )
-            offset_signed_labels = _signed_offset_side_labels(offset_signed_m)
-        else:
-            offset_signed_m = None
-        offset_source = PHYSICAL_OFFSET_SOURCE_HEADER
+    offset_context = build_physical_center_offset_context(
+        geometry=geometry,
+        table=table,
+        cfg=cfg,
+    )
+    offset_abs_m = offset_context.offset_abs_m
+    offset_signed_m = offset_context.offset_signed_m
+    offset_signed_labels = offset_context.offset_signed_labels
+    offset_source = offset_context.offset_source
 
     reporter.emit('physical-center.stage_start', **context, stage='source_grouping')
     stage_start = time.perf_counter()
@@ -4257,32 +2560,13 @@ def build_geometry_two_piece_physical_center(
         if runtime_diagnostics is not None
         else nullcontext()
     ):
-        source_grouping_invalid = False
-        source_groups_from_geometry = False
-        groups: tuple[SourceGroup, ...] = ()
-        source_group_geometry = geometry
-        if source_group_geometry is None and not use_geometry_offset:
-            source_group_geometry = _load_source_group_geometry_from_npz(
-                coarse_npz,
-                n_traces=n,
-            )
-        if source_group_geometry is not None:
-            coord_group_tol_m = float(cfg.physical_trend.coord_group_tol_m)
-            source_xy_degenerate = is_source_xy_degenerate(
-                source_group_geometry,
-                table=table,
-                coord_group_tol_m=coord_group_tol_m,
-            )
-            if source_xy_degenerate and use_geometry_offset:
-                source_grouping_invalid = True
-            if not source_xy_degenerate:
-                groups = build_source_groups(
-                    source_group_geometry,
-                    coord_group_tol_m=coord_group_tol_m,
-                )
-                source_groups_from_geometry = len(groups) > 0
-        if len(groups) == 0 and not use_geometry_offset:
-            groups = _build_table_source_groups(table, n_traces=n)
+        source_group_build = build_physical_center_source_group_build(
+            coarse_npz=coarse_npz,
+            geometry=geometry,
+            table=table,
+            cfg=cfg,
+        )
+        groups = source_group_build.groups
     reporter.emit(
         'physical-center.stage_done',
         **context,
@@ -4291,7 +2575,7 @@ def build_geometry_two_piece_physical_center(
         groups=len(groups),
     )
 
-    if source_grouping_invalid:
+    if source_group_build.source_grouping_invalid:
         return _emit_fallback_all_and_done(
             status='geometry_invalid',
             reason='source_xy_degenerate',
@@ -4337,12 +2621,15 @@ def build_geometry_two_piece_physical_center(
         if runtime_diagnostics is not None
         else nullcontext()
     ):
-        groups_by_id = {int(group.group_id): group for group in groups}
-        group_id_by_trace = np.full((n,), -1, dtype=np.int32)
-        for group in groups:
-            group_id_by_trace[
-                np.asarray(group.trace_indices, dtype=np.int64)
-            ] = np.int32(group.group_id)
+        source_group_context = build_physical_center_source_group_context(
+            source_group_build=source_group_build,
+            n_traces=n,
+        )
+        groups_by_id = source_group_context.groups_by_id
+        group_id_by_trace = source_group_context.group_id_by_trace
+        source_groups_from_geometry = (
+            source_group_context.source_groups_from_geometry
+        )
     reporter.emit(
         'physical-center.stage_done',
         **context,
