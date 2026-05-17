@@ -16,6 +16,13 @@ from .geometry import (
     split_offset_gap_segments,
 )
 from .merge import MergeResult
+from .physical_center_anchor import (
+    _anchor_model_key,
+    _AnchorModelContext,
+    _apply_anchor_selection_diagnostics,
+    build_anchor_source_xy_context,
+    fit_anchor_models,
+)
 from .physical_center_context import (
     PhysicalCenterBuildContext,
     PhysicalCenterInputs,
@@ -160,10 +167,6 @@ from .physical_center_types import (
 from .pick_table import CoarsePickTable
 from .progress import build_progress_reporter
 from .runtime_diagnostics import PhysicalRuntimeDiagnostics
-from .runtime_policy import (
-    SourceXYAnchorSelectionResult,
-    select_source_xy_stride_anchors,
-)
 from .trend import TrendResult
 
 _PHYSICAL_CENTER_PRIVATE_COMPAT = (
@@ -175,7 +178,10 @@ _PHYSICAL_CENTER_PRIVATE_COMPAT = (
     _assign_model_prediction,
     _assign_model_prediction_batch,
     _assign_prepared_model_prediction_batch,
+    _anchor_model_key,
+    _apply_anchor_selection_diagnostics,
     _bin_representative_position,
+    build_anchor_source_xy_context,
     _build_fit_context_work_items,
     _build_gap_segment_context,
     _build_observation_plan,
@@ -202,6 +208,7 @@ _PHYSICAL_CENTER_PRIVATE_COMPAT = (
     _FitTask,
     _FitTaskCfgValues,
     _FitTaskResult,
+    fit_anchor_models,
     _GapSegmentContext,
     _gap_context_key,
     _GroupObservationContext,
@@ -239,6 +246,7 @@ _PHYSICAL_CENTER_PRIVATE_COMPAT = (
     _TraceFitResult,
     _TracePlanAssignment,
     CoarseGeometry,
+    SourceGroup,
     signed_offset_side_from_geometry,
     split_offset_gap_segments,
 )
@@ -281,12 +289,6 @@ __all__ = [
 
 
 @dataclass(frozen=True)
-class _AnchorModelContext:
-    trend_model: object
-    diagnostics: tuple[float, float, float, float, float, float, float] | None
-
-
-@dataclass(frozen=True)
 class _ReuseShiftStats:
     t0_shift_sec: float
     shift_valid: bool
@@ -306,74 +308,6 @@ def _validate_table(table: CoarsePickTable) -> None:
     if (not np.isfinite(dt)) or dt <= 0.0:
         msg = 'table.dt_scalar_sec must be finite and > 0'
         raise ValueError(msg)
-
-
-def _apply_anchor_selection_diagnostics(
-    arrays: dict[str, np.ndarray],
-    *,
-    groups: tuple[SourceGroup, ...],
-    cfg: PhysicsLiteConfig,
-    runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
-) -> SourceXYAnchorSelectionResult | None:
-    anchor_cfg = cfg.physical_runtime.anchor_selection
-    if not (
-        bool(anchor_cfg.enabled)
-        or cfg.physical_runtime.fit_policy == 'anchor_source_xy'
-    ):
-        return None
-    result = select_source_xy_stride_anchors(
-        groups,
-        anchor_stride_source_groups=int(anchor_cfg.anchor_stride_source_groups),
-        include_first=bool(anchor_cfg.include_first),
-        include_last=bool(anchor_cfg.include_last),
-    )
-    group_pos_by_id = {
-        int(group_id): int(pos)
-        for pos, group_id in enumerate(np.asarray(result.group_ids).tolist())
-    }
-    for group in groups:
-        pos = group_pos_by_id[int(group.group_id)]
-        trace_indices = np.asarray(group.trace_indices, dtype=np.int64)
-        arrays['physical_anchor_group_id'][trace_indices] = np.int32(group.group_id)
-        arrays['physical_anchor_is_anchor'][trace_indices] = np.bool_(
-            result.is_anchor[pos]
-        )
-        arrays['physical_anchor_nearest_anchor_group_id'][trace_indices] = np.int32(
-            result.nearest_anchor_group_id[pos]
-        )
-        arrays['physical_anchor_source_distance_m'][trace_indices] = np.float32(
-            result.source_distance_m[pos]
-        )
-    if runtime_diagnostics is not None:
-        runtime_diagnostics.set_anchor_selection(
-            n_anchor_groups=len(result.anchor_group_ids),
-            anchor_stride_source_groups=int(anchor_cfg.anchor_stride_source_groups),
-            anchor_selection_mode=str(anchor_cfg.mode),
-            source_distance_m=result.source_distance_m,
-        )
-    return result
-
-
-def _anchor_model_key(
-    group_id: int,
-    plan: _ObservationPlan,
-) -> tuple[int, int, int, bool]:
-    return (int(group_id), int(plan.side), int(plan.segment_id), bool(plan.relaxed))
-
-
-def _selection_group_maps(
-    selection: SourceXYAnchorSelectionResult,
-) -> tuple[dict[int, bool], dict[int, int], dict[int, float]]:
-    is_anchor_by_id: dict[int, bool] = {}
-    nearest_by_id: dict[int, int] = {}
-    distance_by_id: dict[int, float] = {}
-    group_ids = np.asarray(selection.group_ids, dtype=np.int64)
-    for pos, group_id in enumerate(group_ids.tolist()):
-        gid = int(group_id)
-        is_anchor_by_id[gid] = bool(np.asarray(selection.is_anchor)[pos])
-        nearest_by_id[gid] = int(np.asarray(selection.nearest_anchor_group_id)[pos])
-        distance_by_id[gid] = float(np.asarray(selection.source_distance_m)[pos])
-    return is_anchor_by_id, nearest_by_id, distance_by_id
 
 
 def _fallback_no_compatible_anchor(
@@ -1027,70 +961,8 @@ def build_geometry_two_piece_physical_center(
     fit_cache = workspace.fit_cache
 
     if cfg.physical_runtime.fit_policy == 'anchor_source_xy':
-        if anchor_selection is None:
-            with (
-                runtime_diagnostics.time_block('anchor_selection_sec')
-                if runtime_diagnostics is not None
-                else nullcontext()
-            ):
-                anchor_selection = select_source_xy_stride_anchors(
-                    groups,
-                    anchor_stride_source_groups=int(
-                        cfg.physical_runtime.anchor_selection.anchor_stride_source_groups
-                    ),
-                    include_first=bool(
-                        cfg.physical_runtime.anchor_selection.include_first
-                    ),
-                    include_last=bool(
-                        cfg.physical_runtime.anchor_selection.include_last
-                    ),
-                )
-        is_anchor_by_id, nearest_by_id, distance_by_id = _selection_group_maps(
-            anchor_selection
-        )
-        anchor_models: dict[tuple[int, int, int, bool], _AnchorModelContext] = {}
-        n_reused_predictions = 0
-        fallback_full_group_ids: set[int] = set()
-
-        anchor_trace_chunks = [
-            np.asarray(group.trace_indices, dtype=np.int64)
-            for group in groups
-            if bool(is_anchor_by_id.get(int(group.group_id), False))
-        ]
-        anchor_trace_indices = (
-            np.concatenate(anchor_trace_chunks)
-            if anchor_trace_chunks
-            else np.zeros((0,), dtype=np.int64)
-        )
-        anchor_assignments_by_fit, anchor_assignments = (
-            _prepare_fit_context_assignments_for_trace_indices(
-                anchor_trace_indices,
-                inputs=inputs,
-                build_context=build_context,
-                workspace=workspace,
-            )
-        )
-        anchor_work_items = _build_fit_context_work_items(
-            anchor_assignments_by_fit,
-            offset_abs_m=offset_abs_m,
-            pick_t_sec=pick_t_sec,
-            coarse_pmax=table.coarse_pmax,
-            runtime_fit_source=PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
-        )
-        reporter.emit(
-            'physical-center.contexts_built',
-            **context,
-            phase='anchor',
-            work_items=len(anchor_work_items),
-            unique_keys=len(anchor_assignments_by_fit),
-        )
-        anchor_fit_calls_before = (
-            int(runtime_diagnostics.n_fit_calls)
-            if runtime_diagnostics is not None
-            else 0
-        )
-        anchor_results = _fit_and_assign_context_work_items(
-            anchor_work_items,
+        anchor_source_xy = build_anchor_source_xy_context(
+            anchor_selection=anchor_selection,
             inputs=inputs,
             build_context=build_context,
             workspace=workspace,
@@ -1099,46 +971,18 @@ def build_geometry_two_piece_physical_center(
             progress_context=context,
             fit_model_for_plan=_fit_model_for_plan,
         )
-        if runtime_diagnostics is not None:
-            anchor_fit_call_delta = max(
-                0,
-                int(runtime_diagnostics.n_fit_calls) - anchor_fit_calls_before,
-            )
-            if anchor_fit_call_delta > 0:
-                runtime_diagnostics.record_anchor_fit_calls(anchor_fit_call_delta)
-        for assignment in anchor_assignments:
-            result = anchor_results.get(assignment.fit_key)
-            if result is None or result.trend_model is None:
-                continue
-            trace_idx = int(assignment.trace_idx)
-            if trace_idx not in result.valid_trace_indices:
-                continue
-            key = _anchor_model_key(int(group_id_by_trace[trace_idx]), assignment.plan)
-            anchor_models.setdefault(
-                key,
-                _AnchorModelContext(
-                    trend_model=result.trend_model,
-                    diagnostics=result.diagnostics,
-                ),
-            )
-        anchor_models_by_group_id: dict[
-            int,
-            dict[tuple[int, int, bool], _AnchorModelContext],
-        ] = {}
-        for model_key, anchor_context in anchor_models.items():
-            anchor_group_id, side, segment_id, relaxed = model_key
-            anchor_models_by_group_id.setdefault(int(anchor_group_id), {}).setdefault(
-                (int(side), int(segment_id), bool(relaxed)),
-                anchor_context,
-            )
+        n_reused_predictions = 0
+        fallback_full_group_ids: set[int] = set()
 
         for group in groups:
             group_id = int(group.group_id)
-            if bool(is_anchor_by_id.get(group_id, False)):
+            if bool(anchor_source_xy.is_anchor_by_id.get(group_id, False)):
                 continue
             group_trace_indices = np.asarray(group.trace_indices, dtype=np.int64)
-            nearest_anchor_id = int(nearest_by_id.get(group_id, -1))
-            anchor_distance_m = float(distance_by_id.get(group_id, np.nan))
+            nearest_anchor_id = int(anchor_source_xy.nearest_by_id.get(group_id, -1))
+            anchor_distance_m = float(
+                anchor_source_xy.distance_by_id.get(group_id, np.nan)
+            )
             if runtime_diagnostics is not None:
                 runtime_diagnostics.record_nearest_anchor_distance(anchor_distance_m)
             max_distance_m = cfg.physical_runtime.anchor_reuse.max_anchor_distance_m
@@ -1169,7 +1013,10 @@ def build_geometry_two_piece_physical_center(
                         else nullcontext()
                     ):
                         compatible_anchor_context_by_plan_key = (
-                            anchor_models_by_group_id.get(nearest_anchor_id, {})
+                            anchor_source_xy.models_by_group_id.get(
+                                nearest_anchor_id,
+                                {},
+                            )
                         )
             reuse_items: dict[
                 tuple[int, int, int, bool],
@@ -1544,7 +1391,12 @@ def build_geometry_two_piece_physical_center(
                 n_non_anchor_groups=sum(
                     1
                     for group in groups
-                    if not bool(is_anchor_by_id.get(int(group.group_id), False))
+                    if not bool(
+                        anchor_source_xy.is_anchor_by_id.get(
+                            int(group.group_id),
+                            False,
+                        )
+                    )
                 )
             )
             runtime_diagnostics.set_fit_call_reduction_rate_vs_full(
