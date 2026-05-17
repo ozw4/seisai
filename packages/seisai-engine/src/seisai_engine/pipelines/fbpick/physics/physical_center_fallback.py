@@ -9,6 +9,7 @@ import numpy as np
 
 from .feasible import FeasibleBandResult
 from .merge import MergeResult
+from .physical_center_context import PhysicalCenterInputs
 from .physical_center_types import (
     PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
@@ -759,15 +760,12 @@ def _emit_fallback_all_and_done(
     reason: str,
     fallback_mode: str,
     failure_reason: int,
-    table: CoarsePickTable,
-    feasible: FeasibleBandResult,
-    trend: TrendResult,
-    merged: MergeResult,
+    inputs: PhysicalCenterInputs,
     reporter: object,
     context: Mapping[str, object],
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None,
-    trend_provider: object | None = None,
 ) -> PhysicalCenterResult:
+    table = inputs.table
     n = int(table.n_traces)
     reporter.emit(
         'physical-center.stage_start',
@@ -786,10 +784,10 @@ def _emit_fallback_all_and_done(
             fallback_mode=fallback_mode,
             failure_reason=failure_reason,
             table=table,
-            feasible=feasible,
-            trend=trend,
-            trend_provider=trend_provider,
-            merged=merged,
+            feasible=inputs.feasible,
+            trend=inputs.trend,
+            trend_provider=inputs.trend_provider,
+            merged=inputs.merged,
         )
     reporter.emit(
         'physical-center.stage_done',
