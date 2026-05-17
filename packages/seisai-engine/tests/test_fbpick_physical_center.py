@@ -8,6 +8,9 @@ import torch
 from seisai_engine.pipelines.fbpick.physics import (
     physical_center as physical_center_mod,
 )
+from seisai_engine.pipelines.fbpick.physics import (
+    physical_center_fallback as physical_center_fallback_mod,
+)
 from seisai_engine.pipelines.fbpick.physics.config import load_physics_lite_config
 from seisai_engine.pipelines.fbpick.physics.feasible import FeasibleBandResult
 from seisai_engine.pipelines.fbpick.physics.merge import MergeResult
@@ -44,7 +47,6 @@ from seisai_pick.trend.trend_fit_strategy import (
     TwoPieceIRLSAutoBreakStrategy,
     TwoPieceRansacAutoBreakStrategy,
 )
-
 
 PHYSICAL_CENTER_RESULT_DTYPE_CONTRACT = {
     'physical_center_i': np.int32,
@@ -2504,7 +2506,7 @@ def test_assign_fallback_all_vectorized_matches_scalar_fallback() -> None:
         ),
     )
 
-    result = physical_center_mod._assign_fallback_all(
+    result = physical_center_fallback_mod._assign_fallback_all(
         failure_reason=PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
         table=table,
         feasible=feasible,
@@ -2512,7 +2514,7 @@ def test_assign_fallback_all_vectorized_matches_scalar_fallback() -> None:
         merged=merged,
     )
     expected = [
-        physical_center_mod._fallback_center_for_trace(
+        physical_center_fallback_mod._fallback_center_for_trace(
             idx,
             table=table,
             feasible=feasible,
