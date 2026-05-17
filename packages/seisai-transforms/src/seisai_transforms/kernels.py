@@ -6,7 +6,6 @@ from scipy.signal import resample_poly
 __all__ = [
     '_apply_freq_augment',
     '_cosine_ramp',
-    '_fit_time_len_np',
     '_make_freq_mask',
     '_spatial_stretch',
     '_time_stretch_poly',
