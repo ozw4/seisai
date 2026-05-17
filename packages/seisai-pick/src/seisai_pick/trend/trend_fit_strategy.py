@@ -374,8 +374,8 @@ class TwoPieceIRLSAutoBreakStrategy:
             y = y[order]
             w = w[order]
 
-        xmin = float(x[0].item())
-        xmax = float(x[-1].item())
+        xmin = float(x.min().item())
+        xmax = float(x.max().item())
         if float(xmax - xmin) <= 1e-6:
             a, b = _fit_line_ls(x, y)
             edges = torch.tensor(
@@ -524,8 +524,8 @@ class TwoPieceRansacAutoBreakStrategy:
             x = x[order]
             y = y[order]
 
-        xmin = float(x[0].item())
-        xmax = float(x[-1].item())
+        xmin = float(x.min().item())
+        xmax = float(x.max().item())
         if float(xmax - xmin) <= 1e-6:
             a, b = _fit_line_ls(x, y)
             edges = torch.tensor(
