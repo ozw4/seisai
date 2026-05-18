@@ -12,6 +12,23 @@ import yaml
 FOLDS = [f"fold{i:02d}" for i in range(6)]
 DEFAULT_CV_ROOT = Path("/workspace/proc/fbpick/site54/oof")
 DEFAULT_RUN_ID = "baseline_physical_center"
+FINE_TRAIN_HELDOUT_FORBIDDEN_KEYS = (
+    "segy_files",
+    "fb_files",
+    "robust_npz_files",
+    "infer_segy_files",
+    "infer_fb_files",
+    "infer_robust_npz_files",
+)
+FINE_INFER_HELDOUT_ALLOWED_KEYS = {
+    "segy_files": "heldout_sgy.txt",
+    "robust_npz_files": "heldout_robust.txt",
+    "coarse_npz_files": "heldout_coarse.txt",
+}
+FINE_INFER_ALLOWED_PATH_KEYS = set(FINE_INFER_HELDOUT_ALLOWED_KEYS) | {
+    "fb_files",
+    "out_dir",
+}
 
 
 def read_list(path: Path) -> list[str]:
@@ -150,7 +167,8 @@ def load_fold_lists(
         global_failures.append(f"heldout_total={total_heldout}/54")
     if duplicate_heldout:
         global_failures.append(
-            f"duplicate_heldout={len(set(duplicate_heldout))} first={duplicate_heldout[0]}"
+            f"duplicate_heldout={len(set(duplicate_heldout))} "
+            f"first={duplicate_heldout[0]}"
         )
     add_result(
         results,
@@ -178,7 +196,13 @@ def check_ckpt(
     smoke_stage = f"{stage}_smoke"
     smoke_ckpt = run_root / fold / smoke_stage / "ckpt" / "best.pt"
     if allow_smoke and smoke_ckpt.is_file():
-        add_result(results, fold=fold, stage=stage, ok=True, detail=f"smoke_path={smoke_ckpt}")
+        add_result(
+            results,
+            fold=fold,
+            stage=stage,
+            ok=True,
+            detail=f"smoke_path={smoke_ckpt}",
+        )
         return
 
     expected = [ckpt, smoke_ckpt] if allow_smoke else [ckpt]
@@ -349,14 +373,15 @@ def strict_check_fine_train_config(
         if path.is_file():
             heldout_values.update(read_list(path))
 
-    for key, raw in paths.items():
-        if not str(key).startswith("infer_"):
+    for key in FINE_TRAIN_HELDOUT_FORBIDDEN_KEYS:
+        raw = paths.get(key)
+        if raw is None:
             continue
         values = raw if isinstance(raw, list) else [raw]
         for value in values:
             if not isinstance(value, str):
                 continue
-            if "heldout" in Path(value).name:
+            if Path(value).name.startswith("heldout_"):
                 return f"{key}_uses_heldout={value}"
             value_path = Path(value)
             if not value_path.is_absolute():
@@ -364,7 +389,43 @@ def strict_check_fine_train_config(
             if value_path.is_file():
                 overlap = set(read_list(value_path)) & heldout_values
                 if overlap:
-                    return f"{key}_heldout_overlap={len(overlap)} first={sorted(overlap)[0]}"
+                    return (
+                        f"{key}_heldout_overlap={len(overlap)} "
+                        f"first={sorted(overlap)[0]}"
+                    )
+
+    return None
+
+
+def strict_check_fine_infer_config(*, config_path: Path) -> str | None:
+    if not config_path.is_file():
+        return f"missing_config={config_path}"
+    cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(cfg, dict):
+        return f"invalid_config={config_path}"
+    paths = cfg.get("paths")
+    if not isinstance(paths, dict):
+        return f"missing_paths={config_path}"
+
+    unexpected = sorted(set(paths) - FINE_INFER_ALLOWED_PATH_KEYS)
+    if unexpected:
+        return f"unexpected_paths={','.join(unexpected)}"
+
+    if paths.get("fb_files") is not None:
+        return f"fb_files_set={paths['fb_files']}"
+
+    for key, expected_name in FINE_INFER_HELDOUT_ALLOWED_KEYS.items():
+        value = paths.get(key)
+        if not isinstance(value, str):
+            return f"{key}_not_listfile={value}"
+        if Path(value).name != expected_name:
+            return f"{key}_not_{expected_name}={value}"
+
+    for key, raw in paths.items():
+        values = raw if isinstance(raw, list) else [raw]
+        for value in values:
+            if isinstance(value, str) and Path(value).name == "heldout_fb.txt":
+                return f"{key}_uses_heldout_fb={value}"
 
     return None
 
@@ -388,7 +449,9 @@ def check_eval(results: list[dict[str, Any]], *, run_root: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check run-scoped site54 OOF CV outputs.")
+    parser = argparse.ArgumentParser(
+        description="Check run-scoped site54 OOF CV outputs."
+    )
     parser.add_argument("--cv-root", type=Path, default=DEFAULT_CV_ROOT)
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID)
     parser.add_argument("--run-root", type=Path, default=None)
@@ -498,6 +561,26 @@ def main() -> int:
             if args.strict
             else (),
         )
+        if args.strict:
+            strict_error = strict_check_fine_infer_config(
+                config_path=config_root / fold / "07_fine_infer.yaml",
+            )
+            if strict_error:
+                add_result(
+                    results,
+                    fold=fold,
+                    stage="07_fine_infer_config",
+                    ok=False,
+                    detail=strict_error,
+                )
+            else:
+                add_result(
+                    results,
+                    fold=fold,
+                    stage="07_fine_infer_config",
+                    ok=True,
+                    detail=f"path={config_root / fold / '07_fine_infer.yaml'}",
+                )
 
     check_collect_outputs(results, run_root=run_root)
     check_eval(results, run_root=run_root)
@@ -522,7 +605,10 @@ def main() -> int:
             "summary": {"failed": failed, "passed": passed},
             "results": results,
         }
-        args.json_out.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        args.json_out.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
 
     return 1 if failed else 0
 

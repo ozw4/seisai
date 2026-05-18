@@ -1,0 +1,51 @@
+paths: {}
+
+dataset:
+  use_header_cache: true
+  verbose: true
+  progress: true
+  primary_keys: [ffid]
+  waveform_mode: eager
+  train_endian: big
+  infer_endian: big
+
+transform:
+  trace_len: 128
+  time_len: 256
+  center_index: 128
+  standardize_eps: 1.0e-8
+
+window_center:
+  npz_key: fine_center_i
+  fallback_npz_key: robust_pick_i
+
+infer:
+  ckpt_path: null
+  device: auto
+  batch_size: 1
+  num_workers: 0
+  overlap_h: 96
+  amp: false
+  use_tqdm: false
+  high_conf_threshold: 0.5
+  source_model_id: null
+  iter_id: null
+  allow_unsafe_override: false
+
+viewer:
+  enabled: true
+  save_overview_png: false
+  save_gather_png: true
+  max_gathers_per_file: 8
+  skip_gather_keys:
+    ffid: [0]
+  max_traces_per_gather: 10000
+  waveform_norm: per_trace
+  dpi: 150
+  clip_percentile: 99.0
+
+model:
+  backbone: resnet18
+  pretrained: false
+  in_chans: 1
+  out_chans: 1

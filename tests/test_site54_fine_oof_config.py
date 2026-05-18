@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import yaml
+
 
 def _load_make_fine_fold_configs() -> ModuleType:
     return _load_oof_script(
@@ -116,8 +118,9 @@ def test_make_fine_defaults_write_under_run_root(
     fold_root = cv_root / 'fold_lists' / 'folds'
     oof_list_dir = run_root / 'aggregate' / '05_collect_oof_lists'
     data_dir = tmp_path / 'data'
-    base_train = tmp_path / 'base_train.yaml'
-    base_infer = tmp_path / 'base_infer.yaml'
+    template_dir = cv_root / 'config_templates'
+    base_train = template_dir / 'fine_train.yaml'
+    base_infer = template_dir / 'fine_infer.yaml'
 
     sgys = [str(data_dir / f'survey{i}.sgy') for i in range(6)]
     fbs = [str(data_dir / f'survey{i}.fb.npy') for i in range(6)]
@@ -147,6 +150,7 @@ def test_make_fine_defaults_write_under_run_root(
         '\n'.join(coarse) + '\n',
         encoding='utf-8',
     )
+    template_dir.mkdir(parents=True)
     base_train.write_text(
         'paths: {}\ntrain: {}\ninfer: {}\nvis: {}\n',
         encoding='utf-8',
@@ -166,10 +170,6 @@ def test_make_fine_defaults_write_under_run_root(
             run_id,
             '--run-root',
             str(run_root),
-            '--base-train-config',
-            str(base_train),
-            '--base-infer-config',
-            str(base_infer),
             '--fine-inner-valid-size',
             '1',
         ],
@@ -177,6 +177,13 @@ def test_make_fine_defaults_write_under_run_root(
 
     assert module.main() == 0
     assert (run_root / 'configs' / 'fold00' / '06_fine_train.yaml').is_file()
+    train_cfg = yaml.safe_load(
+        (run_root / 'configs' / 'fold00' / '06_fine_train.yaml').read_text(
+            encoding='utf-8',
+        ),
+    )
+    for key, value in train_cfg['paths'].items():
+        assert 'heldout_' not in str(value), (key, value)
     assert (
         run_root
         / 'aggregate'

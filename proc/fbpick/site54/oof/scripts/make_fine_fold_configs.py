@@ -17,6 +17,20 @@ VALID_POLICIES = (
     "fixed_last",
     "heldout_metric_legacy",
 )
+TRAIN_HELDOUT_FORBIDDEN_KEYS = (
+    "segy_files",
+    "fb_files",
+    "robust_npz_files",
+    "infer_segy_files",
+    "infer_fb_files",
+    "infer_robust_npz_files",
+)
+INFER_HELDOUT_ALLOWED_KEYS = {
+    "segy_files": "heldout_sgy.txt",
+    "robust_npz_files": "heldout_robust.txt",
+    "coarse_npz_files": "heldout_coarse.txt",
+}
+INFER_ALLOWED_PATH_KEYS = set(INFER_HELDOUT_ALLOWED_KEYS) | {"fb_files", "out_dir"}
 
 
 def parse_bool(value: object) -> bool:
@@ -92,6 +106,53 @@ def write_yaml(path: Path, data: dict, *, dry_run: bool) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def ensure_no_heldout_train_paths(*, cfg: dict, config_name: str, policy: str) -> None:
+    if policy == "heldout_metric_legacy":
+        return
+    paths = cfg.get("paths")
+    if not isinstance(paths, dict):
+        raise RuntimeError(f"{config_name}: paths must be a mapping")
+    for key in TRAIN_HELDOUT_FORBIDDEN_KEYS:
+        raw = paths.get(key)
+        if raw is None:
+            continue
+        values = raw if isinstance(raw, list) else [raw]
+        for value in values:
+            if isinstance(value, str) and Path(value).name.startswith("heldout_"):
+                raise RuntimeError(
+                    f"{config_name}: paths.{key} uses heldout list {value}"
+                )
+
+
+def ensure_fine_infer_heldout_policy(*, cfg: dict, config_name: str) -> None:
+    paths = cfg.get("paths")
+    if not isinstance(paths, dict):
+        raise RuntimeError(f"{config_name}: paths must be a mapping")
+    unexpected = sorted(set(paths) - INFER_ALLOWED_PATH_KEYS)
+    if unexpected:
+        raise RuntimeError(
+            f"{config_name}: unexpected fine infer paths: {unexpected}"
+        )
+    if "fb_files" in paths and paths["fb_files"] is not None:
+        raise RuntimeError(f"{config_name}: paths.fb_files must not be set")
+    for key, expected_name in INFER_HELDOUT_ALLOWED_KEYS.items():
+        value = paths.get(key)
+        if not isinstance(value, str):
+            raise RuntimeError(
+                f"{config_name}: paths.{key} must be a listfile path"
+            )
+        if Path(value).name != expected_name:
+            raise RuntimeError(
+                f"{config_name}: paths.{key} must reference {expected_name}, "
+                f"got {value}"
+            )
+    for raw in paths.values():
+        values = raw if isinstance(raw, list) else [raw]
+        for value in values:
+            if isinstance(value, str) and Path(value).name == "heldout_fb.txt":
+                raise RuntimeError(f"{config_name}: heldout FB is reserved for 08_eval")
 
 
 def set_smoke_overrides(cfg: dict) -> None:
@@ -192,12 +253,20 @@ def main() -> int:
     parser.add_argument(
         "--base-train-config",
         type=Path,
-        default=Path("proc/fbpick/site54/configs/config_train_fbpick_fine_oof.yaml"),
+        default=None,
+        help=(
+            "fine train base config; defaults to "
+            "<cv-root>/config_templates/fine_train.yaml"
+        ),
     )
     parser.add_argument(
         "--base-infer-config",
         type=Path,
-        default=Path("proc/fbpick/site54/configs/config_infer_fbpick_fine.yaml"),
+        default=None,
+        help=(
+            "fine infer base config; defaults to "
+            "<cv-root>/config_templates/fine_infer.yaml"
+        ),
     )
     parser.add_argument(
         "--fine-valid-policy",
@@ -235,8 +304,16 @@ def main() -> int:
         or run_root / "aggregate" / "05_collect_oof_lists"
     ).resolve()
 
-    base_train_config = resolve_path(args.base_train_config, repo_root)
-    base_infer_config = resolve_path(args.base_infer_config, repo_root)
+    base_train_config = (
+        cv_root / "config_templates" / "fine_train.yaml"
+        if args.base_train_config is None
+        else resolve_path(args.base_train_config, repo_root)
+    )
+    base_infer_config = (
+        cv_root / "config_templates" / "fine_infer.yaml"
+        if args.base_infer_config is None
+        else resolve_path(args.base_infer_config, repo_root)
+    )
     base_train_cfg = load_base_yaml(base_train_config)
     base_infer_cfg = load_base_yaml(base_infer_config)
 
@@ -353,6 +430,20 @@ def main() -> int:
             paths=paths,
             out_dir=run_root / fold / "07_fine_infer",
             ckpt_path=run_root / fold / "06_fine_train" / "ckpt" / "best.pt",
+        )
+        ensure_no_heldout_train_paths(
+            cfg=train_cfg,
+            config_name=f"{fold}/06_fine_train.yaml",
+            policy=args.fine_valid_policy,
+        )
+        ensure_no_heldout_train_paths(
+            cfg=smoke_cfg,
+            config_name=f"{fold}/06_fine_train_smoke.yaml",
+            policy=args.fine_valid_policy,
+        )
+        ensure_fine_infer_heldout_policy(
+            cfg=infer_cfg,
+            config_name=f"{fold}/07_fine_infer.yaml",
         )
 
         fold_config_dir = config_root / fold

@@ -243,6 +243,13 @@ python proc/fbpick/site54/oof/scripts/make_fine_fold_configs.py \
   --fine-inner-valid-size 2
 ```
 
+By default this reads the tracked OOF-local templates:
+
+```text
+proc/fbpick/site54/oof/config_templates/fine_train.yaml
+proc/fbpick/site54/oof/config_templates/fine_infer.yaml
+```
+
 Run one fold or all folds:
 
 ```bash
@@ -293,7 +300,10 @@ uses all non-heldout samples for fine training and writes `ckpt.metric: last`,
 so `ckpt/best.pt` is the final epoch checkpoint rather than the best validation
 loss checkpoint. `--fine-valid-policy heldout_metric_legacy` is available only
 for reproducing old behavior; it prints a warning because heldout loss is then
-used to choose `ckpt/best.pt`.
+used to choose `ckpt/best.pt`. Generated default-policy `06_fine_train*.yaml`
+files must not reference `heldout_*` list files. `07_fine_infer.yaml` may
+reference heldout SGY, robust NPZ, and coarse NPZ lists, but not heldout FB;
+heldout FB is reserved for final reporting in `08_eval`.
 
 ## Fold-list validation
 
