@@ -1,0 +1,2 @@
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/2017_JCCS_noshiro_V-2__profiled-shot_2017V-2.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/kuju_L4H-RPG__AIRAS_TRCTAB_L4H-RPG_wolmo.coarse.npz

@@ -1,0 +1,2 @@
+/home/dcuser/data/ActiveSeisField/2017_JCCS_noshiro_V-2/profiled-shot_2017V-2.sgy
+/home/dcuser/data/ActiveSeisField/kuju_L4H-RPG/AIRAS_TRCTAB_L4H-RPG_wolmo.sgy

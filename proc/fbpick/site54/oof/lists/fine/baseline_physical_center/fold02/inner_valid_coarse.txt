@@ -1,0 +1,2 @@
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/Tachikawa2014__Tachikawa2014_Shot-Record_Line2.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold01/okinawa2022_OH11-05__OH11-05_shot_rec_geom_set_rectified.coarse.npz

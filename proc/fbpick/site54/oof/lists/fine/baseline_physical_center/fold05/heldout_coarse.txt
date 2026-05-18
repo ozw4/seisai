@@ -1,0 +1,9 @@
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/2017_JCCS_noshiro_V-1__profiled-shot_2017V-1.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/2017_JCCS_noshiro_V-2__profiled-shot_2017V-2.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/iwaki2012_Line2__Line2_Deep_Geom.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/iwaki2012_Line3__Line3_Geom.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/kuju_L1H__AIRAS_TRCTAB_L1H_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/kuju_L2H__AIRAS_TRCTAB_L2H_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/kuju_L3H-RPG__AIRAS_TRCTAB_L3H-RPG_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/kuju_L4H-RPG__AIRAS_TRCTAB_L4H-RPG_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold05/shinjo22__AIRAS_TRCTAB_shinjo22_wolmo.coarse.npz

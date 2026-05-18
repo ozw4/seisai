@@ -1,0 +1,2 @@
+/home/dcuser/data/ActiveSeisField/Tachikawa2014/fb_Line2_rough.npy
+/home/dcuser/data/ActiveSeisField/okinawa2022_OH11-05/OH11-5_fbtime.npy

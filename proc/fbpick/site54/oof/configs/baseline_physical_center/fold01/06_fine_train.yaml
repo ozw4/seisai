@@ -1,11 +1,11 @@
 paths:
-  segy_files: /workspace/proc/fbpick/site54/oof/fine_fold_lists/fold05/train_sgy.txt
-  fb_files: /workspace/proc/fbpick/site54/oof/fine_fold_lists/fold05/train_fb.txt
-  robust_npz_files: /workspace/proc/fbpick/site54/oof/fine_fold_lists/fold05/train_robust.txt
-  infer_segy_files: /workspace/proc/fbpick/site54/oof/fine_fold_lists/fold05/heldout_sgy.txt
-  infer_fb_files: /workspace/proc/fbpick/site54/oof/fine_fold_lists/fold05/heldout_fb.txt
-  infer_robust_npz_files: /workspace/proc/fbpick/site54/oof/fine_fold_lists/fold05/heldout_robust.txt
-  out_dir: /workspace/proc/fbpick/site54/fbpick_fine_train_oof_fold05_out
+  segy_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold01/train_sgy.txt
+  fb_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold01/train_fb.txt
+  robust_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold01/train_robust.txt
+  infer_segy_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold01/inner_valid_sgy.txt
+  infer_fb_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold01/inner_valid_fb.txt
+  infer_robust_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold01/inner_valid_robust.txt
+  out_dir: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/06_fine_train
 dataset:
   max_trials: 2048
   use_header_cache: true

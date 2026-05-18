@@ -1,0 +1,2 @@
+/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_Kouga/DAIDAITOKU04_Kouga_shotgather_rectified.sgy
+/home/dcuser/data/ActiveSeisField/aso18-2/input_TRCTAB_ml_fbpick_Aso18-2_wolmo.sgy

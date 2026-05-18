@@ -1,0 +1,2 @@
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/aso18-2__input_TRCTAB_ml_fbpick_Aso18-2_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold00/mooka2016__data_TRCTAB__MDALL_SM.coarse.npz

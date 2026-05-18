@@ -307,18 +307,24 @@ def run_training_loop(
 
         ckpt_path = ckpt_dir / 'best.pt'
         monitor_key = str(spec.ckpt_metric)
-        if monitor_key in ('infer_loss', 'infer/loss'):
+        if monitor_key == 'last':
+            monitor_val = float(epoch)
+        elif monitor_key in ('infer_loss', 'infer/loss'):
             monitor_val = float(infer_loss)
         elif monitor_key in infer_extra_metrics:
             monitor_val = float(infer_extra_metrics[monitor_key])
         else:
             msg = (
                 'ckpt.metric not found in infer metrics: '
-                f'{monitor_key} (available: infer_loss and {sorted(infer_extra_metrics)})'
+                f'{monitor_key} '
+                f'(available: infer_loss and {sorted(infer_extra_metrics)})'
             )
             raise ValueError(msg)
 
         mode = str(spec.ckpt_mode)
+        if monitor_key == 'last' and mode != 'max':
+            msg = 'ckpt.mode must be "max" when ckpt.metric is "last"'
+            raise ValueError(msg)
         if mode == 'min':
             did_update = best_ckpt_value is None or monitor_val < float(best_ckpt_value)
         elif mode == 'max':

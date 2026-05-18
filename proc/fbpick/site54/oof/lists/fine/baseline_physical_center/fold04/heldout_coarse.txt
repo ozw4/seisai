@@ -1,0 +1,10 @@
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/jtknzw_kana22__AIRAS_TRCTAB_kanazawa_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/jtsanage_L1ER__AIRAS_TRCTAB_L1ER-SNG_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/jtsanage_L1K-SNG__AIRAS_TRCTAB_L1K-SNG_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/jtsanage_L2R__AIRAS_TRCTAB_L2R-SNG_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/jtsanage_L3K__AIRAS_TRCTAB_L3K-SNG_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/jtsanage_L3R__AIRAS_TRCTAB_L3R-SN_wolmoG.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/kego2013_Chumitsu__02_2013Kego-fault_Chumitsu_Shot-record.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/kego2013_Hireso__01_2013Kego-fault_HiReso_Shot-record.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/jtsanage_L2K__AIRAS_TRCTAB_L2K-SNG_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold04/TSTKRES__shotgath.coarse.npz

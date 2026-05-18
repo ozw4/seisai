@@ -1,0 +1,2 @@
+/workspace/proc/fbpick/site54/oof/robust_oof/fold00/DAIDAITOKU04_Kouga__DAIDAITOKU04_Kouga_shotgather_rectified.robust.npz
+/workspace/proc/fbpick/site54/oof/robust_oof/fold03/aso18-2__input_TRCTAB_ml_fbpick_Aso18-2_wolmo.robust.npz

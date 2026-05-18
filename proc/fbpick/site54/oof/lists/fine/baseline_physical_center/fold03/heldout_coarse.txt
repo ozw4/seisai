@@ -1,0 +1,10 @@
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/Tachikawa2012__shot-integra-geom_3D.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/Tachikawa2014__Tachikawa2014_Shot-Record_Line2.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/aso18-1__input_TRCTAB_ml_fbpick_Aso18-1.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/aso18-2__input_TRCTAB_ml_fbpick_Aso18-2_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/aso18-2H__input_TRCTAB_ml_fbpick_Aso18-2H_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/aso19-1__input_TRCTAB_ml_fbpick_Aso19-1_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/aso19-2__input_TRCTAB_ml_fbpick_Aso19-2_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/aso19-3H__input_TRCTAB_ml_fbpick_Aso19-3H_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/aso19-4H__input_TRCTAB_ml_fbpick_Aso19-4H_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/coarse_oof/fold03/aso19-6__input_TRCTAB_ml_fbpick_Aso19-6_wolmo.coarse.npz

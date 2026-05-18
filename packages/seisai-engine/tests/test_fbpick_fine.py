@@ -860,13 +860,16 @@ def test_prepare_fine_infer_cfg_expands_coarse_npz_listfile(tmp_path: Path) -> N
     segy_path = data_dir / 'sample.sgy'
     robust_path = physics_dir / 'sample.robust.npz'
     coarse_path = coarse_dir / 'sample.coarse.npz'
-    for path in (segy_path, robust_path, coarse_path):
+    fb_path = data_dir / 'sample.fb.npy'
+    for path in (segy_path, robust_path, coarse_path, fb_path):
         path.touch()
 
     segy_list = list_dir / 'segy.txt'
+    fb_list = list_dir / 'fb.txt'
     robust_list = list_dir / 'robust.txt'
     coarse_list = list_dir / 'coarse.txt'
     segy_list.write_text('../data/sample.sgy\n', encoding='utf-8')
+    fb_list.write_text('../data/sample.fb.npy\n', encoding='utf-8')
     robust_list.write_text('../physics/sample.robust.npz\n', encoding='utf-8')
     coarse_list.write_text('../coarse/sample.coarse.npz\n', encoding='utf-8')
 
@@ -877,6 +880,7 @@ def test_prepare_fine_infer_cfg_expands_coarse_npz_listfile(tmp_path: Path) -> N
     )
     cfg['paths'] = {
         'segy_files': 'lists/segy.txt',
+        'fb_files': 'lists/fb.txt',
         'robust_npz_files': 'lists/robust.txt',
         'coarse_npz_files': 'lists/coarse.txt',
         'out_dir': 'out',
@@ -886,6 +890,7 @@ def test_prepare_fine_infer_cfg_expands_coarse_npz_listfile(tmp_path: Path) -> N
     typed = load_fine_infer_config(prepared)
 
     assert typed.paths.segy_files == (str(segy_path.resolve()),)
+    assert typed.paths.fb_files == (str(fb_path.resolve()),)
     assert typed.paths.robust_npz_files == (str(robust_path.resolve()),)
     assert typed.paths.coarse_npz_files == (str(coarse_path.resolve()),)
 

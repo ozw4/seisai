@@ -1,9 +1,9 @@
 paths:
-  segy_files: /workspace/proc/fbpick/site54/oof/lists/fine/REPLACE_ME_RUN_ID/fold00/heldout_sgy.txt
-  fb_files: /workspace/proc/fbpick/site54/oof/lists/fine/REPLACE_ME_RUN_ID/fold00/heldout_fb.txt
-  robust_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/REPLACE_ME_RUN_ID/fold00/heldout_robust.txt
-  coarse_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/REPLACE_ME_RUN_ID/fold00/heldout_coarse.txt
-  out_dir: /workspace/proc/fbpick/site54/oof/runs/REPLACE_ME_RUN_ID/fold00/07_fine_infer
+  segy_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold05/heldout_sgy.txt
+  fb_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold05/heldout_fb.txt
+  robust_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold05/heldout_robust.txt
+  coarse_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold05/heldout_coarse.txt
+  out_dir: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold05/07_fine_infer
 dataset:
   use_header_cache: true
   verbose: true
@@ -22,7 +22,7 @@ window_center:
   npz_key: physical_center_i
   fallback_npz_key: null
 infer:
-  ckpt_path: /workspace/proc/fbpick/site54/oof/runs/REPLACE_ME_RUN_ID/fold00/06_fine_train/ckpt/best.pt
+  ckpt_path: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold05/06_fine_train/ckpt/best.pt
   device: auto
   batch_size: 1
   num_workers: 0

@@ -596,6 +596,8 @@ def _prepare_fine_infer_cfg(cfg: dict[str, Any], *, base_dir: Path) -> dict[str,
         msg = 'paths must be dict'
         raise TypeError(msg)
     list_path_keys: list[str] = ['paths.segy_files', 'paths.robust_npz_files']
+    if paths.get('fb_files') is not None:
+        list_path_keys.append('paths.fb_files')
     if paths.get('coarse_npz_files') is not None:
         list_path_keys.append('paths.coarse_npz_files')
     resolve_cfg_paths(prepared, base_dir, keys=list_path_keys)
