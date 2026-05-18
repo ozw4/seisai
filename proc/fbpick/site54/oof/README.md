@@ -36,6 +36,7 @@ fold_lists/
 ```
 
 `fold_lists/fold_summary.csv`, `fold_lists/fold_assignments.csv`, `fold_lists/site54_manifest.csv`, and per-fold `fold_meta.json` are tracked metadata for this split.
+`config_templates/fine_train.yaml` and `config_templates/fine_infer.yaml` are tracked base configs used by the fine config generator.
 
 ## Clean Rerun Procedure
 
@@ -62,7 +63,7 @@ python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage fine_conf
 python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage fine_train
 python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage fine_infer
 python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage eval
-python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage check --smoke
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage check --smoke --strict
 ```
 
 After reviewing the cleanup dry run, replace `--dry-run` with `--yes` to delete the selected run-scoped artifacts before rerunning. Use `--dry-run` on `run_site54_oof_cv.py` to print commands without executing training or inference.
@@ -119,7 +120,7 @@ python proc/fbpick/site54/oof/scripts/clean_generated_artifacts.py \
 `--legacy-only` targets deprecated generated paths such as `oof/configs`,
 `oof/lists`, `oof/logs`, old fold-list mirrors, old stage output roots, and
 the old site54 fine train/infer output roots. It does not target `README.md`,
-`fold_lists/`, or `scripts/`.
+`config_templates/`, `fold_lists/`, or `scripts/`.
 
 Run-scoped outputs are deleted only when explicitly selected:
 
@@ -378,7 +379,8 @@ Check the run-scoped CV outputs:
 ```bash
 python proc/fbpick/site54/oof/scripts/check_cv_outputs.py \
   --cv-root /workspace/proc/fbpick/site54/oof \
-  --run-id baseline_physical_center
+  --run-id baseline_physical_center \
+  --strict
 ```
 
 The formal fine OOF script paths are:

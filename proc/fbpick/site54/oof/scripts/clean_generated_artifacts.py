@@ -27,7 +27,7 @@ LEGACY_SITE54_GLOBS = (
 	'fbpick_fine_train_oof*_out',
 	'fbpick_fine_infer*_out',
 )
-PROTECTED_OOF_NAMES = {'README.md', 'fold_lists', 'scripts'}
+PROTECTED_OOF_NAMES = {'README.md', 'config_templates', 'fold_lists', 'scripts'}
 
 
 def _parse_args() -> argparse.Namespace:

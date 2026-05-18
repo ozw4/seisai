@@ -286,6 +286,7 @@ def commands_for_stage(
     folds: list[str],
     gpu: str,
     smoke: bool,
+    strict: bool,
 ) -> list[StageCommand]:
     train_mode = "smoke" if smoke else "full"
     if stage == "prepare_configs":
@@ -459,6 +460,8 @@ def commands_for_stage(
         ]
         if smoke:
             cmd.append("--smoke")
+        if strict:
+            cmd.append("--strict")
         return [command(cmd)]
     raise ValueError(stage)
 
@@ -505,6 +508,11 @@ def main() -> int:
     parser.add_argument("--fold", default="all")
     parser.add_argument("--gpu", default="")
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Pass --strict to check_cv_outputs.py for the check stage.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -543,6 +551,7 @@ def main() -> int:
             folds=folds,
             gpu=args.gpu,
             smoke=args.smoke,
+            strict=args.strict,
         )
         try:
             for command in commands:
