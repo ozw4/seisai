@@ -55,14 +55,6 @@ tracking/
 
 test_data/
 
-# Generated Arakawa pipeline outputs.
-proc/arakawa/outputs/generated_configs/**
-proc/arakawa/outputs/runtime_runs/**
-proc/arakawa/outputs/grstat/**
-proc/arakawa/generated_configs/**
-proc/arakawa/runtime_runs/**
-proc/arakawa/grstat/**
-
 proc/mobara
 .work
 .work/

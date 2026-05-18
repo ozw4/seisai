@@ -200,8 +200,8 @@ def main() -> None:
     ap.add_argument('--infer-endian', default='big')
     ap.add_argument('--time-ref-sec', type=float, default=20.0)
     ap.add_argument('--offset-ref-m', type=float, default=2000.0)
-    ap.add_argument('--fbgate-apply-on', default='any')
-    ap.add_argument('--fbgate-min-pick-ratio', type=float, default=0.3)
+    ap.add_argument('--fbgate-apply-on', default='off')
+    ap.add_argument('--fbgate-min-pick-ratio', type=float, default=0.001)
     args = ap.parse_args()
 
     args.cv_root = args.cv_root.resolve()

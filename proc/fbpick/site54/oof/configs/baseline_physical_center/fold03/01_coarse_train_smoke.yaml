@@ -10,8 +10,8 @@ dataset:
   train_endian: big
   infer_endian: big
 fbgate:
-  apply_on: any
-  min_pick_ratio: 0.3
+  apply_on: 'off'
+  min_pick_ratio: 0.001
   verbose: false
 transform:
   trace_len: 256
