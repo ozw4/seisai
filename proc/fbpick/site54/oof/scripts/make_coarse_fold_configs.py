@@ -122,7 +122,7 @@ def write_yaml(path: Path, data: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description='Render 6-fold global-anchor fbpick-coarse configs.')
-    ap.add_argument('--fold-list-root', type=Path, default=Path('/workspace/proc/fbpick/site54/oof/site54_oof_6fold_lists'))
+    ap.add_argument('--fold-list-root', type=Path, default=Path('/workspace/proc/fbpick/site54/oof/fold_lists'))
     ap.add_argument('--out-root', type=Path, default=Path('/workspace/proc/fbpick/site54/oof'))
     ap.add_argument('--config-dir', type=Path, default=Path('/workspace/proc/fbpick/site54/oof/configs'))
     ap.add_argument('--train-list-mode', choices=['strict', 'all_nonheldout'], default='strict')

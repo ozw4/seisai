@@ -22,11 +22,11 @@ def main() -> None:
         '--fold-list-root',
         type=Path,
         default=None,
-        help='Defaults to <oof-root>/site54_oof_6fold_lists.',
+        help='Defaults to <oof-root>/fold_lists.',
     )
     args = ap.parse_args()
 
-    fold_list_root = args.fold_list_root or (args.oof_root / 'site54_oof_6fold_lists')
+    fold_list_root = args.fold_list_root or (args.oof_root / 'fold_lists')
     ok = True
     for i in range(6):
         fold = f'fold{i:02d}'

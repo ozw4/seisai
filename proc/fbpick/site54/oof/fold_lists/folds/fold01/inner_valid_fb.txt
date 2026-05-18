@@ -1,0 +1,6 @@
+/home/dcuser/data/ActiveSeisField/jtsanage_L1ER/L1ER-SNG_fb_0609.npy
+/home/dcuser/data/ActiveSeisField/jtsanage_L1K-SNG/L1K-SNG_fb_1216.npy
+/home/dcuser/data/ActiveSeisField/jtsanage_L2R/L2R_SNG_fb.crd.npy
+/home/dcuser/data/ActiveSeisField/jtsanage_L3K/L3K_SNG_fb.npy
+/home/dcuser/data/ActiveSeisField/jtsanage_L3R/L3R-SNG_fb.npy
+/home/dcuser/data/ActiveSeisField/jtsanage_L2K/L2K_SNG_fb_1217.npy

@@ -1,0 +1,2 @@
+/home/dcuser/data/ActiveSeisField/SouthIzu2015_A-line/fb_LineA.npy
+/home/dcuser/data/ActiveSeisField/SouthIzu2015_B-line/fb_LineB.npy

@@ -24,7 +24,7 @@ def main() -> None:
     args = parser.parse_args()
 
     oof_root = Path(args.oof_root)
-    lists_root = oof_root / 'site54_oof_6fold_lists' / 'lists'
+    lists_root = oof_root / 'fold_lists' / 'lists'
     all_sgy = read_list(lists_root / 'all_sgy.txt')
     all_fb = read_list(lists_root / 'all_fb.txt')
     if len(all_sgy) != len(all_fb):

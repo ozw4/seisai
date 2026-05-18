@@ -16,7 +16,7 @@ def read_list(path: Path) -> list[Path]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description='Check OOF fold list files and optionally referenced data files.')
-    ap.add_argument('--fold-list-root', type=Path, default=Path('/workspace/proc/fbpick/site54/oof/site54_oof_6fold_lists'))
+    ap.add_argument('--fold-list-root', type=Path, default=Path('/workspace/proc/fbpick/site54/oof/fold_lists'))
     ap.add_argument('--check-exists', action='store_true', help='Also check that every SGY/FB path exists on this machine.')
     args = ap.parse_args()
     root = args.fold_list_root
@@ -24,6 +24,7 @@ def main() -> None:
         raise SystemExit(f'fold list root not found: {root}')
 
     total_heldout = 0
+    heldout_sgy_seen: set[Path] = set()
     for i in range(6):
         fold = f'fold{i:02d}'
         d = root / 'folds' / fold
@@ -36,13 +37,19 @@ def main() -> None:
         assert len(train_sgy) == len(train_fb), (fold, 'train', len(train_sgy), len(train_fb))
         assert len(valid_sgy) == len(valid_fb), (fold, 'inner_valid', len(valid_sgy), len(valid_fb))
         assert len(held_sgy) == len(held_fb), (fold, 'heldout', len(held_sgy), len(held_fb))
+        duplicate_heldout = heldout_sgy_seen.intersection(held_sgy)
+        if duplicate_heldout:
+            raise SystemExit(f'duplicate heldout SGY in {fold}: {sorted(map(str, duplicate_heldout))}')
+        heldout_sgy_seen.update(held_sgy)
         total_heldout += len(held_sgy)
         print(f'{fold}: train={len(train_sgy):2d}, inner_valid={len(valid_sgy):2d}, heldout={len(held_sgy):2d}')
         if args.check_exists:
             for p in train_sgy + train_fb + valid_sgy + valid_fb + held_sgy + held_fb:
                 if not p.exists():
                     raise SystemExit(f'missing referenced file in {fold}: {p}')
-    print(f'OK: total heldout regions = {total_heldout}')
+    if total_heldout != 54:
+        raise SystemExit(f'expected 54 total heldout regions, got {total_heldout}')
+    print(f'OK: total heldout regions = {total_heldout}; duplicate heldout SGY = 0')
 
 if __name__ == '__main__':
     main()

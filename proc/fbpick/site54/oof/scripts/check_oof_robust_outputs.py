@@ -53,7 +53,7 @@ def main() -> None:
     parser.add_argument('--check-schema', action='store_true')
     args = parser.parse_args()
     oof_root = Path(args.oof_root)
-    fold_root = oof_root / 'site54_oof_6fold_lists' / 'folds'
+    fold_root = oof_root / 'fold_lists' / 'folds'
     total_expected = 0
     total_found = 0
     for fold in FOLDS:

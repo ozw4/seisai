@@ -4,10 +4,10 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST_ROOT="/workspace/proc/fbpick/site54/oof"
 mkdir -p "$DEST_ROOT/scripts" "$DEST_ROOT/configs" "$DEST_ROOT/logs" "$DEST_ROOT/lists"
 
-if [ ! -d "$DEST_ROOT/site54_oof_6fold_lists" ]; then
-  cp -R "$SRC_DIR/site54_oof_6fold_lists" "$DEST_ROOT/site54_oof_6fold_lists"
+if [ ! -d "$DEST_ROOT/fold_lists" ]; then
+  cp -R "$SRC_DIR/fold_lists" "$DEST_ROOT/fold_lists"
 else
-  echo "[install] fold lists already exist: $DEST_ROOT/site54_oof_6fold_lists"
+  echo "[install] fold lists already exist: $DEST_ROOT/fold_lists"
 fi
 cp "$SRC_DIR"/scripts/*.py "$DEST_ROOT/scripts/"
 cp "$SRC_DIR"/scripts/*.sh "$DEST_ROOT/scripts/"

@@ -10,7 +10,7 @@ FOLDS = [f"fold{i:02d}" for i in range(6)]
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Render site54 OOF physics batch configs.')
-    parser.add_argument('--fold-list-root', default='/workspace/proc/fbpick/site54/oof/site54_oof_6fold_lists')
+    parser.add_argument('--fold-list-root', default='/workspace/proc/fbpick/site54/oof/fold_lists')
     parser.add_argument('--oof-root', default='/workspace/proc/fbpick/site54/oof')
     parser.add_argument('--config-dir', default='/workspace/proc/fbpick/site54/oof/configs')
     parser.add_argument('--overwrite', action='store_true')

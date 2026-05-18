@@ -60,5 +60,17 @@ proc/mobara
 vendor/issue_forge
 vendor/issue_forge/
 
+# Generated Arakawa experiment outputs.
+proc/arakawa/outputs/generated_configs/
+proc/arakawa/outputs/runtime_runs/
+proc/arakawa/outputs/grstat/
+proc/arakawa/generated_configs/
+proc/arakawa/runtime_runs/
+proc/arakawa/grstat/
+
+# Tracked metadata for the canonical site54 OOF fold-list split.
+!proc/fbpick/site54/oof/fold_lists/**/*.csv
+!proc/fbpick/site54/oof/fold_lists/**/*.json
+
 proc/tools/configs/fb_list_site54.txt
 proc/tools/configs/sgy_list_site54.txt
