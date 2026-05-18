@@ -1,5 +1,0 @@
-# Deprecated legacy path.
-# Use proc/arakawa/configs/templates/physics.yaml as the physics template.
-# User-run configs are:
-# - proc/arakawa/configs/run_coarse_physics_export_minimal.yaml
-# - proc/arakawa/configs/run_coarse_physics_export.yaml
