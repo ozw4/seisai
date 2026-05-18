@@ -36,14 +36,29 @@ fold_lists/
 
 ## Legacy paths
 
-The following paths are legacy duplicates retained only for existing configs and historical outputs:
+The following paths are deprecated compatibility paths retained only for existing configs and historical outputs. Do not use them for new runs, new configs, or new scripts.
 
-- `/workspace/proc/fbpick/site54/oof/folds`
-- `/workspace/proc/fbpick/site54/oof/site54_oof_6fold_lists`
-- `/workspace/proc/fbpick/site54/oof/lists/all_sgy.txt`
-- `/workspace/proc/fbpick/site54/oof/lists/all_fb.txt`
+| Old path | New path |
+| --- | --- |
+| `oof/folds` | `oof/fold_lists/folds` |
+| `oof/site54_oof_6fold_lists/lists` | `oof/fold_lists/lists` |
+| `oof/coarse_foldXX_train_out` | `oof/runs/<run_id>/foldXX/01_coarse_train` |
+| `oof/coarse_oof/foldXX` | `oof/runs/<run_id>/foldXX/02_coarse_infer` |
+| `oof/robust_oof/foldXX` | `oof/runs/<run_id>/foldXX/03_physics` |
+| `oof/physics_qc/foldXX` | `oof/runs/<run_id>/foldXX/04_physics_qc` |
+| `site54/fbpick_fine_train_oof_foldXX_out` | `oof/runs/<run_id>/foldXX/06_fine_train` |
+| `oof/fine_infer/foldXX` | `oof/runs/<run_id>/foldXX/07_fine_infer` |
+| `oof/fine_eval` | `oof/runs/<run_id>/aggregate/08_eval` |
 
-Do not use these paths for new configs or new scripts. New fold-list references must use `/workspace/proc/fbpick/site54/oof/fold_lists`.
+Deprecated for new runs:
+
+- `proc/fbpick/site54/oof/coarse_oof`
+- `proc/fbpick/site54/oof/robust_oof`
+- `proc/fbpick/site54/oof/fine_infer`
+- `proc/fbpick/site54/oof/fine_eval`
+- `proc/fbpick/site54/fbpick_fine_train_oof_foldXX_out`
+
+New fold-list references must use `/workspace/proc/fbpick/site54/oof/fold_lists`.
 
 ## Stage order
 
@@ -130,6 +145,21 @@ stages:
 notes: ""
 ```
 
+## Generated Configs
+
+The formal generated config layout is `configs/<run_id>/foldXX/<stage>.yaml`:
+
+```text
+configs/<run_id>/fold00/01_coarse_train.yaml
+configs/<run_id>/fold00/02_coarse_infer.yaml
+configs/<run_id>/fold00/03_physics.yaml
+configs/<run_id>/fold00/04_physics_qc.yaml
+configs/<run_id>/fold00/06_fine_train.yaml
+configs/<run_id>/fold00/07_fine_infer.yaml
+```
+
+Flat generated config names such as `config_train_fbpick_coarse_fold00.yaml`, `config_infer_fbpick_coarse_fold00_heldout.yaml`, `config_run_fbpick_physics_fold00_heldout.yaml`, `config_run_fbpick_physics_qc_fold00.yaml`, and `config_train_fbpick_fine_oof_fold00.yaml` are legacy compatibility artifacts. The config generators write them only when `--legacy-flat-configs true` is passed, and normal run commands must use the run-scoped config layout above.
+
 ## Coarse And Physics Run Commands
 
 Generate run-scoped configs for coarse train/infer, physics, and physics QC:
@@ -168,16 +198,7 @@ RUN_ID=baseline_physical_center \
 
 `run_physics_fold.sh` runs `03_physics` and then `04_physics_qc`. Logs are written under `runs/<run_id>/logs/foldXX/`.
 
-Old path mapping for the first four stages:
-
-```text
-coarse_foldXX_train_out       -> runs/<run_id>/foldXX/01_coarse_train
-coarse_foldXX_train_smoke_out -> runs/<run_id>/foldXX/01_coarse_train_smoke
-coarse_oof/foldXX             -> runs/<run_id>/foldXX/02_coarse_infer
-robust_oof/foldXX             -> runs/<run_id>/foldXX/03_physics
-physics_qc/foldXX             -> runs/<run_id>/foldXX/04_physics_qc
-logs/*foldXX*                 -> runs/<run_id>/logs/foldXX/
-```
+Legacy stage output mappings are listed in the legacy path table above. Logs for new runs are written under `runs/<run_id>/logs/foldXX/`.
 
 ## Fine Run Commands
 

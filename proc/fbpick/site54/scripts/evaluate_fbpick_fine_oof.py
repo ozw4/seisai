@@ -15,8 +15,8 @@ def main() -> int:
         / "evaluate_fine_oof.py"
     )
     print(
-        "WARNING: proc/fbpick/site54/scripts/evaluate_fbpick_fine_oof.py "
-        "is deprecated; use proc/fbpick/site54/oof/scripts/evaluate_fine_oof.py",
+        "WARNING: This path is deprecated. Use "
+        "proc/fbpick/site54/oof/scripts/evaluate_fine_oof.py instead.",
         file=sys.stderr,
     )
     runpy.run_path(str(target), run_name="__main__")

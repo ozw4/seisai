@@ -15,8 +15,8 @@ def main() -> int:
         / "make_fine_fold_configs.py"
     )
     print(
-        "WARNING: proc/fbpick/site54/scripts/make_fbpick_fine_oof_fold_configs.py "
-        "is deprecated; use proc/fbpick/site54/oof/scripts/make_fine_fold_configs.py",
+        "WARNING: This path is deprecated. Use "
+        "proc/fbpick/site54/oof/scripts/make_fine_fold_configs.py instead.",
         file=sys.stderr,
     )
     runpy.run_path(str(target), run_name="__main__")

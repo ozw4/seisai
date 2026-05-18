@@ -72,5 +72,11 @@ proc/arakawa/grstat/
 !proc/fbpick/site54/oof/fold_lists/**/*.csv
 !proc/fbpick/site54/oof/fold_lists/**/*.json
 
+# Generated site54 OOF run outputs are not tracked; keep small run manifests.
+proc/fbpick/site54/oof/runs/**
+!proc/fbpick/site54/oof/runs/
+!proc/fbpick/site54/oof/runs/*/
+!proc/fbpick/site54/oof/runs/*/manifest.yaml
+
 proc/tools/configs/fb_list_site54.txt
 proc/tools/configs/sgy_list_site54.txt
