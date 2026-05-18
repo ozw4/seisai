@@ -5,9 +5,12 @@
 ## Canonical paths
 
 - CV root: `/workspace/proc/fbpick/site54/oof`
-- Fold list root: `/workspace/proc/fbpick/site54/oof/fold_lists`
+- Fold lists: `/workspace/proc/fbpick/site54/oof/fold_lists`
 - Run root: `/workspace/proc/fbpick/site54/oof/runs/<run_id>`
 - Config root: `/workspace/proc/fbpick/site54/oof/runs/<run_id>/configs`
+- Collect dir: `/workspace/proc/fbpick/site54/oof/runs/<run_id>/aggregate/05_collect_oof_lists`
+- Fine lists: `/workspace/proc/fbpick/site54/oof/runs/<run_id>/aggregate/05_collect_oof_lists/fine_fold_lists`
+- Eval dir: `/workspace/proc/fbpick/site54/oof/runs/<run_id>/aggregate/08_eval`
 
 The canonical fold list layout is:
 
@@ -33,6 +36,36 @@ fold_lists/
 ```
 
 `fold_lists/fold_summary.csv`, `fold_lists/fold_assignments.csv`, `fold_lists/site54_manifest.csv`, and per-fold `fold_meta.json` are tracked metadata for this split.
+
+## Clean Rerun Procedure
+
+Use this sequence as the canonical clean-state rerun procedure. It validates the tracked fold lists, inspects artifacts selected for cleanup, prepares run-scoped configs, and then runs each CV stage through the unified entry point.
+
+```bash
+cd /workspace
+RUN_ID=baseline_physical_center
+OOF_ROOT=/workspace/proc/fbpick/site54/oof
+RUN_ROOT=$OOF_ROOT/runs/$RUN_ID
+CONFIG_ROOT=$RUN_ROOT/configs
+COLLECT_DIR=$RUN_ROOT/aggregate/05_collect_oof_lists
+FINE_LIST_ROOT=$COLLECT_DIR/fine_fold_lists
+
+python $OOF_ROOT/scripts/check_fold_lists.py --fold-list-root $OOF_ROOT/fold_lists
+python $OOF_ROOT/scripts/clean_generated_artifacts.py --cv-root $OOF_ROOT --run-id $RUN_ID --dry-run
+
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage prepare_configs
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage coarse_train
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage coarse_infer
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage physics
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage collect
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage fine_configs
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage fine_train
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage fine_infer
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage eval
+python $OOF_ROOT/scripts/run_site54_oof_cv.py --run-id $RUN_ID --stage check --smoke
+```
+
+After reviewing the cleanup dry run, replace `--dry-run` with `--yes` to delete the selected run-scoped artifacts before rerunning. Use `--dry-run` on `run_site54_oof_cv.py` to print commands without executing training or inference.
 
 ## Legacy paths
 
