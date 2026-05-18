@@ -1,6 +1,5 @@
 paths:
   segy_files: /workspace/proc/fbpick/site54/oof/lists/fine/REPLACE_ME_RUN_ID/fold00/heldout_sgy.txt
-  fb_files: /workspace/proc/fbpick/site54/oof/lists/fine/REPLACE_ME_RUN_ID/fold00/heldout_fb.txt
   robust_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/REPLACE_ME_RUN_ID/fold00/heldout_robust.txt
   coarse_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/REPLACE_ME_RUN_ID/fold00/heldout_coarse.txt
   out_dir: /workspace/proc/fbpick/site54/oof/runs/REPLACE_ME_RUN_ID/fold00/07_fine_infer
