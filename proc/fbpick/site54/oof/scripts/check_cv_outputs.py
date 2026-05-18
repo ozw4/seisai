@@ -282,6 +282,51 @@ def check_physics_qc(
     add_result(results, fold=fold, stage="04_physics_qc", ok=True, detail=detail)
 
 
+def check_collect_outputs(results: list[dict[str, Any]], *, run_root: Path) -> None:
+    out_dir = run_root / "aggregate" / "05_collect_oof_lists"
+    txt_files = [
+        out_dir / "oof_train_sgy_all.txt",
+        out_dir / "oof_train_fb_all.txt",
+        out_dir / "oof_train_coarse_all.txt",
+        out_dir / "oof_train_robust_all.txt",
+    ]
+    mapping = out_dir / "oof_train_mapping.csv"
+    required = [*txt_files, mapping]
+    missing = [path for path in required if not path.is_file()]
+    if missing:
+        add_result(
+            results,
+            fold="all",
+            stage="05_collect_oof_lists",
+            ok=False,
+            detail=f"missing={missing[0]}",
+            expected_paths=missing,
+        )
+        return
+
+    lengths = {path.name: len(read_list(path)) for path in txt_files}
+    mapping_rows = max(0, len(read_list(mapping)) - 1)
+    failures: list[str] = []
+    if len(set(lengths.values())) != 1:
+        failures.append(
+            "lengths=" + ",".join(f"{name}:{count}" for name, count in lengths.items())
+        )
+    n_rows = next(iter(lengths.values()))
+    if n_rows != 54:
+        failures.append(f"n={n_rows}/54")
+    if mapping_rows != n_rows:
+        failures.append(f"mapping_rows={mapping_rows}/{n_rows}")
+
+    add_result(
+        results,
+        fold="all",
+        stage="05_collect_oof_lists",
+        ok=not failures,
+        detail=f"n={n_rows} out_dir={out_dir}" if not failures else ";".join(failures),
+        expected_paths=[] if not failures else required,
+    )
+
+
 def strict_check_fine_train_config(
     *,
     config_path: Path,
@@ -451,6 +496,7 @@ def main() -> int:
             else (),
         )
 
+    check_collect_outputs(results, run_root=run_root)
     check_eval(results, run_root=run_root)
 
     for item in results:
