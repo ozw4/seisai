@@ -1,0 +1,9 @@
+/home/dcuser/data/ActiveSeisField/SouthIzu2015_A-line/fb_LineA.npy
+/home/dcuser/data/ActiveSeisField/SouthIzu2015_B-line/fb_LineB.npy
+/home/dcuser/data/ActiveSeisField/horonobe2020/Horo20-3D_FB.npy
+/home/dcuser/data/ActiveSeisField/okinawa2011_OH11-0A/OH11-A_fbtime.npy
+/home/dcuser/data/ActiveSeisField/okinawa2022_OH11-02/OH11-2_fbtime.npy
+/home/dcuser/data/ActiveSeisField/okinawa2022_OH11-03/OH11-3_fbtime.npy
+/home/dcuser/data/ActiveSeisField/okinawa2022_OH11-04/OH11-4_fbtime.npy
+/home/dcuser/data/ActiveSeisField/okinawa2022_OH11-05/OH11-5_fbtime.npy
+/home/dcuser/data/ActiveSeisField/okinawa2022_OH11-0B/OH11-B_fbtime.npy

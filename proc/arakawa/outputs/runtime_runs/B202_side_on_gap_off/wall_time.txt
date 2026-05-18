@@ -1,0 +1,5 @@
+name: B202_side_on_gap_off
+returncode: 0
+elapsed_sec: 1032.378842
+max_rss_kb: 139220992
+max_rss_gib: 132.771484

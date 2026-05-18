@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+import argparse
+from pathlib import Path
+
+
+def read_list(path: Path) -> list[Path]:
+    items: list[Path] = []
+    for line in path.read_text(encoding='utf-8').splitlines():
+        s = line.strip()
+        if not s or s.startswith('#'):
+            continue
+        items.append(Path(s))
+    return items
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description='Check OOF fold list files and optionally referenced data files.')
+    ap.add_argument('--fold-list-root', type=Path, default=Path('/workspace/proc/fbpick/site54/oof/site54_oof_6fold_lists'))
+    ap.add_argument('--check-exists', action='store_true', help='Also check that every SGY/FB path exists on this machine.')
+    args = ap.parse_args()
+    root = args.fold_list_root
+    if not root.is_dir():
+        raise SystemExit(f'fold list root not found: {root}')
+
+    total_heldout = 0
+    for i in range(6):
+        fold = f'fold{i:02d}'
+        d = root / 'folds' / fold
+        train_sgy = read_list(d / 'train_sgy.txt')
+        train_fb = read_list(d / 'train_fb.txt')
+        valid_sgy = read_list(d / 'inner_valid_sgy.txt')
+        valid_fb = read_list(d / 'inner_valid_fb.txt')
+        held_sgy = read_list(d / 'heldout_sgy.txt')
+        held_fb = read_list(d / 'heldout_fb.txt')
+        assert len(train_sgy) == len(train_fb), (fold, 'train', len(train_sgy), len(train_fb))
+        assert len(valid_sgy) == len(valid_fb), (fold, 'inner_valid', len(valid_sgy), len(valid_fb))
+        assert len(held_sgy) == len(held_fb), (fold, 'heldout', len(held_sgy), len(held_fb))
+        total_heldout += len(held_sgy)
+        print(f'{fold}: train={len(train_sgy):2d}, inner_valid={len(valid_sgy):2d}, heldout={len(held_sgy):2d}')
+        if args.check_exists:
+            for p in train_sgy + train_fb + valid_sgy + valid_fb + held_sgy + held_fb:
+                if not p.exists():
+                    raise SystemExit(f'missing referenced file in {fold}: {p}')
+    print(f'OK: total heldout regions = {total_heldout}')
+
+if __name__ == '__main__':
+    main()

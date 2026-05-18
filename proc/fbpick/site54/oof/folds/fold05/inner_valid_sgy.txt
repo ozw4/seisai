@@ -1,0 +1,2 @@
+/home/dcuser/data/ActiveSeisField/SouthIzu2015_A-line/A-line_shot.sgy
+/home/dcuser/data/ActiveSeisField/SouthIzu2015_B-line/B-line_shot.sgy

@@ -1,0 +1,8 @@
+/workspace/proc/fbpick/site54/oof/robust_oof/fold02/noto21-2a__AIRAS_TRCTAB_Noto21-2a_wolmo.robust.npz
+/workspace/proc/fbpick/site54/oof/robust_oof/fold02/noto21-2b__AIRAS_TRCTAB_Noto21-2b_wolmo.robust.npz
+/workspace/proc/fbpick/site54/oof/robust_oof/fold02/noto21-4__AIRAS_TRCTAB_Noto21-4_wolmo.robust.npz
+/workspace/proc/fbpick/site54/oof/robust_oof/fold02/noto21-5__AIRAS_TRCTAB_Noto21-5_wolmo.robust.npz
+/workspace/proc/fbpick/site54/oof/robust_oof/fold02/noto21-6__AIRAS_TRCTAB_Noto21-6_wolmo.robust.npz
+/workspace/proc/fbpick/site54/oof/robust_oof/fold02/noto_shikaH28-EW__fdata_hset_shikaH28-EW.robust.npz
+/workspace/proc/fbpick/site54/oof/robust_oof/fold02/noto_togi18__fdata_hset_togi18_rectified.robust.npz
+/workspace/proc/fbpick/site54/oof/robust_oof/fold02/noto21-3a__AIRAS_TRCTAB_Noto21-3A_wolmo.robust.npz

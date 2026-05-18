@@ -1,0 +1,2 @@
+/home/dcuser/data/ActiveSeisField/Tachikawa2012/fb_All_0417.npy
+/home/dcuser/data/ActiveSeisField/Tachikawa2014/fb_Line2_rough.npy

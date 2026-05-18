@@ -1,0 +1,4 @@
+/home/dcuser/data/ActiveSeisField/kuju_L1H/fb_L1H.npy
+/home/dcuser/data/ActiveSeisField/kuju_L2H/fb_L2H.npy
+/home/dcuser/data/ActiveSeisField/kuju_L3H-RPG/fb_L3H-RPG.npy
+/home/dcuser/data/ActiveSeisField/kuju_L4H-RPG/fb_L4H-RPG.npy

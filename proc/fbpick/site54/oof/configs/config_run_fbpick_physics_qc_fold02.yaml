@@ -1,0 +1,91 @@
+paths:
+  segy_files: /workspace/proc/fbpick/site54/oof/site54_oof_6fold_lists/folds/fold02/heldout_sgy.txt
+  fb_files: /workspace/proc/fbpick/site54/oof/site54_oof_6fold_lists/folds/fold02/heldout_fb.txt
+  coarse_npz_dir: /workspace/proc/fbpick/site54/oof/coarse_oof/fold02
+  robust_npz_dir: /workspace/proc/fbpick/site54/oof/robust_oof/fold02
+  out_dir: /workspace/proc/fbpick/site54/oof/physics_qc/fold02
+dataset:
+  primary_keys:
+  - ffid
+  infer_endian: big
+  use_header_cache: true
+vis:
+  max_gathers_per_file: 8
+  skip_gather_keys:
+    ffid:
+    - 0
+  max_traces_per_gather: 10000
+  save_cdf: true
+  save_summary_csv: true
+  waveform_norm: per_trace
+  clip_percentile: 99.0
+physical_trend:
+  enabled: true
+  fit_kind: two_piece_irls_autobreak
+  use_geometry_offset: true
+  min_offset_spread_m: 1.0
+  coord_group_tol_m: 1.0
+  segment_by_offset_sign: true
+  split_by_offset_gap: true
+  gap_ratio: 5.0
+  min_gap_m: null
+neighbor_context:
+  enabled: true
+  mode: nearest_source_xy
+  k_neighbors: 5
+  max_source_distance_m: null
+  include_self: true
+physical_prefilter:
+  enabled: true
+  vmin_m_s: 300.0
+  vmax_m_s: 6000.0
+  t0_lo_ms: -20.0
+  t0_hi_ms: 200.0
+  pmax_min: 0.0
+  use_existing_feasible_mask: false
+physical_runtime:
+  fit_policy: full
+  diagnostics_enabled: true
+  write_runtime_summary: true
+  diagnostics:
+    enabled: true
+    detailed_timing: true
+    save_json: true
+    save_npz_scalars: true
+    save_per_trace_context: false
+  observation_sampling:
+    enabled: false
+  trend_result_mode: lazy
+  geometry_invalid_fallback: robust
+  group_invalid_fallback: robust
+  progress:
+    enabled: true
+    level: fit
+    interval_sec: 5.0
+    min_interval_fit_calls: 10
+    stream: stderr
+    use_tqdm: auto
+    print_on_non_tty: true
+    include_stage_events: true
+    include_summary: true
+two_piece_ransac:
+  n_iter: 200
+  inlier_th_ms: 40.0
+  min_pts: 8
+  n_break_cand: 64
+  q_lo: 0.15
+  q_hi: 0.85
+  seed: 0
+  slope_eps: 1.0e-06
+  sort_offsets: true
+physical_projection:
+  mode: model
+two_piece_irls:
+  huber_c: 1.345
+  iters: 5
+  min_pts: 8
+  n_break_cand: 64
+  q_lo: 0.15
+  q_hi: 0.85
+  slope_eps: 1.0e-06
+  sort_offsets: true

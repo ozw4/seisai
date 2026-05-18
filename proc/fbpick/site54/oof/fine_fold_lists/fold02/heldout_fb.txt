@@ -1,0 +1,8 @@
+/home/dcuser/data/ActiveSeisField/noto21-2a/fb_Noto21-2a.npy
+/home/dcuser/data/ActiveSeisField/noto21-2b/fb_Noto21-2b.crd.npy
+/home/dcuser/data/ActiveSeisField/noto21-4/fb_Noto21-4.npy
+/home/dcuser/data/ActiveSeisField/noto21-5/fb_Noto21-5.npy
+/home/dcuser/data/ActiveSeisField/noto21-6/fb_Noto21-6.npy
+/home/dcuser/data/ActiveSeisField/noto_shikaH28-EW/fb_shikaH28-EW.npy
+/home/dcuser/data/ActiveSeisField/noto_togi18/fb_togi18.npy
+/home/dcuser/data/ActiveSeisField/noto21-3a/fb_Noto21-3A.npy

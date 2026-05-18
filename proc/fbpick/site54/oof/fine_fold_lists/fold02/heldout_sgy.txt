@@ -1,0 +1,8 @@
+/home/dcuser/data/ActiveSeisField/noto21-2a/AIRAS_TRCTAB_Noto21-2a_wolmo.sgy
+/home/dcuser/data/ActiveSeisField/noto21-2b/AIRAS_TRCTAB_Noto21-2b_wolmo.sgy
+/home/dcuser/data/ActiveSeisField/noto21-4/AIRAS_TRCTAB_Noto21-4_wolmo.sgy
+/home/dcuser/data/ActiveSeisField/noto21-5/AIRAS_TRCTAB_Noto21-5_wolmo.sgy
+/home/dcuser/data/ActiveSeisField/noto21-6/AIRAS_TRCTAB_Noto21-6_wolmo.sgy
+/home/dcuser/data/ActiveSeisField/noto_shikaH28-EW/fdata_hset_shikaH28-EW.sgy
+/home/dcuser/data/ActiveSeisField/noto_togi18/fdata_hset_togi18_rectified.sgy
+/home/dcuser/data/ActiveSeisField/noto21-3a/AIRAS_TRCTAB_Noto21-3A_wolmo.sgy

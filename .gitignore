@@ -59,35 +59,6 @@ proc/mobara
 .work/
 vendor/issue_forge
 vendor/issue_forge/
-proc/fbpick/site54/oof/
-site54_oof_6fold_lists/folds/fold05/heldout_fb.txt
+
 proc/tools/configs/fb_list_site54.txt
 proc/tools/configs/sgy_list_site54.txt
-site54_oof_coarse_runner/
-site54_oof_physics_runner/
-# Arakawa runner outputs
-proc/arakawa/outputs/*
-!proc/arakawa/outputs/.gitkeep
-proc/arakawa/generated_configs/
-proc/arakawa/coarse/
-proc/arakawa/robust/
-proc/arakawa/fine/
-proc/arakawa/grstat/
-proc/arakawa/qc/
-proc/arakawa/qc_no_fb/
-proc/arakawa/eval/
-proc/arakawa/fb_dummy/
-proc/arakawa/runtime_runs/
-proc/arakawa/*arakawa_physical_export_summary.json
-proc/arakawa/reference/*
-!proc/arakawa/reference/README.md
-
-# Keep Arakawa docs/configs/templates tracked
-!proc/arakawa/README.md
-!proc/arakawa/README_RUNTIME_SPEEDUP.md
-!proc/arakawa/MIGRATION.md
-!proc/arakawa/README_LAYOUT.md
-!proc/arakawa/configs/
-!proc/arakawa/configs/**
-!proc/arakawa/experiments/
-!proc/arakawa/experiments/**

@@ -1,0 +1,2 @@
+/home/dcuser/data/ActiveSeisField/2017_JCCS_noshiro_V-1/fb_merge_2017V-1.npy
+/home/dcuser/data/ActiveSeisField/2017_JCCS_noshiro_V-2/fb_merge_2017V-2.npy

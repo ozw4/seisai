@@ -1,0 +1,10 @@
+/home/dcuser/data/ActiveSeisField/Tachikawa2012/fb_All_0417.npy
+/home/dcuser/data/ActiveSeisField/Tachikawa2014/fb_Line2_rough.npy
+/home/dcuser/data/ActiveSeisField/aso18-1/fb_1227_Aso18-1.npy
+/home/dcuser/data/ActiveSeisField/aso18-2/fb_ml_prediction_rev.npy
+/home/dcuser/data/ActiveSeisField/aso18-2H/fb_ml_prediction_rev_0218.npy
+/home/dcuser/data/ActiveSeisField/aso19-1/fb_Aso19-1.npy
+/home/dcuser/data/ActiveSeisField/aso19-2/fb_Aso19-2.npy
+/home/dcuser/data/ActiveSeisField/aso19-3H/fb_Aso19-3H_okuda0210.npy
+/home/dcuser/data/ActiveSeisField/aso19-4H/fb_Aso19-4H.npy
+/home/dcuser/data/ActiveSeisField/aso19-6/fb_Aso19-6_okuda0205.npy
