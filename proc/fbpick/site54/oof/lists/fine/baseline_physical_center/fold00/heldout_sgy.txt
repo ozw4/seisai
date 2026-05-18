@@ -1,8 +1,0 @@
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_Kouga/DAIDAITOKU04_Kouga_shotgather_rectified.sgy
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_Oosaka/DAIDAITOKU04_Oosaka_shotgather_rectified.sgy
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_refraction/DAIDAITOKU04_Refraction_shotgather_rectified.sgy
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU_Suzuka/DAIDAITOKU04_Suzuka_shotgather_rectified.sgy
-/home/dcuser/data/ActiveSeisField/kks22-2/0151_iras_AI_trctab_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/kks22-3/0151_iras_AI_trctab_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/kks22-4/0151_iras_AI_trctab_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/mooka2016/data_TRCTAB__MDALL_SM.sgy

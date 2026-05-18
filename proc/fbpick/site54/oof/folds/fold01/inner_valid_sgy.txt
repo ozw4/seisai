@@ -1,6 +1,0 @@
-/home/dcuser/data/ActiveSeisField/jtsanage_L1ER/AIRAS_TRCTAB_L1ER-SNG_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/jtsanage_L1K-SNG/AIRAS_TRCTAB_L1K-SNG_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/jtsanage_L2R/AIRAS_TRCTAB_L2R-SNG_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/jtsanage_L3K/AIRAS_TRCTAB_L3K-SNG_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/jtsanage_L3R/AIRAS_TRCTAB_L3R-SN_wolmoG.sgy
-/home/dcuser/data/ActiveSeisField/jtsanage_L2K/AIRAS_TRCTAB_L2K-SNG_wolmo.sgy

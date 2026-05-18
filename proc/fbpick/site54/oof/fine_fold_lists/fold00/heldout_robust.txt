@@ -1,8 +1,0 @@
-/workspace/proc/fbpick/site54/oof/robust_oof/fold00/DAIDAITOKU04_Kouga__DAIDAITOKU04_Kouga_shotgather_rectified.robust.npz
-/workspace/proc/fbpick/site54/oof/robust_oof/fold00/DAIDAITOKU04_Oosaka__DAIDAITOKU04_Oosaka_shotgather_rectified.robust.npz
-/workspace/proc/fbpick/site54/oof/robust_oof/fold00/DAIDAITOKU04_refraction__DAIDAITOKU04_Refraction_shotgather_rectified.robust.npz
-/workspace/proc/fbpick/site54/oof/robust_oof/fold00/DAIDAITOKU_Suzuka__DAIDAITOKU04_Suzuka_shotgather_rectified.robust.npz
-/workspace/proc/fbpick/site54/oof/robust_oof/fold00/kks22-2__0151_iras_AI_trctab_wolmo.robust.npz
-/workspace/proc/fbpick/site54/oof/robust_oof/fold00/kks22-3__0151_iras_AI_trctab_wolmo.robust.npz
-/workspace/proc/fbpick/site54/oof/robust_oof/fold00/kks22-4__0151_iras_AI_trctab_wolmo.robust.npz
-/workspace/proc/fbpick/site54/oof/robust_oof/fold00/mooka2016__data_TRCTAB__MDALL_SM.robust.npz

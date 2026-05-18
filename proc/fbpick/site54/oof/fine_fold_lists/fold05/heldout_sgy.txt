@@ -1,9 +1,0 @@
-/home/dcuser/data/ActiveSeisField/2017_JCCS_noshiro_V-1/profiled-shot_2017V-1.sgy
-/home/dcuser/data/ActiveSeisField/2017_JCCS_noshiro_V-2/profiled-shot_2017V-2.sgy
-/home/dcuser/data/ActiveSeisField/iwaki2012_Line2/Line2_Deep_Geom.sgy
-/home/dcuser/data/ActiveSeisField/iwaki2012_Line3/Line3_Geom.sgy
-/home/dcuser/data/ActiveSeisField/kuju_L1H/AIRAS_TRCTAB_L1H_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/kuju_L2H/AIRAS_TRCTAB_L2H_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/kuju_L3H-RPG/AIRAS_TRCTAB_L3H-RPG_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/kuju_L4H-RPG/AIRAS_TRCTAB_L4H-RPG_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/shinjo22/AIRAS_TRCTAB_shinjo22_wolmo.sgy

@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_Kouga/kouga_fbtime.npy
-/home/dcuser/data/ActiveSeisField/kks22-3/fbout_iras.npy

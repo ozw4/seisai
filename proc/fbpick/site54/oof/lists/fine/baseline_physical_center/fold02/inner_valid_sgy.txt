@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/Tachikawa2014/Tachikawa2014_Shot-Record_Line2.sgy
-/home/dcuser/data/ActiveSeisField/okinawa2022_OH11-05/OH11-05_shot_rec_geom_set_rectified.sgy

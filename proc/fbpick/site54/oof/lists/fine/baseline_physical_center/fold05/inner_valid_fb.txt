@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/aso18-2/fb_ml_prediction_rev.npy
-/home/dcuser/data/ActiveSeisField/mooka2016/FB-time_tomo_temp0530.npy

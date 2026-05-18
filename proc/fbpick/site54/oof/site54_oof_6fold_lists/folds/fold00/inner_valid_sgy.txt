@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/2017_JCCS_noshiro_V-1/profiled-shot_2017V-1.sgy
-/home/dcuser/data/ActiveSeisField/2017_JCCS_noshiro_V-2/profiled-shot_2017V-2.sgy

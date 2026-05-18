@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/Tachikawa2012/shot-integra-geom_3D.sgy
-/home/dcuser/data/ActiveSeisField/Tachikawa2014/Tachikawa2014_Shot-Record_Line2.sgy

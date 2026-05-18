@@ -1,4 +1,0 @@
-/home/dcuser/data/ActiveSeisField/kuju_L1H/AIRAS_TRCTAB_L1H_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/kuju_L2H/AIRAS_TRCTAB_L2H_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/kuju_L3H-RPG/AIRAS_TRCTAB_L3H-RPG_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/kuju_L4H-RPG/AIRAS_TRCTAB_L4H-RPG_wolmo.sgy

@@ -1,8 +1,0 @@
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_Kouga/kouga_fbtime.npy
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_Oosaka/oosaka_fbtime.npy
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_refraction/refraction_fbtime.npy
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU_Suzuka/suzuka_fbtime.npy
-/home/dcuser/data/ActiveSeisField/kks22-2/fbout_iras.npy
-/home/dcuser/data/ActiveSeisField/kks22-3/fbout_iras.npy
-/home/dcuser/data/ActiveSeisField/kks22-4/fbout_iras.npy
-/home/dcuser/data/ActiveSeisField/mooka2016/FB-time_tomo_temp0530.npy

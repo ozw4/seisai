@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/jtsanage_L1K-SNG/AIRAS_TRCTAB_L1K-SNG_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/noto_shikaH28-EW/fdata_hset_shikaH28-EW.sgy

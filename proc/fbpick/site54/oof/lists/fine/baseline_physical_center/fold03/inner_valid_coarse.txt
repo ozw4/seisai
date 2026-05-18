@@ -1,2 +1,0 @@
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold04/02_coarse_infer/jtsanage_L1K-SNG__AIRAS_TRCTAB_L1K-SNG_wolmo.coarse.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold02/02_coarse_infer/noto_shikaH28-EW__fdata_hset_shikaH28-EW.coarse.npz

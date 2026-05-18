@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_Kouga/DAIDAITOKU04_Kouga_shotgather_rectified.sgy
-/home/dcuser/data/ActiveSeisField/kks22-3/0151_iras_AI_trctab_wolmo.sgy

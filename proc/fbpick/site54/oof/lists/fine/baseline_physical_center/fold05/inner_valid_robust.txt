@@ -1,2 +1,0 @@
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold03/03_physics/aso18-2__input_TRCTAB_ml_fbpick_Aso18-2_wolmo.robust.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold00/03_physics/mooka2016__data_TRCTAB__MDALL_SM.robust.npz

@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/kego2013_Chumitsu/02_2013Kego-fault_Chumitsu_Shot-record.sgy
-/home/dcuser/data/ActiveSeisField/kego2013_Hireso/01_2013Kego-fault_HiReso_Shot-record.sgy

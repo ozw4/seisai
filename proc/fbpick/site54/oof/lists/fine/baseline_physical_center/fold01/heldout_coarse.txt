@@ -1,9 +1,0 @@
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/02_coarse_infer/SouthIzu2015_A-line__A-line_shot.coarse.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/02_coarse_infer/SouthIzu2015_B-line__B-line_shot.coarse.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/02_coarse_infer/horonobe2020__fdata_hset_Horo20-3D.coarse.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/02_coarse_infer/okinawa2011_OH11-0A__OH11-0A_shot_rec_geom_set_rectified.coarse.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/02_coarse_infer/okinawa2022_OH11-02__OH11-02_shot_rec_geom_set_rectified.coarse.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/02_coarse_infer/okinawa2022_OH11-03__OH11-03_shot_rec_geom_set_rectified.coarse.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/02_coarse_infer/okinawa2022_OH11-04__OH11-04_shot_rec_geom_set_rectified.coarse.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/02_coarse_infer/okinawa2022_OH11-05__OH11-05_shot_rec_geom_set_rectified.coarse.npz
-/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold01/02_coarse_infer/okinawa2022_OH11-0B__OH11-0B_shot_rec_geom_set.coarse.npz

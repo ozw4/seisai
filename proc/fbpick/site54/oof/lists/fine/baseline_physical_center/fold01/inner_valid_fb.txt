@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/DAIDAITOKU04_Kouga/kouga_fbtime.npy
-/home/dcuser/data/ActiveSeisField/aso18-2/fb_ml_prediction_rev.npy

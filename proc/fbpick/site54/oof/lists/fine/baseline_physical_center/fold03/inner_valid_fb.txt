@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/jtsanage_L1K-SNG/L1K-SNG_fb_1216.npy
-/home/dcuser/data/ActiveSeisField/noto_shikaH28-EW/fb_shikaH28-EW.npy

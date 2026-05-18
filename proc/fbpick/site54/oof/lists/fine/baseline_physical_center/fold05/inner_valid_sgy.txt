@@ -1,2 +1,0 @@
-/home/dcuser/data/ActiveSeisField/aso18-2/input_TRCTAB_ml_fbpick_Aso18-2_wolmo.sgy
-/home/dcuser/data/ActiveSeisField/mooka2016/data_TRCTAB__MDALL_SM.sgy
