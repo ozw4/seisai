@@ -61,6 +61,14 @@ proc/mobara
 vendor/issue_forge
 vendor/issue_forge/
 
+# Generated Arakawa outputs are runtime artifacts.
+proc/arakawa/outputs/generated_configs/
+proc/arakawa/outputs/runtime_runs/
+proc/arakawa/outputs/grstat/
+proc/arakawa/generated_configs/
+proc/arakawa/runtime_runs/
+proc/arakawa/grstat/
+
 # Tracked metadata for the canonical site54 OOF fold-list split.
 !proc/fbpick/site54/oof/fold_lists/**/*.csv
 !proc/fbpick/site54/oof/fold_lists/**/*.json
