@@ -29,6 +29,13 @@ def _load_make_physics_fold_configs() -> ModuleType:
     )
 
 
+def _load_run_site54_oof_cv() -> ModuleType:
+    return _load_oof_script(
+        'run_site54_oof_cv.py',
+        'site54_run_site54_oof_cv',
+    )
+
+
 def _load_oof_script(script_name: str, module_name: str) -> ModuleType:
     script = (
         Path(__file__).resolve().parents[1]
@@ -268,3 +275,119 @@ def test_make_physics_defaults_write_configs_under_run_root(
     assert (run_root / 'configs' / 'fold00' / '04_physics_qc.yaml').is_file()
     assert not (cv_root / 'configs').exists()
     assert not (run_root / 'configs' / run_id).exists()
+
+
+def _write_runner_fold_lists(cv_root: Path) -> None:
+    fold_root = cv_root / 'fold_lists' / 'folds'
+    heldout_index = 0
+    for i in range(6):
+        fold = f'fold{i:02d}'
+        fold_dir = fold_root / fold
+        fold_dir.mkdir(parents=True)
+        train_sgy = [f'/data/{fold}/train{j}.sgy' for j in range(2)]
+        train_fb = [f'/data/{fold}/train{j}.fb.npy' for j in range(2)]
+        valid_sgy = [f'/data/{fold}/valid{j}.sgy' for j in range(1)]
+        valid_fb = [f'/data/{fold}/valid{j}.fb.npy' for j in range(1)]
+        heldout_sgy = [
+            f'/data/{fold}/heldout{heldout_index + j}.sgy' for j in range(9)
+        ]
+        heldout_fb = [
+            f'/data/{fold}/heldout{heldout_index + j}.fb.npy' for j in range(9)
+        ]
+        heldout_index += 9
+        for name, values in {
+            'train_sgy.txt': train_sgy,
+            'train_fb.txt': train_fb,
+            'inner_valid_sgy.txt': valid_sgy,
+            'inner_valid_fb.txt': valid_fb,
+            'heldout_sgy.txt': heldout_sgy,
+            'heldout_fb.txt': heldout_fb,
+        }.items():
+            (fold_dir / name).write_text(
+                '\n'.join(values) + '\n',
+                encoding='utf-8',
+            )
+
+
+def test_run_site54_oof_cv_dry_run_uses_run_scoped_paths(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    module = _load_run_site54_oof_cv()
+    cv_root = tmp_path / 'oof'
+    run_id = 'rerun_probe'
+
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        [
+            'run_site54_oof_cv.py',
+            '--repo-root',
+            str(tmp_path),
+            '--cv-root',
+            str(cv_root),
+            '--run-id',
+            run_id,
+            '--stage',
+            'all',
+            '--dry-run',
+        ],
+    )
+
+    assert module.main() == 0
+    out = capsys.readouterr().out
+    assert f'RUN_ROOT={cv_root / "runs" / run_id}' in out
+    assert f'CONFIG_ROOT={cv_root / "runs" / run_id / "configs"}' in out
+    assert str(cv_root / 'runs' / run_id / 'configs' / 'fold00') in out
+    assert str(
+        cv_root
+        / 'runs'
+        / run_id
+        / 'aggregate'
+        / '05_collect_oof_lists'
+        / 'fine_fold_lists'
+    ) in out
+    assert str(cv_root / 'configs') not in out
+    assert str(cv_root / 'lists') not in out
+    assert str(cv_root / 'logs') not in out
+    assert not (cv_root / 'runs' / run_id / 'manifest.yaml').exists()
+
+
+def test_run_site54_oof_cv_prepare_configs_writes_manifest_and_configs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _load_run_site54_oof_cv()
+    cv_root = tmp_path / 'oof'
+    run_id = 'rerun_probe'
+    run_root = cv_root / 'runs' / run_id
+    _write_runner_fold_lists(cv_root)
+
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        [
+            'run_site54_oof_cv.py',
+            '--repo-root',
+            str(tmp_path),
+            '--cv-root',
+            str(cv_root),
+            '--run-id',
+            run_id,
+            '--stage',
+            'prepare_configs',
+        ],
+    )
+
+    assert module.main() == 0
+    assert (run_root / 'manifest.yaml').is_file()
+    assert (run_root / 'configs' / 'fold00' / '01_coarse_train.yaml').is_file()
+    assert (run_root / 'configs' / 'fold00' / '02_coarse_infer.yaml').is_file()
+    assert (run_root / 'configs' / 'fold00' / '03_physics.yaml').is_file()
+    assert (run_root / 'configs' / 'fold00' / '04_physics_qc.yaml').is_file()
+    manifest = yaml.safe_load(
+        (run_root / 'manifest.yaml').read_text(encoding='utf-8'),
+    )
+    assert manifest['run_root'] == str(run_root)
+    assert manifest['config_root'] == str(run_root / 'configs')

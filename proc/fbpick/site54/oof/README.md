@@ -91,6 +91,33 @@ Use these stage names for manifests, logs, and run directories:
 | `07_fine_infer` | Run each fold's fine model on that fold's heldout surveys. | `runs/<run_id>/aggregate/05_collect_oof_lists/fine_fold_lists/foldXX/heldout_sgy.txt`, `heldout_robust.txt`, `heldout_coarse.txt`; checkpoint from `06_fine_train`. | `runs/<run_id>/foldXX/07_fine_infer/`. | `RUN_ID=baseline_physical_center proc/fbpick/site54/oof/scripts/run_fine_infer_fold.sh fold00 0` | Smoke uses one fold or a small heldout subset. Full writes predictions for all heldout surveys in all folds. | Heldout SGY, robust NPZ, and coarse NPZ are inference inputs. Heldout FB is not an inference config input; use it only in `08_eval` for final reporting. |
 | `08_eval` | Aggregate OOF prediction quality across folds. | `runs/<run_id>/aggregate/05_collect_oof_lists/fine_fold_lists/foldXX/heldout_sgy.txt`, `heldout_fb.txt`; fine predictions from `07_fine_infer`; optional coarse/robust stages. | `runs/<run_id>/aggregate/08_eval/`. | `python proc/fbpick/site54/oof/scripts/evaluate_fine_oof.py --run-id baseline_physical_center` | Smoke evaluates one fold or subset. Full evaluates all six folds and all requested stages. | Heldout FB is allowed for final reporting only. Evaluation choices must not be fed back into the same CV run's training. |
 
+## Unified Rerun Entry Point
+
+Use `scripts/run_site54_oof_cv.py` for clean reruns. It derives all run-scoped paths once and passes them explicitly to each stage:
+
+```bash
+python proc/fbpick/site54/oof/scripts/run_site54_oof_cv.py \
+  --run-id baseline_physical_center \
+  --stage all
+```
+
+Supported high-level stages are:
+
+```text
+prepare_configs
+coarse_train
+coarse_infer
+physics
+collect
+fine_configs
+fine_train
+fine_infer
+eval
+check
+```
+
+Use `--from-stage coarse_train --to-stage physics` for ranges, `--fold fold00` for fold-scoped stages, and `--dry-run` to print commands without executing them. `collect`, `fine_configs`, `eval`, and `check` require `--fold all`. The runner writes `runs/<run_id>/manifest.yaml` for non-dry runs and updates completed or failed stage status as stages finish.
+
 ## Run layout
 
 New CV outputs should use this layout:
