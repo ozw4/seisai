@@ -210,7 +210,7 @@ def main() -> int:
         help="run root containing foldXX/07_fine_infer outputs",
     )
     parser.add_argument(
-        "--pred-stage",
+        "--pred-stage-subdir",
         default="07_fine_infer",
         help="prediction stage directory under each fold in --pred-root",
     )
@@ -248,16 +248,17 @@ def main() -> int:
     args = parser.parse_args()
 
     cv_root = Path(args.cv_root)
+    run_root = cv_root / "runs" / args.run_id
     fold_list_root = (
         Path(args.fold_list_root)
         if args.fold_list_root
         else cv_root / "lists" / "fine" / args.run_id
     )
-    pred_root = Path(args.pred_root) if args.pred_root else cv_root / "runs" / args.run_id
+    pred_root = Path(args.pred_root) if args.pred_root else run_root
     out_dir = (
         Path(args.out_dir)
         if args.out_dir
-        else cv_root / "runs" / args.run_id / "aggregate" / "08_eval"
+        else run_root / "aggregate" / "08_eval"
     )
     thresholds_samples = parse_csv_numbers(args.thresholds_samples, dtype=float)
     thresholds_ms = parse_csv_numbers(args.thresholds_ms, dtype=float)
@@ -298,7 +299,7 @@ def main() -> int:
 
         for segy, fb_path in zip(sgys, fbs, strict=True):
             tag = build_fbpick_tag(segy)
-            final_path = pred_root / fold / args.pred_stage / build_final_npz_name(segy)
+            final_path = pred_root / fold / args.pred_stage_subdir / build_final_npz_name(segy)
             if not final_path.is_file():
                 raise FileNotFoundError(f"missing final npz: {final_path}")
 
@@ -526,9 +527,11 @@ def main() -> int:
     write_csv(out_dir / "top_errors_final.csv", top_error_rows)
 
     meta = {
+        "run_id": args.run_id,
+        "run_root": str(run_root),
         "fold_list_root": str(fold_list_root),
         "pred_root": str(pred_root),
-        "pred_stage": str(args.pred_stage),
+        "pred_stage_subdir": str(args.pred_stage_subdir),
         "out_dir": str(out_dir),
         "n_files": n_files,
         "stages": list(global_abs_by_stage),

@@ -6,6 +6,8 @@ from pathlib import Path
 import csv
 
 FOLDS = [f"fold{i:02d}" for i in range(6)]
+DEFAULT_CV_ROOT = Path('/workspace/proc/fbpick/site54/oof')
+DEFAULT_RUN_ID = 'baseline_physical_center'
 
 
 def read_list(path: Path) -> list[str]:
@@ -19,12 +21,18 @@ def prefixed_name(segy_path: str, suffix: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Collect OOF coarse/robust lists in original SGY/FB order.')
-    parser.add_argument('--oof-root', default='/workspace/proc/fbpick/site54/oof')
-    parser.add_argument('--out-dir', default='/workspace/proc/fbpick/site54/oof/lists')
+    parser.add_argument('--cv-root', type=Path, default=DEFAULT_CV_ROOT)
+    parser.add_argument('--run-id', default=DEFAULT_RUN_ID)
+    parser.add_argument('--run-root', type=Path, default=None)
+    parser.add_argument('--fold-list-root', type=Path, default=None)
+    parser.add_argument('--out-dir', type=Path, default=None)
     args = parser.parse_args()
 
-    oof_root = Path(args.oof_root)
-    lists_root = oof_root / 'fold_lists' / 'lists'
+    cv_root = args.cv_root
+    run_root = args.run_root or (cv_root / 'runs' / args.run_id)
+    fold_list_root = args.fold_list_root or (cv_root / 'fold_lists')
+    out_dir = args.out_dir or (run_root / 'aggregate' / '05_collect_oof_lists')
+    lists_root = fold_list_root / 'lists'
     all_sgy = read_list(lists_root / 'all_sgy.txt')
     all_fb = read_list(lists_root / 'all_fb.txt')
     if len(all_sgy) != len(all_fb):
@@ -33,8 +41,8 @@ def main() -> None:
     robust_by_name: dict[str, tuple[str, Path]] = {}
     coarse_by_name: dict[str, tuple[str, Path]] = {}
     for fold in FOLDS:
-        robust_dir = oof_root / 'robust_oof' / fold
-        coarse_dir = oof_root / 'coarse_oof' / fold
+        robust_dir = run_root / fold / '03_physics'
+        coarse_dir = run_root / fold / '02_coarse_infer'
         for p in robust_dir.glob('*.robust.npz'):
             if p.name in robust_by_name:
                 raise ValueError(f'duplicate robust output name: {p.name}')
@@ -73,7 +81,6 @@ def main() -> None:
             'robust_npz': str(r_path),
         })
 
-    out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / 'oof_train_sgy_all.txt').write_text('\n'.join(out_sgy) + '\n', encoding='utf-8')
     (out_dir / 'oof_train_fb_all.txt').write_text('\n'.join(out_fb) + '\n', encoding='utf-8')

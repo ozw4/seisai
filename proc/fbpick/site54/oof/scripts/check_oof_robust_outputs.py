@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np
 
 FOLDS = [f"fold{i:02d}" for i in range(6)]
+DEFAULT_CV_ROOT = Path('/workspace/proc/fbpick/site54/oof')
+DEFAULT_RUN_ID = 'baseline_physical_center'
 
 
 def read_list(path: Path) -> list[str]:
@@ -49,16 +51,20 @@ def check_schema(path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Check site54 OOF robust outputs.')
-    parser.add_argument('--oof-root', default='/workspace/proc/fbpick/site54/oof')
+    parser.add_argument('--cv-root', type=Path, default=DEFAULT_CV_ROOT)
+    parser.add_argument('--run-id', default=DEFAULT_RUN_ID)
+    parser.add_argument('--run-root', type=Path, default=None)
+    parser.add_argument('--fold-list-root', type=Path, default=None)
     parser.add_argument('--check-schema', action='store_true')
     args = parser.parse_args()
-    oof_root = Path(args.oof_root)
-    fold_root = oof_root / 'fold_lists' / 'folds'
+    cv_root = args.cv_root
+    run_root = args.run_root or (cv_root / 'runs' / args.run_id)
+    fold_root = (args.fold_list_root or (cv_root / 'fold_lists')) / 'folds'
     total_expected = 0
     total_found = 0
     for fold in FOLDS:
         heldout = read_list(fold_root / fold / 'heldout_sgy.txt')
-        out_dir = oof_root / 'robust_oof' / fold
+        out_dir = run_root / fold / '03_physics'
         files = sorted(out_dir.glob('*.robust.npz'))
         total_expected += len(heldout)
         total_found += len(files)

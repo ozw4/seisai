@@ -14,6 +14,18 @@ def read_list(path: Path) -> list[Path]:
     return items
 
 
+def assert_disjoint(fold: str, suffix: str, train: list[Path], valid: list[Path], held: list[Path]) -> None:
+    checks = {
+        'train/inner_valid': set(train).intersection(valid),
+        'train/heldout': set(train).intersection(held),
+        'inner_valid/heldout': set(valid).intersection(held),
+    }
+    overlaps = {name: values for name, values in checks.items() if values}
+    if overlaps:
+        details = ', '.join(f'{name}={len(values)}' for name, values in overlaps.items())
+        raise SystemExit(f'{fold}: {suffix} split overlap: {details}')
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description='Check OOF fold list files and optionally referenced data files.')
     ap.add_argument('--fold-list-root', type=Path, default=Path('/workspace/proc/fbpick/site54/oof/fold_lists'))
@@ -34,9 +46,14 @@ def main() -> None:
         valid_fb = read_list(d / 'inner_valid_fb.txt')
         held_sgy = read_list(d / 'heldout_sgy.txt')
         held_fb = read_list(d / 'heldout_fb.txt')
-        assert len(train_sgy) == len(train_fb), (fold, 'train', len(train_sgy), len(train_fb))
-        assert len(valid_sgy) == len(valid_fb), (fold, 'inner_valid', len(valid_sgy), len(valid_fb))
-        assert len(held_sgy) == len(held_fb), (fold, 'heldout', len(held_sgy), len(held_fb))
+        if len(train_sgy) != len(train_fb):
+            raise SystemExit(f'{fold}: train length mismatch: SGY={len(train_sgy)} FB={len(train_fb)}')
+        if len(valid_sgy) != len(valid_fb):
+            raise SystemExit(f'{fold}: inner_valid length mismatch: SGY={len(valid_sgy)} FB={len(valid_fb)}')
+        if len(held_sgy) != len(held_fb):
+            raise SystemExit(f'{fold}: heldout length mismatch: SGY={len(held_sgy)} FB={len(held_fb)}')
+        assert_disjoint(fold, 'SGY', train_sgy, valid_sgy, held_sgy)
+        assert_disjoint(fold, 'FB', train_fb, valid_fb, held_fb)
         duplicate_heldout = heldout_sgy_seen.intersection(held_sgy)
         if duplicate_heldout:
             raise SystemExit(f'duplicate heldout SGY in {fold}: {sorted(map(str, duplicate_heldout))}')
