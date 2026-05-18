@@ -73,6 +73,22 @@ proc/arakawa/grstat/
 !proc/fbpick/site54/oof/fold_lists/**/*.csv
 !proc/fbpick/site54/oof/fold_lists/**/*.json
 
+# Legacy/generated site54 OOF artifacts. New runs must write under oof/runs/<run_id>/.
+/proc/fbpick/site54/oof/configs/
+/proc/fbpick/site54/oof/lists/
+/proc/fbpick/site54/oof/logs/
+/proc/fbpick/site54/oof/folds/
+/proc/fbpick/site54/oof/site54_oof_6fold_lists/
+/proc/fbpick/site54/oof/fine_fold_lists/
+/proc/fbpick/site54/oof/coarse_oof/
+/proc/fbpick/site54/oof/robust_oof/
+/proc/fbpick/site54/oof/physics_qc/
+/proc/fbpick/site54/oof/fine_infer/
+/proc/fbpick/site54/oof/fine_eval/
+/proc/fbpick/site54/oof/coarse_fold*_train_out/
+/proc/fbpick/site54/fbpick_fine_train_oof*_out/
+/proc/fbpick/site54/fbpick_fine_infer*_out/
+
 # Generated site54 OOF run outputs are not tracked; keep small run manifests.
 proc/fbpick/site54/oof/runs/**
 !proc/fbpick/site54/oof/runs/

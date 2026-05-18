@@ -2,9 +2,7 @@
 set -euo pipefail
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST_ROOT="/workspace/proc/fbpick/site54/oof"
-RUN_ID="${RUN_ID:-baseline_physical_center}"
-RUN_ROOT="${RUN_ROOT:-$DEST_ROOT/runs/$RUN_ID}"
-mkdir -p "$DEST_ROOT/scripts" "$RUN_ROOT/logs/launcher"
+mkdir -p "$DEST_ROOT/scripts"
 
 if [ ! -d "$DEST_ROOT/fold_lists" ]; then
   cp -R "$SRC_DIR/fold_lists" "$DEST_ROOT/fold_lists"

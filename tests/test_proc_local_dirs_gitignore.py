@@ -35,3 +35,33 @@ def test_proc_local_work_dirs_are_ignored_by_git() -> None:
             check=False,
         )
         assert result.returncode == 0, path
+
+
+def test_site54_legacy_oof_artifacts_are_ignored_by_git() -> None:
+    try:
+        repo_result = subprocess.run(
+            ['git', 'rev-parse', '--is-inside-work-tree'],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        pytest.skip('git is not available')
+
+    if repo_result.returncode != 0:
+        pytest.skip('git ignore rules are only testable inside a git checkout')
+
+    paths = (
+        'proc/fbpick/site54/oof/configs/foo.yaml',
+        'proc/fbpick/site54/oof/lists/fine/foo.txt',
+        'proc/fbpick/site54/oof/logs/foo.log',
+        'proc/fbpick/site54/oof/coarse_oof/fold00/foo.npz',
+    )
+    for path in paths:
+        result = subprocess.run(
+            ['git', 'check-ignore', '--quiet', '--', path],
+            cwd=REPO_ROOT,
+            check=False,
+        )
+        assert result.returncode == 0, path

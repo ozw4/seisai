@@ -63,6 +63,42 @@ Deprecated for new runs:
 
 New fold-list references must use `/workspace/proc/fbpick/site54/oof/fold_lists`.
 
+## Clean Generated Artifacts
+
+Before a clean rerun, inspect generated legacy artifacts without deleting them:
+
+```bash
+python proc/fbpick/site54/oof/scripts/clean_generated_artifacts.py \
+  --cv-root /workspace/proc/fbpick/site54/oof \
+  --legacy-only \
+  --dry-run
+```
+
+Delete only the selected legacy artifacts after inspection:
+
+```bash
+python proc/fbpick/site54/oof/scripts/clean_generated_artifacts.py \
+  --cv-root /workspace/proc/fbpick/site54/oof \
+  --legacy-only \
+  --yes
+```
+
+`--legacy-only` targets deprecated generated paths such as `oof/configs`,
+`oof/lists`, `oof/logs`, old fold-list mirrors, old stage output roots, and
+the old site54 fine train/infer output roots. It does not target `README.md`,
+`fold_lists/`, or `scripts/`.
+
+Run-scoped outputs are deleted only when explicitly selected:
+
+```bash
+python proc/fbpick/site54/oof/scripts/clean_generated_artifacts.py \
+  --cv-root /workspace/proc/fbpick/site54/oof \
+  --run-id baseline_physical_center \
+  --dry-run
+```
+
+Use `--all-runs` to select every direct child under `oof/runs/`.
+
 ## Stage order
 
 Use these stage names for manifests, logs, and run directories:
