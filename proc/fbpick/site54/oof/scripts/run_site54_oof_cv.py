@@ -414,11 +414,6 @@ def commands_for_stage(
         return [
             command(
                 ["bash", paths.scripts_dir / "run_fine_infer_fold.sh", fold, gpu],
-                {
-                    "CONFIG_PATH": str(
-                        paths.config_root / fold / "07_fine_infer.yaml"
-                    )
-                },
             )
             for fold in folds
         ]

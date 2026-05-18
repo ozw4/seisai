@@ -158,7 +158,7 @@ Use these stage names for manifests, logs, and run directories:
 | `04_physics_qc` | Check robust outputs against heldout SGY/FB lists and summarize missing or mismatched outputs. | `fold_lists/folds/foldXX/heldout_sgy.txt`, `heldout_fb.txt`; coarse NPZ from `runs/<run_id>/foldXX/02_coarse_infer`; robust NPZ from `runs/<run_id>/foldXX/03_physics`; `runs/<run_id>/configs/foldXX/04_physics_qc.yaml`. | `runs/<run_id>/foldXX/04_physics_qc/`. | `RUN_ID=baseline_physical_center proc/fbpick/site54/oof/scripts/run_physics_fold.sh fold00` | Smoke checks one fold or a temporary subset. Full checks all six folds. | Heldout FB may be used for QC metrics after inference products already exist. Do not feed QC results back into training. |
 | `05_collect_oof_lists` | Collect coarse and robust OOF NPZ paths in canonical all-SGY order for fine training. | `fold_lists/lists/all_sgy.txt`, `all_fb.txt`; `runs/<run_id>/foldXX/02_coarse_infer/*.coarse.npz`; `runs/<run_id>/foldXX/03_physics/*.robust.npz`. | `runs/<run_id>/aggregate/05_collect_oof_lists/`. | `python proc/fbpick/site54/oof/scripts/collect_oof_robust_lists.py --run-id baseline_physical_center` | Smoke should collect from a smoke run directory. Full requires all 54 coarse and robust outputs. | Uses all heldout inference outputs as OOF features. No model fitting happens in this stage. |
 | `06_fine_train` | Train one fine model per fold using non-heldout surveys and their OOF robust features. | `runs/<run_id>/aggregate/05_collect_oof_lists/fine_fold_lists/foldXX/train_sgy.txt`, `train_fb.txt`, `train_robust.txt`; checkpoint selection uses `inner_valid_*` by default; config `runs/<run_id>/configs/foldXX/06_fine_train*.yaml`. | `runs/<run_id>/foldXX/06_fine_train/`; smoke: `runs/<run_id>/foldXX/06_fine_train_smoke/`. | `RUN_ID=baseline_physical_center proc/fbpick/site54/oof/scripts/run_fine_train_fold.sh fold00 0 full` | Smoke uses `06_fine_train_smoke.yaml` and short training in its own output directory. Full uses `06_fine_train.yaml`. | Heldout lists must not be used for training, validation, model selection, or early stopping. |
-| `07_fine_infer` | Run each fold's fine model on that fold's heldout surveys. | `runs/<run_id>/aggregate/05_collect_oof_lists/fine_fold_lists/foldXX/heldout_sgy.txt`, `heldout_robust.txt`, `heldout_coarse.txt`; checkpoint from `06_fine_train`. | `runs/<run_id>/foldXX/07_fine_infer/`. | `RUN_ID=baseline_physical_center proc/fbpick/site54/oof/scripts/run_fine_infer_fold.sh fold00 0` | Smoke uses one fold or a small heldout subset. Full writes predictions for all heldout surveys in all folds. | Heldout SGY, robust NPZ, and coarse NPZ are inference inputs. Heldout FB is not an inference config input; use it only in `08_eval` for final reporting. |
+| `07_fine_infer` | Run each fold's fine model on that fold's heldout surveys. | One generated `07_fine_infer*.yaml` config per heldout survey, each with one SGY, robust NPZ, and coarse NPZ entry; checkpoint from `06_fine_train`. | `runs/<run_id>/foldXX/07_fine_infer/`. | `RUN_ID=baseline_physical_center proc/fbpick/site54/oof/scripts/run_fine_infer_fold.sh fold00 0` | Smoke uses one fold or a small heldout subset. Full writes predictions for all heldout surveys in all folds. | Heldout SGY, robust NPZ, and coarse NPZ are inference inputs. Heldout FB is not an inference config input; use it only in `08_eval` for final reporting. |
 | `08_eval` | Aggregate OOF prediction quality across folds. | `runs/<run_id>/aggregate/05_collect_oof_lists/fine_fold_lists/foldXX/heldout_sgy.txt`, `heldout_fb.txt`; fine predictions from `07_fine_infer`; optional coarse/robust stages. | `runs/<run_id>/aggregate/08_eval/`. | `python proc/fbpick/site54/oof/scripts/evaluate_fine_oof.py --run-id baseline_physical_center` | Smoke evaluates one fold or subset. Full evaluates all six folds and all requested stages. | Heldout FB is allowed for final reporting only. Evaluation choices must not be fed back into the same CV run's training. |
 
 ## Unified Rerun Entry Point
@@ -205,6 +205,8 @@ runs/<run_id>/
       06_fine_train.yaml
       06_fine_train_smoke.yaml
       07_fine_infer.yaml
+      07_fine_infer_001.yaml
+      ...
   logs/
     launcher/
     fold00/
@@ -214,6 +216,8 @@ runs/<run_id>/
       04_physics_qc.log
       06_fine_train.log
       07_fine_infer.log
+      07_fine_infer_001.log
+      ...
   fold00/
     01_coarse_train/
     01_coarse_train_smoke/
@@ -269,6 +273,8 @@ runs/<run_id>/configs/fold00/03_physics.yaml
 runs/<run_id>/configs/fold00/04_physics_qc.yaml
 runs/<run_id>/configs/fold00/06_fine_train.yaml
 runs/<run_id>/configs/fold00/07_fine_infer.yaml
+runs/<run_id>/configs/fold00/07_fine_infer_001.yaml
+...
 ```
 
 Flat generated config names such as `config_train_fbpick_coarse_fold00.yaml`, `config_infer_fbpick_coarse_fold00_heldout.yaml`, `config_run_fbpick_physics_fold00_heldout.yaml`, `config_run_fbpick_physics_qc_fold00.yaml`, and `config_train_fbpick_fine_oof_fold00.yaml` are legacy compatibility artifacts. The config generators write them only when `--legacy-flat-configs true` is passed, and normal run commands must use the run-scoped config layout above.
@@ -399,9 +405,10 @@ so `ckpt/best.pt` is the final epoch checkpoint rather than the best validation
 loss checkpoint. `--fine-valid-policy heldout_metric_legacy` is available only
 for reproducing old behavior; it prints a warning because heldout loss is then
 used to choose `ckpt/best.pt`. Generated default-policy `06_fine_train*.yaml`
-files must not reference `heldout_*` list files. `07_fine_infer.yaml` may
-reference heldout SGY, robust NPZ, and coarse NPZ lists, but not heldout FB;
-heldout FB is reserved for final reporting in `08_eval`.
+files must not reference `heldout_*` list files. Fine inference configs are
+generated as `07_fine_infer.yaml`, `07_fine_infer_001.yaml`, and so on, with
+exactly one SGY, robust NPZ, and coarse NPZ entry per config. Heldout FB is
+reserved for final reporting in `08_eval`.
 
 ## Fold-list validation
 

@@ -94,24 +94,19 @@ def test_fine_infer_config_omits_fb_files_for_raw_only_runtime(
     tmp_path: Path,
 ) -> None:
     module = _load_make_fine_fold_configs()
-    paths = {
-        'heldout_sgy': tmp_path / 'heldout_sgy.txt',
-        'heldout_fb': tmp_path / 'heldout_fb.txt',
-        'heldout_robust': tmp_path / 'heldout_robust.txt',
-        'heldout_coarse': tmp_path / 'heldout_coarse.txt',
-    }
-
     cfg = module.fine_infer_config(
         base_cfg={'paths': {}, 'infer': {}},
-        paths=paths,
+        segy_file='/data/heldout.sgy',
+        robust_npz_file='/data/heldout.robust.npz',
+        coarse_npz_file='/data/heldout.coarse.npz',
         out_dir=tmp_path / 'run' / 'fold00' / '07_fine_infer',
         ckpt_path=tmp_path / 'run' / 'fold00' / '06_fine_train' / 'ckpt' / 'best.pt',
     )
 
     assert 'fb_files' not in cfg['paths']
-    assert cfg['paths']['segy_files'] == str(paths['heldout_sgy'])
-    assert cfg['paths']['robust_npz_files'] == str(paths['heldout_robust'])
-    assert cfg['paths']['coarse_npz_files'] == str(paths['heldout_coarse'])
+    assert cfg['paths']['segy_files'] == ['/data/heldout.sgy']
+    assert cfg['paths']['robust_npz_files'] == ['/data/heldout.robust.npz']
+    assert cfg['paths']['coarse_npz_files'] == ['/data/heldout.coarse.npz']
 
 
 def test_make_fine_defaults_write_under_run_root(
@@ -129,16 +124,23 @@ def test_make_fine_defaults_write_under_run_root(
     base_train = template_dir / 'fine_train.yaml'
     base_infer = template_dir / 'fine_infer.yaml'
 
-    sgys = [str(data_dir / f'survey{i}.sgy') for i in range(6)]
-    fbs = [str(data_dir / f'survey{i}.fb.npy') for i in range(6)]
-    robust = [str(data_dir / f'survey{i}.robust.npz') for i in range(6)]
-    coarse = [str(data_dir / f'survey{i}.coarse.npz') for i in range(6)]
+    sgys = [str(data_dir / f'survey{i}.sgy') for i in range(7)]
+    fbs = [str(data_dir / f'survey{i}.fb.npy') for i in range(7)]
+    robust = [str(data_dir / f'survey{i}.robust.npz') for i in range(7)]
+    coarse = [str(data_dir / f'survey{i}.coarse.npz') for i in range(7)]
 
     for i in range(6):
         fold_dir = fold_root / f'fold{i:02d}'
         fold_dir.mkdir(parents=True)
-        (fold_dir / 'heldout_sgy.txt').write_text(sgys[i] + '\n', encoding='utf-8')
-        (fold_dir / 'heldout_fb.txt').write_text(fbs[i] + '\n', encoding='utf-8')
+        heldout_indices = [0, 1] if i == 0 else [i + 1]
+        (fold_dir / 'heldout_sgy.txt').write_text(
+            '\n'.join(sgys[idx] for idx in heldout_indices) + '\n',
+            encoding='utf-8',
+        )
+        (fold_dir / 'heldout_fb.txt').write_text(
+            '\n'.join(fbs[idx] for idx in heldout_indices) + '\n',
+            encoding='utf-8',
+        )
 
     oof_list_dir.mkdir(parents=True)
     (oof_list_dir / 'oof_train_sgy_all.txt').write_text(
@@ -184,13 +186,23 @@ def test_make_fine_defaults_write_under_run_root(
 
     assert module.main() == 0
     assert (run_root / 'configs' / 'fold00' / '06_fine_train.yaml').is_file()
+    assert (run_root / 'configs' / 'fold00' / '07_fine_infer.yaml').is_file()
+    assert (run_root / 'configs' / 'fold00' / '07_fine_infer_001.yaml').is_file()
     train_cfg = yaml.safe_load(
         (run_root / 'configs' / 'fold00' / '06_fine_train.yaml').read_text(
             encoding='utf-8',
         ),
     )
+    infer_cfg = yaml.safe_load(
+        (run_root / 'configs' / 'fold00' / '07_fine_infer.yaml').read_text(
+            encoding='utf-8',
+        ),
+    )
     for key, value in train_cfg['paths'].items():
         assert 'heldout_' not in str(value), (key, value)
+    assert infer_cfg['paths']['segy_files'] == [sgys[0]]
+    assert infer_cfg['paths']['robust_npz_files'] == [robust[0]]
+    assert infer_cfg['paths']['coarse_npz_files'] == [coarse[0]]
     assert (
         run_root
         / 'aggregate'

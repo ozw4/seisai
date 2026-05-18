@@ -20,12 +20,12 @@ FINE_TRAIN_HELDOUT_FORBIDDEN_KEYS = (
     "infer_fb_files",
     "infer_robust_npz_files",
 )
-FINE_INFER_HELDOUT_ALLOWED_KEYS = {
-    "segy_files": "heldout_sgy.txt",
-    "robust_npz_files": "heldout_robust.txt",
-    "coarse_npz_files": "heldout_coarse.txt",
-}
-FINE_INFER_ALLOWED_PATH_KEYS = set(FINE_INFER_HELDOUT_ALLOWED_KEYS) | {
+FINE_INFER_REQUIRED_SINGLE_ENTRY_KEYS = (
+    "segy_files",
+    "robust_npz_files",
+    "coarse_npz_files",
+)
+FINE_INFER_ALLOWED_PATH_KEYS = set(FINE_INFER_REQUIRED_SINGLE_ENTRY_KEYS) | {
     "fb_files",
     "out_dir",
 }
@@ -414,12 +414,14 @@ def strict_check_fine_infer_config(*, config_path: Path) -> str | None:
     if paths.get("fb_files") is not None:
         return f"fb_files_set={paths['fb_files']}"
 
-    for key, expected_name in FINE_INFER_HELDOUT_ALLOWED_KEYS.items():
+    for key in FINE_INFER_REQUIRED_SINGLE_ENTRY_KEYS:
         value = paths.get(key)
-        if not isinstance(value, str):
-            return f"{key}_not_listfile={value}"
-        if Path(value).name != expected_name:
-            return f"{key}_not_{expected_name}={value}"
+        if not (
+            isinstance(value, list)
+            and len(value) == 1
+            and isinstance(value[0], str)
+        ):
+            return f"{key}_not_single_entry={value}"
 
     for key, raw in paths.items():
         values = raw if isinstance(raw, list) else [raw]
@@ -562,16 +564,46 @@ def main() -> int:
             else (),
         )
         if args.strict:
-            strict_error = strict_check_fine_infer_config(
-                config_path=config_root / fold / "07_fine_infer.yaml",
+            fine_infer_config_paths = [config_root / fold / "07_fine_infer.yaml"]
+            fine_infer_config_paths.extend(
+                sorted((config_root / fold).glob("07_fine_infer_*.yaml"))
             )
-            if strict_error:
+            strict_errors = [
+                f"{path.name}:{error}"
+                for path in fine_infer_config_paths
+                if (error := strict_check_fine_infer_config(config_path=path))
+            ]
+            if len(fine_infer_config_paths) != len(heldout_sgy):
+                strict_errors.append(
+                    f"config_count={len(fine_infer_config_paths)}/"
+                    f"{len(heldout_sgy)}"
+                )
+            configured_sgy: list[str] = []
+            for path in fine_infer_config_paths:
+                if not path.is_file():
+                    continue
+                cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+                paths_cfg = cfg.get("paths") if isinstance(cfg, dict) else None
+                value = (
+                    paths_cfg.get("segy_files")
+                    if isinstance(paths_cfg, dict)
+                    else None
+                )
+                if isinstance(value, list) and len(value) == 1:
+                    configured_sgy.append(str(value[0]))
+            missing_sgy = sorted(set(heldout_sgy) - set(configured_sgy))
+            extra_sgy = sorted(set(configured_sgy) - set(heldout_sgy))
+            if missing_sgy:
+                strict_errors.append(f"missing_sgy={len(missing_sgy)}")
+            if extra_sgy:
+                strict_errors.append(f"extra_sgy={len(extra_sgy)}")
+            if strict_errors:
                 add_result(
                     results,
                     fold=fold,
                     stage="07_fine_infer_config",
                     ok=False,
-                    detail=strict_error,
+                    detail=";".join(strict_errors),
                 )
             else:
                 add_result(
@@ -579,7 +611,7 @@ def main() -> int:
                     fold=fold,
                     stage="07_fine_infer_config",
                     ok=True,
-                    detail=f"path={config_root / fold / '07_fine_infer.yaml'}",
+                    detail=f"n={len(fine_infer_config_paths)}",
                 )
 
     check_collect_outputs(results, run_root=run_root)

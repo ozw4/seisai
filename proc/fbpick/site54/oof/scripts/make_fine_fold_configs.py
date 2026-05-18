@@ -25,12 +25,12 @@ TRAIN_HELDOUT_FORBIDDEN_KEYS = (
     "infer_fb_files",
     "infer_robust_npz_files",
 )
-INFER_HELDOUT_ALLOWED_KEYS = {
-    "segy_files": "heldout_sgy.txt",
-    "robust_npz_files": "heldout_robust.txt",
-    "coarse_npz_files": "heldout_coarse.txt",
-}
-INFER_ALLOWED_PATH_KEYS = set(INFER_HELDOUT_ALLOWED_KEYS) | {"fb_files", "out_dir"}
+INFER_REQUIRED_SINGLE_ENTRY_KEYS = (
+    "segy_files",
+    "robust_npz_files",
+    "coarse_npz_files",
+)
+INFER_ALLOWED_PATH_KEYS = set(INFER_REQUIRED_SINGLE_ENTRY_KEYS) | {"fb_files", "out_dir"}
 
 
 def parse_bool(value: object) -> bool:
@@ -137,15 +137,15 @@ def ensure_fine_infer_heldout_policy(*, cfg: dict, config_name: str) -> None:
         )
     if "fb_files" in paths and paths["fb_files"] is not None:
         raise RuntimeError(f"{config_name}: paths.fb_files must not be set")
-    for key, expected_name in INFER_HELDOUT_ALLOWED_KEYS.items():
+    for key in INFER_REQUIRED_SINGLE_ENTRY_KEYS:
         value = paths.get(key)
-        if not isinstance(value, str):
+        if not (
+            isinstance(value, list)
+            and len(value) == 1
+            and isinstance(value[0], str)
+        ):
             raise RuntimeError(
-                f"{config_name}: paths.{key} must be a listfile path"
-            )
-        if Path(value).name != expected_name:
-            raise RuntimeError(
-                f"{config_name}: paths.{key} must reference {expected_name}, "
+                f"{config_name}: paths.{key} must be a single-entry list, "
                 f"got {value}"
             )
     for raw in paths.values():
@@ -213,20 +213,28 @@ def fine_train_config(
 def fine_infer_config(
     *,
     base_cfg: dict,
-    paths: dict[str, Path],
+    segy_file: str,
+    robust_npz_file: str,
+    coarse_npz_file: str,
     out_dir: Path,
     ckpt_path: Path,
 ) -> dict:
     cfg = copy.deepcopy(base_cfg)
     cfg.setdefault("paths", {})
-    cfg["paths"]["segy_files"] = str(paths["heldout_sgy"])
+    cfg["paths"]["segy_files"] = [segy_file]
     cfg["paths"].pop("fb_files", None)
-    cfg["paths"]["robust_npz_files"] = str(paths["heldout_robust"])
-    cfg["paths"]["coarse_npz_files"] = str(paths["heldout_coarse"])
+    cfg["paths"]["robust_npz_files"] = [robust_npz_file]
+    cfg["paths"]["coarse_npz_files"] = [coarse_npz_file]
     cfg["paths"]["out_dir"] = str(out_dir)
     cfg.setdefault("infer", {})
     cfg["infer"]["ckpt_path"] = str(ckpt_path)
     return cfg
+
+
+def fine_infer_config_name(index: int) -> str:
+    if index == 0:
+        return "07_fine_infer.yaml"
+    return f"07_fine_infer_{index:03d}.yaml"
 
 
 def main() -> int:
@@ -425,12 +433,6 @@ def main() -> int:
             policy=args.fine_valid_policy,
         )
         set_smoke_overrides(smoke_cfg)
-        infer_cfg = fine_infer_config(
-            base_cfg=base_infer_cfg,
-            paths=paths,
-            out_dir=run_root / fold / "07_fine_infer",
-            ckpt_path=run_root / fold / "06_fine_train" / "ckpt" / "best.pt",
-        )
         ensure_no_heldout_train_paths(
             cfg=train_cfg,
             config_name=f"{fold}/06_fine_train.yaml",
@@ -441,27 +443,42 @@ def main() -> int:
             config_name=f"{fold}/06_fine_train_smoke.yaml",
             policy=args.fine_valid_policy,
         )
-        ensure_fine_infer_heldout_policy(
-            cfg=infer_cfg,
-            config_name=f"{fold}/07_fine_infer.yaml",
-        )
 
         fold_config_dir = config_root / fold
         out_train_cfg = fold_config_dir / "06_fine_train.yaml"
         out_smoke_cfg = fold_config_dir / "06_fine_train_smoke.yaml"
-        out_infer_cfg = fold_config_dir / "07_fine_infer.yaml"
+        infer_cfgs: list[tuple[Path, dict]] = []
+        ckpt_path = run_root / fold / "06_fine_train" / "ckpt" / "best.pt"
+        for infer_idx, all_idx in enumerate(held_idx):
+            out_infer_cfg = fold_config_dir / fine_infer_config_name(infer_idx)
+            infer_cfg = fine_infer_config(
+                base_cfg=base_infer_cfg,
+                segy_file=all_sgy[all_idx],
+                robust_npz_file=all_robust[all_idx],
+                coarse_npz_file=all_coarse[all_idx],
+                out_dir=run_root / fold / "07_fine_infer",
+                ckpt_path=ckpt_path,
+            )
+            ensure_fine_infer_heldout_policy(
+                cfg=infer_cfg,
+                config_name=f"{fold}/{out_infer_cfg.name}",
+            )
+            infer_cfgs.append((out_infer_cfg, infer_cfg))
 
         print(
             f"{fold}: train={len(train_idx)} inner_valid={len(inner_idx)} "
-            f"heldout={len(held_idx)} -> {fold_config_dir}"
+            f"heldout={len(held_idx)} fine_infer_configs={len(infer_cfgs)} "
+            f"-> {fold_config_dir}"
         )
         if not args.dry_run:
             for key, path in paths.items():
                 write_plain_list(path, values[key])
         write_yaml(out_train_cfg, train_cfg, dry_run=args.dry_run)
         write_yaml(out_smoke_cfg, smoke_cfg, dry_run=args.dry_run)
-        write_yaml(out_infer_cfg, infer_cfg, dry_run=args.dry_run)
-        generated.extend([out_train_cfg, out_smoke_cfg, out_infer_cfg])
+        for out_infer_cfg, infer_cfg in infer_cfgs:
+            write_yaml(out_infer_cfg, infer_cfg, dry_run=args.dry_run)
+        generated.extend([out_train_cfg, out_smoke_cfg])
+        generated.extend(path for path, _ in infer_cfgs)
 
         if args.legacy_flat_configs:
             write_yaml(
@@ -476,7 +493,7 @@ def main() -> int:
             )
             write_yaml(
                 config_root / f"config_infer_fbpick_fine_oof_{fold}.yaml",
-                infer_cfg,
+                infer_cfgs[0][1],
                 dry_run=args.dry_run,
             )
         heldout_all_keys.extend(held_keys)
