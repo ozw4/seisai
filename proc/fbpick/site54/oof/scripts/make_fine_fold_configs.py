@@ -159,7 +159,6 @@ def fine_infer_config(
     cfg = copy.deepcopy(base_cfg)
     cfg.setdefault("paths", {})
     cfg["paths"]["segy_files"] = str(paths["heldout_sgy"])
-    cfg["paths"]["fb_files"] = str(paths["heldout_fb"])
     cfg["paths"]["robust_npz_files"] = str(paths["heldout_robust"])
     cfg["paths"]["coarse_npz_files"] = str(paths["heldout_coarse"])
     cfg["paths"]["out_dir"] = str(out_dir)

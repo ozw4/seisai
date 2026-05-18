@@ -57,3 +57,27 @@ def test_fine_train_config_fixed_last_uses_last_checkpoint_policy(
         'metric': 'last',
         'mode': 'max',
     }
+
+
+def test_fine_infer_config_omits_fb_files_for_raw_only_runtime(
+    tmp_path: Path,
+) -> None:
+    module = _load_make_fine_fold_configs()
+    paths = {
+        'heldout_sgy': tmp_path / 'heldout_sgy.txt',
+        'heldout_fb': tmp_path / 'heldout_fb.txt',
+        'heldout_robust': tmp_path / 'heldout_robust.txt',
+        'heldout_coarse': tmp_path / 'heldout_coarse.txt',
+    }
+
+    cfg = module.fine_infer_config(
+        base_cfg={'paths': {}, 'infer': {}},
+        paths=paths,
+        out_dir=tmp_path / 'run' / 'fold00' / '07_fine_infer',
+        ckpt_path=tmp_path / 'run' / 'fold00' / '06_fine_train' / 'ckpt' / 'best.pt',
+    )
+
+    assert 'fb_files' not in cfg['paths']
+    assert cfg['paths']['segy_files'] == str(paths['heldout_sgy'])
+    assert cfg['paths']['robust_npz_files'] == str(paths['heldout_robust'])
+    assert cfg['paths']['coarse_npz_files'] == str(paths['heldout_coarse'])
