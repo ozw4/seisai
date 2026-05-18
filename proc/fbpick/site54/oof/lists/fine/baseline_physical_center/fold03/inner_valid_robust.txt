@@ -1,2 +1,2 @@
-/workspace/proc/fbpick/site54/oof/robust_oof/fold04/jtsanage_L1K-SNG__AIRAS_TRCTAB_L1K-SNG_wolmo.robust.npz
-/workspace/proc/fbpick/site54/oof/robust_oof/fold02/noto_shikaH28-EW__fdata_hset_shikaH28-EW.robust.npz
+/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold04/03_physics/jtsanage_L1K-SNG__AIRAS_TRCTAB_L1K-SNG_wolmo.robust.npz
+/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold02/03_physics/noto_shikaH28-EW__fdata_hset_shikaH28-EW.robust.npz

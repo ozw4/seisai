@@ -1,2 +1,2 @@
-/workspace/proc/fbpick/site54/oof/coarse_oof/fold00/DAIDAITOKU04_Kouga__DAIDAITOKU04_Kouga_shotgather_rectified.coarse.npz
-/workspace/proc/fbpick/site54/oof/coarse_oof/fold00/kks22-3__0151_iras_AI_trctab_wolmo.coarse.npz
+/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold00/02_coarse_infer/DAIDAITOKU04_Kouga__DAIDAITOKU04_Kouga_shotgather_rectified.coarse.npz
+/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold00/02_coarse_infer/kks22-3__0151_iras_AI_trctab_wolmo.coarse.npz

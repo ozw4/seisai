@@ -1,2 +1,2 @@
-/workspace/proc/fbpick/site54/oof/robust_oof/fold05/2017_JCCS_noshiro_V-2__profiled-shot_2017V-2.robust.npz
-/workspace/proc/fbpick/site54/oof/robust_oof/fold05/kuju_L4H-RPG__AIRAS_TRCTAB_L4H-RPG_wolmo.robust.npz
+/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold05/03_physics/2017_JCCS_noshiro_V-2__profiled-shot_2017V-2.robust.npz
+/workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold05/03_physics/kuju_L4H-RPG__AIRAS_TRCTAB_L4H-RPG_wolmo.robust.npz

@@ -1,5 +1,6 @@
 paths:
   segy_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold02/heldout_sgy.txt
+  fb_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold02/heldout_fb.txt
   robust_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold02/heldout_robust.txt
   coarse_npz_files: /workspace/proc/fbpick/site54/oof/lists/fine/baseline_physical_center/fold02/heldout_coarse.txt
   out_dir: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold02/07_fine_infer
