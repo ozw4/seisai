@@ -1,0 +1,118 @@
+paths:
+  segy_files: /workspace/proc/fbpick/site54/oof/fold_lists/folds/fold05/heldout_sgy.txt
+  coarse_npz_dir: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold05/02_coarse_infer
+  out_dir: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/fold05/03_physics
+feasible_band: {}
+trend: {}
+residual_statics: {}
+keep_reject: {}
+robust_center: {}
+physical_trend:
+  enabled: true
+  fit_kind: two_piece_irls_autobreak
+  use_geometry_offset: true
+  min_offset_spread_m: 1.0
+  coord_group_tol_m: 1.0
+  segment_by_offset_sign: true
+  split_by_offset_gap: true
+  gap_ratio: 5.0
+  min_gap_m: null
+neighbor_context:
+  enabled: true
+  mode: nearest_source_xy
+  k_neighbors: 3
+  max_source_distance_m: null
+  include_self: true
+physical_prefilter:
+  enabled: true
+  vmin_m_s: 300.0
+  vmax_m_s: 6000.0
+  t0_lo_ms: -20.0
+  t0_hi_ms: 200.0
+  pmax_min: 0.05
+  use_existing_feasible_mask: false
+physical_projection:
+  mode: model
+two_piece_ransac:
+  n_iter: 200
+  inlier_th_ms: 40.0
+  min_pts: 8
+  n_break_cand: 64
+  q_lo: 0.15
+  q_hi: 0.85
+  seed: 0
+  slope_eps: 1.0e-06
+  sort_offsets: true
+two_piece_irls:
+  huber_c: 1.345
+  iters: 3
+  min_pts: 8
+  n_break_cand: 24
+  q_lo: 0.15
+  q_hi: 0.85
+  slope_eps: 1.0e-06
+  sort_offsets: true
+physical_runtime:
+  fit_policy: anchor_source_xy
+  diagnostics_enabled: true
+  write_runtime_summary: true
+  diagnostics:
+    enabled: true
+    detailed_timing: false
+    save_json: true
+    save_npz_scalars: true
+    save_per_trace_context: false
+  observation_sampling:
+    enabled: true
+    method: offset_bin
+    max_obs_per_fit: 64
+    n_offset_bins: 64
+    bin_pick: pmax_max
+    min_obs_per_fit_after_sampling: 16
+    preserve_edge_bins: true
+  fit_executor:
+    enabled: true
+    backend: thread
+    max_workers: 4
+    torch_num_threads_per_worker: 1
+    chunksize: 4
+  anchor_selection:
+    enabled: true
+    mode: source_xy_stride
+    anchor_stride_source_groups: 5
+    anchor_spacing_m: null
+    include_first: true
+    include_last: true
+  anchor_reuse:
+    enabled: true
+    non_anchor_mode: nearest_anchor_plus_t0_shift
+    max_anchor_distance_m: null
+    reuse_segment_policy: same_side_and_gap
+    fallback_if_no_compatible_segment: robust
+  t0_shift:
+    enabled: true
+    estimator: median
+    min_valid_for_t0_shift: 8
+    t0_shift_clip_ms: 60.0
+    use_physical_prefilter_mask: true
+    use_pmax_min: true
+  adaptive_refit:
+    enabled: false
+    resid_p90_ms_gt: 50.0
+    median_abs_shift_ms_gt: 40.0
+    min_valid_for_resid_check: 8
+    fallback_if_refit_fails: nearest_anchor_plus_t0_shift
+  progress:
+    enabled: true
+    level: fit
+    interval_sec: 5.0
+    min_interval_fit_calls: 10
+    stream: stderr
+    use_tqdm: auto
+    include_stage_events: true
+    include_summary: true
+    print_on_non_tty: true
+  trend_result_mode: lazy
+  geometry_invalid_fallback: robust
+  group_invalid_fallback: robust
+  legacy_trend_output: auto

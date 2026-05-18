@@ -1,15 +1,38 @@
 #!/usr/bin/env python3
+"""Render site54 OOF coarse configs."""
 from __future__ import annotations
+
 import argparse
 from pathlib import Path
+
 import yaml
+
+FOLDS = [f'fold{i:02d}' for i in range(6)]
 
 
 def rel_or_abs(p: Path) -> str:
+    """Return a path string for YAML serialization."""
     return str(p)
 
 
+def parse_bool(value: object) -> bool:
+    """Parse a command-line boolean value."""
+    if isinstance(value, bool):
+        return value
+    if not isinstance(value, str):
+        msg = f'expected boolean value, got {value!r}'
+        raise argparse.ArgumentTypeError(msg)
+    lowered = value.lower()
+    if lowered in {'1', 'true', 'yes', 'y', 'on'}:
+        return True
+    if lowered in {'0', 'false', 'no', 'n', 'off'}:
+        return False
+    msg = f'expected boolean value, got {value!r}'
+    raise argparse.ArgumentTypeError(msg)
+
+
 def model_cfg() -> dict:
+    """Build the shared coarse model config."""
     return {
         'backbone': 'resnet18',
         'pretrained': False,
@@ -23,6 +46,7 @@ def model_cfg() -> dict:
 
 
 def base_common(args: argparse.Namespace) -> dict:
+    """Build shared coarse train/infer config."""
     return {
         'coarse': {'input_mode': 'global_anchor_resize'},
         'dataset': {
@@ -58,17 +82,20 @@ def base_common(args: argparse.Namespace) -> dict:
     }
 
 
-def train_config(args: argparse.Namespace, fold: str, smoke: bool = False) -> dict:
+def train_config(args: argparse.Namespace, fold: str, *, smoke: bool = False) -> dict:
+    """Build one fold's coarse training config."""
     root = args.fold_list_root / 'folds' / fold
-    train_prefix = 'train_all_nonheldout' if args.train_list_mode == 'all_nonheldout' else 'train'
+    train_prefix = (
+        'train_all_nonheldout' if args.train_list_mode == 'all_nonheldout' else 'train'
+    )
+    out_stage = '01_coarse_train_smoke' if smoke else '01_coarse_train'
     cfg = base_common(args)
-    out_name = f'coarse_{fold}_train_smoke_out' if smoke else f'coarse_{fold}_train_out'
     cfg['paths'] = {
         'segy_files': rel_or_abs(root / f'{train_prefix}_sgy.txt'),
         'fb_files': rel_or_abs(root / f'{train_prefix}_fb.txt'),
         'infer_segy_files': rel_or_abs(root / 'inner_valid_sgy.txt'),
         'infer_fb_files': rel_or_abs(root / 'inner_valid_fb.txt'),
-        'out_dir': rel_or_abs(args.out_root / out_name),
+        'out_dir': rel_or_abs(args.run_root / fold / out_stage),
     }
     cfg['train'] = {
         'seed': args.seed,
@@ -95,16 +122,19 @@ def train_config(args: argparse.Namespace, fold: str, smoke: bool = False) -> di
 
 
 def infer_config(args: argparse.Namespace, fold: str) -> dict:
+    """Build one fold's coarse heldout inference config."""
     root = args.fold_list_root / 'folds' / fold
     cfg = base_common(args)
-    # raw inference does not need fbgate; keeping it harmless if parser ignores/accepts it.
+    # Raw inference does not need fbgate.
     cfg.pop('fbgate', None)
     cfg['paths'] = {
         'segy_files': rel_or_abs(root / 'heldout_sgy.txt'),
-        'out_dir': rel_or_abs(args.out_root / 'coarse_oof' / fold),
+        'out_dir': rel_or_abs(args.run_root / fold / '02_coarse_infer'),
     }
     cfg['infer'] = {
-        'ckpt_path': rel_or_abs(args.out_root / f'coarse_{fold}_train_out' / 'ckpt' / 'best.pt'),
+        'ckpt_path': rel_or_abs(
+            args.run_root / fold / '01_coarse_train' / 'ckpt' / 'best.pt'
+        ),
         'device': args.infer_device,
         'batch_size': 1,
         'num_workers': args.num_workers,
@@ -115,17 +145,41 @@ def infer_config(args: argparse.Namespace, fold: str) -> dict:
 
 
 def write_yaml(path: Path, data: dict) -> None:
+    """Write one YAML file and print its path."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding='utf-8')
+    path.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+        encoding='utf-8',
+    )
     print(path)
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description='Render 6-fold global-anchor fbpick-coarse configs.')
-    ap.add_argument('--fold-list-root', type=Path, default=Path('/workspace/proc/fbpick/site54/oof/fold_lists'))
-    ap.add_argument('--out-root', type=Path, default=Path('/workspace/proc/fbpick/site54/oof'))
-    ap.add_argument('--config-dir', type=Path, default=Path('/workspace/proc/fbpick/site54/oof/configs'))
-    ap.add_argument('--train-list-mode', choices=['strict', 'all_nonheldout'], default='strict')
+    """Render all fold configs."""
+    ap = argparse.ArgumentParser(
+        description='Render 6-fold global-anchor fbpick-coarse configs.'
+    )
+    ap.add_argument(
+        '--cv-root',
+        type=Path,
+        default=Path('/workspace/proc/fbpick/site54/oof'),
+    )
+    ap.add_argument('--run-id', default='baseline_physical_center')
+    ap.add_argument('--run-root', type=Path, default=None)
+    ap.add_argument('--fold-list-root', type=Path, default=None)
+    ap.add_argument('--config-root', type=Path, default=None)
+    ap.add_argument(
+        '--legacy-flat-configs',
+        nargs='?',
+        const=True,
+        default=False,
+        type=parse_bool,
+    )
+    ap.add_argument(
+        '--train-list-mode',
+        choices=['strict', 'all_nonheldout'],
+        default='strict',
+    )
     ap.add_argument('--epochs', type=int, default=30)
     ap.add_argument('--samples-per-epoch', type=int, default=256)
     ap.add_argument('--batch-size', type=int, default=4)
@@ -146,17 +200,39 @@ def main() -> None:
     ap.add_argument('--infer-endian', default='big')
     ap.add_argument('--time-ref-sec', type=float, default=20.0)
     ap.add_argument('--offset-ref-m', type=float, default=2000.0)
-    ap.add_argument('--fbgate-apply-on', default='any')
-    ap.add_argument('--fbgate-min-pick-ratio', type=float, default=0.3)
+    ap.add_argument('--fbgate-apply-on', default='off')
+    ap.add_argument('--fbgate-min-pick-ratio', type=float, default=0.001)
     args = ap.parse_args()
+
+    args.cv_root = args.cv_root.resolve()
+    args.run_root = (args.run_root or args.cv_root / 'runs' / args.run_id).resolve()
+    args.fold_list_root = (args.fold_list_root or args.cv_root / 'fold_lists').resolve()
+    args.config_root = (args.config_root or args.cv_root / 'configs').resolve()
 
     if not args.fold_list_root.is_dir():
         raise SystemExit(f'fold list root not found: {args.fold_list_root}')
-    for i in range(6):
-        fold = f'fold{i:02d}'
-        write_yaml(args.config_dir / f'config_train_fbpick_coarse_{fold}.yaml', train_config(args, fold, smoke=False))
-        write_yaml(args.config_dir / f'config_train_fbpick_coarse_{fold}_smoke.yaml', train_config(args, fold, smoke=True))
-        write_yaml(args.config_dir / f'config_infer_fbpick_coarse_{fold}_heldout.yaml', infer_config(args, fold))
+    for fold in FOLDS:
+        fold_config_dir = args.config_root / args.run_id / fold
+        full_train = train_config(args, fold, smoke=False)
+        smoke_train = train_config(args, fold, smoke=True)
+        heldout_infer = infer_config(args, fold)
+        write_yaml(fold_config_dir / '01_coarse_train.yaml', full_train)
+        write_yaml(fold_config_dir / '01_coarse_train_smoke.yaml', smoke_train)
+        write_yaml(fold_config_dir / '02_coarse_infer.yaml', heldout_infer)
+        if args.legacy_flat_configs:
+            write_yaml(
+                args.config_root / f'config_train_fbpick_coarse_{fold}.yaml',
+                full_train,
+            )
+            write_yaml(
+                args.config_root / f'config_train_fbpick_coarse_{fold}_smoke.yaml',
+                smoke_train,
+            )
+            write_yaml(
+                args.config_root
+                / f'config_infer_fbpick_coarse_{fold}_heldout.yaml',
+                heldout_infer,
+            )
 
 if __name__ == '__main__':
     main()

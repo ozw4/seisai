@@ -64,10 +64,10 @@ Use these stage names for manifests, logs, and run directories:
 
 | Stage | Purpose | Inputs | Outputs | Representative command | Smoke vs full | Heldout use |
 | --- | --- | --- | --- | --- | --- | --- |
-| `01_coarse_train` | Train one coarse model per fold. | `fold_lists/folds/foldXX/train_sgy.txt`, `train_fb.txt`, `inner_valid_sgy.txt`, `inner_valid_fb.txt`; `configs/config_train_fbpick_coarse_foldXX*.yaml`. | New: `runs/<run_id>/foldXX/01_coarse_train/`; legacy configs currently write `coarse_foldXX_train_out/` or `coarse_foldXX_train_smoke_out/`. | `proc/fbpick/site54/oof/scripts/run_coarse_train_fold.sh fold00 0 full` | Smoke uses `config_train_fbpick_coarse_foldXX_smoke.yaml` and short training. Full uses `config_train_fbpick_coarse_foldXX.yaml`. | Heldout lists must not be used for training, validation, model selection, or early stopping. |
-| `02_coarse_infer` | Produce coarse predictions for each fold's heldout surveys. | `fold_lists/folds/foldXX/heldout_sgy.txt`; checkpoint from `01_coarse_train`. | New: `runs/<run_id>/foldXX/02_coarse_infer/`; legacy configs currently write `coarse_oof/foldXX/`. | `proc/fbpick/site54/oof/scripts/run_coarse_infer_fold.sh fold00 0` | Smoke should run on the smoke checkpoint and a temporary run directory. Full runs every heldout SGY for the fold. | Heldout SGY may be used only as inference input. Heldout FB is still not used. |
-| `03_physics` | Convert heldout coarse predictions to physical-center robust NPZ files. | `fold_lists/folds/foldXX/heldout_sgy.txt`; heldout coarse NPZ from `02_coarse_infer`; `configs/config_run_fbpick_physics_foldXX_heldout.yaml`. | New: `runs/<run_id>/foldXX/03_physics/`; legacy configs currently write `robust_oof/foldXX/`. | `proc/fbpick/site54/oof/scripts/run_physics_fold.sh fold00` | Smoke should target a temporary run directory and a small heldout subset. Full runs all heldout predictions. | Heldout FB is not used. Heldout SGY and coarse NPZ are inference inputs only. |
-| `04_physics_qc` | Check robust outputs against heldout SGY/FB lists and summarize missing or mismatched outputs. | `fold_lists/folds/foldXX/heldout_sgy.txt`, `heldout_fb.txt`; robust NPZ from `03_physics`; `configs/config_run_fbpick_physics_qc_foldXX.yaml`. | New: `runs/<run_id>/foldXX/04_physics_qc/`; existing checks are report/log oriented. | `python cli/run_fbpick_physics_qc.py --config proc/fbpick/site54/oof/configs/config_run_fbpick_physics_qc_fold00.yaml` | Smoke checks one fold or a temporary subset. Full checks all six folds. | Heldout FB may be used for QC metrics after inference products already exist. Do not feed QC results back into training. |
+| `01_coarse_train` | Train one coarse model per fold. | `fold_lists/folds/foldXX/train_sgy.txt`, `train_fb.txt`, `inner_valid_sgy.txt`, `inner_valid_fb.txt`; `configs/<run_id>/foldXX/01_coarse_train*.yaml`. | Full: `runs/<run_id>/foldXX/01_coarse_train/`; smoke: `runs/<run_id>/foldXX/01_coarse_train_smoke/`. | `RUN_ID=baseline_physical_center proc/fbpick/site54/oof/scripts/run_coarse_train_fold.sh fold00 0 full` | Smoke uses `01_coarse_train_smoke.yaml` and short training in its own output directory. Full uses `01_coarse_train.yaml`. | Heldout lists must not be used for training, validation, model selection, or early stopping. |
+| `02_coarse_infer` | Produce coarse predictions for each fold's heldout surveys. | `fold_lists/folds/foldXX/heldout_sgy.txt`; checkpoint from `runs/<run_id>/foldXX/01_coarse_train/ckpt/best.pt`. | `runs/<run_id>/foldXX/02_coarse_infer/`. | `RUN_ID=baseline_physical_center proc/fbpick/site54/oof/scripts/run_coarse_infer_fold.sh fold00 0` | Smoke should run on the smoke checkpoint and a temporary run directory. Full runs every heldout SGY for the fold. | Heldout SGY may be used only as inference input. Heldout FB is still not used. |
+| `03_physics` | Convert heldout coarse predictions to physical-center robust NPZ files. | `fold_lists/folds/foldXX/heldout_sgy.txt`; heldout coarse NPZ from `runs/<run_id>/foldXX/02_coarse_infer`; `configs/<run_id>/foldXX/03_physics.yaml`. | `runs/<run_id>/foldXX/03_physics/`. | `RUN_ID=baseline_physical_center proc/fbpick/site54/oof/scripts/run_physics_fold.sh fold00` | Smoke should target a temporary run directory and a small heldout subset. Full runs all heldout predictions. | Heldout FB is not used. Heldout SGY and coarse NPZ are inference inputs only. |
+| `04_physics_qc` | Check robust outputs against heldout SGY/FB lists and summarize missing or mismatched outputs. | `fold_lists/folds/foldXX/heldout_sgy.txt`, `heldout_fb.txt`; coarse NPZ from `runs/<run_id>/foldXX/02_coarse_infer`; robust NPZ from `runs/<run_id>/foldXX/03_physics`; `configs/<run_id>/foldXX/04_physics_qc.yaml`. | `runs/<run_id>/foldXX/04_physics_qc/`. | `RUN_ID=baseline_physical_center proc/fbpick/site54/oof/scripts/run_physics_fold.sh fold00` | Smoke checks one fold or a temporary subset. Full checks all six folds. | Heldout FB may be used for QC metrics after inference products already exist. Do not feed QC results back into training. |
 | `05_collect_oof_lists` | Collect coarse and robust OOF NPZ paths in canonical all-SGY order for fine training. | `fold_lists/lists/all_sgy.txt`, `all_fb.txt`; `coarse_oof/foldXX/*.coarse.npz`; `robust_oof/foldXX/*.robust.npz`. | New: `runs/<run_id>/aggregate/05_collect_oof_lists/`; legacy output is `lists/oof_train_*`. | `python proc/fbpick/site54/oof/scripts/collect_oof_robust_lists.py --out-dir proc/fbpick/site54/oof/runs/<run_id>/aggregate/05_collect_oof_lists` | Smoke should collect from a smoke run directory. Full requires all 54 coarse and robust outputs. | Uses all heldout inference outputs as OOF features. No model fitting happens in this stage. |
 | `06_fine_train` | Train one fine model per fold using non-heldout surveys and their OOF robust/coarse features. | `fine_fold_lists/foldXX/train_sgy.txt`, `train_fb.txt`, `train_robust.txt`; config `configs/config_train_fbpick_fine_oof_foldXX.yaml`; optional coarse init. | New: `runs/<run_id>/foldXX/06_fine_train/`; legacy configs currently write `/workspace/proc/fbpick/site54/fbpick_fine_train_oof_foldXX_out`. | `python cli/run_fbpick_fine_train.py --config proc/fbpick/site54/oof/configs/config_train_fbpick_fine_oof_fold00.yaml` | Smoke should use the smoke base config or a generated small-list config and a temporary run directory. Full uses the generated fold config for each fold. | The fold's heldout SGY/FB/robust lists may be used only for inference/evaluation fields in the config, not for train batches or model selection. |
 | `07_fine_infer` | Run each fold's fine model on that fold's heldout surveys. | `fine_fold_lists/foldXX/heldout_sgy.txt`, `heldout_fb.txt`, `heldout_robust.txt`; checkpoint from `06_fine_train`. | New: `runs/<run_id>/foldXX/07_fine_infer/`; current evaluation default expects `fine_infer/foldXX/`. | `python cli/run_fbpick_fine_infer.py --config <config with foldXX heldout inputs and ckpt_path>` | Smoke uses one fold or a small heldout subset. Full writes predictions for all heldout surveys in all folds. | Heldout SGY and robust NPZ are inference inputs. Heldout FB may be carried for reporting but must not tune the model. |
@@ -90,6 +90,7 @@ runs/<run_id>/
       07_fine_infer.log
   fold00/
     01_coarse_train/
+    01_coarse_train_smoke/
     02_coarse_infer/
     03_physics/
     04_physics_qc/
@@ -127,6 +128,55 @@ stages:
   07_fine_infer: enabled
   08_eval: enabled
 notes: ""
+```
+
+## Coarse And Physics Run Commands
+
+Generate run-scoped configs for coarse train/infer, physics, and physics QC:
+
+```bash
+python proc/fbpick/site54/oof/scripts/make_coarse_fold_configs.py \
+  --cv-root /workspace/proc/fbpick/site54/oof \
+  --run-id baseline_physical_center \
+  --run-root /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center \
+  --fold-list-root /workspace/proc/fbpick/site54/oof/fold_lists \
+  --config-root /workspace/proc/fbpick/site54/oof/configs \
+  --legacy-flat-configs false
+
+python proc/fbpick/site54/oof/scripts/make_physics_fold_configs.py \
+  --cv-root /workspace/proc/fbpick/site54/oof \
+  --run-id baseline_physical_center \
+  --run-root /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center \
+  --fold-list-root /workspace/proc/fbpick/site54/oof/fold_lists \
+  --config-root /workspace/proc/fbpick/site54/oof/configs \
+  --legacy-flat-configs false \
+  --overwrite
+```
+
+Run one fold:
+
+```bash
+RUN_ID=baseline_physical_center \
+  bash proc/fbpick/site54/oof/scripts/run_coarse_train_fold.sh fold00
+
+RUN_ID=baseline_physical_center \
+  bash proc/fbpick/site54/oof/scripts/run_coarse_infer_fold.sh fold00
+
+RUN_ID=baseline_physical_center \
+  bash proc/fbpick/site54/oof/scripts/run_physics_fold.sh fold00
+```
+
+`run_physics_fold.sh` runs `03_physics` and then `04_physics_qc`. Logs are written under `runs/<run_id>/logs/foldXX/`.
+
+Old path mapping for the first four stages:
+
+```text
+coarse_foldXX_train_out       -> runs/<run_id>/foldXX/01_coarse_train
+coarse_foldXX_train_smoke_out -> runs/<run_id>/foldXX/01_coarse_train_smoke
+coarse_oof/foldXX             -> runs/<run_id>/foldXX/02_coarse_infer
+robust_oof/foldXX             -> runs/<run_id>/foldXX/03_physics
+physics_qc/foldXX             -> runs/<run_id>/foldXX/04_physics_qc
+logs/*foldXX*                 -> runs/<run_id>/logs/foldXX/
 ```
 
 ## Fold-list validation

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 fold00 [gpu_id] [smoke|full]" >&2
+  echo "Usage: RUN_ID=baseline_physical_center $0 fold00 [gpu_id] [smoke|full]" >&2
   exit 2
 fi
 FOLD=$1
@@ -9,16 +9,21 @@ GPU=${2:-}
 MODE=${3:-full}
 REPO_ROOT=${REPO_ROOT:-/workspace}
 OOF_ROOT=${OOF_ROOT:-/workspace/proc/fbpick/site54/oof}
-CONFIG_DIR=${CONFIG_DIR:-$OOF_ROOT/configs}
+RUN_ID=${RUN_ID:-baseline_physical_center}
+RUN_ROOT=${RUN_ROOT:-$OOF_ROOT/runs/$RUN_ID}
+CONFIG_ROOT=${CONFIG_ROOT:-$OOF_ROOT/configs}
 if [[ "$MODE" == "smoke" ]]; then
-  CONFIG="$CONFIG_DIR/config_train_fbpick_coarse_${FOLD}_smoke.yaml"
+  CONFIG="$CONFIG_ROOT/$RUN_ID/$FOLD/01_coarse_train_smoke.yaml"
+  LOG_NAME="01_coarse_train_smoke.log"
 else
-  CONFIG="$CONFIG_DIR/config_train_fbpick_coarse_${FOLD}.yaml"
+  CONFIG="$CONFIG_ROOT/$RUN_ID/$FOLD/01_coarse_train.yaml"
+  LOG_NAME="01_coarse_train.log"
 fi
 cd "$REPO_ROOT"
-mkdir -p "$OOF_ROOT/logs"
-LOG="$OOF_ROOT/logs/train_${FOLD}_${MODE}.log"
-echo "[run] fold=$FOLD mode=$MODE config=$CONFIG log=$LOG"
+LOG_DIR="$RUN_ROOT/logs/$FOLD"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/$LOG_NAME"
+echo "[run] run_id=$RUN_ID fold=$FOLD mode=$MODE config=$CONFIG log=$LOG"
 if [[ -n "$GPU" && "$GPU" != "cpu" ]]; then
   CUDA_VISIBLE_DEVICES="$GPU" python cli/run_fbpick_coarse_train.py --config "$CONFIG" 2>&1 | tee "$LOG"
 else
