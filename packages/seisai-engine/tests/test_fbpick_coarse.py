@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -425,13 +427,40 @@ def test_load_coarse_infer_config_rejects_multiple_primary_keys(
     assert 'requires exactly one dataset.primary_keys' in str(exc.value)
 
 
-def test_fbpick_coarse_proc_configs_follow_global_anchor_contract() -> None:
+def test_fbpick_coarse_proc_configs_follow_global_anchor_contract(
+    tmp_path: Path,
+) -> None:
     import yaml
 
     repo_root = Path(__file__).resolve().parents[3]
+    cv_root = repo_root / 'proc' / 'fbpick' / 'site54' / 'oof'
+    config_root = tmp_path / 'configs'
+    run_id = 'test_run'
+    subprocess.run(
+        [
+            sys.executable,
+            str(cv_root / 'scripts' / 'make_coarse_fold_configs.py'),
+            '--cv-root',
+            str(cv_root),
+            '--run-id',
+            run_id,
+            '--run-root',
+            str(tmp_path / 'runs' / run_id),
+            '--fold-list-root',
+            str(cv_root / 'fold_lists'),
+            '--config-root',
+            str(config_root),
+            '--legacy-flat-configs',
+            'false',
+            '--no-use-amp',
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     paths = [
-        repo_root / 'proc/fbpick/site54/configs/config_train_fbpick_coarse.yaml',
-        repo_root / 'proc/fbpick/site54/configs/config_infer_fbpick_coarse.yaml',
+        config_root / 'fold00' / '01_coarse_train.yaml',
+        config_root / 'fold00' / '02_coarse_infer.yaml',
     ]
     forbidden_tokens = [
         'subset_traces:',
