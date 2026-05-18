@@ -252,7 +252,7 @@ def main() -> int:
     fold_list_root = (
         Path(args.fold_list_root)
         if args.fold_list_root
-        else cv_root / "lists" / "fine" / args.run_id
+        else run_root / "aggregate" / "05_collect_oof_lists" / "fine_fold_lists"
     )
     pred_root = Path(args.pred_root) if args.pred_root else run_root
     out_dir = (

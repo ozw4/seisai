@@ -411,8 +411,11 @@ def main() -> int:
     cv_root = args.cv_root
     run_root = args.run_root or (cv_root / "runs" / args.run_id)
     fold_list_root = args.fold_list_root or (cv_root / "fold_lists")
-    fine_list_root = args.fine_list_root or (cv_root / "lists" / "fine" / args.run_id)
-    config_root = args.config_root or (cv_root / "configs" / args.run_id)
+    fine_list_root = (
+        args.fine_list_root
+        or run_root / "aggregate" / "05_collect_oof_lists" / "fine_fold_lists"
+    )
+    config_root = args.config_root or (run_root / "configs")
 
     results: list[dict[str, Any]] = []
     fold_lists = load_fold_lists(fold_list_root=fold_list_root, results=results)

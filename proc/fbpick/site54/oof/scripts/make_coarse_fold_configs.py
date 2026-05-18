@@ -207,12 +207,12 @@ def main() -> None:
     args.cv_root = args.cv_root.resolve()
     args.run_root = (args.run_root or args.cv_root / 'runs' / args.run_id).resolve()
     args.fold_list_root = (args.fold_list_root or args.cv_root / 'fold_lists').resolve()
-    args.config_root = (args.config_root or args.cv_root / 'configs').resolve()
+    args.config_root = (args.config_root or args.run_root / 'configs').resolve()
 
     if not args.fold_list_root.is_dir():
         raise SystemExit(f'fold list root not found: {args.fold_list_root}')
     for fold in FOLDS:
-        fold_config_dir = args.config_root / args.run_id / fold
+        fold_config_dir = args.config_root / fold
         full_train = train_config(args, fold, smoke=False)
         smoke_train = train_config(args, fold, smoke=True)
         heldout_infer = infer_config(args, fold)

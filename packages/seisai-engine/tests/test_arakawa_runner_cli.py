@@ -67,12 +67,6 @@ def _write_runner_templates(
     )
 
 
-def test_arakawa_runner_default_template_paths_exist() -> None:
-    template_dir = REPO_ROOT / 'proc' / 'arakawa' / 'configs' / 'templates'
-    assert (template_dir / 'coarse.yaml').is_file()
-    assert (template_dir / 'physics.yaml').is_file()
-
-
 def test_arakawa_runner_default_template_lookup_finds_canonical_templates(
     tmp_path: Path,
 ) -> None:

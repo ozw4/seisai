@@ -225,13 +225,14 @@ def main() -> int:
     cv_root = args.cv_root.resolve()
     run_root = (args.run_root or cv_root / "runs" / args.run_id).resolve()
     fold_list_root = (args.fold_list_root or cv_root / "fold_lists").resolve()
-    config_root = (args.config_root or cv_root / "configs").resolve()
+    config_root = (args.config_root or run_root / "configs").resolve()
     fine_list_root = (
-        args.fine_list_root or cv_root / "lists" / "fine" / args.run_id
+        args.fine_list_root
+        or run_root / "aggregate" / "05_collect_oof_lists" / "fine_fold_lists"
     ).resolve()
     oof_list_dir = (
         args.oof_list_dir
-        or cv_root / "runs" / args.run_id / "aggregate" / "05_collect_oof_lists"
+        or run_root / "aggregate" / "05_collect_oof_lists"
     ).resolve()
 
     base_train_config = resolve_path(args.base_train_config, repo_root)
@@ -354,7 +355,7 @@ def main() -> int:
             ckpt_path=run_root / fold / "06_fine_train" / "ckpt" / "best.pt",
         )
 
-        fold_config_dir = config_root / args.run_id / fold
+        fold_config_dir = config_root / fold
         out_train_cfg = fold_config_dir / "06_fine_train.yaml"
         out_smoke_cfg = fold_config_dir / "06_fine_train_smoke.yaml"
         out_infer_cfg = fold_config_dir / "07_fine_infer.yaml"

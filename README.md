@@ -313,6 +313,15 @@ export FBP_TEST_FB=/abs/path/fb.npy
 pytest -q -m integration
 ```
 
+### ローカル proc 作業ディレクトリ
+
+`proc/arakawa` と `proc/jogsarar` はローカル作業ディレクトリで、Git 管理外です。これらの実ファイルを前提にしたテストは通常 CI では実行せず、必要な場合だけ明示的に実行します。
+
+```bash
+SEISAI_RUN_LOCAL_PROC_TESTS=1 pytest proc/arakawa/tests
+SEISAI_RUN_LOCAL_PROC_TESTS=1 pytest proc/jogsarar/tests
+```
+
 ## ドキュメント
 
 - FBPick coarse global-anchor resize 設計: `docs/fbpick_coarse_global_anchor.md`

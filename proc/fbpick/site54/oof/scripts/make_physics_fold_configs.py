@@ -274,7 +274,7 @@ def main() -> None:
     args.cv_root = args.cv_root.resolve()
     args.run_root = (args.run_root or args.cv_root / 'runs' / args.run_id).resolve()
     args.fold_list_root = (args.fold_list_root or args.cv_root / 'fold_lists').resolve()
-    args.config_root = (args.config_root or args.cv_root / 'configs').resolve()
+    args.config_root = (args.config_root or args.run_root / 'configs').resolve()
 
     for fold in FOLDS:
         heldout_sgy = args.fold_list_root / 'folds' / fold / 'heldout_sgy.txt'
@@ -286,7 +286,7 @@ def main() -> None:
 
         physics = physics_config(args, fold)
         physics_qc = physics_qc_config(args, fold)
-        fold_config_dir = args.config_root / args.run_id / fold
+        fold_config_dir = args.config_root / fold
         write_yaml(
             fold_config_dir / '03_physics.yaml',
             physics,

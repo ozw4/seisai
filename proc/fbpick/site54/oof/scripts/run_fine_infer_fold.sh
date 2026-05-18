@@ -10,8 +10,8 @@ REPO_ROOT=${REPO_ROOT:-/workspace}
 OOF_ROOT=${OOF_ROOT:-/workspace/proc/fbpick/site54/oof}
 RUN_ID=${RUN_ID:-baseline_physical_center}
 RUN_ROOT=${RUN_ROOT:-$OOF_ROOT/runs/$RUN_ID}
-CONFIG_ROOT=${CONFIG_ROOT:-$OOF_ROOT/configs}
-CONFIG="$CONFIG_ROOT/$RUN_ID/$FOLD/07_fine_infer.yaml"
+CONFIG_ROOT=${CONFIG_ROOT:-$RUN_ROOT/configs}
+CONFIG="$CONFIG_ROOT/$FOLD/07_fine_infer.yaml"
 cd "$REPO_ROOT"
 LOG_DIR="$RUN_ROOT/logs/$FOLD"
 mkdir -p "$LOG_DIR"

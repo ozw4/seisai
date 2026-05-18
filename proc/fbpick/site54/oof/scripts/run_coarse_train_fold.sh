@@ -11,12 +11,12 @@ REPO_ROOT=${REPO_ROOT:-/workspace}
 OOF_ROOT=${OOF_ROOT:-/workspace/proc/fbpick/site54/oof}
 RUN_ID=${RUN_ID:-baseline_physical_center}
 RUN_ROOT=${RUN_ROOT:-$OOF_ROOT/runs/$RUN_ID}
-CONFIG_ROOT=${CONFIG_ROOT:-$OOF_ROOT/configs}
+CONFIG_ROOT=${CONFIG_ROOT:-$RUN_ROOT/configs}
 if [[ "$MODE" == "smoke" ]]; then
-  CONFIG="$CONFIG_ROOT/$RUN_ID/$FOLD/01_coarse_train_smoke.yaml"
+  CONFIG="$CONFIG_ROOT/$FOLD/01_coarse_train_smoke.yaml"
   LOG_NAME="01_coarse_train_smoke.log"
 else
-  CONFIG="$CONFIG_ROOT/$RUN_ID/$FOLD/01_coarse_train.yaml"
+  CONFIG="$CONFIG_ROOT/$FOLD/01_coarse_train.yaml"
   LOG_NAME="01_coarse_train.log"
 fi
 cd "$REPO_ROOT"
