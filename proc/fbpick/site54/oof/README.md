@@ -38,6 +38,12 @@ fold_lists/
 `fold_lists/fold_summary.csv`, `fold_lists/fold_assignments.csv`, `fold_lists/site54_manifest.csv`, and per-fold `fold_meta.json` are tracked metadata for this split.
 `config_templates/fine_train.yaml` and `config_templates/fine_infer.yaml` are tracked base configs used by the fine config generator.
 
+## Coarse Runtime Gates
+
+The site54 OOF coarse config generator defaults both train and inner-valid fbgate runtime guards to `apply_on=off` and `min_pick_ratio=0.01`. The `off` mode disables the FBLC consistency gate only; `min_pick_ratio=0.01` remains as a minimal guard against nearly empty samples.
+
+Do not use `min_pick_ratio=0.3` as the site54 OOF runtime default. That threshold is too strong for this split: a low-pick survey that fails inner validation in one fold can be training data in another fold, so applying a strong phase-dependent threshold makes data usage uneven across folds. Keep `0.3` for explicit audit or diagnostic runs, and evaluate quality through heldout OOF eval rather than hiding low-pick data at runtime.
+
 ## Clean Rerun Procedure
 
 Use this sequence as the canonical clean-state rerun procedure. It validates the tracked fold lists, inspects artifacts selected for cleanup, prepares run-scoped configs, and then runs each CV stage through the unified entry point.

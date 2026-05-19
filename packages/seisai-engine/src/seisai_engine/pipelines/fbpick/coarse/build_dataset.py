@@ -194,8 +194,13 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
             raise ValueError(msg)
 
         fb_full = np.asarray(info.fb[indices_full], dtype=np.int64)
-        apply_fb_gates = self._should_apply_fb_gates({})
-        if apply_fb_gates and (not self.gate_evaluator.min_pick_accept(fb_full)):
+        min_pick_result = self.gate_evaluator.min_pick_accept(fb_full)
+        min_pick_accept = (
+            bool(min_pick_result[0])
+            if isinstance(min_pick_result, tuple)
+            else bool(min_pick_result)
+        )
+        if not min_pick_accept:
             self._count_rejection(counters, 'min_pick')
             return None
 
@@ -295,6 +300,7 @@ class GlobalAnchorCoarseDataset(SegyGatherPipelineDataset):
         }
         meta.update(transform_meta)
 
+        apply_fb_gates = self._should_apply_fb_gates({})
         if apply_fb_gates:
             if not self.gate_evaluator.apply_gates(
                 meta,

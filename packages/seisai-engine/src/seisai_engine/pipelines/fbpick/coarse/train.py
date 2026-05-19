@@ -101,16 +101,29 @@ def _prepare_cfg(
     return cfg, train_sampling_overrides, infer_sampling_overrides
 
 
-def _build_fbgate_from_cfg(cfg: dict, *, default_verbose: bool):
+def _phase_fbgate_cfg(fbgate_cfg: dict, *, phase: str) -> dict:
+    if 'apply_on' in fbgate_cfg or 'min_pick_ratio' in fbgate_cfg:
+        return fbgate_cfg
+    phase_cfg = fbgate_cfg.get(phase)
+    if phase_cfg is None:
+        return {}
+    if not isinstance(phase_cfg, dict):
+        msg = f'fbgate.{phase} must be dict'
+        raise TypeError(msg)
+    return phase_cfg
+
+
+def _build_fbgate_from_cfg(cfg: dict, *, phase: str, default_verbose: bool):
     fbgate_cfg = cfg.get('fbgate')
     if fbgate_cfg is None:
         return build_fbgate(apply_on='off', min_pick_ratio=0.0, verbose=default_verbose)
     if not isinstance(fbgate_cfg, dict):
         msg = 'fbgate must be dict'
         raise TypeError(msg)
-    apply_on = str(fbgate_cfg.get('apply_on', 'off'))
-    min_pick_ratio = float(fbgate_cfg.get('min_pick_ratio', 0.0))
-    verbose = bool(fbgate_cfg.get('verbose', default_verbose))
+    phase_cfg = _phase_fbgate_cfg(fbgate_cfg, phase=phase)
+    apply_on = str(phase_cfg.get('apply_on', 'off'))
+    min_pick_ratio = float(phase_cfg.get('min_pick_ratio', 0.0))
+    verbose = bool(phase_cfg.get('verbose', default_verbose))
     return build_fbgate(
         apply_on=apply_on,
         min_pick_ratio=min_pick_ratio,
@@ -189,14 +202,23 @@ def build_train_bundle(
         time_ref_sec=typed.norm_refs.time_ref_sec,
         offset_ref_m=typed.norm_refs.offset_ref_m,
     )
-    fbgate = _build_fbgate_from_cfg(cfg_prepared, default_verbose=typed.dataset.verbose)
+    train_fbgate = _build_fbgate_from_cfg(
+        cfg_prepared,
+        phase='train',
+        default_verbose=typed.dataset.verbose,
+    )
+    infer_fbgate = _build_fbgate_from_cfg(
+        cfg_prepared,
+        phase='infer',
+        default_verbose=typed.dataset.verbose,
+    )
 
     ds_train_full = build_train_dataset(
         segy_files=list(typed.paths.segy_files),
         fb_files=list(typed.paths.fb_files),
         sampling_overrides=train_sampling_overrides,
         plan=plan,
-        fbgate=fbgate,
+        fbgate=train_fbgate,
         trace_len=typed.transform.trace_len,
         time_len=typed.transform.time_len,
         standardize_eps=typed.transform.standardize_eps,
@@ -219,7 +241,7 @@ def build_train_bundle(
         fb_files=list(typed.paths.infer_fb_files),
         sampling_overrides=infer_sampling_overrides,
         plan=plan,
-        fbgate=fbgate,
+        fbgate=infer_fbgate,
         trace_len=typed.transform.trace_len,
         time_len=typed.transform.time_len,
         standardize_eps=typed.transform.standardize_eps,

@@ -59,9 +59,16 @@ def base_common(args: argparse.Namespace) -> dict:
             'infer_endian': args.infer_endian,
         },
         'fbgate': {
-            'apply_on': args.fbgate_apply_on,
-            'min_pick_ratio': args.fbgate_min_pick_ratio,
-            'verbose': False,
+            'train': {
+                'apply_on': args.train_fbgate_apply_on,
+                'min_pick_ratio': args.train_fbgate_min_pick_ratio,
+                'verbose': False,
+            },
+            'infer': {
+                'apply_on': args.infer_fbgate_apply_on,
+                'min_pick_ratio': args.infer_fbgate_min_pick_ratio,
+                'verbose': False,
+            },
         },
         'transform': {
             'trace_len': 256,
@@ -200,8 +207,10 @@ def main() -> None:
     ap.add_argument('--infer-endian', default='big')
     ap.add_argument('--time-ref-sec', type=float, default=20.0)
     ap.add_argument('--offset-ref-m', type=float, default=2000.0)
-    ap.add_argument('--fbgate-apply-on', default='any')
-    ap.add_argument('--fbgate-min-pick-ratio', type=float, default=0.3)
+    ap.add_argument('--train-fbgate-apply-on', default='off')
+    ap.add_argument('--train-fbgate-min-pick-ratio', type=float, default=0.01)
+    ap.add_argument('--infer-fbgate-apply-on', default='off')
+    ap.add_argument('--infer-fbgate-min-pick-ratio', type=float, default=0.01)
     args = ap.parse_args()
 
     args.cv_root = args.cv_root.resolve()

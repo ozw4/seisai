@@ -245,6 +245,15 @@ def test_make_coarse_defaults_write_configs_under_run_root(
     assert (run_root / 'configs' / 'fold00' / '02_coarse_infer.yaml').is_file()
     assert not (cv_root / 'configs').exists()
     assert not (run_root / 'configs' / run_id).exists()
+    train_text = (run_root / 'configs' / 'fold00' / '01_coarse_train.yaml').read_text(
+        encoding='utf-8',
+    )
+    train_cfg = yaml.safe_load(train_text)
+    assert train_cfg['fbgate']['train']['apply_on'] == 'off'
+    assert train_cfg['fbgate']['train']['min_pick_ratio'] == 0.01
+    assert train_cfg['fbgate']['infer']['apply_on'] == 'off'
+    assert train_cfg['fbgate']['infer']['min_pick_ratio'] == 0.01
+    assert 'min_pick_ratio: 0.3' not in train_text
 
 
 def test_make_physics_defaults_write_configs_under_run_root(

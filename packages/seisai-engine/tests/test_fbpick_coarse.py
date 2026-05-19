@@ -475,6 +475,7 @@ def test_fbpick_coarse_proc_configs_follow_global_anchor_contract(
         text = path.read_text(encoding='utf-8')
         for token in forbidden_tokens:
             assert token not in text
+        assert 'min_pick_ratio: 0.3' not in text
 
         cfg = yaml.safe_load(text)
         assert cfg['coarse']['input_mode'] == 'global_anchor_resize'
@@ -487,6 +488,11 @@ def test_fbpick_coarse_proc_configs_follow_global_anchor_contract(
             'train_mode': 'random',
             'infer_mode': 'center',
         }
+        if path.name == '01_coarse_train.yaml':
+            assert cfg['fbgate']['train']['apply_on'] == 'off'
+            assert cfg['fbgate']['train']['min_pick_ratio'] == pytest.approx(0.01)
+            assert cfg['fbgate']['infer']['apply_on'] == 'off'
+            assert cfg['fbgate']['infer']['min_pick_ratio'] == pytest.approx(0.01)
 
 
 @pytest.mark.parametrize(
@@ -671,6 +677,49 @@ def test_global_anchor_train_dataset_returns_fixed_shape_and_masks_pad_rows(
     assert sample['meta']['fb_idx_coarse_for_anchors'][n_traces - 1] == 2047
 
 
+def test_global_anchor_dataset_keeps_min_pick_guard_when_fblc_gate_is_off(
+    tmp_path: Path,
+) -> None:
+    n_traces = 256
+    n_samples = 2048
+    traces = np.ones((n_traces, n_samples), dtype=np.float32)
+    segy_path = str(tmp_path / 'global_min_pick_guard.sgy')
+    write_unstructured_segy(segy_path, traces, dt_us=2000)
+    fb_path = str(tmp_path / 'global_min_pick_guard_fb.npy')
+    np.save(fb_path, np.zeros((n_traces,), dtype=np.int64))
+
+    ds = build_labeled_infer_dataset(
+        segy_files=[segy_path],
+        fb_files=[fb_path],
+        sampling_overrides=None,
+        plan=_make_plan(),
+        fbgate=build_fbgate(apply_on='off', min_pick_ratio=0.01, verbose=False),
+        trace_len=256,
+        time_len=2048,
+        standardize_eps=1.0e-8,
+        anchor_mode='center',
+        gap_ratio=5.0,
+        min_gap_m=None,
+        primary_keys=('ffid',),
+        secondary_key_fixed=False,
+        verbose=False,
+        progress=False,
+        max_trials=2,
+        use_header_cache=False,
+        waveform_mode='eager',
+        segy_endian='big',
+    )
+
+    try:
+        with pytest.raises(RuntimeError) as exc:
+            ds[0]
+    finally:
+        ds.close()
+
+    assert 'min_pick=2' in str(exc.value)
+    assert 'fblc=0' in str(exc.value)
+
+
 def test_build_train_bundle_uses_train_and_infer_endian_for_dataset_builders(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -719,6 +768,120 @@ def test_build_train_bundle_uses_train_and_infer_endian_for_dataset_builders(
 
     assert seen_endian == {'train': 'little', 'infer': 'big'}
     assert bundle.ds_train_full is not bundle.ds_infer_full
+
+
+def test_build_train_bundle_applies_flat_fbgate_to_train_and_infer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import seisai_engine.pipelines.fbpick.coarse.train as coarse_train
+
+    cfg = _make_training_config(tmp_path, segy_path='train.sgy', fb_path='train.npy')
+    cfg['paths']['infer_segy_files'] = ['valid.sgy']
+    cfg['paths']['infer_fb_files'] = ['valid.npy']
+    cfg['fbgate'] = {
+        'apply_on': 'any',
+        'min_pick_ratio': 0.3,
+        'verbose': False,
+    }
+
+    seen_fbgate: dict[str, tuple[str, float]] = {}
+
+    class StubDataset:
+        def close(self) -> None:
+            return None
+
+    def fake_build_train_dataset(**kwargs):
+        gate = kwargs['fbgate'].cfg
+        seen_fbgate['train'] = (gate.apply_on, gate.min_pick_ratio)
+        return StubDataset()
+
+    def fake_build_labeled_infer_dataset(**kwargs):
+        gate = kwargs['fbgate'].cfg
+        seen_fbgate['infer'] = (gate.apply_on, gate.min_pick_ratio)
+        return StubDataset()
+
+    monkeypatch.setattr(coarse_train, 'build_train_dataset', fake_build_train_dataset)
+    monkeypatch.setattr(
+        coarse_train,
+        'build_labeled_infer_dataset',
+        fake_build_labeled_infer_dataset,
+    )
+    monkeypatch.setattr(
+        coarse_train,
+        'build_model',
+        lambda _model_sig: torch.nn.Conv2d(3, 1, kernel_size=1),
+    )
+
+    coarse_train.build_train_bundle(
+        cfg,
+        base_dir=tmp_path,
+        device=torch.device('cpu'),
+    )
+
+    assert seen_fbgate == {'train': ('any', 0.3), 'infer': ('any', 0.3)}
+
+
+def test_build_train_bundle_uses_phase_specific_nested_fbgates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import seisai_engine.pipelines.fbpick.coarse.train as coarse_train
+
+    cfg = _make_training_config(tmp_path, segy_path='train.sgy', fb_path='train.npy')
+    cfg['paths']['infer_segy_files'] = ['valid.sgy']
+    cfg['paths']['infer_fb_files'] = ['valid.npy']
+    cfg['fbgate'] = {
+        'train': {
+            'apply_on': 'off',
+            'min_pick_ratio': 0.01,
+            'verbose': False,
+        },
+        'infer': {
+            'apply_on': 'super_only',
+            'min_pick_ratio': 0.02,
+            'verbose': False,
+        },
+    }
+
+    seen_fbgate: dict[str, tuple[str, float]] = {}
+
+    class StubDataset:
+        def close(self) -> None:
+            return None
+
+    def fake_build_train_dataset(**kwargs):
+        gate = kwargs['fbgate'].cfg
+        seen_fbgate['train'] = (gate.apply_on, gate.min_pick_ratio)
+        return StubDataset()
+
+    def fake_build_labeled_infer_dataset(**kwargs):
+        gate = kwargs['fbgate'].cfg
+        seen_fbgate['infer'] = (gate.apply_on, gate.min_pick_ratio)
+        return StubDataset()
+
+    monkeypatch.setattr(coarse_train, 'build_train_dataset', fake_build_train_dataset)
+    monkeypatch.setattr(
+        coarse_train,
+        'build_labeled_infer_dataset',
+        fake_build_labeled_infer_dataset,
+    )
+    monkeypatch.setattr(
+        coarse_train,
+        'build_model',
+        lambda _model_sig: torch.nn.Conv2d(3, 1, kernel_size=1),
+    )
+
+    coarse_train.build_train_bundle(
+        cfg,
+        base_dir=tmp_path,
+        device=torch.device('cpu'),
+    )
+
+    assert seen_fbgate == {
+        'train': ('off', 0.01),
+        'infer': ('super_only', 0.02),
+    }
 
 
 def test_global_anchor_labeled_datasets_draw_full_gather_before_anchor_selection(

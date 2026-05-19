@@ -1,0 +1,31 @@
+run_id: baseline_physical_center
+cv_root: /workspace/proc/fbpick/site54/oof
+run_root: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center
+fold_list_root: /workspace/proc/fbpick/site54/oof/fold_lists
+config_root: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/configs
+collect_dir: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/aggregate/05_collect_oof_lists
+fine_list_root: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/aggregate/05_collect_oof_lists/fine_fold_lists
+eval_dir: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/aggregate/08_eval
+log_root: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/logs
+folds:
+- fold00
+- fold01
+- fold02
+- fold03
+- fold04
+- fold05
+stages:
+  01_coarse_train: failed
+  02_coarse_infer: pending
+  03_physics: pending
+  04_physics_qc: pending
+  05_collect_oof_lists: pending
+  06_fine_train: pending
+  07_fine_infer: pending
+  08_eval: pending
+stage_timestamps:
+  01_coarse_train:
+    failed_at: '2026-05-18T23:30:01+00:00'
+created_at: '2026-05-18T23:24:29+00:00'
+config_prepare_started_at: '2026-05-18T23:24:29+00:00'
+config_prepared_at: '2026-05-18T23:24:29+00:00'
