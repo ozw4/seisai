@@ -12,7 +12,7 @@ physics:
   partial_trend_fallback:
     max_fraction: 0.05
     max_traces: 50000
-    fallback_if_too_many: robust
+    fallback_if_too_many: full
 folds:
 - fold00
 - fold01
@@ -47,5 +47,5 @@ stage_timestamps:
   08_eval:
     completed_at: '2026-05-19T17:02:14+00:00'
 created_at: '2026-05-19T01:45:02+00:00'
-config_prepare_started_at: '2026-05-20T01:46:26+00:00'
-config_prepared_at: '2026-05-20T01:46:26+00:00'
+config_prepare_started_at: '2026-05-20T13:17:46+00:00'
+config_prepared_at: '2026-05-20T13:17:46+00:00'
