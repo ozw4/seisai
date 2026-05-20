@@ -89,6 +89,8 @@ def test_generator_defaults_write_run_scoped_configs(tmp_path: Path) -> None:
         assert runtime["partial_trend_fallback"]["max_fraction"] == 0.05
         assert runtime["partial_trend_fallback"]["max_traces"] == 50000
     assert physics_qc_cfg["vis"]["first_panel_only"] is True
+    assert physics_qc_cfg["vis"]["auto_figsize"] is True
+    assert physics_qc_cfg["vis"]["max_display_traces"] == 1200
     assert physics_qc_cfg["vis"]["gather_selection"] == "even"
 
 
@@ -129,6 +131,8 @@ def test_fine_base_configs_exist() -> None:
     assert fine_infer_path.is_file()
     fine_infer_cfg = yaml.safe_load(fine_infer_path.read_text(encoding="utf-8"))
     assert fine_infer_cfg["viewer"]["first_panel_only"] is True
+    assert fine_infer_cfg["viewer"]["auto_figsize"] is True
+    assert fine_infer_cfg["viewer"]["max_display_traces"] == 1200
     assert fine_infer_cfg["viewer"]["gather_selection"] == "even"
 
 

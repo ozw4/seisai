@@ -331,6 +331,8 @@ def test_make_physics_defaults_write_configs_under_run_root(
     _assert_partial_physics_fallback(physics_cfg)
     _assert_partial_physics_fallback(physics_qc_cfg)
     assert physics_qc_cfg['vis']['first_panel_only'] is True
+    assert physics_qc_cfg['vis']['auto_figsize'] is True
+    assert physics_qc_cfg['vis']['max_display_traces'] == 1200
     assert physics_qc_cfg['vis']['gather_selection'] == 'even'
     assert physics_qc_cfg['vis']['overlays']['gt_pick'] is True
     assert physics_qc_cfg['vis']['overlays']['robust_pick'] is False

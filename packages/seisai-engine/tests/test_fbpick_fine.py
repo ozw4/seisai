@@ -3,18 +3,16 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
-import cli.run_fbpick_fine_infer as fine_infer_cli
 import numpy as np
 import pytest
+import seisai_engine.pipelines.fbpick.fine.infer as fine_infer_module
 import torch
 import yaml
-from torch.utils.data import DataLoader, Subset
-
-import seisai_dataset.infer_window_dataset as infer_window_dataset
-import seisai_dataset.segy_gather_pipeline_dataset as segy_gather_pipeline_dataset
-import seisai_engine.pipelines.fbpick.fine.infer as fine_infer_module
+from seisai_dataset import infer_window_dataset, segy_gather_pipeline_dataset
 from seisai_dataset.file_info import FileInfo
 from seisai_engine.pipelines.common import load_checkpoint
+from seisai_engine.pipelines.fbpick.coarse import build_fbgate
+from seisai_engine.pipelines.fbpick.coarse import build_model as build_coarse_model
 from seisai_engine.pipelines.fbpick.common import (
     FINE_RESULT_REQUIRED_KEYS,
     ROBUST_SOURCE_COARSE_OBSERVED,
@@ -25,12 +23,10 @@ from seisai_engine.pipelines.fbpick.common import (
     validate_fbpick_final_payload,
     validate_fine_result_payload,
 )
-from seisai_engine.pipelines.fbpick.coarse import build_fbgate, build_model as build_coarse_model
 from seisai_engine.pipelines.fbpick.fine import (
     FineCenterAugmentCfg,
     FineUniformJitterCfg,
     build_labeled_infer_dataset,
-    build_model as build_fine_model,
     build_plan,
     build_raw_infer_dataset,
     build_train_dataset,
@@ -38,25 +34,33 @@ from seisai_engine.pipelines.fbpick.fine import (
     load_fine_infer_config,
     load_fine_train_config,
     load_train_bundle,
+    restore_local_pick_to_raw,
     run_fine_infer,
     run_fine_local_infer,
     run_train,
-    restore_local_pick_to_raw,
     sample_center_jitter,
+)
+from seisai_engine.pipelines.fbpick.fine import (
+    build_model as build_fine_model,
 )
 from seisai_engine.pipelines.fbpick.fine.infer import (
     _derive_final_npz_path,
     _prepare_fine_infer_cfg,
     _save_fine_gather_qc_pngs,
-    main as run_fine_infer_main,
     require_existing_coarse_npz_path,
     resolve_fine_coarse_npz_path,
+)
+from seisai_engine.pipelines.fbpick.fine.infer import (
+    main as run_fine_infer_main,
 )
 from seisai_engine.pipelines.fbpick.fine.init_from_coarse import (
     build_fine_init_state_dict,
     load_fine_init_from_coarse_checkpoint,
 )
 from seisai_engine.train_loop import train_one_epoch
+from torch.utils.data import DataLoader, Subset
+
+import cli.run_fbpick_fine_infer as fine_infer_cli
 
 
 class _DummySegy:
@@ -763,6 +767,8 @@ def test_load_fine_infer_config_returns_default_high_conf_threshold(
     assert typed.viewer.save_gather_png is False
     assert typed.viewer.gather_selection == 'first'
     assert typed.viewer.first_panel_only is False
+    assert typed.viewer.auto_figsize is False
+    assert typed.viewer.max_display_traces is None
 
 
 def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
@@ -783,6 +789,16 @@ def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
         'dpi': 120,
         'clip_percentile': 98.5,
         'first_panel_only': True,
+        'auto_figsize': True,
+        'traces_per_inch': 160.0,
+        'samples_per_inch': 550.0,
+        'min_fig_width': 7.0,
+        'max_fig_width': 14.0,
+        'min_fig_height': 5.5,
+        'max_fig_height': 12.0,
+        'min_panel_aspect': 0.9,
+        'max_panel_aspect': 1.8,
+        'max_display_traces': 1200,
         'overlays': {'robust_pick': False, 'gt_pick': True},
     }
     cfg['paths']['viewer_fb_files'] = ['viewer.fb.npy']
@@ -804,6 +820,16 @@ def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
     assert typed.viewer.dpi == 120
     assert typed.viewer.clip_percentile == pytest.approx(98.5)
     assert typed.viewer.first_panel_only is True
+    assert typed.viewer.auto_figsize is True
+    assert typed.viewer.traces_per_inch == pytest.approx(160.0)
+    assert typed.viewer.samples_per_inch == pytest.approx(550.0)
+    assert typed.viewer.min_fig_width == pytest.approx(7.0)
+    assert typed.viewer.max_fig_width == pytest.approx(14.0)
+    assert typed.viewer.min_fig_height == pytest.approx(5.5)
+    assert typed.viewer.max_fig_height == pytest.approx(12.0)
+    assert typed.viewer.min_panel_aspect == pytest.approx(0.9)
+    assert typed.viewer.max_panel_aspect == pytest.approx(1.8)
+    assert typed.viewer.max_display_traces == 1200
     assert typed.viewer.overlays['gt_pick'] is True
     assert typed.viewer.overlays['robust_pick'] is False
     assert typed.viewer.overlays['coarse_pick'] is True
@@ -839,6 +865,38 @@ def test_load_fine_infer_config_rejects_non_bool_first_panel_only(
         load_fine_infer_config(cfg)
 
     assert 'first_panel_only' in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    'viewer',
+    [
+        {'auto_figsize': 1},
+        {'traces_per_inch': 0.0},
+        {'samples_per_inch': '550.0'},
+        {'min_fig_width': -1.0},
+        {'max_fig_width': 0.0},
+        {'min_fig_height': -1.0},
+        {'max_fig_height': 0.0},
+        {'min_panel_aspect': 2.0, 'max_panel_aspect': 1.0},
+        {'min_fig_width': 15.0, 'max_fig_width': 14.0},
+        {'min_fig_height': 13.0, 'max_fig_height': 12.0},
+        {'max_display_traces': -1},
+        {'max_display_traces': True},
+    ],
+)
+def test_load_fine_infer_config_rejects_invalid_adaptive_viewer_fields(
+    tmp_path: Path,
+    viewer: dict[str, object],
+) -> None:
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['viewer'] = viewer
+
+    with pytest.raises((TypeError, ValueError)):
+        load_fine_infer_config(cfg)
 
 
 def test_load_fine_infer_config_parses_window_center(tmp_path: Path) -> None:
@@ -2029,6 +2087,8 @@ def test_save_fine_gather_qc_pngs_skips_configured_key_and_counts_accepted(
         'max_traces_per_gather': None,
         'waveform_norm': 'per_trace',
         'first_panel_only': True,
+        'auto_figsize': True,
+        'max_display_traces': 1200,
     }
     viewer = load_fine_infer_config(cfg).viewer
     captured: list[np.ndarray] = []
@@ -2037,6 +2097,8 @@ def test_save_fine_gather_qc_pngs_skips_configured_key_and_counts_accepted(
         captured.append(np.asarray(kwargs['trace_indices'], dtype=np.int64))
         assert kwargs['waveform_norm'] == 'per_trace'
         assert kwargs['first_panel_only'] is True
+        assert kwargs['auto_figsize'] is True
+        assert kwargs['max_display_traces'] == 1200
         return Path(out_png)
 
     out_paths = _save_fine_gather_qc_pngs(

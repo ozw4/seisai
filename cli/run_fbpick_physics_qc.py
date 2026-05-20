@@ -332,6 +332,38 @@ def _load_dataset_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
+def _load_vis_positive_float(
+	vis: dict[str, Any],
+	key: str,
+	default: float,
+) -> float:
+	raw = vis.get(key, default)
+	if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+		msg = f'vis.{key} must be float > 0'
+		raise TypeError(msg)
+	value = float(raw)
+	if not np.isfinite(value) or value <= 0.0:
+		msg = f'vis.{key} must be finite and > 0'
+		raise ValueError(msg)
+	return value
+
+
+def _load_vis_max_display_traces(vis: dict[str, Any]) -> int | None:
+	raw = vis.get('max_display_traces')
+	if raw is None:
+		return None
+	if isinstance(raw, bool) or not isinstance(raw, int):
+		msg = 'vis.max_display_traces must be int >= 0 or null'
+		raise TypeError(msg)
+	value = int(raw)
+	if value < 0:
+		msg = 'vis.max_display_traces must be int >= 0 or null'
+		raise ValueError(msg)
+	if value == 0:
+		return None
+	return value
+
+
 def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 	vis = cfg.get('vis', {})
 	if vis is None:
@@ -395,6 +427,29 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 	if not isinstance(first_panel_only, bool):
 		msg = 'vis.first_panel_only must be bool'
 		raise TypeError(msg)
+
+	auto_figsize = vis.get('auto_figsize', False)
+	if not isinstance(auto_figsize, bool):
+		msg = 'vis.auto_figsize must be bool'
+		raise TypeError(msg)
+	traces_per_inch = _load_vis_positive_float(vis, 'traces_per_inch', 160.0)
+	samples_per_inch = _load_vis_positive_float(vis, 'samples_per_inch', 550.0)
+	min_fig_width = _load_vis_positive_float(vis, 'min_fig_width', 7.0)
+	max_fig_width = _load_vis_positive_float(vis, 'max_fig_width', 14.0)
+	min_fig_height = _load_vis_positive_float(vis, 'min_fig_height', 5.5)
+	max_fig_height = _load_vis_positive_float(vis, 'max_fig_height', 12.0)
+	min_panel_aspect = _load_vis_positive_float(vis, 'min_panel_aspect', 0.9)
+	max_panel_aspect = _load_vis_positive_float(vis, 'max_panel_aspect', 1.8)
+	if min_fig_width > max_fig_width:
+		msg = 'vis.min_fig_width must be <= vis.max_fig_width'
+		raise ValueError(msg)
+	if min_fig_height > max_fig_height:
+		msg = 'vis.min_fig_height must be <= vis.max_fig_height'
+		raise ValueError(msg)
+	if min_panel_aspect > max_panel_aspect:
+		msg = 'vis.min_panel_aspect must be <= vis.max_panel_aspect'
+		raise ValueError(msg)
+	max_display_traces = _load_vis_max_display_traces(vis)
 
 	default_overlays = {
 		'gt_pick': True,
@@ -516,6 +571,16 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		'clip_percentile': clip_percentile,
 		'gather_selection': gather_selection,
 		'first_panel_only': bool(first_panel_only),
+		'auto_figsize': bool(auto_figsize),
+		'traces_per_inch': traces_per_inch,
+		'samples_per_inch': samples_per_inch,
+		'min_fig_width': min_fig_width,
+		'max_fig_width': max_fig_width,
+		'min_fig_height': min_fig_height,
+		'max_fig_height': max_fig_height,
+		'min_panel_aspect': min_panel_aspect,
+		'max_panel_aspect': max_panel_aspect,
+		'max_display_traces': max_display_traces,
 		'overlays': overlays,
 		'first_panel_flatten': first_panel_flatten,
 		'skip_gather_keys': skip_gather_keys,
@@ -772,6 +837,16 @@ def _save_vis_pngs(
 				show_gt=bool(overlays.get('gt_pick', True)),
 				show_coarse=bool(overlays.get('coarse_pick', True)),
 				first_panel_only=bool(vis_cfg.get('first_panel_only', False)),
+				auto_figsize=bool(vis_cfg.get('auto_figsize', False)),
+				traces_per_inch=float(vis_cfg.get('traces_per_inch', 160.0)),
+				samples_per_inch=float(vis_cfg.get('samples_per_inch', 550.0)),
+				min_fig_width=float(vis_cfg.get('min_fig_width', 7.0)),
+				max_fig_width=float(vis_cfg.get('max_fig_width', 14.0)),
+				min_fig_height=float(vis_cfg.get('min_fig_height', 5.5)),
+				max_fig_height=float(vis_cfg.get('max_fig_height', 12.0)),
+				min_panel_aspect=float(vis_cfg.get('min_panel_aspect', 0.9)),
+				max_panel_aspect=float(vis_cfg.get('max_panel_aspect', 1.8)),
+				max_display_traces=vis_cfg.get('max_display_traces'),
 			)
 		)
 	if not out_paths:
