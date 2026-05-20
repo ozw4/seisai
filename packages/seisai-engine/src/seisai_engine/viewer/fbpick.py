@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -455,6 +456,98 @@ def _optional_qc_vector(
 		msg = f'{name} must be 1D with length {length}'
 		raise ValueError(msg)
 	return arr
+
+
+def _require_finite_positive_float(value: object, *, name: str) -> float:
+	if isinstance(value, bool) or not isinstance(value, (int, float)):
+		msg = f'{name} must be float > 0'
+		raise TypeError(msg)
+	float_value = float(value)
+	if not np.isfinite(float_value) or float_value <= 0.0:
+		msg = f'{name} must be finite and > 0'
+		raise ValueError(msg)
+	return float_value
+
+
+def _compute_first_panel_qc_figsize(
+	*,
+	n_traces: int,
+	n_samples: int,
+	traces_per_inch: float = 160.0,
+	samples_per_inch: float = 550.0,
+	min_fig_width: float = 7.0,
+	max_fig_width: float = 14.0,
+	min_fig_height: float = 5.5,
+	max_fig_height: float = 12.0,
+	min_panel_aspect: float = 0.9,
+	max_panel_aspect: float = 1.8,
+) -> tuple[float, float]:
+	n_trace_value = _require_strict_int(n_traces, name='n_traces')
+	n_sample_value = _require_strict_int(n_samples, name='n_samples')
+	if n_trace_value <= 0:
+		msg = 'n_traces must be > 0'
+		raise ValueError(msg)
+	if n_sample_value <= 0:
+		msg = 'n_samples must be > 0'
+		raise ValueError(msg)
+
+	traces_scale = _require_finite_positive_float(
+		traces_per_inch,
+		name='traces_per_inch',
+	)
+	samples_scale = _require_finite_positive_float(
+		samples_per_inch,
+		name='samples_per_inch',
+	)
+	min_width = _require_finite_positive_float(min_fig_width, name='min_fig_width')
+	max_width = _require_finite_positive_float(max_fig_width, name='max_fig_width')
+	min_height = _require_finite_positive_float(min_fig_height, name='min_fig_height')
+	max_height = _require_finite_positive_float(max_fig_height, name='max_fig_height')
+	min_aspect = _require_finite_positive_float(
+		min_panel_aspect,
+		name='min_panel_aspect',
+	)
+	max_aspect = _require_finite_positive_float(
+		max_panel_aspect,
+		name='max_panel_aspect',
+	)
+	if min_width > max_width:
+		msg = 'min_fig_width must be <= max_fig_width'
+		raise ValueError(msg)
+	if min_height > max_height:
+		msg = 'min_fig_height must be <= max_fig_height'
+		raise ValueError(msg)
+	if min_aspect > max_aspect:
+		msg = 'min_panel_aspect must be <= max_panel_aspect'
+		raise ValueError(msg)
+
+	width = float(
+		np.clip(float(n_trace_value) / traces_scale, min_width, max_width)
+	)
+	height = float(
+		np.clip(float(n_sample_value) / samples_scale, min_height, max_height)
+	)
+
+	aspect = width / height
+	if aspect > max_aspect:
+		height = min(max_height, width / max_aspect)
+	elif aspect < min_aspect:
+		width = min(max_width, height * min_aspect)
+	return width, height
+
+
+def _resolve_qc_display_stride(
+	*, n_traces: int, max_display_traces: int | None
+) -> int:
+	if max_display_traces is None:
+		return 1
+	if isinstance(max_display_traces, bool) or not isinstance(max_display_traces, int):
+		msg = 'max_display_traces must be int >= 0 or None'
+		raise TypeError(msg)
+	max_display = int(max_display_traces)
+	if max_display <= 0:
+		return 1
+	return max(1, int(math.ceil(float(n_traces) / float(max_display))))
 
 
 def _format_qc_status_counts(status: np.ndarray | None) -> str | None:
@@ -986,6 +1079,16 @@ def save_fbpick_physics_qc_gather_png(
 	show_gt: bool = True,
 	show_coarse: bool = True,
 	first_panel_only: bool = False,
+	auto_figsize: bool = False,
+	traces_per_inch: float = 160.0,
+	samples_per_inch: float = 550.0,
+	min_fig_width: float = 7.0,
+	max_fig_width: float = 14.0,
+	min_fig_height: float = 5.5,
+	max_fig_height: float = 12.0,
+	min_panel_aspect: float = 0.9,
+	max_panel_aspect: float = 1.8,
+	max_display_traces: int | None = None,
 ) -> Path:
 	import matplotlib.pyplot as plt
 
@@ -1083,12 +1186,42 @@ def save_fbpick_physics_qc_gather_png(
 	if not isinstance(first_panel_only, bool):
 		msg = 'first_panel_only must be bool'
 		raise TypeError(msg)
+	if not isinstance(auto_figsize, bool):
+		msg = 'auto_figsize must be bool'
+		raise TypeError(msg)
+	display_stride = _resolve_qc_display_stride(
+		n_traces=n_traces,
+		max_display_traces=max_display_traces,
+	)
 	status_summary = _format_qc_status_counts(status)
+	original_n_traces = n_traces
 
 	dpi_int = int(dpi)
 	if dpi_int <= 0:
 		msg = 'dpi must be > 0'
 		raise ValueError(msg)
+
+	if display_stride > 1:
+		wave = np.ascontiguousarray(wave[::display_stride])
+		gt = gt[::display_stride]
+		coarse = coarse[::display_stride]
+		robust = None if robust is None else robust[::display_stride]
+		coarse_pmax_arr = (
+			None if coarse_pmax_arr is None else coarse_pmax_arr[::display_stride]
+		)
+		trend = None if trend is None else trend[::display_stride]
+		physical = None if physical is None else physical[::display_stride]
+		fine = None if fine is None else fine[::display_stride]
+		window_start = None if window_start is None else window_start[::display_stride]
+		window_end = None if window_end is None else window_end[::display_stride]
+		final = None if final is None else final[::display_stride]
+		status = None if status is None else status[::display_stride]
+		flatten_reference = (
+			None
+			if flatten_reference is None
+			else flatten_reference[::display_stride]
+		)
+		n_traces = int(wave.shape[0])
 
 	valid_gt = (gt > 0) & (gt < int(n_samples))
 	coarse_err = coarse.astype(np.float32) - gt.astype(np.float32)
@@ -1132,14 +1265,28 @@ def save_fbpick_physics_qc_gather_png(
 		display_vmin = -1.0
 		display_vmax = 1.0
 	fig_width = max(14.0, float(n_traces) / 12.0)
+	fig_height = 6.0
+	if first_panel_only and auto_figsize:
+		fig_width, fig_height = _compute_first_panel_qc_figsize(
+			n_traces=original_n_traces,
+			n_samples=n_samples,
+			traces_per_inch=traces_per_inch,
+			samples_per_inch=samples_per_inch,
+			min_fig_width=min_fig_width,
+			max_fig_width=max_fig_width,
+			min_fig_height=min_fig_height,
+			max_fig_height=max_fig_height,
+			min_panel_aspect=min_panel_aspect,
+			max_panel_aspect=max_panel_aspect,
+		)
 	if first_panel_only:
-		fig, first_ax = plt.subplots(1, 1, figsize=(fig_width, 6.0))
+		fig, first_ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
 		axes = [first_ax]
 	else:
 		fig, axes = plt.subplots(
 			1,
 			3,
-			figsize=(fig_width, 6.0),
+			figsize=(fig_width, fig_height),
 			gridspec_kw={'width_ratios': [2.2, 1.5, 0.7]},
 		)
 
@@ -1348,6 +1495,11 @@ def save_fbpick_physics_qc_gather_png(
 		title_lines.append(str(title))
 	if status_summary is not None:
 		title_lines.append(f'physical status: {status_summary}')
+	if display_stride > 1:
+		title_lines.append(
+			f'display_stride={display_stride} '
+			f'({n_traces}/{original_n_traces} traces shown)'
+		)
 	if title_lines:
 		fig.suptitle('\n'.join(title_lines))
 		fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.93))
@@ -1374,6 +1526,16 @@ def save_fbpick_fine_qc_gather_png(
 	clip_percentile: float = 99.0,
 	waveform_norm: str = 'global',
 	first_panel_only: bool = False,
+	auto_figsize: bool = False,
+	traces_per_inch: float = 160.0,
+	samples_per_inch: float = 550.0,
+	min_fig_width: float = 7.0,
+	max_fig_width: float = 14.0,
+	min_fig_height: float = 5.5,
+	max_fig_height: float = 12.0,
+	min_panel_aspect: float = 0.9,
+	max_panel_aspect: float = 1.8,
+	max_display_traces: int | None = None,
 ) -> Path:
 	import matplotlib.pyplot as plt
 
@@ -1430,6 +1592,14 @@ def save_fbpick_fine_qc_gather_png(
 	if not isinstance(first_panel_only, bool):
 		msg = 'first_panel_only must be bool'
 		raise TypeError(msg)
+	if not isinstance(auto_figsize, bool):
+		msg = 'auto_figsize must be bool'
+		raise TypeError(msg)
+	display_stride = _resolve_qc_display_stride(
+		n_traces=n_traces,
+		max_display_traces=max_display_traces,
+	)
+	original_n_traces = n_traces
 
 	if 'n_traces' not in final_payload:
 		msg = 'final payload missing key: n_traces'
@@ -1508,6 +1678,28 @@ def save_fbpick_fine_qc_gather_png(
 			)
 			raise ValueError(msg)
 
+	if display_stride > 1:
+		wave = np.ascontiguousarray(wave[::display_stride])
+		trace_idx = trace_idx[::display_stride]
+		coarse_pick_i = coarse_pick_i[::display_stride]
+		robust_pick_i = robust_pick_i[::display_stride]
+		physical_center_i = (
+			None
+			if physical_center_i is None
+			else physical_center_i[::display_stride]
+		)
+		fine_center_i = (
+			None if fine_center_i is None else fine_center_i[::display_stride]
+		)
+		window_start_i = window_start_i[::display_stride]
+		window_end_i = window_end_i[::display_stride]
+		final_pick_i = final_pick_i[::display_stride]
+		high_conf_mask = high_conf_mask[::display_stride]
+		reject_mask = reject_mask[::display_stride]
+		final_conf = final_conf[::display_stride]
+		gt = None if gt is None else gt[::display_stride]
+		n_traces = int(wave.shape[0])
+
 	x = np.arange(n_traces, dtype=np.float32)
 	norm_mode = str(waveform_norm)
 	wave_display = _normalize_waveform_for_qc_display(
@@ -1523,14 +1715,28 @@ def save_fbpick_fine_qc_gather_png(
 		display_vmax = 1.0
 
 	fig_width = min(max(12.0, float(n_traces) / 100.0), 24.0)
+	fig_height = 6.0
+	if first_panel_only and auto_figsize:
+		fig_width, fig_height = _compute_first_panel_qc_figsize(
+			n_traces=original_n_traces,
+			n_samples=n_samples,
+			traces_per_inch=traces_per_inch,
+			samples_per_inch=samples_per_inch,
+			min_fig_width=min_fig_width,
+			max_fig_width=max_fig_width,
+			min_fig_height=min_fig_height,
+			max_fig_height=max_fig_height,
+			min_panel_aspect=min_panel_aspect,
+			max_panel_aspect=max_panel_aspect,
+		)
 	if first_panel_only:
-		fig, first_ax = plt.subplots(1, 1, figsize=(fig_width, 6.0))
+		fig, first_ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
 		axes = [first_ax]
 	else:
 		fig, axes = plt.subplots(
 			1,
 			3,
-			figsize=(fig_width, 6.0),
+			figsize=(fig_width, fig_height),
 			gridspec_kw={'width_ratios': [2.4, 1.3, 0.8]},
 		)
 
@@ -1689,8 +1895,16 @@ def save_fbpick_fine_qc_gather_png(
 		axes[2].set_yticks([0, 1, 2])
 		axes[2].set_yticklabels(['high', 'accepted', 'conf'])
 
+	title_lines = []
 	if title is not None:
-		fig.suptitle(str(title))
+		title_lines.append(str(title))
+	if display_stride > 1:
+		title_lines.append(
+			f'display_stride={display_stride} '
+			f'({n_traces}/{original_n_traces} traces shown)'
+		)
+	if title_lines:
+		fig.suptitle('\n'.join(title_lines))
 		fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.93))
 	else:
 		fig.tight_layout()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -156,6 +157,16 @@ class FineViewerCfg:
     dpi: int
     clip_percentile: float
     first_panel_only: bool
+    auto_figsize: bool
+    traces_per_inch: float
+    samples_per_inch: float
+    min_fig_width: float
+    max_fig_width: float
+    min_fig_height: float
+    max_fig_height: float
+    min_panel_aspect: float
+    max_panel_aspect: float
+    max_display_traces: int | None
     overlays: dict[str, bool]
 
 
@@ -503,6 +514,38 @@ def _load_center_augment_cfg(cfg: dict) -> FineCenterAugmentCfg:
     )
 
 
+def _load_viewer_positive_float(
+    viewer_cfg: dict,
+    key: str,
+    default: float,
+) -> float:
+    raw = viewer_cfg.get(key, default)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        msg = f'viewer.{key} must be float > 0'
+        raise TypeError(msg)
+    value = float(raw)
+    if not math.isfinite(value) or value <= 0.0:
+        msg = f'viewer.{key} must be finite and > 0'
+        raise ValueError(msg)
+    return value
+
+
+def _load_viewer_max_display_traces(viewer_cfg: dict) -> int | None:
+    raw = viewer_cfg.get('max_display_traces')
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        msg = 'viewer.max_display_traces must be int >= 0 or null'
+        raise TypeError(msg)
+    value = int(raw)
+    if value < 0:
+        msg = 'viewer.max_display_traces must be int >= 0 or null'
+        raise ValueError(msg)
+    if value == 0:
+        return None
+    return value
+
+
 def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
     viewer_cfg = cfg.get('viewer')
     if viewer_cfg is None:
@@ -565,6 +608,41 @@ def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
         msg = 'viewer.gather_selection must be one of: first, even'
         raise ValueError(msg)
 
+    traces_per_inch = _load_viewer_positive_float(
+        viewer_cfg,
+        'traces_per_inch',
+        160.0,
+    )
+    samples_per_inch = _load_viewer_positive_float(
+        viewer_cfg,
+        'samples_per_inch',
+        550.0,
+    )
+    min_fig_width = _load_viewer_positive_float(viewer_cfg, 'min_fig_width', 7.0)
+    max_fig_width = _load_viewer_positive_float(viewer_cfg, 'max_fig_width', 14.0)
+    min_fig_height = _load_viewer_positive_float(viewer_cfg, 'min_fig_height', 5.5)
+    max_fig_height = _load_viewer_positive_float(viewer_cfg, 'max_fig_height', 12.0)
+    min_panel_aspect = _load_viewer_positive_float(
+        viewer_cfg,
+        'min_panel_aspect',
+        0.9,
+    )
+    max_panel_aspect = _load_viewer_positive_float(
+        viewer_cfg,
+        'max_panel_aspect',
+        1.8,
+    )
+    if min_fig_width > max_fig_width:
+        msg = 'viewer.min_fig_width must be <= viewer.max_fig_width'
+        raise ValueError(msg)
+    if min_fig_height > max_fig_height:
+        msg = 'viewer.min_fig_height must be <= viewer.max_fig_height'
+        raise ValueError(msg)
+    if min_panel_aspect > max_panel_aspect:
+        msg = 'viewer.min_panel_aspect must be <= viewer.max_panel_aspect'
+        raise ValueError(msg)
+    max_display_traces = _load_viewer_max_display_traces(viewer_cfg)
+
     default_overlays = {
         'gt_pick': True,
         'coarse_pick': True,
@@ -614,6 +692,16 @@ def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
         first_panel_only=bool(
             optional_bool(viewer_cfg, 'first_panel_only', default=False)
         ),
+        auto_figsize=bool(optional_bool(viewer_cfg, 'auto_figsize', default=False)),
+        traces_per_inch=traces_per_inch,
+        samples_per_inch=samples_per_inch,
+        min_fig_width=min_fig_width,
+        max_fig_width=max_fig_width,
+        min_fig_height=min_fig_height,
+        max_fig_height=max_fig_height,
+        min_panel_aspect=min_panel_aspect,
+        max_panel_aspect=max_panel_aspect,
+        max_display_traces=max_display_traces,
         overlays=overlays,
     )
 

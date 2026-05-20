@@ -45,6 +45,16 @@ viewer:
   dpi: 150
   clip_percentile: 99.0
   first_panel_only: true
+  auto_figsize: true
+  traces_per_inch: 160.0
+  samples_per_inch: 550.0
+  min_fig_width: 7.0
+  max_fig_width: 14.0
+  min_fig_height: 5.5
+  max_fig_height: 12.0
+  min_panel_aspect: 0.9
+  max_panel_aspect: 1.8
+  max_display_traces: 1200
   overlays:
     gt_pick: true
     coarse_pick: true

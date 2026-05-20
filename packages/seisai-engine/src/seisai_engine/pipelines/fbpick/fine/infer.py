@@ -600,6 +600,16 @@ def _save_fine_gather_qc_pngs(
                 clip_percentile=viewer.clip_percentile,
                 waveform_norm=viewer.waveform_norm,
                 first_panel_only=viewer.first_panel_only,
+                auto_figsize=viewer.auto_figsize,
+                traces_per_inch=viewer.traces_per_inch,
+                samples_per_inch=viewer.samples_per_inch,
+                min_fig_width=viewer.min_fig_width,
+                max_fig_width=viewer.max_fig_width,
+                min_fig_height=viewer.min_fig_height,
+                max_fig_height=viewer.max_fig_height,
+                min_panel_aspect=viewer.min_panel_aspect,
+                max_panel_aspect=viewer.max_panel_aspect,
+                max_display_traces=viewer.max_display_traces,
             )
         )
     if not out_paths:

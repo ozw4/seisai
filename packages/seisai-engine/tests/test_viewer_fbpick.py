@@ -7,6 +7,7 @@ import torch
 from seisai_engine.infer.ckpt_meta import resolve_output_ids, resolve_softmax_axis
 from seisai_engine.viewer.fbpick import (
     _apply_softmax,
+    _compute_first_panel_qc_figsize,
     _crop_logits_chw,
     _normalize_waveform_for_qc_display,
     _pad_chw_to_min_tile,
@@ -14,6 +15,33 @@ from seisai_engine.viewer.fbpick import (
     save_fbpick_fine_qc_gather_png,
     save_fbpick_physics_qc_gather_png,
 )
+
+
+def test_compute_first_panel_qc_figsize_balances_large_gather() -> None:
+    width, height = _compute_first_panel_qc_figsize(
+        n_traces=1400,
+        n_samples=4000,
+    )
+
+    assert 8.0 <= width <= 10.0
+    assert 7.0 <= height <= 8.0
+    assert width / height <= 1.8
+
+
+def test_compute_first_panel_qc_figsize_clamps_bounds() -> None:
+    small_width, small_height = _compute_first_panel_qc_figsize(
+        n_traces=4,
+        n_samples=16,
+    )
+    large_width, large_height = _compute_first_panel_qc_figsize(
+        n_traces=10000,
+        n_samples=10000,
+    )
+
+    assert small_width >= 7.0
+    assert small_height >= 5.5
+    assert large_width <= 14.0
+    assert large_height <= 12.0
 
 
 def test_apply_softmax_channel_normalizes_channel_axis() -> None:
@@ -442,6 +470,47 @@ def test_save_fbpick_physics_qc_gather_png_can_show_first_panel_only(
         original_close(fig)
 
 
+def test_save_fbpick_physics_qc_gather_png_uses_adaptive_first_panel_size(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out_png = tmp_path / 'adaptive_first_panel.png'
+    wave = np.zeros((1400, 4000), dtype=np.float32)
+    picks = np.full(1400, 2000, dtype=np.int64)
+    closed: list[object | None] = []
+    original_close = plt.close
+
+    def _capture_close(fig: object | None = None) -> None:
+        closed.append(fig)
+
+    def _skip_savefig(self, *args, **kwargs) -> None:
+        _ = (self, args, kwargs)
+
+    monkeypatch.setattr(plt, 'close', _capture_close)
+    monkeypatch.setattr(plt.Figure, 'savefig', _skip_savefig)
+
+    out_path = save_fbpick_physics_qc_gather_png(
+        out_png,
+        raw_wave_hw=wave,
+        gt_pick_i=picks,
+        coarse_pick_i=picks,
+        first_panel_only=True,
+        auto_figsize=True,
+        max_display_traces=1200,
+    )
+
+    assert out_path == out_png.resolve()
+    assert closed
+    fig = closed[0]
+    try:
+        assert len(fig.axes) == 1
+        width, height = fig.get_size_inches()
+        assert width / height <= 1.8
+        assert any('display_stride=2' in text.get_text() for text in fig.texts)
+    finally:
+        original_close(fig)
+
+
 def test_save_fbpick_physics_qc_gather_png_can_hide_window_overlay(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -531,6 +600,60 @@ def test_save_fbpick_fine_qc_gather_png_per_trace_smoke(
         assert out_path.stat().st_size > 0
         assert len(closed) == 1
         assert len(closed[0].axes) == 3
+    finally:
+        for fig in closed:
+            original_close(fig)
+
+
+def test_save_fbpick_fine_qc_gather_png_uses_adaptive_first_panel_size(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out_png = tmp_path / 'fine_adaptive_first_panel.png'
+    n_traces = 1400
+    wave = np.zeros((n_traces, 4000), dtype=np.float32)
+    picks = np.full(n_traces, 2000, dtype=np.int32)
+    final_payload = {
+        'n_traces': np.asarray(n_traces, dtype=np.int32),
+        'coarse_pick_i': picks,
+        'robust_pick_i': picks,
+        'window_start_i': picks - 10,
+        'window_end_i': picks + 10,
+        'final_pick_i': picks,
+        'high_conf_mask': np.ones(n_traces, dtype=np.bool_),
+        'reject_mask': np.zeros(n_traces, dtype=np.bool_),
+        'final_conf': np.ones(n_traces, dtype=np.float32),
+    }
+    original_close = plt.close
+    closed = []
+
+    def _capture_close(fig=None):
+        closed.append(fig)
+
+    def _skip_savefig(self, *args, **kwargs) -> None:
+        _ = (self, args, kwargs)
+
+    monkeypatch.setattr(plt, 'close', _capture_close)
+    monkeypatch.setattr(plt.Figure, 'savefig', _skip_savefig)
+
+    try:
+        out_path = save_fbpick_fine_qc_gather_png(
+            out_png,
+            raw_wave_hw=wave,
+            final_payload=final_payload,
+            trace_indices=np.arange(n_traces, dtype=np.int64),
+            first_panel_only=True,
+            auto_figsize=True,
+            max_display_traces=1200,
+        )
+
+        assert out_path == out_png.resolve()
+        assert len(closed) == 1
+        fig = closed[0]
+        assert len(fig.axes) == 1
+        width, height = fig.get_size_inches()
+        assert width / height <= 1.8
+        assert any('display_stride=2' in text.get_text() for text in fig.texts)
     finally:
         for fig in closed:
             original_close(fig)

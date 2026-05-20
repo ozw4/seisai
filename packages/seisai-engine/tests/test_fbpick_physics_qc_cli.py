@@ -136,6 +136,16 @@ def test_load_vis_cfg_parses_skip_keys_and_max_traces() -> None:
                 'clip_percentile': 99.0,
                 'gather_selection': 'even',
                 'first_panel_only': True,
+                'auto_figsize': True,
+                'traces_per_inch': 160.0,
+                'samples_per_inch': 550.0,
+                'min_fig_width': 7.0,
+                'max_fig_width': 14.0,
+                'min_fig_height': 5.5,
+                'max_fig_height': 12.0,
+                'min_panel_aspect': 0.9,
+                'max_panel_aspect': 1.8,
+                'max_display_traces': 1200,
                 'overlays': {'window': False, 'final_pick': False},
                 'first_panel_flatten': {
                     'enabled': True,
@@ -152,6 +162,16 @@ def test_load_vis_cfg_parses_skip_keys_and_max_traces() -> None:
     assert vis_cfg['clip_percentile'] == 99.0
     assert vis_cfg['gather_selection'] == 'even'
     assert vis_cfg['first_panel_only'] is True
+    assert vis_cfg['auto_figsize'] is True
+    assert vis_cfg['traces_per_inch'] == pytest.approx(160.0)
+    assert vis_cfg['samples_per_inch'] == pytest.approx(550.0)
+    assert vis_cfg['min_fig_width'] == pytest.approx(7.0)
+    assert vis_cfg['max_fig_width'] == pytest.approx(14.0)
+    assert vis_cfg['min_fig_height'] == pytest.approx(5.5)
+    assert vis_cfg['max_fig_height'] == pytest.approx(12.0)
+    assert vis_cfg['min_panel_aspect'] == pytest.approx(0.9)
+    assert vis_cfg['max_panel_aspect'] == pytest.approx(1.8)
+    assert vis_cfg['max_display_traces'] == 1200
     assert vis_cfg['overlays']['window'] is False
     assert vis_cfg['overlays']['final_pick'] is False
     assert vis_cfg['overlays']['coarse_pmax'] is True
@@ -188,6 +208,18 @@ def test_load_vis_cfg_allows_null_max_traces() -> None:
         {'gather_selection': 1},
         {'gather_selection': 'middle'},
         {'first_panel_only': 1},
+        {'auto_figsize': 1},
+        {'traces_per_inch': 0.0},
+        {'samples_per_inch': '550.0'},
+        {'min_fig_width': -1.0},
+        {'max_fig_width': 0.0},
+        {'min_fig_height': -1.0},
+        {'max_fig_height': 0.0},
+        {'min_panel_aspect': 2.0, 'max_panel_aspect': 1.0},
+        {'min_fig_width': 15.0, 'max_fig_width': 14.0},
+        {'min_fig_height': 13.0, 'max_fig_height': 12.0},
+        {'max_display_traces': -1},
+        {'max_display_traces': True},
         {'overlays': []},
         {'overlays': {1: True}},
         {'overlays': {'window': 1}},
@@ -463,6 +495,8 @@ def test_save_vis_pngs_passes_first_panel_flatten_reference(
             'waveform_norm': 'global',
             'clip_percentile': 99.0,
             'first_panel_only': True,
+            'auto_figsize': True,
+            'max_display_traces': 1200,
             'first_panel_flatten': {
                 'enabled': True,
                 'reference_key': 'physical_center_i',
@@ -480,6 +514,8 @@ def test_save_vis_pngs_passes_first_panel_flatten_reference(
     assert captured['first_panel_flatten_reference_label'] == 'physical_center_i'
     assert captured['first_panel_flatten_half_samples'] == 128
     assert captured['first_panel_only'] is True
+    assert captured['auto_figsize'] is True
+    assert captured['max_display_traces'] == 1200
 
 
 def test_save_vis_pngs_omits_disabled_overlay_arrays(tmp_path: Path) -> None:
