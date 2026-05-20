@@ -551,7 +551,8 @@ def test_check_cv_outputs_strict_npz_policy_accepts_new_keys(tmp_path: Path) -> 
         fine_window_valid_mask=np.asarray([True, False, True], dtype=np.bool_),
         fine_window_physical_lo_i=np.asarray([0, 250, 372], dtype=np.int32),
         fine_window_physical_hi_i=np.asarray([255, 550, 627], dtype=np.int32),
-        physical_model_status=np.asarray([0, 11, 13], dtype=np.uint8),
+        fine_window_reject_reason=np.asarray([0, 3, 0], dtype=np.uint8),
+        physical_model_status=np.asarray([0, 12, 9], dtype=np.uint8),
     )
     np.savez(
         final_path,
@@ -615,12 +616,57 @@ def test_check_cv_outputs_strict_npz_policy_rejects_legacy_fallback_statuses(
             fine_window_valid_mask=np.asarray([True], dtype=np.bool_),
             fine_window_physical_lo_i=np.asarray([0], dtype=np.int32),
             fine_window_physical_hi_i=np.asarray([255], dtype=np.int32),
+            fine_window_reject_reason=np.asarray([0], dtype=np.uint8),
             physical_model_status=np.asarray([status_code], dtype=np.uint8),
         )
 
         assert module.strict_check_physics_npz(physics_path) == (
             f'{physics_path.name}:forbidden_physical_model_status={status_label}'
         )
+
+
+def test_check_cv_outputs_strict_npz_policy_rejects_valid_reject_status(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'reject-valid.robust.npz'
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        fine_center_i=np.asarray([128], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([True], dtype=np.bool_),
+        fine_window_physical_lo_i=np.asarray([0], dtype=np.int32),
+        fine_window_physical_hi_i=np.asarray([255], dtype=np.int32),
+        fine_window_reject_reason=np.asarray([0], dtype=np.uint8),
+        physical_model_status=np.asarray([13], dtype=np.uint8),
+    )
+
+    assert module.strict_check_physics_npz(physics_path) == (
+        'reject-valid.robust.npz:reject_physics_status_window_valid=0'
+    )
+
+
+def test_check_cv_outputs_strict_npz_policy_rejects_invalid_window_ok_reason(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'invalid-ok.robust.npz'
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        fine_center_i=np.asarray([128], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([False], dtype=np.bool_),
+        fine_window_physical_lo_i=np.asarray([0], dtype=np.int32),
+        fine_window_physical_hi_i=np.asarray([255], dtype=np.int32),
+        fine_window_reject_reason=np.asarray([0], dtype=np.uint8),
+        physical_model_status=np.asarray([12], dtype=np.uint8),
+    )
+
+    assert module.strict_check_physics_npz(physics_path) == (
+        'invalid-ok.robust.npz:invalid_window_reject_reason_ok=0'
+    )
 
 
 def test_check_cv_outputs_strict_npz_policy_rejects_invalid_window_without_final_reject(
@@ -637,6 +683,7 @@ def test_check_cv_outputs_strict_npz_policy_rejects_invalid_window_without_final
         fine_window_valid_mask=np.asarray([False], dtype=np.bool_),
         fine_window_physical_lo_i=np.asarray([250], dtype=np.int32),
         fine_window_physical_hi_i=np.asarray([350], dtype=np.int32),
+        fine_window_reject_reason=np.asarray([3], dtype=np.uint8),
         physical_model_status=np.asarray([12], dtype=np.uint8),
     )
     np.savez(

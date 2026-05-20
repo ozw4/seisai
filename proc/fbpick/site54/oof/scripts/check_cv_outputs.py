@@ -36,6 +36,7 @@ STRICT_PHYSICS_KEYS = (
     "fine_window_valid_mask",
     "fine_window_physical_lo_i",
     "fine_window_physical_hi_i",
+    "fine_window_reject_reason",
     "physical_model_status",
 )
 STRICT_FINAL_KEYS = (
@@ -66,6 +67,7 @@ PHYSICAL_MODEL_STATUS_LABELS = {
 }
 RECOGNIZED_REJECT_PHYSICS_STATUSES = {12, 13, 14}
 STRICT_FORBIDDEN_PHYSICAL_MODEL_STATUSES = {3, 4}
+FINE_WINDOW_REJECT_OK = 0
 
 
 def read_list(path: Path) -> list[str]:
@@ -341,13 +343,21 @@ def strict_check_physics_npz(path: Path) -> str | None:
                 n_traces=n_traces,
                 dtype=np.uint8,
             )
-            for key in (
-                "fine_center_i",
+            require_trace_vector(z, "fine_center_i", n_traces=n_traces)
+            valid = require_trace_vector(
+                z,
                 "fine_window_valid_mask",
-                "fine_window_physical_lo_i",
-                "fine_window_physical_hi_i",
-            ):
+                n_traces=n_traces,
+                dtype=np.bool_,
+            )
+            for key in ("fine_window_physical_lo_i", "fine_window_physical_hi_i"):
                 require_trace_vector(z, key, n_traces=n_traces)
+            window_reason = require_trace_vector(
+                z,
+                "fine_window_reject_reason",
+                n_traces=n_traces,
+                dtype=np.uint8,
+            )
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
         return f"{path.name}:read_error={exc}"
 
@@ -364,6 +374,34 @@ def strict_check_physics_npz(path: Path) -> str | None:
     if forbidden:
         label = PHYSICAL_MODEL_STATUS_LABELS[forbidden[0]]
         return f"{path.name}:forbidden_physical_model_status={label}"
+
+    reject_status_window_valid = np.flatnonzero(
+        np.isin(status, np.fromiter(RECOGNIZED_REJECT_PHYSICS_STATUSES, np.uint8))
+        & valid
+    )
+    if reject_status_window_valid.size:
+        return (
+            f"{path.name}:reject_physics_status_window_valid="
+            f"{int(reject_status_window_valid[0])}"
+        )
+
+    invalid_reason_ok = np.flatnonzero(
+        (~valid) & (window_reason == FINE_WINDOW_REJECT_OK)
+    )
+    if invalid_reason_ok.size:
+        return (
+            f"{path.name}:invalid_window_reject_reason_ok="
+            f"{int(invalid_reason_ok[0])}"
+        )
+
+    valid_reason_reject = np.flatnonzero(
+        valid & (window_reason != FINE_WINDOW_REJECT_OK)
+    )
+    if valid_reason_reject.size:
+        return (
+            f"{path.name}:valid_window_reject_reason="
+            f"{int(valid_reason_reject[0])}"
+        )
 
     if (
         "coarse_in_band_fallback" not in PHYSICAL_MODEL_STATUS_LABELS.values()

@@ -9,6 +9,8 @@ import numpy as np
 
 from seisai_engine.pipelines.fbpick.common import (
     FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND,
+    FINE_WINDOW_REJECT_OK,
+    FINE_WINDOW_REJECT_WINDOW_OUTSIDE_PREFILTER_BAND,
 )
 
 from .physical_center_types import (
@@ -208,6 +210,11 @@ def apply_physics_fallback_policy(  # noqa: C901, PLR0915
     coarse_fallback_mask = np.zeros((n,), dtype=np.bool_)
     reject_mask = np.zeros((n,), dtype=np.bool_)
     reject_reason = np.full((n,), '', dtype='<U40')
+    reject_window_reason = np.full(
+        (n,),
+        FINE_WINDOW_REJECT_OK,
+        dtype=np.uint8,
+    )
 
     if not bool(cfg.physical_runtime.fallback_policy.enabled):
         diagnostics = {
@@ -359,6 +366,7 @@ def apply_physics_fallback_policy(  # noqa: C901, PLR0915
                 continue
 
             reason = int(coarse_eval.fine_window_reject_reason[idx])
+            reject_window_reason[idx] = np.uint8(reason)
             reject_status = (
                 PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_COARSE_OUTSIDE_BAND
                 if reason == FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND
@@ -381,6 +389,10 @@ def apply_physics_fallback_policy(  # noqa: C901, PLR0915
         cfg=cfg,
     )
     final_window_valid = np.asarray(final_window.fine_window_valid_mask, dtype=np.bool_)
+    final_window_reason = np.asarray(
+        final_window.fine_window_reject_reason,
+        dtype=np.uint8,
+    ).copy()
     rejected = np.isin(
         np.asarray(final_physical.physical_model_status, dtype=np.uint8),
         np.asarray(
@@ -392,8 +404,22 @@ def apply_physics_fallback_policy(  # noqa: C901, PLR0915
             dtype=np.uint8,
         ),
     )
+    has_reject_reason = rejected & (
+        reject_window_reason != np.uint8(FINE_WINDOW_REJECT_OK)
+    )
+    final_window_reason[has_reject_reason] = reject_window_reason[has_reject_reason]
+    missing_reject_reason = rejected & (
+        final_window_reason == np.uint8(FINE_WINDOW_REJECT_OK)
+    )
+    final_window_reason[missing_reject_reason] = np.uint8(
+        FINE_WINDOW_REJECT_WINDOW_OUTSIDE_PREFILTER_BAND
+    )
     final_window_valid[rejected] = False
-    final_window = replace(final_window, fine_window_valid_mask=final_window_valid)
+    final_window = replace(
+        final_window,
+        fine_window_valid_mask=final_window_valid,
+        fine_window_reject_reason=final_window_reason,
+    )
     reject_mask[rejected] = True
     reject_reason[(rejected) & (reject_reason == '')] = 'reject_physics_no_valid_window'
 

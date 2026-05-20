@@ -12,7 +12,9 @@ import pytest
 from seisai_engine.pipelines.fbpick.common import (
     COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS,
     COARSE_GEOMETRY_OPTIONAL_KEYS,
+    FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND,
     FINE_WINDOW_REJECT_OK,
+    FINE_WINDOW_REJECT_WINDOW_OUTSIDE_PREFILTER_BAND,
     REASON_MASK_FILLED_FROM_TREND,
     REASON_MASK_INFEASIBLE,
     REASON_MASK_LOW_SCORE,
@@ -3040,8 +3042,8 @@ def test_apply_physics_fallback_policy_preserves_coarse_reject_reason() -> None:
         }
     )
     arrays = physical_center_fallback_mod._allocate_result_arrays(table)  # noqa: SLF001
-    arrays['physical_center_i'][:] = np.asarray([0, 10], dtype=np.int32)
-    arrays['fine_center_i'][:] = np.asarray([0, 10], dtype=np.int32)
+    arrays['physical_center_i'][:] = np.asarray([136, 136], dtype=np.int32)
+    arrays['fine_center_i'][:] = np.asarray([136, 136], dtype=np.int32)
     arrays['physical_model_status'][:] = np.uint8(
         PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED
     )
@@ -3082,6 +3084,13 @@ def test_apply_physics_fallback_policy_preserves_coarse_reject_reason() -> None:
         ],
     )
     np.testing.assert_array_equal(final_window.fine_window_valid_mask, [False, False])
+    np.testing.assert_array_equal(
+        final_window.fine_window_reject_reason,
+        [
+            FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND,
+            FINE_WINDOW_REJECT_WINDOW_OUTSIDE_PREFILTER_BAND,
+        ],
+    )
     np.testing.assert_array_equal(
         diagnostics['reject_physics_reason'],
         ['reject_physics_coarse_outside_band', 'reject_physics_no_valid_window'],
