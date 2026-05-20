@@ -398,6 +398,15 @@ python proc/fbpick/site54/oof/scripts/evaluate_fine_oof.py \
   --run-id baseline_physical_center
 ```
 
+`08_eval` writes `per_data.csv`, `per_fold.csv`, `summary.csv`, and
+`top_errors_final.csv`. site54 OOF evaluation fixes the denominator to every
+trace with a teacher FB pick. Missing predictions, NaN predictions, out-of-range
+picks, and rejected final/robust picks count as misses rather than being removed
+from the denominator. `within_k_samples` uses `n_teacher` as its denominator.
+Continuous error statistics such as `accepted_mae_samples` are computed only on
+accepted predictions, so interpret them together with `coverage`. Millisecond
+metric columns are not emitted.
+
 Check the run-scoped CV outputs:
 
 ```bash
