@@ -181,7 +181,10 @@ def test_make_fine_defaults_write_under_run_root(
         'paths: {}\ntrain: {}\ninfer: {}\nvis: {}\n',
         encoding='utf-8',
     )
-    base_infer.write_text('paths: {}\ninfer: {}\n', encoding='utf-8')
+    base_infer.write_text(
+        'paths: {}\ninfer: {}\nviewer:\n  gather_selection: even\n',
+        encoding='utf-8',
+    )
 
     monkeypatch.setattr(
         sys,
@@ -221,6 +224,7 @@ def test_make_fine_defaults_write_under_run_root(
     assert infer_cfg['paths']['viewer_fb_files'] == [fbs[0]]
     assert infer_cfg['paths']['robust_npz_files'] == [robust[0]]
     assert infer_cfg['paths']['coarse_npz_files'] == [coarse[0]]
+    assert infer_cfg['viewer']['gather_selection'] == 'even'
     assert (
         run_root
         / 'aggregate'
@@ -327,6 +331,7 @@ def test_make_physics_defaults_write_configs_under_run_root(
     _assert_partial_physics_fallback(physics_cfg)
     _assert_partial_physics_fallback(physics_qc_cfg)
     assert physics_qc_cfg['vis']['first_panel_only'] is True
+    assert physics_qc_cfg['vis']['gather_selection'] == 'even'
     assert physics_qc_cfg['vis']['overlays']['gt_pick'] is True
     assert physics_qc_cfg['vis']['overlays']['robust_pick'] is False
 

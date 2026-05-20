@@ -83,6 +83,7 @@ _SAFE_OVERRIDE_PATHS = frozenset(
         'viewer.save_overview_png',
         'viewer.save_gather_png',
         'viewer.max_gathers_per_file',
+        'viewer.gather_selection',
         'viewer.skip_gather_keys',
         'viewer.max_traces_per_gather',
         'viewer.waveform_norm',
@@ -147,6 +148,7 @@ def _default_cfg() -> dict[str, Any]:
             'save_overview_png': False,
             'save_gather_png': False,
             'max_gathers_per_file': 8,
+            'gather_selection': 'first',
             'skip_gather_keys': {},
             'max_traces_per_gather': 10000,
             'waveform_norm': 'global',
@@ -571,6 +573,7 @@ def _save_fine_gather_qc_pngs(
             skip_gather_keys=viewer.skip_gather_keys,
             max_traces_per_gather=viewer.max_traces_per_gather,
             segy_path=segy_path,
+            gather_selection=viewer.gather_selection,
         )
     ):
         x_hw = np.stack(

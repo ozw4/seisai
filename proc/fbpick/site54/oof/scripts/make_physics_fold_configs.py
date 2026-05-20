@@ -241,6 +241,7 @@ def physics_qc_config(args: argparse.Namespace, fold: str) -> dict:
         },
         'vis': {
             'max_gathers_per_file': 8,
+            'gather_selection': 'even',
             'skip_gather_keys': {'ffid': [0]},
             'max_traces_per_gather': 10000,
             'save_cdf': True,

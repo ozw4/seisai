@@ -54,6 +54,8 @@ To rerun physics and later stages, keep the coarse outputs, remove only physics-
 
 The site54 OOF default QC gather PNGs for `physics_qc` and `fine_infer` save only the first panel. That panel contains the waveform with the main pick and window overlays, including coarse, robust, window start/end, final, and high-confidence final picks where available.
 
+The default gather selection is `even`, so QC PNGs are sampled at even intervals across all eligible FFIDs instead of taking only the first consecutive FFIDs. Set `viewer.gather_selection=first` for fine infer or `vis.gather_selection=first` for physics QC to restore first-gather selection. `skip_gather_keys` is applied before gather selection, and `max_gathers_per_file` limits the number of rendered gathers.
+
 The offset panel and confidence mask panel are diagnostic views. Set `viewer.first_panel_only=false` for fine infer, or `vis.first_panel_only=false` for physics QC, when those extra panels are needed. When a window has jumped to an edge of the gather, the first-panel-only view is usually easier to inspect because the right-side offset and mask panels no longer compress the waveform view.
 
 ## Clean Rerun Procedure

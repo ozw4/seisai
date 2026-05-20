@@ -89,6 +89,7 @@ def test_generator_defaults_write_run_scoped_configs(tmp_path: Path) -> None:
         assert runtime["partial_trend_fallback"]["max_fraction"] == 0.05
         assert runtime["partial_trend_fallback"]["max_traces"] == 50000
     assert physics_qc_cfg["vis"]["first_panel_only"] is True
+    assert physics_qc_cfg["vis"]["gather_selection"] == "even"
 
 
 def test_runner_dry_run_uses_run_scoped_config_paths(tmp_path: Path) -> None:
@@ -128,6 +129,7 @@ def test_fine_base_configs_exist() -> None:
     assert fine_infer_path.is_file()
     fine_infer_cfg = yaml.safe_load(fine_infer_path.read_text(encoding="utf-8"))
     assert fine_infer_cfg["viewer"]["first_panel_only"] is True
+    assert fine_infer_cfg["viewer"]["gather_selection"] == "even"
 
 
 def test_clean_rerun_procedure_has_no_legacy_root_paths() -> None:

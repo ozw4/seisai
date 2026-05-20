@@ -37,6 +37,7 @@ viewer:
   save_overview_png: false
   save_gather_png: true
   max_gathers_per_file: 8
+  gather_selection: even
   skip_gather_keys:
     ffid: [0]
   max_traces_per_gather: 10000

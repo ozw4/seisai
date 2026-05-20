@@ -149,6 +149,7 @@ class FineViewerCfg:
     save_overview_png: bool
     save_gather_png: bool
     max_gathers_per_file: int
+    gather_selection: str
     skip_gather_keys: dict[str, frozenset[int]]
     max_traces_per_gather: int | None
     waveform_norm: str
@@ -559,6 +560,11 @@ def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
         msg = 'viewer.waveform_norm must be one of: global, per_trace'
         raise ValueError(msg)
 
+    gather_selection = optional_str(viewer_cfg, 'gather_selection', 'first').strip()
+    if gather_selection not in ('first', 'even'):
+        msg = 'viewer.gather_selection must be one of: first, even'
+        raise ValueError(msg)
+
     default_overlays = {
         'gt_pick': True,
         'coarse_pick': True,
@@ -599,6 +605,7 @@ def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
             optional_bool(viewer_cfg, 'save_gather_png', default=False)
         ),
         max_gathers_per_file=max_gathers_per_file,
+        gather_selection=gather_selection,
         skip_gather_keys=skip_gather_keys,
         max_traces_per_gather=max_traces_per_gather,
         waveform_norm=waveform_norm,
