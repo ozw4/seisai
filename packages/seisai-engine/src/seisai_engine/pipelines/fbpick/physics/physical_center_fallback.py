@@ -15,6 +15,7 @@ from .physical_center_types import (
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
     PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP,
     PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
+    PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
     PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND,
     PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST,
@@ -764,7 +765,24 @@ def _assign_configured_fallback_all(
     merged: MergeResult,
     trend_provider: object | None = None,
 ) -> PhysicalCenterResult:
-    if str(fallback_mode) == 'robust':
+    mode = str(fallback_mode)
+    if mode == 'neighbor_or_coarse_in_band':
+        arrays = _allocate_result_arrays(table)
+        n_samples = int(table.n_samples_orig)
+        dt = float(table.dt_scalar_sec)
+        center_i = np.clip(
+            np.asarray(table.coarse_pick_i, dtype=np.int64),
+            0,
+            n_samples - 1,
+        ).astype(np.int32)
+        arrays['physical_center_i'][:] = center_i
+        arrays['physical_center_t_sec'][:] = center_i.astype(np.float64) * dt
+        arrays['physical_model_status'][:] = np.uint8(
+            PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID
+        )
+        arrays['physical_model_failure_reason'][:] = np.uint8(failure_reason)
+        return _finalize_result(arrays)
+    if mode == 'robust':
         return _assign_robust_fallback_all(
             failure_reason=failure_reason,
             table=table,

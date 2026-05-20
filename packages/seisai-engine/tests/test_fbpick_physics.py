@@ -2688,6 +2688,68 @@ def test_run_physics_lite_lazy_geometry_invalid_robust_skips_trend_result(
     )
 
 
+def test_run_physics_lite_geometry_invalid_neighbor_or_coarse_uses_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    n_traces = 6
+    coarse_pick_i = np.full((n_traces,), 170, dtype=np.int32)
+    coarse_path = save_coarse_npz(
+        tmp_path / 'geometry_invalid_policy.coarse.npz',
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full((n_traces,), 0.95, dtype=np.float32),
+            offsets_m=np.linspace(600.0, 900.0, n_traces, dtype=np.float32),
+        ),
+    )
+
+    def fail_build_trend(*_args, **_kwargs):
+        raise AssertionError('trend_result should not be materialized')
+
+    monkeypatch.setattr(
+        'seisai_engine.pipelines.fbpick.physics.run.build_trend_result',
+        fail_build_trend,
+    )
+
+    out_path = run_physics_lite(
+        coarse_path,
+        cfg={
+            'physical_trend': {
+                'enabled': True,
+                'fit_kind': 'auto_irls',
+                'use_geometry_offset': True,
+            },
+            'physical_runtime': {
+                'trend_result_mode': 'lazy',
+                'geometry_invalid_fallback': 'neighbor_or_coarse_in_band',
+                'neighbor_physical_fit_reuse': {'enabled': True},
+                'fallback_policy': {'enabled': True},
+            },
+        },
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+    robust = load_robust_npz(out_path)
+
+    np.testing.assert_array_equal(robust['physical_center_i'], coarse_pick_i)
+    np.testing.assert_array_equal(robust['fine_center_i'], coarse_pick_i)
+    assert np.all(
+        robust['physical_model_status']
+        == np.uint8(PHYSICAL_MODEL_STATUS_COARSE_IN_BAND_FALLBACK)
+    )
+    assert np.all(
+        robust['physical_model_failure_reason']
+        == np.uint8(PHYSICAL_MODEL_FAILURE_NONE)
+    )
+    assert np.all(robust['physical_center_source'] == 'coarse_in_band_fallback')
+    assert np.all(robust['fine_window_valid_mask'])
+    assert (
+        int(np.asarray(robust['physical_runtime_trend_result_materialized']).item())
+        == 0
+    )
+
+
 def test_run_physics_lite_lazy_group_invalid_robust_skips_trend_result(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

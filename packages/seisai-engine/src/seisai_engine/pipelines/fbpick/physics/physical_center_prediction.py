@@ -207,17 +207,16 @@ def _status_for_plan_batch(
     trend_model: object | None = None,
 ) -> np.ndarray:
     indices = np.asarray(trace_indices, dtype=np.int64)
-    if str(getattr(trend_model, 'model_type', '')) == MODEL_TYPE_SINGLE_LINE:
-        return np.full(
-            (indices.size,),
-            np.uint8(PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK),
-            dtype=np.uint8,
-        )
+    success_status = (
+        PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK
+        if str(getattr(trend_model, 'model_type', '')) == MODEL_TYPE_SINGLE_LINE
+        else PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
+    )
     if isinstance(plan_by_trace, _ObservationPlan):
         status = (
             PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT
             if bool(plan_by_trace.relaxed)
-            else PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
+            else success_status
         )
         return np.full((indices.size,), np.uint8(status), dtype=np.uint8)
 
@@ -227,7 +226,7 @@ def _status_for_plan_batch(
         out[pos] = np.uint8(
             PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT
             if bool(plan.relaxed)
-            else PHYSICAL_MODEL_STATUS_TWO_PIECE_OK
+            else success_status
         )
     return out
 

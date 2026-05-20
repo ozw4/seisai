@@ -45,6 +45,7 @@ from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP,
     PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT,
     PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
+    PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
     PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
@@ -1283,6 +1284,39 @@ def test_geometry_missing_falls_back_to_existing_trend_without_crashing() -> Non
     )
 
 
+def test_geometry_invalid_neighbor_or_coarse_preflight_defers_to_policy() -> None:
+    coarse_npz, table, feasible, trend, merged = make_inputs(
+        offsets_m=np.linspace(300.0, 900.0, 12, dtype=np.float32),
+        with_geometry=False,
+    )
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=physical_cfg(
+            {
+                'physical_runtime': {
+                    'geometry_invalid_fallback': 'neighbor_or_coarse_in_band',
+                    'fallback_policy': {'enabled': True},
+                }
+            }
+        ),
+    )
+
+    np.testing.assert_array_equal(result.fine_center_i, table.coarse_pick_i)
+    assert np.all(
+        result.physical_model_status
+        == np.uint8(PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID)
+    )
+    assert np.all(
+        result.physical_model_failure_reason
+        == np.uint8(PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID)
+    )
+
+
 def test_assign_fallback_all_vectorized_matches_scalar_fallback() -> None:
     _coarse_npz, table, feasible, trend, merged = make_inputs(
         offsets_m=np.linspace(50.0, 1200.0, 4, dtype=np.float32),
@@ -1952,3 +1986,26 @@ def test_segment_relaxation_path_uses_relaxed_fit(monkeypatch) -> None:
         == np.uint8(PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT)
     )
     assert np.all(result.physical_model_failure_reason == PHYSICAL_MODEL_FAILURE_NONE)
+
+
+def test_single_line_selected_model_preserves_relaxed_segment_status() -> None:
+    plan = observation_mod._ObservationPlan(
+        obs_indices=np.arange(6, dtype=np.int64),
+        obs_key=(0, 1, 2, 3, 4, 5),
+        neighbor_count=6,
+        prefilter_valid_count=6,
+        segment_id=0,
+        side=0,
+        relaxed=True,
+    )
+
+    status = prediction_mod._status_for_plan_batch(
+        np.arange(3, dtype=np.int64),
+        plan,
+        trend_model=type('SingleLineModel', (), {'model_type': 'single_line'})(),
+    )
+
+    np.testing.assert_array_equal(
+        status,
+        np.full((3,), PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT, dtype=np.uint8),
+    )
