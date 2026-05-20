@@ -408,19 +408,19 @@ python proc/fbpick/site54/oof/scripts/evaluate_fine_oof.py \
   --run-id baseline_physical_center
 ```
 
-`08_eval` writes `per_data.csv`, `per_fold.csv`, `summary.csv`, and
-`top_errors_final.csv`. site54 OOF evaluation fixes the denominator to every
-trace with a teacher FB pick. Missing predictions, NaN predictions, out-of-range
-picks, and rejected final/robust picks count as misses rather than being removed
-from the denominator. `within_k_samples` uses `n_teacher` as its denominator.
-Continuous error statistics such as `accepted_mae_samples` are computed only on
-accepted predictions, so interpret them together with `coverage`. Millisecond
-metric columns are not emitted.
+`08_eval` writes only `per_data.csv`, `summary_by_stage.csv`, and
+`eval_meta.json`. site54 OOF evaluation uses teacher traces where
+`fb_i` is finite, `fb_i > 0`, and `fb_i < n_samples_orig`; `fb_i == 0`
+is treated as unlabeled and excluded. Pick validity is finite-only. Finite picks
+outside the raw record are not removed: before error calculation they are clipped
+to `[0, n_samples_orig - 1]`, so out-of-record predictions still contribute to
+coverage and error metrics. `reject_mask`, `high_conf_mask`, accepted-prediction
+metrics, and top-error CSVs are not part of normal evaluation output.
 
 For `08_eval`, the `final` stage uses `final_pick_i`. This matches the red final
 pick drawn by fine inference QC PNGs. `final_pick_f` may remain in the payload as
 an internal float pick, but site54 OOF normal evaluation does not use it.
-`final_high_conf` is also outside the normal evaluation output.
+Normal evaluation stages are `final`, `robust`, and `coarse`.
 
 Check the run-scoped CV outputs:
 
