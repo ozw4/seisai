@@ -382,6 +382,11 @@ _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
     'physical_fit_two_piece_slope_near': np.float32,
     'physical_fit_two_piece_slope_far': np.float32,
     'physical_fit_two_piece_break_offset_m': np.float32,
+    'fine_center_valid_mask': np.bool_,
+    'fine_window_valid_mask': np.bool_,
+    'fine_window_physical_lo_i': np.int32,
+    'fine_window_physical_hi_i': np.int32,
+    'fine_window_reject_reason': np.uint8,
 }
 
 _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = tuple(
@@ -697,6 +702,11 @@ def save_robust_npz(
     physical_fit_two_piece_slope_near=None,
     physical_fit_two_piece_slope_far=None,
     physical_fit_two_piece_break_offset_m=None,
+    fine_center_valid_mask=None,
+    fine_window_valid_mask=None,
+    fine_window_physical_lo_i=None,
+    fine_window_physical_hi_i=None,
+    fine_window_reject_reason=None,
     physics_total_sec=None,
     physical_center_total_sec=None,
     ransac_fit_total_sec=None,
@@ -924,6 +934,11 @@ def save_robust_npz(
         'physical_fit_two_piece_break_offset_m': (
             physical_fit_two_piece_break_offset_m
         ),
+        'fine_center_valid_mask': fine_center_valid_mask,
+        'fine_window_valid_mask': fine_window_valid_mask,
+        'fine_window_physical_lo_i': fine_window_physical_lo_i,
+        'fine_window_physical_hi_i': fine_window_physical_hi_i,
+        'fine_window_reject_reason': fine_window_reject_reason,
     }
     for key, dtype in _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS:
         value = physical_diagnostic_values[key]

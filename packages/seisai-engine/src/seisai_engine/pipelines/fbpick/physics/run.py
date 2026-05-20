@@ -36,6 +36,7 @@ from .trend import (
     build_partial_trend_fallback,
     build_trend_result,
 )
+from .window_constraint import evaluate_fine_window_constraint
 
 __all__ = [
     'build_robust_payload_from_coarse',
@@ -821,6 +822,22 @@ def build_robust_payload_from_coarse(
 
     legacy_trend_output = str(typed_cfg.physical_runtime.legacy_trend_output)
     include_trend_output = legacy_trend_output != 'omit' or bool(trend_materialized)
+    window_constraint = evaluate_fine_window_constraint(
+        offsets_m=table.offset_m,
+        dt_sec=float(table.dt_scalar_sec),
+        n_samples_orig=int(table.n_samples_orig),
+        fine_center_i=np.asarray(physical.fine_center_i, dtype=np.int32),
+        physical_prefilter=typed_cfg.physical_prefilter,
+        constraint=typed_cfg.physical_runtime.fine_window_constraint,
+        physical_model_status=np.asarray(
+            physical.physical_model_status,
+            dtype=np.uint8,
+        ),
+        physical_runtime_fit_source=np.asarray(
+            physical.physical_runtime_fit_source,
+            dtype=np.uint8,
+        ),
+    )
     payload = {
         'dt_sec': np.asarray(table.dt_scalar_sec, dtype=np.float32),
         'n_samples_orig': np.asarray(table.n_samples_orig, dtype=np.int32),
@@ -960,6 +977,26 @@ def build_robust_payload_from_coarse(
         'physical_fit_two_piece_break_offset_m': np.asarray(
             physical.physical_fit_two_piece_break_offset_m,
             dtype=np.float32,
+        ),
+        'fine_center_valid_mask': np.asarray(
+            window_constraint.fine_center_valid_mask,
+            dtype=np.bool_,
+        ),
+        'fine_window_valid_mask': np.asarray(
+            window_constraint.fine_window_valid_mask,
+            dtype=np.bool_,
+        ),
+        'fine_window_physical_lo_i': np.asarray(
+            window_constraint.fine_window_physical_lo_i,
+            dtype=np.int32,
+        ),
+        'fine_window_physical_hi_i': np.asarray(
+            window_constraint.fine_window_physical_hi_i,
+            dtype=np.int32,
+        ),
+        'fine_window_reject_reason': np.asarray(
+            window_constraint.fine_window_reject_reason,
+            dtype=np.uint8,
         ),
         'physical_runtime_trend_result_materialized': np.asarray(
             int(bool(trend_materialized)),

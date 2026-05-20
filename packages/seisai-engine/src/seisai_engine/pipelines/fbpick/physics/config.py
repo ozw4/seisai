@@ -17,6 +17,7 @@ __all__ = [
     'PhysicalAdaptiveRefitCfg',
     'PhysicalAnchorReuseCfg',
     'PhysicalAnchorSelectionCfg',
+    'PhysicalFineWindowConstraintCfg',
     'PhysicalFitExecutorCfg',
     'PhysicalModelSelectionCfg',
     'PhysicalObservationSamplingCfg',
@@ -227,6 +228,19 @@ class PhysicalFitExecutorCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalFineWindowConstraintCfg:
+    enabled: bool = True
+    band_source: str = 'physical_prefilter'
+    time_len: int = 256
+    center_index: int = 128
+    require_center_inside_band: bool = True
+    require_window_inside_band: bool = True
+    invalid_policy: str = 'defer_to_fallback_policy'
+    allow_robust_fallback_as_fine_center: bool = True
+    allow_feasible_clip_as_fine_center: bool = True
+
+
+@dataclass(frozen=True)
 class PhysicalPartialTrendFallbackCfg:
     enabled: bool = True
     max_fraction: float = 0.05
@@ -279,6 +293,9 @@ class PhysicalRuntimeCfg:
         PhysicalObservationSamplingCfg()
     )
     fit_executor: PhysicalFitExecutorCfg = PhysicalFitExecutorCfg()
+    fine_window_constraint: PhysicalFineWindowConstraintCfg = (
+        PhysicalFineWindowConstraintCfg()
+    )
     partial_trend_fallback: PhysicalPartialTrendFallbackCfg = (
         PhysicalPartialTrendFallbackCfg()
     )
@@ -704,6 +721,50 @@ def _load_physical_fit_executor_cfg(cfg: dict[str, Any]) -> PhysicalFitExecutorC
     )
 
 
+def _load_physical_fine_window_constraint_cfg(
+    cfg: dict[str, Any],
+) -> PhysicalFineWindowConstraintCfg:
+    band_source = optional_str(cfg, 'band_source', 'physical_prefilter')
+    invalid_policy = optional_str(
+        cfg,
+        'invalid_policy',
+        'defer_to_fallback_policy',
+    )
+    if band_source is None:
+        msg = 'physical_runtime.fine_window_constraint.band_source must not be null'
+        raise TypeError(msg)
+    if invalid_policy is None:
+        msg = 'physical_runtime.fine_window_constraint.invalid_policy must not be null'
+        raise TypeError(msg)
+    return PhysicalFineWindowConstraintCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=True)),
+        band_source=str(band_source),
+        time_len=int(optional_int(cfg, 'time_len', 256)),
+        center_index=int(optional_int(cfg, 'center_index', 128)),
+        require_center_inside_band=bool(
+            optional_bool(cfg, 'require_center_inside_band', default=True)
+        ),
+        require_window_inside_band=bool(
+            optional_bool(cfg, 'require_window_inside_band', default=True)
+        ),
+        invalid_policy=str(invalid_policy),
+        allow_robust_fallback_as_fine_center=bool(
+            optional_bool(
+                cfg,
+                'allow_robust_fallback_as_fine_center',
+                default=True,
+            )
+        ),
+        allow_feasible_clip_as_fine_center=bool(
+            optional_bool(
+                cfg,
+                'allow_feasible_clip_as_fine_center',
+                default=True,
+            )
+        ),
+    )
+
+
 def _load_physical_partial_trend_fallback_cfg(
     cfg: dict[str, Any],
 ) -> PhysicalPartialTrendFallbackCfg:
@@ -846,6 +907,12 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
             _require_dict(
                 cfg.get('fit_executor'),
                 key='physical_runtime.fit_executor',
+            )
+        ),
+        fine_window_constraint=_load_physical_fine_window_constraint_cfg(
+            _require_dict(
+                cfg.get('fine_window_constraint'),
+                key='physical_runtime.fine_window_constraint',
             )
         ),
         partial_trend_fallback=_load_physical_partial_trend_fallback_cfg(
@@ -1003,6 +1070,37 @@ def _validate_physical_partial_trend_fallback_cfg(
         raise ValueError(msg)
 
 
+def _validate_physical_fine_window_constraint_cfg(
+    cfg: PhysicalFineWindowConstraintCfg,
+) -> None:
+    if cfg.band_source != 'physical_prefilter':
+        msg = (
+            'physical_runtime.fine_window_constraint.band_source must be '
+            f"'physical_prefilter', got {cfg.band_source!r}"
+        )
+        raise ValueError(msg)
+    _validate_positive_int(
+        'physical_runtime.fine_window_constraint.time_len',
+        cfg.time_len,
+    )
+    _validate_nonnegative_int(
+        'physical_runtime.fine_window_constraint.center_index',
+        cfg.center_index,
+    )
+    if int(cfg.center_index) >= int(cfg.time_len):
+        msg = (
+            'physical_runtime.fine_window_constraint.center_index must be '
+            '< time_len'
+        )
+        raise ValueError(msg)
+    if cfg.invalid_policy != 'defer_to_fallback_policy':
+        msg = (
+            'physical_runtime.fine_window_constraint.invalid_policy must be '
+            f"'defer_to_fallback_policy', got {cfg.invalid_policy!r}"
+        )
+        raise ValueError(msg)
+
+
 def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
     if cfg.fit_policy not in {'full', 'anchor_source_xy'}:
         msg = (
@@ -1065,6 +1163,7 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
             "with legacy_trend_output='always'"
         )
         raise ValueError(msg)
+    _validate_physical_fine_window_constraint_cfg(cfg.fine_window_constraint)
     _validate_physical_partial_trend_fallback_cfg(cfg.partial_trend_fallback)
     anchor = cfg.anchor_selection
     if anchor.mode != 'source_xy_stride':

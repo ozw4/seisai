@@ -12,6 +12,7 @@ import pytest
 from seisai_engine.pipelines.fbpick.common import (
     COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS,
     COARSE_GEOMETRY_OPTIONAL_KEYS,
+    FINE_WINDOW_REJECT_OK,
     REASON_MASK_FILLED_FROM_TREND,
     REASON_MASK_INFEASIBLE,
     REASON_MASK_LOW_SCORE,
@@ -289,6 +290,14 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
         'physical_fit_two_piece_break_offset_m': np.array(
             [1000.0, np.nan, 1200.0],
             dtype=np.float32,
+        ),
+        'fine_center_valid_mask': np.array([True, True, False], dtype=np.bool_),
+        'fine_window_valid_mask': np.array([True, False, False], dtype=np.bool_),
+        'fine_window_physical_lo_i': np.array([0, 10, 20], dtype=np.int32),
+        'fine_window_physical_hi_i': np.array([255, 265, 275], dtype=np.int32),
+        'fine_window_reject_reason': np.array(
+            [FINE_WINDOW_REJECT_OK, 3, 2],
+            dtype=np.uint8,
         ),
         'physics_total_sec': np.asarray(1.0, dtype=np.float64),
         'physical_center_total_sec': np.asarray(0.7, dtype=np.float64),
@@ -1927,6 +1936,14 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
         'physical_fit_two_piece_break_offset_m': np.array(
             [1000.0, np.nan, 1200.0],
             dtype=np.float32,
+        ),
+        'fine_center_valid_mask': np.array([True, True, False], dtype=np.bool_),
+        'fine_window_valid_mask': np.array([True, False, False], dtype=np.bool_),
+        'fine_window_physical_lo_i': np.array([0, 10, 20], dtype=np.int32),
+        'fine_window_physical_hi_i': np.array([255, 265, 275], dtype=np.int32),
+        'fine_window_reject_reason': np.array(
+            [FINE_WINDOW_REJECT_OK, 3, 2],
+            dtype=np.uint8,
         ),
     }
 
