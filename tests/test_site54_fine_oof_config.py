@@ -596,6 +596,26 @@ def test_check_cv_outputs_strict_npz_policy_accepts_new_keys(tmp_path: Path) -> 
     )
 
 
+def test_check_cv_outputs_strict_physics_npz_accepts_physical_band_keys(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'survey.robust.npz'
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        fine_center_i=np.asarray([128], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([True], dtype=np.bool_),
+        physical_band_lo_i=np.asarray([0], dtype=np.int32),
+        physical_band_hi_i=np.asarray([255], dtype=np.int32),
+        fine_window_reject_reason=np.asarray([0], dtype=np.uint8),
+        physical_model_status=np.asarray([0], dtype=np.uint8),
+    )
+
+    assert module.strict_check_physics_npz(physics_path) is None
+
+
 def test_check_cv_outputs_strict_final_npz_requires_fine_window_valid_mask(
     tmp_path: Path,
 ) -> None:

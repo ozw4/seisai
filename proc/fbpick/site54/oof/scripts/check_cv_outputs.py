@@ -34,10 +34,12 @@ FINE_INFER_ALLOWED_PATH_KEYS = set(FINE_INFER_REQUIRED_SINGLE_ENTRY_KEYS) | {
 STRICT_PHYSICS_KEYS = (
     "fine_center_i",
     "fine_window_valid_mask",
-    "fine_window_physical_lo_i",
-    "fine_window_physical_hi_i",
     "fine_window_reject_reason",
     "physical_model_status",
+)
+STRICT_PHYSICS_WINDOW_KEY_PAIRS = (
+    ("fine_window_physical_lo_i", "fine_window_physical_hi_i"),
+    ("physical_band_lo_i", "physical_band_hi_i"),
 )
 STRICT_FINAL_KEYS = (
     "final_pick_f",
@@ -293,6 +295,8 @@ def check_npz_count(
             try:
                 with np.load(path, allow_pickle=False) as z:
                     missing_keys = [key for key in strict_keys if key not in z.files]
+                    if strict_keys == STRICT_PHYSICS_KEYS:
+                        missing_keys.extend(missing_physics_window_keys(z.files))
             except Exception as exc:
                 failures.append(f"read_error={path}:{exc}")
                 break
@@ -342,6 +346,25 @@ def require_integer_trace_vector(
     return arr.astype(np.int64, copy=False)
 
 
+def missing_physics_window_keys(files: list[str]) -> list[str]:
+    file_set = set(files)
+    for lo_key, hi_key in STRICT_PHYSICS_WINDOW_KEY_PAIRS:
+        if lo_key in file_set and hi_key in file_set:
+            return []
+    for lo_key, hi_key in STRICT_PHYSICS_WINDOW_KEY_PAIRS:
+        present = [key in file_set for key in (lo_key, hi_key)]
+        if any(present):
+            return [key for key in (lo_key, hi_key) if key not in file_set]
+    return list(STRICT_PHYSICS_WINDOW_KEY_PAIRS[0])
+
+
+def physics_window_keys(z: np.lib.npyio.NpzFile) -> tuple[str, str]:
+    for lo_key, hi_key in STRICT_PHYSICS_WINDOW_KEY_PAIRS:
+        if lo_key in z.files and hi_key in z.files:
+            return lo_key, hi_key
+    raise KeyError(",".join(missing_physics_window_keys(z.files)))
+
+
 def strict_check_physics_npz(
     path: Path,
     *,
@@ -352,9 +375,11 @@ def strict_check_physics_npz(
     try:
         with np.load(path, allow_pickle=False) as z:
             missing = [key for key in STRICT_PHYSICS_KEYS if key not in z.files]
+            missing.extend(missing_physics_window_keys(z.files))
             if missing:
                 return f"{path.name}:missing_keys={','.join(missing)}"
             n_traces = npz_n_traces(z)
+            lo_key, hi_key = physics_window_keys(z)
             status = require_trace_vector(
                 z,
                 "physical_model_status",
@@ -374,12 +399,12 @@ def strict_check_physics_npz(
             )
             lo_i = require_integer_trace_vector(
                 z,
-                "fine_window_physical_lo_i",
+                lo_key,
                 n_traces=n_traces,
             )
             hi_i = require_integer_trace_vector(
                 z,
-                "fine_window_physical_hi_i",
+                hi_key,
                 n_traces=n_traces,
             )
             window_reason = require_trace_vector(
@@ -507,14 +532,15 @@ def strict_check_physics_final_pair(
                 n_traces=n_traces,
                 dtype=np.bool_,
             )
+            lo_key, hi_key = physics_window_keys(physics)
             lo_i = require_integer_trace_vector(
                 physics,
-                "fine_window_physical_lo_i",
+                lo_key,
                 n_traces=n_traces,
             )
             hi_i = require_integer_trace_vector(
                 physics,
-                "fine_window_physical_hi_i",
+                hi_key,
                 n_traces=n_traces,
             )
             reject = require_trace_vector(

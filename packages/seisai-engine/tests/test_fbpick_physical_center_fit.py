@@ -253,6 +253,21 @@ def test_physical_center_auto_irls_attempts_single_line_below_two_piece_min() ->
     assert np.all(np.isposinf(result.physical_fit_two_piece_cost))
 
 
+def test_fit_min_obs_required_explicit_single_line_ignores_fallback_flag() -> None:
+    cfg = physical_cfg(
+        {
+            'physical_trend': {
+                'fit_kind': 'auto_irls',
+                'candidate_models': ['single_line'],
+                'model_selection': {'fallback_to_single_line': False},
+            },
+            'two_piece_irls': {'min_pts': 6},
+        }
+    )
+
+    assert fit_mod._fit_min_obs_required(cfg) == 6
+
+
 def test_physical_center_auto_irls_selects_two_piece_when_improved() -> None:
     offsets = np.linspace(0.0, 4000.0, 48, dtype=np.float32)
     coarse_npz, table, feasible, trend, merged = make_inputs(offsets_m=offsets)
