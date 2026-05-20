@@ -65,7 +65,11 @@ def _load_oof_script(script_name: str, module_name: str) -> ModuleType:
     return module
 
 
-def _assert_partial_physics_fallback(cfg: dict) -> None:
+def _assert_partial_physics_fallback(
+    cfg: dict,
+    *,
+    expected_pmax_min: float,
+) -> None:
     trend = cfg['physical_trend']
     assert trend['fit_kind'] == 'auto_irls'
     assert trend['candidate_models'] == ['two_piece', 'single_line']
@@ -102,13 +106,31 @@ def _assert_partial_physics_fallback(cfg: dict) -> None:
         'reject',
     ]
     assert runtime['fine_window_constraint']['enabled'] is True
-    assert runtime['fine_window_constraint']['band_source'] == 'physical_prefilter'
+    assert runtime['fine_window_constraint']['band_source'] == 'physical_band'
     assert runtime['fine_window_constraint']['time_len'] == 256
     assert runtime['fine_window_constraint']['center_index'] == 128
+    assert runtime['neighbor_physical_fit_reuse']['band_source'] == 'physical_band'
+    assert runtime['coarse_in_band_fallback']['band_source'] == 'physical_band'
     assert runtime['neighbor_physical_fit_reuse']['candidate_statuses'] == [
         'two_piece_ok',
         'single_line_ok',
     ]
+    assert 'physical_band' in cfg
+    assert cfg['physical_band'] == {
+        'vmin_m_s': 300.0,
+        'vmax_m_s': 6000.0,
+        't0_lo_ms': -20.0,
+        't0_hi_ms': 200.0,
+    }
+    assert cfg['fit_observation_filter'] == {
+        'enabled': True,
+        'band_source': 'physical_band',
+        'pmax_min': expected_pmax_min,
+        'use_existing_mask': False,
+    }
+    assert 'pmax_min' not in cfg['physical_band']
+    assert 'feasible_band' not in cfg
+    assert 'physical_prefilter' not in cfg
 
 
 def test_fine_train_config_fixed_last_uses_last_checkpoint_policy(
@@ -388,8 +410,20 @@ def test_make_physics_defaults_write_configs_under_run_root(
             encoding='utf-8',
         ),
     )
-    _assert_partial_physics_fallback(physics_cfg)
-    _assert_partial_physics_fallback(physics_qc_cfg)
+    _assert_partial_physics_fallback(physics_cfg, expected_pmax_min=0.05)
+    _assert_partial_physics_fallback(physics_qc_cfg, expected_pmax_min=0.0)
+    assert (
+        physics_cfg['physical_runtime']['observation_sampling'][
+            'min_obs_per_fit_after_sampling'
+        ]
+        == 8
+    )
+    assert (
+        physics_qc_cfg['physical_runtime']['observation_sampling'][
+            'min_obs_per_fit_after_sampling'
+        ]
+        == 8
+    )
     assert 'fallback_if_no_compatible_segment: robust' not in physics_text
     assert 'geometry_invalid_fallback: robust' not in physics_text
     assert 'group_invalid_fallback: robust' not in physics_text
@@ -534,8 +568,8 @@ def test_run_site54_oof_cv_prepare_configs_writes_manifest_and_configs(
             encoding='utf-8',
         ),
     )
-    _assert_partial_physics_fallback(physics_cfg)
-    _assert_partial_physics_fallback(physics_qc_cfg)
+    _assert_partial_physics_fallback(physics_cfg, expected_pmax_min=0.05)
+    _assert_partial_physics_fallback(physics_qc_cfg, expected_pmax_min=0.0)
 
 
 def test_check_cv_outputs_strict_npz_policy_accepts_new_keys(tmp_path: Path) -> None:
@@ -578,6 +612,98 @@ def test_check_cv_outputs_strict_npz_policy_accepts_new_keys(tmp_path: Path) -> 
     )
 
 
+def test_check_cv_outputs_strict_physics_npz_accepts_physical_band_keys(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'survey.robust.npz'
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        fine_center_i=np.asarray([128], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([True], dtype=np.bool_),
+        physical_band_lo_i=np.asarray([0], dtype=np.int32),
+        physical_band_hi_i=np.asarray([255], dtype=np.int32),
+        fine_window_reject_reason=np.asarray([0], dtype=np.uint8),
+        physical_model_status=np.asarray([0], dtype=np.uint8),
+    )
+
+    assert module.strict_check_physics_npz(physics_path) is None
+
+
+def _strict_physics_config() -> dict:
+    return {
+        'physical_band': {
+            'vmin_m_s': 300.0,
+            'vmax_m_s': 6000.0,
+            't0_lo_ms': -20.0,
+            't0_hi_ms': 200.0,
+        },
+        'fit_observation_filter': {
+            'enabled': True,
+            'band_source': 'physical_band',
+            'pmax_min': 0.05,
+            'use_existing_mask': False,
+        },
+        'physical_runtime': {
+            'fine_window_constraint': {'band_source': 'physical_band'},
+            'neighbor_physical_fit_reuse': {'band_source': 'physical_band'},
+            'coarse_in_band_fallback': {'band_source': 'physical_band'},
+            'fallback_policy': {
+                'order': [
+                    'self_physical_fit',
+                    'neighbor_physical_fit_reuse',
+                    'coarse_in_band',
+                    'reject',
+                ],
+            },
+        },
+    }
+
+
+def test_check_cv_outputs_strict_physics_config_accepts_fit_filter_contract(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    config_path = tmp_path / '03_physics.yaml'
+    config_path.write_text(
+        yaml.safe_dump(_strict_physics_config(), sort_keys=False),
+        encoding='utf-8',
+    )
+
+    assert module.strict_check_physics_config(config_path) is None
+
+
+def test_check_cv_outputs_strict_physics_config_requires_fit_filter_band_source(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    config_path = tmp_path / '03_physics.yaml'
+    cfg = _strict_physics_config()
+    cfg['fit_observation_filter']['band_source'] = 'physical_prefilter'
+    config_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding='utf-8')
+
+    assert module.strict_check_physics_config(config_path) == (
+        "03_physics.yaml:fit_observation_filter.band_source='physical_prefilter'"
+    )
+
+
+def test_check_cv_outputs_strict_physics_config_requires_fit_filter_pmax_min(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    config_path = tmp_path / '03_physics.yaml'
+    cfg = _strict_physics_config()
+    del cfg['fit_observation_filter']['pmax_min']
+    cfg['physical_band']['pmax_min'] = 0.05
+    config_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding='utf-8')
+
+    assert module.strict_check_physics_config(config_path) == (
+        '03_physics.yaml:forbidden_physical_band.pmax_min'
+    )
+
+
 def test_check_cv_outputs_strict_final_npz_requires_fine_window_valid_mask(
     tmp_path: Path,
 ) -> None:
@@ -596,6 +722,49 @@ def test_check_cv_outputs_strict_final_npz_requires_fine_window_valid_mask(
 
     assert module.strict_check_final_npz(final_path) == (
         'legacy.fbpick_final.npz:missing_keys=fine_window_valid_mask'
+    )
+
+
+def test_check_cv_outputs_strict_physics_npz_requires_physical_window_keys(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'legacy.robust.npz'
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        fine_center_i=np.asarray([128], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([True], dtype=np.bool_),
+        fine_window_reject_reason=np.asarray([0], dtype=np.uint8),
+        physical_model_status=np.asarray([0], dtype=np.uint8),
+    )
+
+    assert module.strict_check_physics_npz(physics_path) == (
+        'legacy.robust.npz:missing_keys='
+        'fine_window_physical_lo_i,fine_window_physical_hi_i'
+    )
+
+
+def test_check_cv_outputs_strict_physics_npz_rejects_valid_window_outside_band(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'outside-band.robust.npz'
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        fine_center_i=np.asarray([128], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([True], dtype=np.bool_),
+        fine_window_physical_lo_i=np.asarray([1], dtype=np.int32),
+        fine_window_physical_hi_i=np.asarray([255], dtype=np.int32),
+        fine_window_reject_reason=np.asarray([0], dtype=np.uint8),
+        physical_model_status=np.asarray([0], dtype=np.uint8),
+    )
+
+    assert module.strict_check_physics_npz(physics_path) == (
+        'outside-band.robust.npz:valid_window_outside_physical_band=0'
     )
 
 

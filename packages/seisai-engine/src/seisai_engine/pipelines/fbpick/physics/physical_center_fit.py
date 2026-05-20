@@ -172,9 +172,14 @@ def _fit_min_obs_required(cfg: PhysicsLiteConfig) -> int:
         cfg.physical_trend.candidate_models,
     )
     min_pts = _fit_min_pts(cfg)
+    required: list[int] = []
     if MODEL_TYPE_TWO_PIECE in candidates:
+        required.append(2 * min_pts)
+    if MODEL_TYPE_SINGLE_LINE in candidates:
+        required.append(min_pts)
+    if not required:
         return 2 * min_pts
-    return min_pts
+    return min(required)
 
 
 def _fit_min_pts(cfg: PhysicsLiteConfig) -> int:

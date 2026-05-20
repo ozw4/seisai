@@ -543,6 +543,11 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.neighbor_context.mode == 'nearest_source_xy'
     assert cfg.neighbor_context.k_neighbors == 5
     assert cfg.neighbor_context.max_source_distance_m is None
+    assert cfg.physical_band.vmin_m_s == 300.0
+    assert cfg.physical_band.vmax_m_s == 6000.0
+    assert cfg.fit_observation_filter.enabled is True
+    assert cfg.fit_observation_filter.band_source == 'physical_band'
+    assert cfg.fit_observation_filter.pmax_min == 0.0
     assert cfg.physical_prefilter.vmin_m_s == 300.0
     assert cfg.physical_prefilter.vmax_m_s == 6000.0
     assert cfg.two_piece_ransac.q_lo == 0.15
@@ -605,6 +610,12 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.physical_runtime.fit_executor.max_workers is None
     assert cfg.physical_runtime.fit_executor.torch_num_threads_per_worker == 1
     assert cfg.physical_runtime.fit_executor.chunksize == 1
+    assert cfg.physical_runtime.fine_window_constraint.band_source == 'physical_band'
+    assert (
+        cfg.physical_runtime.neighbor_physical_fit_reuse.band_source
+        == 'physical_band'
+    )
+    assert cfg.physical_runtime.coarse_in_band_fallback.band_source == 'physical_band'
     assert cfg.physical_runtime.partial_trend_fallback.enabled is True
     assert cfg.physical_runtime.partial_trend_fallback.max_fraction == pytest.approx(
         0.05
@@ -632,6 +643,104 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
     assert cfg.physical_runtime.progress.print_on_non_tty is True
     assert cfg.physical_runtime.progress.include_stage_events is True
     assert cfg.physical_runtime.progress.include_summary is True
+
+
+def test_load_physics_lite_config_accepts_physical_band_and_fit_filter() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_band': {
+                'vmin_m_s': 350.0,
+                'vmax_m_s': 5500.0,
+                't0_lo_ms': -15.0,
+                't0_hi_ms': 150.0,
+            },
+            'fit_observation_filter': {
+                'enabled': True,
+                'band_source': 'physical_band',
+                'pmax_min': 0.05,
+                'use_existing_mask': False,
+            },
+            'physical_runtime': {
+                'fine_window_constraint': {'band_source': 'physical_band'},
+                'neighbor_physical_fit_reuse': {'band_source': 'physical_band'},
+                'coarse_in_band_fallback': {'band_source': 'physical_band'},
+            },
+        }
+    )
+
+    assert cfg.physical_band.vmin_m_s == pytest.approx(350.0)
+    assert cfg.physical_band.vmax_m_s == pytest.approx(5500.0)
+    assert cfg.fit_observation_filter.pmax_min == pytest.approx(0.05)
+    assert cfg.physical_prefilter.vmin_m_s == pytest.approx(350.0)
+    assert cfg.physical_prefilter.pmax_min == pytest.approx(0.05)
+
+
+def test_load_physics_lite_config_derives_physical_band_from_legacy_prefilter() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_prefilter': {
+                'enabled': True,
+                'vmin_m_s': 400.0,
+                'vmax_m_s': 5000.0,
+                't0_lo_ms': -5.0,
+                't0_hi_ms': 125.0,
+                'pmax_min': 0.2,
+                'use_existing_feasible_mask': True,
+            }
+        }
+    )
+
+    assert cfg.physical_band.vmin_m_s == pytest.approx(400.0)
+    assert cfg.physical_band.vmax_m_s == pytest.approx(5000.0)
+    assert cfg.fit_observation_filter.pmax_min == pytest.approx(0.2)
+    assert cfg.fit_observation_filter.use_existing_mask is True
+
+
+def test_load_physics_lite_config_derives_physical_band_from_legacy_feasible_band() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'feasible_band': {
+                'vmin_mask': 250.0,
+                'vmax_mask': 4500.0,
+                't0_lo_ms': -12.0,
+                't0_hi_ms': 90.0,
+            }
+        }
+    )
+
+    assert cfg.physical_band.vmin_m_s == pytest.approx(250.0)
+    assert cfg.physical_band.vmax_m_s == pytest.approx(4500.0)
+    assert cfg.physical_band.t0_lo_ms == pytest.approx(-12.0)
+    assert cfg.physical_band.t0_hi_ms == pytest.approx(90.0)
+
+
+def test_load_physics_lite_config_uses_physical_band_before_legacy_bands() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_band': {
+                'vmin_m_s': 350.0,
+                'vmax_m_s': 5500.0,
+                't0_lo_ms': -15.0,
+                't0_hi_ms': 150.0,
+            },
+            'physical_prefilter': {
+                'pmax_min': 0.07,
+            },
+            'feasible_band': {
+                'vmin_mask': 250.0,
+                'vmax_mask': 4500.0,
+                't0_lo_ms': -12.0,
+                't0_hi_ms': 90.0,
+            },
+        }
+    )
+
+    assert cfg.physical_band.vmin_m_s == pytest.approx(350.0)
+    assert cfg.physical_band.vmax_m_s == pytest.approx(5500.0)
+    assert cfg.physical_band.t0_lo_ms == pytest.approx(-15.0)
+    assert cfg.physical_band.t0_hi_ms == pytest.approx(150.0)
+    assert cfg.fit_observation_filter.pmax_min == pytest.approx(0.07)
+    assert cfg.physical_prefilter.vmin_m_s == pytest.approx(350.0)
 
 
 def test_load_physics_lite_config_accepts_nested_diagnostics_block() -> None:
@@ -1200,6 +1309,8 @@ def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
         {
             'physical_trend',
             'neighbor_context',
+            'physical_band',
+            'fit_observation_filter',
             'physical_prefilter',
             'two_piece_ransac',
             'physical_projection',
@@ -1208,6 +1319,8 @@ def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
     )
     assert out['physical_trend']['enabled'] is True
     assert out['neighbor_context']['max_source_distance_m'] == 1000.0
+    assert out['physical_band']['vmin_m_s'] == 400.0
+    assert out['fit_observation_filter']['pmax_min'] == 0.25
     assert out['physical_projection']['mode'] == 'model'
     assert out['physical_runtime']['diagnostics_enabled'] is True
     assert out['physical_runtime']['fit_policy'] == 'full'

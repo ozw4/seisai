@@ -18,7 +18,10 @@ __all__ = [
     'PhysicalAnchorReuseCfg',
     'PhysicalAnchorSelectionCfg',
     'PhysicalFallbackPolicyCfg',
+    'PhysicalBandCfg',
+    'PhysicalCoarseInBandFallbackCfg',
     'PhysicalFineWindowConstraintCfg',
+    'PhysicalFitObservationFilterCfg',
     'PhysicalFitExecutorCfg',
     'PhysicalModelSelectionCfg',
     'PhysicalNeighborPhysicalFitReuseCfg',
@@ -131,6 +134,22 @@ class NeighborContextCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalBandCfg:
+    vmin_m_s: float = 300.0
+    vmax_m_s: float = 6000.0
+    t0_lo_ms: float = -20.0
+    t0_hi_ms: float = 200.0
+
+
+@dataclass(frozen=True)
+class PhysicalFitObservationFilterCfg:
+    enabled: bool = True
+    band_source: str = 'physical_band'
+    pmax_min: float = 0.0
+    use_existing_mask: bool = False
+
+
+@dataclass(frozen=True)
 class PhysicalPrefilterCfg:
     enabled: bool = True
     vmin_m_s: float = 300.0
@@ -232,7 +251,7 @@ class PhysicalFitExecutorCfg:
 @dataclass(frozen=True)
 class PhysicalFineWindowConstraintCfg:
     enabled: bool = True
-    band_source: str = 'physical_prefilter'
+    band_source: str = 'physical_band'
     time_len: int = 256
     center_index: int = 128
     require_center_inside_band: bool = True
@@ -245,6 +264,7 @@ class PhysicalFineWindowConstraintCfg:
 @dataclass(frozen=True)
 class PhysicalNeighborPhysicalFitReuseCfg:
     enabled: bool = False
+    band_source: str = 'physical_band'
     candidate_statuses: tuple[str, ...] = ('two_piece_ok', 'single_line_ok')
     max_source_xy_distance_m: float | None = None
     max_trace_distance: int | None = None
@@ -262,6 +282,13 @@ class PhysicalFallbackPolicyCfg:
     )
     allow_robust_fallback_as_fine_center: bool = True
     allow_feasible_clip_as_fine_center: bool = True
+
+
+@dataclass(frozen=True)
+class PhysicalCoarseInBandFallbackCfg:
+    enabled: bool = True
+    band_source: str = 'physical_band'
+    require_window_inside_band: bool = True
 
 
 @dataclass(frozen=True)
@@ -323,6 +350,9 @@ class PhysicalRuntimeCfg:
     neighbor_physical_fit_reuse: PhysicalNeighborPhysicalFitReuseCfg = (
         PhysicalNeighborPhysicalFitReuseCfg()
     )
+    coarse_in_band_fallback: PhysicalCoarseInBandFallbackCfg = (
+        PhysicalCoarseInBandFallbackCfg()
+    )
     fallback_policy: PhysicalFallbackPolicyCfg = PhysicalFallbackPolicyCfg()
     partial_trend_fallback: PhysicalPartialTrendFallbackCfg = (
         PhysicalPartialTrendFallbackCfg()
@@ -339,6 +369,10 @@ class PhysicsLiteConfig:
     robust_center: PhysicsRobustCenterCfg = PhysicsRobustCenterCfg()
     physical_trend: PhysicalTrendCfg = PhysicalTrendCfg()
     neighbor_context: NeighborContextCfg = NeighborContextCfg()
+    physical_band: PhysicalBandCfg = PhysicalBandCfg()
+    fit_observation_filter: PhysicalFitObservationFilterCfg = (
+        PhysicalFitObservationFilterCfg()
+    )
     physical_prefilter: PhysicalPrefilterCfg = PhysicalPrefilterCfg()
     two_piece_ransac: TwoPieceRansacCfg = TwoPieceRansacCfg()
     two_piece_irls: TwoPieceIrlsCfg = TwoPieceIrlsCfg()
@@ -592,6 +626,109 @@ def _load_neighbor_context_cfg(cfg: dict[str, Any]) -> NeighborContextCfg:
     )
 
 
+def _load_physical_band_cfg(cfg: dict[str, Any]) -> PhysicalBandCfg:
+    return PhysicalBandCfg(
+        vmin_m_s=float(optional_float(cfg, 'vmin_m_s', 300.0)),
+        vmax_m_s=float(optional_float(cfg, 'vmax_m_s', 6000.0)),
+        t0_lo_ms=float(optional_float(cfg, 't0_lo_ms', -20.0)),
+        t0_hi_ms=float(optional_float(cfg, 't0_hi_ms', 200.0)),
+    )
+
+
+def _physical_band_from_legacy_prefilter(
+    cfg: dict[str, Any],
+) -> PhysicalBandCfg:
+    return PhysicalBandCfg(
+        vmin_m_s=float(optional_float(cfg, 'vmin_m_s', 300.0)),
+        vmax_m_s=float(optional_float(cfg, 'vmax_m_s', 6000.0)),
+        t0_lo_ms=float(optional_float(cfg, 't0_lo_ms', -20.0)),
+        t0_hi_ms=float(optional_float(cfg, 't0_hi_ms', 200.0)),
+    )
+
+
+def _physical_band_from_feasible_band(cfg: dict[str, Any]) -> PhysicalBandCfg:
+    return PhysicalBandCfg(
+        vmin_m_s=float(optional_float(cfg, 'vmin_mask', 100.0)),
+        vmax_m_s=float(optional_float(cfg, 'vmax_mask', 5000.0)),
+        t0_lo_ms=float(optional_float(cfg, 't0_lo_ms', -10.0)),
+        t0_hi_ms=float(optional_float(cfg, 't0_hi_ms', 100.0)),
+    )
+
+
+def _resolve_physical_band_cfg(raw: dict[str, Any]) -> PhysicalBandCfg:
+    physical_band_raw = _require_dict(raw.get('physical_band'), key='physical_band')
+    physical_prefilter_raw = _require_dict(
+        raw.get('physical_prefilter'),
+        key='physical_prefilter',
+    )
+    feasible_band_raw = _require_dict(raw.get('feasible_band'), key='feasible_band')
+
+    if 'physical_band' in raw:
+        return _load_physical_band_cfg(physical_band_raw)
+    if 'physical_prefilter' in raw:
+        _validate_physical_prefilter_cfg(
+            _load_physical_prefilter_cfg(physical_prefilter_raw)
+        )
+        return _physical_band_from_legacy_prefilter(physical_prefilter_raw)
+    if 'feasible_band' in raw:
+        return _physical_band_from_feasible_band(feasible_band_raw)
+    return PhysicalBandCfg()
+
+
+def _load_fit_observation_filter_cfg(
+    cfg: dict[str, Any],
+    *,
+    legacy_prefilter: dict[str, Any],
+) -> PhysicalFitObservationFilterCfg:
+    legacy_enabled = bool(
+        optional_bool(legacy_prefilter, 'enabled', default=True)
+    )
+    band_source = optional_str(cfg, 'band_source', 'physical_band')
+    if band_source is None:
+        msg = 'fit_observation_filter.band_source must not be null'
+        raise TypeError(msg)
+    return PhysicalFitObservationFilterCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=legacy_enabled)),
+        band_source=str(band_source),
+        pmax_min=float(
+            optional_float(
+                cfg,
+                'pmax_min',
+                float(optional_float(legacy_prefilter, 'pmax_min', 0.0)),
+            )
+        ),
+        use_existing_mask=bool(
+            optional_bool(
+                cfg,
+                'use_existing_mask',
+                default=bool(
+                    optional_bool(
+                        legacy_prefilter,
+                        'use_existing_feasible_mask',
+                        default=False,
+                    )
+                ),
+            )
+        ),
+    )
+
+
+def _effective_physical_prefilter_cfg(
+    *,
+    band: PhysicalBandCfg,
+    fit_filter: PhysicalFitObservationFilterCfg,
+) -> PhysicalPrefilterCfg:
+    return PhysicalPrefilterCfg(
+        enabled=bool(fit_filter.enabled),
+        vmin_m_s=float(band.vmin_m_s),
+        vmax_m_s=float(band.vmax_m_s),
+        t0_lo_ms=float(band.t0_lo_ms),
+        t0_hi_ms=float(band.t0_hi_ms),
+        pmax_min=float(fit_filter.pmax_min),
+        use_existing_feasible_mask=bool(fit_filter.use_existing_mask),
+    )
+
+
 def _load_physical_prefilter_cfg(cfg: dict[str, Any]) -> PhysicalPrefilterCfg:
     return PhysicalPrefilterCfg(
         enabled=bool(optional_bool(cfg, 'enabled', default=True)),
@@ -761,7 +898,7 @@ def _load_physical_fit_executor_cfg(cfg: dict[str, Any]) -> PhysicalFitExecutorC
 def _load_physical_fine_window_constraint_cfg(
     cfg: dict[str, Any],
 ) -> PhysicalFineWindowConstraintCfg:
-    band_source = optional_str(cfg, 'band_source', 'physical_prefilter')
+    band_source = optional_str(cfg, 'band_source', 'physical_band')
     invalid_policy = optional_str(
         cfg,
         'invalid_policy',
@@ -805,7 +942,14 @@ def _load_physical_fine_window_constraint_cfg(
 def _load_physical_neighbor_fit_reuse_cfg(
     cfg: dict[str, Any],
 ) -> PhysicalNeighborPhysicalFitReuseCfg:
+    band_source = optional_str(cfg, 'band_source', 'physical_band')
     invalid_policy = optional_str(cfg, 'invalid_policy', 'try_coarse_in_band')
+    if band_source is None:
+        msg = (
+            'physical_runtime.neighbor_physical_fit_reuse.band_source '
+            'must not be null'
+        )
+        raise TypeError(msg)
     if invalid_policy is None:
         msg = (
             'physical_runtime.neighbor_physical_fit_reuse.invalid_policy '
@@ -817,6 +961,7 @@ def _load_physical_neighbor_fit_reuse_cfg(
         max_trace_distance = int(optional_int(cfg, 'max_trace_distance', 0))
     return PhysicalNeighborPhysicalFitReuseCfg(
         enabled=bool(optional_bool(cfg, 'enabled', default=False)),
+        band_source=str(band_source),
         candidate_statuses=_optional_str_tuple(
             cfg,
             'candidate_statuses',
@@ -829,6 +974,22 @@ def _load_physical_neighbor_fit_reuse_cfg(
         ),
         max_trace_distance=max_trace_distance,
         invalid_policy=str(invalid_policy),
+    )
+
+
+def _load_physical_coarse_in_band_fallback_cfg(
+    cfg: dict[str, Any],
+) -> PhysicalCoarseInBandFallbackCfg:
+    band_source = optional_str(cfg, 'band_source', 'physical_band')
+    if band_source is None:
+        msg = 'physical_runtime.coarse_in_band_fallback.band_source must not be null'
+        raise TypeError(msg)
+    return PhysicalCoarseInBandFallbackCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=True)),
+        band_source=str(band_source),
+        require_window_inside_band=bool(
+            optional_bool(cfg, 'require_window_inside_band', default=True)
+        ),
     )
 
 
@@ -1040,6 +1201,12 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
         ),
         fine_window_constraint=fine_window_constraint,
         neighbor_physical_fit_reuse=neighbor_physical_fit_reuse,
+        coarse_in_band_fallback=_load_physical_coarse_in_band_fallback_cfg(
+            _require_dict(
+                cfg.get('coarse_in_band_fallback'),
+                key='physical_runtime.coarse_in_band_fallback',
+            )
+        ),
         fallback_policy=fallback_policy,
         partial_trend_fallback=_load_physical_partial_trend_fallback_cfg(
             _require_dict(
@@ -1137,6 +1304,37 @@ def _validate_physical_prefilter_cfg(cfg: PhysicalPrefilterCfg) -> None:
         raise ValueError(msg)
 
 
+def _validate_physical_band_cfg(cfg: PhysicalBandCfg) -> None:
+    _validate_positive_float('physical_band.vmin_m_s', cfg.vmin_m_s)
+    _validate_positive_float('physical_band.vmax_m_s', cfg.vmax_m_s)
+    if float(cfg.vmax_m_s) <= float(cfg.vmin_m_s):
+        msg = 'physical_band.vmax_m_s must be > physical_band.vmin_m_s'
+        raise ValueError(msg)
+    t0_lo_ms = _validate_finite_float('physical_band.t0_lo_ms', cfg.t0_lo_ms)
+    t0_hi_ms = _validate_finite_float('physical_band.t0_hi_ms', cfg.t0_hi_ms)
+    if t0_lo_ms > t0_hi_ms:
+        msg = 'physical_band.t0_lo_ms must be <= physical_band.t0_hi_ms'
+        raise ValueError(msg)
+
+
+def _validate_fit_observation_filter_cfg(
+    cfg: PhysicalFitObservationFilterCfg,
+) -> None:
+    if cfg.band_source != 'physical_band':
+        msg = (
+            'fit_observation_filter.band_source must be '
+            f"'physical_band', got {cfg.band_source!r}"
+        )
+        raise ValueError(msg)
+    pmax_min = _validate_finite_float(
+        'fit_observation_filter.pmax_min',
+        cfg.pmax_min,
+    )
+    if not 0.0 <= pmax_min <= 1.0:
+        msg = 'fit_observation_filter.pmax_min must lie in [0, 1]'
+        raise ValueError(msg)
+
+
 def _validate_two_piece_ransac_cfg(cfg: TwoPieceRansacCfg) -> None:
     _validate_positive_int('two_piece_ransac.n_iter', cfg.n_iter)
     _validate_positive_float('two_piece_ransac.inlier_th_ms', cfg.inlier_th_ms)
@@ -1199,10 +1397,10 @@ def _validate_physical_partial_trend_fallback_cfg(
 def _validate_physical_fine_window_constraint_cfg(
     cfg: PhysicalFineWindowConstraintCfg,
 ) -> None:
-    if cfg.band_source != 'physical_prefilter':
+    if cfg.band_source not in {'physical_band', 'physical_prefilter'}:
         msg = (
             'physical_runtime.fine_window_constraint.band_source must be '
-            f"'physical_prefilter', got {cfg.band_source!r}"
+            f"'physical_band' or 'physical_prefilter', got {cfg.band_source!r}"
         )
         raise ValueError(msg)
     _validate_positive_int(
@@ -1230,6 +1428,12 @@ def _validate_physical_fine_window_constraint_cfg(
 def _validate_physical_neighbor_fit_reuse_cfg(
     cfg: PhysicalNeighborPhysicalFitReuseCfg,
 ) -> None:
+    if cfg.band_source not in {'physical_band', 'physical_prefilter'}:
+        msg = (
+            'physical_runtime.neighbor_physical_fit_reuse.band_source must be '
+            f"'physical_band' or 'physical_prefilter', got {cfg.band_source!r}"
+        )
+        raise ValueError(msg)
     allowed_statuses = {'two_piece_ok', 'single_line_ok'}
     for status in cfg.candidate_statuses:
         if status not in allowed_statuses:
@@ -1254,6 +1458,17 @@ def _validate_physical_neighbor_fit_reuse_cfg(
         msg = (
             'physical_runtime.neighbor_physical_fit_reuse.invalid_policy must be '
             f"'try_coarse_in_band', got {cfg.invalid_policy!r}"
+        )
+        raise ValueError(msg)
+
+
+def _validate_physical_coarse_in_band_fallback_cfg(
+    cfg: PhysicalCoarseInBandFallbackCfg,
+) -> None:
+    if cfg.band_source not in {'physical_band', 'physical_prefilter'}:
+        msg = (
+            'physical_runtime.coarse_in_band_fallback.band_source must be '
+            f"'physical_band' or 'physical_prefilter', got {cfg.band_source!r}"
         )
         raise ValueError(msg)
 
@@ -1347,6 +1562,7 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
         raise ValueError(msg)
     _validate_physical_fine_window_constraint_cfg(cfg.fine_window_constraint)
     _validate_physical_neighbor_fit_reuse_cfg(cfg.neighbor_physical_fit_reuse)
+    _validate_physical_coarse_in_band_fallback_cfg(cfg.coarse_in_band_fallback)
     _validate_physical_fallback_policy_cfg(cfg.fallback_policy)
     _validate_physical_partial_trend_fallback_cfg(cfg.partial_trend_fallback)
     anchor = cfg.anchor_selection
@@ -1547,6 +1763,8 @@ def _validate_robust_center_cfg(cfg: PhysicsRobustCenterCfg) -> None:
 def _validate_physical_cfg(cfg: PhysicsLiteConfig) -> None:
     _validate_physical_trend_cfg(cfg.physical_trend)
     _validate_neighbor_context_cfg(cfg.neighbor_context)
+    _validate_physical_band_cfg(cfg.physical_band)
+    _validate_fit_observation_filter_cfg(cfg.fit_observation_filter)
     _validate_physical_prefilter_cfg(cfg.physical_prefilter)
     _validate_two_piece_ransac_cfg(cfg.two_piece_ransac)
     _validate_two_piece_irls_cfg(cfg.two_piece_irls)
@@ -1623,6 +1841,17 @@ def load_physics_lite_config(cfg: dict[str, Any] | None) -> PhysicsLiteConfig:
     if not isinstance(raw, dict):
         msg = 'physics config must be dict or null'
         raise TypeError(msg)
+    physical_band = _resolve_physical_band_cfg(raw)
+    fit_observation_filter = _load_fit_observation_filter_cfg(
+        _require_dict(
+            raw.get('fit_observation_filter'),
+            key='fit_observation_filter',
+        ),
+        legacy_prefilter=_require_dict(
+            raw.get('physical_prefilter'),
+            key='physical_prefilter',
+        ),
+    )
     typed = PhysicsLiteConfig(
         feasible_band=_load_feasible_band_cfg(
             _require_dict(raw.get('feasible_band'), key='feasible_band')
@@ -1643,8 +1872,11 @@ def load_physics_lite_config(cfg: dict[str, Any] | None) -> PhysicsLiteConfig:
         neighbor_context=_load_neighbor_context_cfg(
             _require_dict(raw.get('neighbor_context'), key='neighbor_context')
         ),
-        physical_prefilter=_load_physical_prefilter_cfg(
-            _require_dict(raw.get('physical_prefilter'), key='physical_prefilter')
+        physical_band=physical_band,
+        fit_observation_filter=fit_observation_filter,
+        physical_prefilter=_effective_physical_prefilter_cfg(
+            band=physical_band,
+            fit_filter=fit_observation_filter,
         ),
         two_piece_ransac=_load_two_piece_ransac_cfg(
             _require_dict(raw.get('two_piece_ransac'), key='two_piece_ransac')
