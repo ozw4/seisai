@@ -655,15 +655,6 @@ def _physical_band_from_feasible_band(cfg: dict[str, Any]) -> PhysicalBandCfg:
     )
 
 
-def _same_physical_band(left: PhysicalBandCfg, right: PhysicalBandCfg) -> bool:
-    return (
-        math.isclose(float(left.vmin_m_s), float(right.vmin_m_s))
-        and math.isclose(float(left.vmax_m_s), float(right.vmax_m_s))
-        and math.isclose(float(left.t0_lo_ms), float(right.t0_lo_ms))
-        and math.isclose(float(left.t0_hi_ms), float(right.t0_hi_ms))
-    )
-
-
 def _resolve_physical_band_cfg(raw: dict[str, Any]) -> PhysicalBandCfg:
     physical_band_raw = _require_dict(raw.get('physical_band'), key='physical_band')
     physical_prefilter_raw = _require_dict(
@@ -673,24 +664,7 @@ def _resolve_physical_band_cfg(raw: dict[str, Any]) -> PhysicalBandCfg:
     feasible_band_raw = _require_dict(raw.get('feasible_band'), key='feasible_band')
 
     if 'physical_band' in raw:
-        band = _load_physical_band_cfg(physical_band_raw)
-        if 'physical_prefilter' in raw:
-            legacy = _physical_band_from_legacy_prefilter(physical_prefilter_raw)
-            if not _same_physical_band(band, legacy):
-                msg = (
-                    'physical_band and physical_prefilter velocity/t0 fields '
-                    'must match when both are present'
-                )
-                raise ValueError(msg)
-        if 'feasible_band' in raw and feasible_band_raw:
-            legacy = _physical_band_from_feasible_band(feasible_band_raw)
-            if not _same_physical_band(band, legacy):
-                msg = (
-                    'physical_band and feasible_band velocity/t0 fields must '
-                    'match when both are present'
-                )
-                raise ValueError(msg)
-        return band
+        return _load_physical_band_cfg(physical_band_raw)
     if 'physical_prefilter' in raw:
         _validate_physical_prefilter_cfg(
             _load_physical_prefilter_cfg(physical_prefilter_raw)

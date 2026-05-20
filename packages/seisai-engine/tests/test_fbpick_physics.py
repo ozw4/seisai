@@ -714,24 +714,33 @@ def test_load_physics_lite_config_derives_physical_band_from_legacy_feasible_ban
     assert cfg.physical_band.t0_hi_ms == pytest.approx(90.0)
 
 
-def test_load_physics_lite_config_rejects_conflicting_legacy_band() -> None:
-    with pytest.raises(ValueError, match='physical_band and physical_prefilter'):
-        load_physics_lite_config(
-            {
-                'physical_band': {
-                    'vmin_m_s': 300.0,
-                    'vmax_m_s': 6000.0,
-                    't0_lo_ms': -20.0,
-                    't0_hi_ms': 200.0,
-                },
-                'physical_prefilter': {
-                    'vmin_m_s': 400.0,
-                    'vmax_m_s': 6000.0,
-                    't0_lo_ms': -20.0,
-                    't0_hi_ms': 200.0,
-                },
-            }
-        )
+def test_load_physics_lite_config_uses_physical_band_before_legacy_bands() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_band': {
+                'vmin_m_s': 350.0,
+                'vmax_m_s': 5500.0,
+                't0_lo_ms': -15.0,
+                't0_hi_ms': 150.0,
+            },
+            'physical_prefilter': {
+                'pmax_min': 0.07,
+            },
+            'feasible_band': {
+                'vmin_mask': 250.0,
+                'vmax_mask': 4500.0,
+                't0_lo_ms': -12.0,
+                't0_hi_ms': 90.0,
+            },
+        }
+    )
+
+    assert cfg.physical_band.vmin_m_s == pytest.approx(350.0)
+    assert cfg.physical_band.vmax_m_s == pytest.approx(5500.0)
+    assert cfg.physical_band.t0_lo_ms == pytest.approx(-15.0)
+    assert cfg.physical_band.t0_hi_ms == pytest.approx(150.0)
+    assert cfg.fit_observation_filter.pmax_min == pytest.approx(0.07)
+    assert cfg.physical_prefilter.vmin_m_s == pytest.approx(350.0)
 
 
 def test_load_physics_lite_config_accepts_nested_diagnostics_block() -> None:

@@ -594,8 +594,28 @@ def strict_check_physics_config(config_path: Path) -> str | None:
         return f"{config_path.name}:config_not_dict"
     if "physical_band" not in cfg:
         return f"{config_path.name}:missing_physical_band"
-    if "fit_observation_filter" not in cfg:
+    physical_band = cfg.get("physical_band")
+    if isinstance(physical_band, dict) and "pmax_min" in physical_band:
+        return f"{config_path.name}:forbidden_physical_band.pmax_min"
+    fit_filter = cfg.get("fit_observation_filter")
+    if not isinstance(fit_filter, dict):
         return f"{config_path.name}:missing_fit_observation_filter"
+    if fit_filter.get("band_source") != "physical_band":
+        return (
+            f"{config_path.name}:fit_observation_filter.band_source="
+            f"{fit_filter.get('band_source')!r}"
+        )
+    if "pmax_min" not in fit_filter:
+        return f"{config_path.name}:missing_fit_observation_filter.pmax_min"
+    try:
+        pmax_min = float(fit_filter["pmax_min"])
+    except (TypeError, ValueError):
+        return (
+            f"{config_path.name}:fit_observation_filter.pmax_min="
+            f"{fit_filter.get('pmax_min')!r}"
+        )
+    if not 0.0 <= pmax_min <= 1.0:
+        return f"{config_path.name}:fit_observation_filter.pmax_min={pmax_min!r}"
     if "feasible_band" in cfg:
         return f"{config_path.name}:forbidden_feasible_band"
     if "physical_prefilter" in cfg:
