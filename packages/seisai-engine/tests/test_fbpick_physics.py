@@ -53,6 +53,7 @@ from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
     PHYSICAL_MODEL_STATUS_NEIGHBOR_PHYSICAL_FIT_REUSE,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
+    PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_COARSE_OUTSIDE_BAND,
     PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_VALID_WINDOW,
     PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
@@ -3013,6 +3014,77 @@ def test_apply_physics_fallback_policy_runs_ordered_sequence() -> None:
     np.testing.assert_array_equal(
         diagnostics['reject_physics_mask'],
         [False, False, False, True],
+    )
+
+
+def test_apply_physics_fallback_policy_preserves_coarse_reject_reason() -> None:
+    coarse_npz = _make_coarse_payload(
+        coarse_pick_i=np.asarray([0, 10], dtype=np.int32),
+        coarse_pmax=np.full((2,), 0.95, dtype=np.float32),
+        offsets_m=np.full((2,), 300.0, dtype=np.float32),
+    )
+    table = normalize_coarse_pick_table(coarse_npz)
+    cfg = load_physics_lite_config(
+        {
+            'physical_prefilter': {
+                'enabled': True,
+                'vmin_m_s': 300.0,
+                'vmax_m_s': 6000.0,
+                't0_lo_ms': -20.0,
+                't0_hi_ms': 200.0,
+            },
+            'physical_runtime': {
+                'fallback_policy': {'enabled': True},
+                'neighbor_physical_fit_reuse': {'enabled': True},
+            },
+        }
+    )
+    arrays = physical_center_fallback_mod._allocate_result_arrays(table)  # noqa: SLF001
+    arrays['physical_center_i'][:] = np.asarray([0, 10], dtype=np.int32)
+    arrays['fine_center_i'][:] = np.asarray([0, 10], dtype=np.int32)
+    arrays['physical_model_status'][:] = np.uint8(
+        PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED
+    )
+    arrays['physical_model_failure_reason'][:] = np.uint8(
+        PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED
+    )
+    physical = PhysicalCenterResult(**arrays)
+    initial_window = evaluate_fine_window_constraint(
+        offsets_m=table.offset_m,
+        dt_sec=float(table.dt_scalar_sec),
+        n_samples_orig=int(table.n_samples_orig),
+        fine_center_i=np.asarray(physical.fine_center_i, dtype=np.int32),
+        physical_prefilter=cfg.physical_prefilter,
+        constraint=cfg.physical_runtime.fine_window_constraint,
+        physical_model_status=np.asarray(
+            physical.physical_model_status,
+            dtype=np.uint8,
+        ),
+        physical_runtime_fit_source=np.asarray(
+            physical.physical_runtime_fit_source,
+            dtype=np.uint8,
+        ),
+    )
+
+    final_physical, final_window, diagnostics = apply_physics_fallback_policy(
+        physical=physical,
+        initial_window_constraint=initial_window,
+        coarse_npz=coarse_npz,
+        table=table,
+        cfg=cfg,
+    )
+
+    np.testing.assert_array_equal(
+        final_physical.physical_model_status,
+        [
+            PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_COARSE_OUTSIDE_BAND,
+            PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_VALID_WINDOW,
+        ],
+    )
+    np.testing.assert_array_equal(final_window.fine_window_valid_mask, [False, False])
+    np.testing.assert_array_equal(
+        diagnostics['reject_physics_reason'],
+        ['reject_physics_coarse_outside_band', 'reject_physics_no_valid_window'],
     )
 
 

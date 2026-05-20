@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from seisai_utils.config import (
@@ -950,6 +950,36 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
             )
         ),
     )
+    fine_window_constraint = _load_physical_fine_window_constraint_cfg(
+        _require_dict(
+            cfg.get('fine_window_constraint'),
+            key='physical_runtime.fine_window_constraint',
+        )
+    )
+    neighbor_physical_fit_reuse = _load_physical_neighbor_fit_reuse_cfg(
+        _require_dict(
+            cfg.get('neighbor_physical_fit_reuse'),
+            key='physical_runtime.neighbor_physical_fit_reuse',
+        )
+    )
+    fallback_policy = _load_physical_fallback_policy_cfg(
+        _require_dict(
+            cfg.get('fallback_policy'),
+            key='physical_runtime.fallback_policy',
+        )
+    )
+    if bool(fallback_policy.enabled):
+        fine_window_constraint = replace(
+            fine_window_constraint,
+            allow_robust_fallback_as_fine_center=bool(
+                fine_window_constraint.allow_robust_fallback_as_fine_center
+                and fallback_policy.allow_robust_fallback_as_fine_center
+            ),
+            allow_feasible_clip_as_fine_center=bool(
+                fine_window_constraint.allow_feasible_clip_as_fine_center
+                and fallback_policy.allow_feasible_clip_as_fine_center
+            ),
+        )
     return PhysicalRuntimeCfg(
         fit_policy=optional_str(cfg, 'fit_policy', 'full'),
         trend_result_mode=optional_str(cfg, 'trend_result_mode', 'eager'),
@@ -1008,24 +1038,9 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
                 key='physical_runtime.fit_executor',
             )
         ),
-        fine_window_constraint=_load_physical_fine_window_constraint_cfg(
-            _require_dict(
-                cfg.get('fine_window_constraint'),
-                key='physical_runtime.fine_window_constraint',
-            )
-        ),
-        neighbor_physical_fit_reuse=_load_physical_neighbor_fit_reuse_cfg(
-            _require_dict(
-                cfg.get('neighbor_physical_fit_reuse'),
-                key='physical_runtime.neighbor_physical_fit_reuse',
-            )
-        ),
-        fallback_policy=_load_physical_fallback_policy_cfg(
-            _require_dict(
-                cfg.get('fallback_policy'),
-                key='physical_runtime.fallback_policy',
-            )
-        ),
+        fine_window_constraint=fine_window_constraint,
+        neighbor_physical_fit_reuse=neighbor_physical_fit_reuse,
+        fallback_policy=fallback_policy,
         partial_trend_fallback=_load_physical_partial_trend_fallback_cfg(
             _require_dict(
                 cfg.get('partial_trend_fallback'),

@@ -45,6 +45,7 @@ STRICT_FINAL_KEYS = (
     "dt_sec",
     "reject_mask",
     "reason_mask",
+    "fine_window_valid_mask",
 )
 PHYSICAL_MODEL_STATUS_LABELS = {
     0: "two_piece_ok",
@@ -390,6 +391,12 @@ def strict_check_final_npz(path: Path) -> str | None:
                 dtype=np.bool_,
             )
             require_trace_vector(z, "reason_mask", n_traces=n_traces, dtype=np.uint8)
+            require_trace_vector(
+                z,
+                "fine_window_valid_mask",
+                n_traces=n_traces,
+                dtype=np.bool_,
+            )
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
         return f"{path.name}:read_error={exc}"
     return None

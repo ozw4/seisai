@@ -364,8 +364,6 @@ def apply_physics_fallback_policy(  # noqa: C901, PLR0915
                 if reason == FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND
                 else PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_VALID_WINDOW
             )
-            if bool(reuse_cfg.enabled) and candidate_indices.size == 0:
-                reject_status = PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_NEIGHBOR_FIT
             arrays['physical_model_status'][idx] = np.uint8(reject_status)
             arrays['physical_model_failure_reason'][idx] = np.uint8(
                 PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID

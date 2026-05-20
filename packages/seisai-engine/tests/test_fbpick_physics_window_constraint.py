@@ -14,6 +14,7 @@ from seisai_engine.pipelines.fbpick.common import (
 from seisai_engine.pipelines.fbpick.physics.config import (
     PhysicalFineWindowConstraintCfg,
     PhysicalPrefilterCfg,
+    load_physics_lite_config,
 )
 from seisai_engine.pipelines.fbpick.physics.physical_center_types import (
     PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST,
@@ -116,6 +117,40 @@ def test_fine_window_constraint_rejects_disallowed_robust_fallback_source() -> N
     )
 
     np.testing.assert_array_equal(result.fine_center_valid_mask, [False])
+    np.testing.assert_array_equal(result.fine_window_valid_mask, [False])
+    np.testing.assert_array_equal(
+        result.fine_window_reject_reason,
+        [FINE_WINDOW_REJECT_FALLBACK_ROBUST_NOT_ALLOWED],
+    )
+
+
+def test_fallback_policy_allow_flags_feed_window_constraint() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_runtime': {
+                'fallback_policy': {
+                    'enabled': True,
+                    'allow_robust_fallback_as_fine_center': False,
+                    'allow_feasible_clip_as_fine_center': False,
+                },
+            },
+        }
+    )
+
+    constraint = cfg.physical_runtime.fine_window_constraint
+    assert constraint.allow_robust_fallback_as_fine_center is False
+    assert constraint.allow_feasible_clip_as_fine_center is False
+    result = _evaluate(
+        lo_i=0,
+        hi_i=511,
+        center_i=128,
+        constraint=constraint,
+        physical_runtime_fit_source=np.asarray(
+            [PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST],
+            dtype=np.uint8,
+        ),
+    )
+
     np.testing.assert_array_equal(result.fine_window_valid_mask, [False])
     np.testing.assert_array_equal(
         result.fine_window_reject_reason,

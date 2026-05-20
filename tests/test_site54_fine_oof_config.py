@@ -561,6 +561,7 @@ def test_check_cv_outputs_strict_npz_policy_accepts_new_keys(tmp_path: Path) -> 
         final_pick_f=np.asarray([128.0, np.nan, 500.0], dtype=np.float32),
         reject_mask=np.asarray([False, True, False], dtype=np.bool_),
         reason_mask=np.asarray([0, 1, 0], dtype=np.uint8),
+        fine_window_valid_mask=np.asarray([True, False, True], dtype=np.bool_),
         window_start_i=np.asarray([0, -1, 372], dtype=np.int32),
         window_end_i=np.asarray([255, -1, 627], dtype=np.int32),
     )
@@ -573,6 +574,27 @@ def test_check_cv_outputs_strict_npz_policy_accepts_new_keys(tmp_path: Path) -> 
             final_path=final_path,
         )
         is None
+    )
+
+
+def test_check_cv_outputs_strict_final_npz_requires_fine_window_valid_mask(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    final_path = tmp_path / 'legacy.fbpick_final.npz'
+
+    np.savez(
+        final_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        n_samples_orig=np.asarray(900, dtype=np.int32),
+        dt_sec=np.asarray(0.004, dtype=np.float32),
+        final_pick_f=np.asarray([128.0], dtype=np.float32),
+        reject_mask=np.asarray([False], dtype=np.bool_),
+        reason_mask=np.asarray([0], dtype=np.uint8),
+    )
+
+    assert module.strict_check_final_npz(final_path) == (
+        'legacy.fbpick_final.npz:missing_keys=fine_window_valid_mask'
     )
 
 
