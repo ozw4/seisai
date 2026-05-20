@@ -17,9 +17,11 @@ __all__ = [
     'PhysicalAdaptiveRefitCfg',
     'PhysicalAnchorReuseCfg',
     'PhysicalAnchorSelectionCfg',
+    'PhysicalFallbackPolicyCfg',
     'PhysicalFineWindowConstraintCfg',
     'PhysicalFitExecutorCfg',
     'PhysicalModelSelectionCfg',
+    'PhysicalNeighborPhysicalFitReuseCfg',
     'PhysicalObservationSamplingCfg',
     'PhysicalPartialTrendFallbackCfg',
     'PhysicalPrefilterCfg',
@@ -241,6 +243,28 @@ class PhysicalFineWindowConstraintCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalNeighborPhysicalFitReuseCfg:
+    enabled: bool = False
+    candidate_statuses: tuple[str, ...] = ('two_piece_ok', 'single_line_ok')
+    max_source_xy_distance_m: float | None = None
+    max_trace_distance: int | None = None
+    invalid_policy: str = 'try_coarse_in_band'
+
+
+@dataclass(frozen=True)
+class PhysicalFallbackPolicyCfg:
+    enabled: bool = False
+    order: tuple[str, ...] = (
+        'self_physical_fit',
+        'neighbor_physical_fit_reuse',
+        'coarse_in_band',
+        'reject',
+    )
+    allow_robust_fallback_as_fine_center: bool = True
+    allow_feasible_clip_as_fine_center: bool = True
+
+
+@dataclass(frozen=True)
 class PhysicalPartialTrendFallbackCfg:
     enabled: bool = True
     max_fraction: float = 0.05
@@ -296,6 +320,10 @@ class PhysicalRuntimeCfg:
     fine_window_constraint: PhysicalFineWindowConstraintCfg = (
         PhysicalFineWindowConstraintCfg()
     )
+    neighbor_physical_fit_reuse: PhysicalNeighborPhysicalFitReuseCfg = (
+        PhysicalNeighborPhysicalFitReuseCfg()
+    )
+    fallback_policy: PhysicalFallbackPolicyCfg = PhysicalFallbackPolicyCfg()
     partial_trend_fallback: PhysicalPartialTrendFallbackCfg = (
         PhysicalPartialTrendFallbackCfg()
     )
@@ -410,6 +438,15 @@ def _optional_str_tuple_or_none(
         msg = f'config.{key} must not be empty'
         raise ValueError(msg)
     return out
+
+
+def _optional_str_tuple(
+    cfg: dict[str, Any],
+    key: str,
+    default: tuple[str, ...],
+) -> tuple[str, ...]:
+    value = _optional_str_tuple_or_none(cfg, key)
+    return tuple(default) if value is None else value
 
 
 def _load_feasible_band_cfg(cfg: dict[str, Any]) -> PhysicsFeasibleBandCfg:
@@ -765,6 +802,68 @@ def _load_physical_fine_window_constraint_cfg(
     )
 
 
+def _load_physical_neighbor_fit_reuse_cfg(
+    cfg: dict[str, Any],
+) -> PhysicalNeighborPhysicalFitReuseCfg:
+    invalid_policy = optional_str(cfg, 'invalid_policy', 'try_coarse_in_band')
+    if invalid_policy is None:
+        msg = (
+            'physical_runtime.neighbor_physical_fit_reuse.invalid_policy '
+            'must not be null'
+        )
+        raise TypeError(msg)
+    max_trace_distance = cfg.get('max_trace_distance')
+    if max_trace_distance is not None:
+        max_trace_distance = int(optional_int(cfg, 'max_trace_distance', 0))
+    return PhysicalNeighborPhysicalFitReuseCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=False)),
+        candidate_statuses=_optional_str_tuple(
+            cfg,
+            'candidate_statuses',
+            ('two_piece_ok', 'single_line_ok'),
+        ),
+        max_source_xy_distance_m=_optional_float_or_none(
+            cfg,
+            'max_source_xy_distance_m',
+            None,
+        ),
+        max_trace_distance=max_trace_distance,
+        invalid_policy=str(invalid_policy),
+    )
+
+
+def _load_physical_fallback_policy_cfg(
+    cfg: dict[str, Any],
+) -> PhysicalFallbackPolicyCfg:
+    return PhysicalFallbackPolicyCfg(
+        enabled=bool(optional_bool(cfg, 'enabled', default=False)),
+        order=_optional_str_tuple(
+            cfg,
+            'order',
+            (
+                'self_physical_fit',
+                'neighbor_physical_fit_reuse',
+                'coarse_in_band',
+                'reject',
+            ),
+        ),
+        allow_robust_fallback_as_fine_center=bool(
+            optional_bool(
+                cfg,
+                'allow_robust_fallback_as_fine_center',
+                default=True,
+            )
+        ),
+        allow_feasible_clip_as_fine_center=bool(
+            optional_bool(
+                cfg,
+                'allow_feasible_clip_as_fine_center',
+                default=True,
+            )
+        ),
+    )
+
+
 def _load_physical_partial_trend_fallback_cfg(
     cfg: dict[str, Any],
 ) -> PhysicalPartialTrendFallbackCfg:
@@ -913,6 +1012,18 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
             _require_dict(
                 cfg.get('fine_window_constraint'),
                 key='physical_runtime.fine_window_constraint',
+            )
+        ),
+        neighbor_physical_fit_reuse=_load_physical_neighbor_fit_reuse_cfg(
+            _require_dict(
+                cfg.get('neighbor_physical_fit_reuse'),
+                key='physical_runtime.neighbor_physical_fit_reuse',
+            )
+        ),
+        fallback_policy=_load_physical_fallback_policy_cfg(
+            _require_dict(
+                cfg.get('fallback_policy'),
+                key='physical_runtime.fallback_policy',
             )
         ),
         partial_trend_fallback=_load_physical_partial_trend_fallback_cfg(
@@ -1101,6 +1212,52 @@ def _validate_physical_fine_window_constraint_cfg(
         raise ValueError(msg)
 
 
+def _validate_physical_neighbor_fit_reuse_cfg(
+    cfg: PhysicalNeighborPhysicalFitReuseCfg,
+) -> None:
+    allowed_statuses = {'two_piece_ok', 'single_line_ok'}
+    for status in cfg.candidate_statuses:
+        if status not in allowed_statuses:
+            msg = (
+                'physical_runtime.neighbor_physical_fit_reuse.'
+                'candidate_statuses entries must be one of '
+                f"{sorted(allowed_statuses)}, got {status!r}"
+            )
+            raise ValueError(msg)
+    if cfg.max_source_xy_distance_m is not None:
+        _validate_nonnegative_float(
+            'physical_runtime.neighbor_physical_fit_reuse.'
+            'max_source_xy_distance_m',
+            cfg.max_source_xy_distance_m,
+        )
+    if cfg.max_trace_distance is not None:
+        _validate_nonnegative_int(
+            'physical_runtime.neighbor_physical_fit_reuse.max_trace_distance',
+            cfg.max_trace_distance,
+        )
+    if cfg.invalid_policy != 'try_coarse_in_band':
+        msg = (
+            'physical_runtime.neighbor_physical_fit_reuse.invalid_policy must be '
+            f"'try_coarse_in_band', got {cfg.invalid_policy!r}"
+        )
+        raise ValueError(msg)
+
+
+def _validate_physical_fallback_policy_cfg(cfg: PhysicalFallbackPolicyCfg) -> None:
+    expected = (
+        'self_physical_fit',
+        'neighbor_physical_fit_reuse',
+        'coarse_in_band',
+        'reject',
+    )
+    if tuple(cfg.order) != expected:
+        msg = (
+            'physical_runtime.fallback_policy.order must be '
+            f'{expected!r}, got {tuple(cfg.order)!r}'
+        )
+        raise ValueError(msg)
+
+
 def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
     if cfg.fit_policy not in {'full', 'anchor_source_xy'}:
         msg = (
@@ -1127,16 +1284,26 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
             f"or 'omit', got {cfg.legacy_trend_output!r}"
         )
         raise ValueError(msg)
-    if cfg.geometry_invalid_fallback not in {'existing_trend', 'robust'}:
+    if cfg.geometry_invalid_fallback not in {
+        'existing_trend',
+        'robust',
+        'neighbor_or_coarse_in_band',
+    }:
         msg = (
             'physical_runtime.geometry_invalid_fallback must be '
-            f"'existing_trend' or 'robust', got {cfg.geometry_invalid_fallback!r}"
+            "'existing_trend', 'robust', or 'neighbor_or_coarse_in_band', "
+            f'got {cfg.geometry_invalid_fallback!r}'
         )
         raise ValueError(msg)
-    if cfg.group_invalid_fallback not in {'existing_trend', 'robust'}:
+    if cfg.group_invalid_fallback not in {
+        'existing_trend',
+        'robust',
+        'neighbor_or_coarse_in_band',
+    }:
         msg = (
             'physical_runtime.group_invalid_fallback must be '
-            f"'existing_trend' or 'robust', got {cfg.group_invalid_fallback!r}"
+            "'existing_trend', 'robust', or 'neighbor_or_coarse_in_band', "
+            f'got {cfg.group_invalid_fallback!r}'
         )
         raise ValueError(msg)
     if (
@@ -1164,6 +1331,8 @@ def _validate_physical_runtime_cfg(cfg: PhysicalRuntimeCfg) -> None:
         )
         raise ValueError(msg)
     _validate_physical_fine_window_constraint_cfg(cfg.fine_window_constraint)
+    _validate_physical_neighbor_fit_reuse_cfg(cfg.neighbor_physical_fit_reuse)
+    _validate_physical_fallback_policy_cfg(cfg.fallback_policy)
     _validate_physical_partial_trend_fallback_cfg(cfg.partial_trend_fallback)
     anchor = cfg.anchor_selection
     if anchor.mode != 'source_xy_stride':

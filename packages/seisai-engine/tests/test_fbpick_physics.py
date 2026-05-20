@@ -299,6 +299,28 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
             [FINE_WINDOW_REJECT_OK, 3, 2],
             dtype=np.uint8,
         ),
+        'physical_center_source': np.array(
+            ['self_physical_fit', 'neighbor_physical_fit_reuse', 'reject'],
+            dtype='<U32',
+        ),
+        'physical_fallback_source': np.array(
+            ['', 'neighbor_physical_fit_reuse', 'reject'],
+            dtype='<U32',
+        ),
+        'physical_neighbor_source_index': np.array([-1, 0, -1], dtype=np.int32),
+        'physical_neighbor_source_distance': np.array(
+            [np.nan, 10.0, np.nan],
+            dtype=np.float32,
+        ),
+        'coarse_in_band_fallback_mask': np.array(
+            [False, False, True],
+            dtype=np.bool_,
+        ),
+        'reject_physics_mask': np.array([False, False, True], dtype=np.bool_),
+        'reject_physics_reason': np.array(
+            ['', '', 'reject_physics_no_valid_window'],
+            dtype='<U40',
+        ),
         'physics_total_sec': np.asarray(1.0, dtype=np.float64),
         'physical_center_total_sec': np.asarray(0.7, dtype=np.float64),
         'ransac_fit_total_sec': np.asarray(0.3, dtype=np.float64),
@@ -1944,6 +1966,28 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
         'fine_window_reject_reason': np.array(
             [FINE_WINDOW_REJECT_OK, 3, 2],
             dtype=np.uint8,
+        ),
+        'physical_center_source': np.array(
+            ['self_physical_fit', 'neighbor_physical_fit_reuse', 'reject'],
+            dtype='<U32',
+        ),
+        'physical_fallback_source': np.array(
+            ['', 'neighbor_physical_fit_reuse', 'reject'],
+            dtype='<U32',
+        ),
+        'physical_neighbor_source_index': np.array([-1, 0, -1], dtype=np.int32),
+        'physical_neighbor_source_distance': np.array(
+            [np.nan, 10.0, np.nan],
+            dtype=np.float32,
+        ),
+        'coarse_in_band_fallback_mask': np.array(
+            [False, False, True],
+            dtype=np.bool_,
+        ),
+        'reject_physics_mask': np.array([False, False, True], dtype=np.bool_),
+        'reject_physics_reason': np.array(
+            ['', '', 'reject_physics_no_valid_window'],
+            dtype='<U40',
         ),
     }
 

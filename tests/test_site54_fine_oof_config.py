@@ -67,9 +67,25 @@ def _assert_partial_physics_fallback(cfg: dict) -> None:
     assert partial['max_traces'] == 50000
     assert partial['cluster_consecutive_indices'] is True
     assert partial['use_global_fallback'] is True
-    assert partial['fallback_if_too_many'] == 'robust'
+    assert partial['fallback_if_too_many'] == 'full'
     assert partial['local_window_from_trend_config'] is True
     assert partial['emit_progress'] is True
+    assert runtime['geometry_invalid_fallback'] == 'neighbor_or_coarse_in_band'
+    assert runtime['group_invalid_fallback'] == 'neighbor_or_coarse_in_band'
+    assert runtime['fine_window_constraint'][
+        'allow_robust_fallback_as_fine_center'
+    ] is False
+    assert runtime['fine_window_constraint'][
+        'allow_feasible_clip_as_fine_center'
+    ] is False
+    assert runtime['neighbor_physical_fit_reuse']['enabled'] is True
+    assert runtime['fallback_policy']['enabled'] is True
+    assert runtime['fallback_policy']['order'] == [
+        'self_physical_fit',
+        'neighbor_physical_fit_reuse',
+        'coarse_in_band',
+        'reject',
+    ]
 
 
 def test_fine_train_config_fixed_last_uses_last_checkpoint_policy(

@@ -387,6 +387,13 @@ _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
     'fine_window_physical_lo_i': np.int32,
     'fine_window_physical_hi_i': np.int32,
     'fine_window_reject_reason': np.uint8,
+    'physical_center_source': '<U32',
+    'physical_fallback_source': '<U32',
+    'physical_neighbor_source_index': np.int32,
+    'physical_neighbor_source_distance': np.float32,
+    'coarse_in_band_fallback_mask': np.bool_,
+    'reject_physics_mask': np.bool_,
+    'reject_physics_reason': '<U40',
 }
 
 _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = tuple(
@@ -707,6 +714,13 @@ def save_robust_npz(
     fine_window_physical_lo_i=None,
     fine_window_physical_hi_i=None,
     fine_window_reject_reason=None,
+    physical_center_source=None,
+    physical_fallback_source=None,
+    physical_neighbor_source_index=None,
+    physical_neighbor_source_distance=None,
+    coarse_in_band_fallback_mask=None,
+    reject_physics_mask=None,
+    reject_physics_reason=None,
     physics_total_sec=None,
     physical_center_total_sec=None,
     ransac_fit_total_sec=None,
@@ -939,6 +953,13 @@ def save_robust_npz(
         'fine_window_physical_lo_i': fine_window_physical_lo_i,
         'fine_window_physical_hi_i': fine_window_physical_hi_i,
         'fine_window_reject_reason': fine_window_reject_reason,
+        'physical_center_source': physical_center_source,
+        'physical_fallback_source': physical_fallback_source,
+        'physical_neighbor_source_index': physical_neighbor_source_index,
+        'physical_neighbor_source_distance': physical_neighbor_source_distance,
+        'coarse_in_band_fallback_mask': coarse_in_band_fallback_mask,
+        'reject_physics_mask': reject_physics_mask,
+        'reject_physics_reason': reject_physics_reason,
     }
     for key, dtype in _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS:
         value = physical_diagnostic_values[key]

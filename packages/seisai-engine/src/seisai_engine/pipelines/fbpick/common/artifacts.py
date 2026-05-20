@@ -111,6 +111,13 @@ ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS = (
     'fine_window_physical_lo_i',
     'fine_window_physical_hi_i',
     'fine_window_reject_reason',
+    'physical_center_source',
+    'physical_fallback_source',
+    'physical_neighbor_source_index',
+    'physical_neighbor_source_distance',
+    'coarse_in_band_fallback_mask',
+    'reject_physics_mask',
+    'reject_physics_reason',
 )
 
 ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS = (

@@ -22,6 +22,7 @@ from .physical_center import (
     build_geometry_two_piece_physical_center,
     preflight_geometry_two_piece_fallback,
 )
+from .physical_center_fallback_policy import apply_physics_fallback_policy
 from .pick_table import normalize_coarse_pick_table
 from .progress import build_progress_reporter
 from .runtime_diagnostics import (
@@ -838,6 +839,15 @@ def build_robust_payload_from_coarse(
             dtype=np.uint8,
         ),
     )
+    physical, window_constraint, fallback_policy_diagnostics = (
+        apply_physics_fallback_policy(
+            physical=physical,
+            initial_window_constraint=window_constraint,
+            coarse_npz=coarse_npz,
+            table=table,
+            cfg=typed_cfg,
+        )
+    )
     payload = {
         'dt_sec': np.asarray(table.dt_scalar_sec, dtype=np.float32),
         'n_samples_orig': np.asarray(table.n_samples_orig, dtype=np.int32),
@@ -997,6 +1007,31 @@ def build_robust_payload_from_coarse(
         'fine_window_reject_reason': np.asarray(
             window_constraint.fine_window_reject_reason,
             dtype=np.uint8,
+        ),
+        'physical_center_source': np.asarray(
+            fallback_policy_diagnostics['physical_center_source']
+        ),
+        'physical_fallback_source': np.asarray(
+            fallback_policy_diagnostics['physical_fallback_source']
+        ),
+        'physical_neighbor_source_index': np.asarray(
+            fallback_policy_diagnostics['physical_neighbor_source_index'],
+            dtype=np.int32,
+        ),
+        'physical_neighbor_source_distance': np.asarray(
+            fallback_policy_diagnostics['physical_neighbor_source_distance'],
+            dtype=np.float32,
+        ),
+        'coarse_in_band_fallback_mask': np.asarray(
+            fallback_policy_diagnostics['coarse_in_band_fallback_mask'],
+            dtype=np.bool_,
+        ),
+        'reject_physics_mask': np.asarray(
+            fallback_policy_diagnostics['reject_physics_mask'],
+            dtype=np.bool_,
+        ),
+        'reject_physics_reason': np.asarray(
+            fallback_policy_diagnostics['reject_physics_reason']
         ),
         'physical_runtime_trend_result_materialized': np.asarray(
             int(bool(trend_materialized)),
