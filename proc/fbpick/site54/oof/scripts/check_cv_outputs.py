@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,43 @@ FINE_INFER_ALLOWED_PATH_KEYS = set(FINE_INFER_REQUIRED_SINGLE_ENTRY_KEYS) | {
     "fb_files",
     "out_dir",
 }
+STRICT_PHYSICS_KEYS = (
+    "fine_center_i",
+    "fine_window_valid_mask",
+    "fine_window_physical_lo_i",
+    "fine_window_physical_hi_i",
+    "fine_window_reject_reason",
+    "physical_model_status",
+)
+STRICT_FINAL_KEYS = (
+    "final_pick_f",
+    "n_traces",
+    "n_samples_orig",
+    "dt_sec",
+    "reject_mask",
+    "reason_mask",
+    "fine_window_valid_mask",
+)
+PHYSICAL_MODEL_STATUS_LABELS = {
+    0: "two_piece_ok",
+    1: "relaxed_segment_ok",
+    2: "fallback_existing_trend",
+    3: "fallback_feasible_clip",
+    4: "fallback_robust",
+    5: "geometry_invalid",
+    6: "insufficient_observations",
+    7: "fit_failed",
+    8: "physical_disabled",
+    9: "single_line_ok",
+    10: "neighbor_physical_fit_reuse",
+    11: "coarse_in_band_fallback",
+    12: "reject_physics_no_valid_window",
+    13: "reject_physics_coarse_outside_band",
+    14: "reject_physics_no_neighbor_fit",
+}
+RECOGNIZED_REJECT_PHYSICS_STATUSES = {12, 13, 14}
+STRICT_FORBIDDEN_PHYSICAL_MODEL_STATUSES = {3, 4}
+FINE_WINDOW_REJECT_OK = 0
 
 
 def read_list(path: Path) -> list[str]:
@@ -269,6 +307,258 @@ def check_npz_count(
         ok=not failures,
         detail=f"n={len(files)}" if not failures else ";".join(failures),
         expected_paths=missing or ([] if not failures else expected_paths),
+    )
+
+
+def npz_n_traces(z: np.lib.npyio.NpzFile) -> int:
+    """Read the scalar n_traces field from an NPZ payload."""
+    return int(np.asarray(z["n_traces"]).reshape(()))
+
+
+def require_trace_vector(
+    z: np.lib.npyio.NpzFile,
+    key: str,
+    *,
+    n_traces: int,
+    dtype: object | None = None,
+) -> np.ndarray:
+    """Return a 1D trace-aligned NPZ array or raise a shape error."""
+    arr = np.asarray(z[key], dtype=dtype)
+    if arr.ndim != 1 or int(arr.shape[0]) != int(n_traces):
+        raise ValueError(f"{key}_shape={arr.shape}/{(n_traces,)}")
+    return arr
+
+
+def strict_check_physics_npz(path: Path) -> str | None:
+    """Validate required physics NPZ keys and physical status values."""
+    try:
+        with np.load(path, allow_pickle=False) as z:
+            missing = [key for key in STRICT_PHYSICS_KEYS if key not in z.files]
+            if missing:
+                return f"{path.name}:missing_keys={','.join(missing)}"
+            n_traces = npz_n_traces(z)
+            status = require_trace_vector(
+                z,
+                "physical_model_status",
+                n_traces=n_traces,
+                dtype=np.uint8,
+            )
+            require_trace_vector(z, "fine_center_i", n_traces=n_traces)
+            valid = require_trace_vector(
+                z,
+                "fine_window_valid_mask",
+                n_traces=n_traces,
+                dtype=np.bool_,
+            )
+            for key in ("fine_window_physical_lo_i", "fine_window_physical_hi_i"):
+                require_trace_vector(z, key, n_traces=n_traces)
+            window_reason = require_trace_vector(
+                z,
+                "fine_window_reject_reason",
+                n_traces=n_traces,
+                dtype=np.uint8,
+            )
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+        return f"{path.name}:read_error={exc}"
+
+    unknown = sorted(
+        {int(value) for value in np.unique(status)} - set(PHYSICAL_MODEL_STATUS_LABELS)
+    )
+    if unknown:
+        return f"{path.name}:unknown_physical_model_status={unknown[0]}"
+
+    forbidden = sorted(
+        {int(value) for value in np.unique(status)}
+        & STRICT_FORBIDDEN_PHYSICAL_MODEL_STATUSES
+    )
+    if forbidden:
+        label = PHYSICAL_MODEL_STATUS_LABELS[forbidden[0]]
+        return f"{path.name}:forbidden_physical_model_status={label}"
+
+    reject_status_window_valid = np.flatnonzero(
+        np.isin(status, np.fromiter(RECOGNIZED_REJECT_PHYSICS_STATUSES, np.uint8))
+        & valid
+    )
+    if reject_status_window_valid.size:
+        return (
+            f"{path.name}:reject_physics_status_window_valid="
+            f"{int(reject_status_window_valid[0])}"
+        )
+
+    invalid_reason_ok = np.flatnonzero(
+        (~valid) & (window_reason == FINE_WINDOW_REJECT_OK)
+    )
+    if invalid_reason_ok.size:
+        return (
+            f"{path.name}:invalid_window_reject_reason_ok="
+            f"{int(invalid_reason_ok[0])}"
+        )
+
+    valid_reason_reject = np.flatnonzero(
+        valid & (window_reason != FINE_WINDOW_REJECT_OK)
+    )
+    if valid_reason_reject.size:
+        return (
+            f"{path.name}:valid_window_reject_reason="
+            f"{int(valid_reason_reject[0])}"
+        )
+
+    if (
+        "coarse_in_band_fallback" not in PHYSICAL_MODEL_STATUS_LABELS.values()
+        or not any(
+            PHYSICAL_MODEL_STATUS_LABELS[code].startswith("reject_physics")
+            for code in RECOGNIZED_REJECT_PHYSICS_STATUSES
+        )
+    ):
+        return "physical_model_status_labels_missing_new_policy"
+    return None
+
+
+def strict_check_final_npz(path: Path) -> str | None:
+    """Validate required final NPZ keys added by the fine inference policy."""
+    try:
+        with np.load(path, allow_pickle=False) as z:
+            missing = [key for key in STRICT_FINAL_KEYS if key not in z.files]
+            if missing:
+                return f"{path.name}:missing_keys={','.join(missing)}"
+            n_traces = npz_n_traces(z)
+            require_trace_vector(
+                z,
+                "reject_mask",
+                n_traces=n_traces,
+                dtype=np.bool_,
+            )
+            require_trace_vector(z, "reason_mask", n_traces=n_traces, dtype=np.uint8)
+            require_trace_vector(
+                z,
+                "fine_window_valid_mask",
+                n_traces=n_traces,
+                dtype=np.bool_,
+            )
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+        return f"{path.name}:read_error={exc}"
+    return None
+
+
+def strict_check_physics_final_pair(
+    *,
+    physics_path: Path,
+    final_path: Path,
+    time_len: int = 256,
+) -> str | None:
+    """Validate physics window masks against the paired final rejection mask."""
+    try:
+        with (
+            np.load(physics_path, allow_pickle=False) as physics,
+            np.load(final_path, allow_pickle=False) as final,
+        ):
+            n_traces = npz_n_traces(physics)
+            final_n_traces = npz_n_traces(final)
+            if final_n_traces != n_traces:
+                return (
+                    f"{final_path.name}:n_traces={final_n_traces}/"
+                    f"{n_traces}"
+                )
+
+            valid = require_trace_vector(
+                physics,
+                "fine_window_valid_mask",
+                n_traces=n_traces,
+                dtype=np.bool_,
+            )
+            lo_i = require_trace_vector(
+                physics,
+                "fine_window_physical_lo_i",
+                n_traces=n_traces,
+                dtype=np.int64,
+            )
+            hi_i = require_trace_vector(
+                physics,
+                "fine_window_physical_hi_i",
+                n_traces=n_traces,
+                dtype=np.int64,
+            )
+            reject = require_trace_vector(
+                final,
+                "reject_mask",
+                n_traces=n_traces,
+                dtype=np.bool_,
+            )
+
+            invalid_not_rejected = np.flatnonzero((~valid) & (~reject))
+            if invalid_not_rejected.size:
+                return (
+                    f"{final_path.name}:invalid_window_not_rejected="
+                    f"{int(invalid_not_rejected[0])}"
+                )
+
+            if "window_start_i" in final.files and "window_end_i" in final.files:
+                start = require_trace_vector(
+                    final,
+                    "window_start_i",
+                    n_traces=n_traces,
+                    dtype=np.int64,
+                )
+                end = require_trace_vector(
+                    final,
+                    "window_end_i",
+                    n_traces=n_traces,
+                    dtype=np.int64,
+                )
+                bad_window = np.flatnonzero(valid & ((start < lo_i) | (end > hi_i)))
+                if bad_window.size:
+                    return (
+                        f"{final_path.name}:window_outside_physical_band="
+                        f"{int(bad_window[0])}"
+                    )
+                bad_len = np.flatnonzero(valid & ((end - start) != (time_len - 1)))
+                if bad_len.size:
+                    return f"{final_path.name}:window_len={int(bad_len[0])}"
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+        return f"{physics_path.name}:{final_path.name}:read_error={exc}"
+    return None
+
+
+def check_strict_npz_policy(
+    *,
+    results: list[dict[str, Any]],
+    fold: str,
+    run_root: Path,
+    heldout_sgy: list[str],
+) -> None:
+    """Run strict new-policy checks for paired physics and final NPZ outputs."""
+    failures: list[str] = []
+    for segy_path in heldout_sgy:
+        physics_path = expected_output_path(
+            run_root / fold / "03_physics",
+            segy_path,
+            ".robust.npz",
+        )
+        final_path = expected_output_path(
+            run_root / fold / "07_fine_infer",
+            segy_path,
+            ".fbpick_final.npz",
+        )
+        if not physics_path.is_file() or not final_path.is_file():
+            continue
+        error = (
+            strict_check_physics_npz(physics_path)
+            or strict_check_final_npz(final_path)
+            or strict_check_physics_final_pair(
+                physics_path=physics_path,
+                final_path=final_path,
+            )
+        )
+        if error:
+            failures.append(error)
+            break
+
+    add_result(
+        results,
+        fold=fold,
+        stage="strict_npz_policy",
+        ok=not failures,
+        detail=f"n={len(heldout_sgy)}" if not failures else ";".join(failures),
     )
 
 
@@ -515,6 +805,7 @@ def main() -> int:
             out_dir=run_root / fold / "03_physics",
             heldout_sgy=heldout_sgy,
             suffix=".robust.npz",
+            strict_keys=STRICT_PHYSICS_KEYS if args.strict else (),
         )
         check_physics_qc(
             results=results,
@@ -558,16 +849,15 @@ def main() -> int:
             out_dir=run_root / fold / "07_fine_infer",
             heldout_sgy=heldout_sgy,
             suffix=".fbpick_final.npz",
-            strict_keys=(
-                "final_pick_f",
-                "n_traces",
-                "n_samples_orig",
-                "dt_sec",
-            )
-            if args.strict
-            else (),
+            strict_keys=STRICT_FINAL_KEYS if args.strict else (),
         )
         if args.strict:
+            check_strict_npz_policy(
+                results=results,
+                fold=fold,
+                run_root=run_root,
+                heldout_sgy=heldout_sgy,
+            )
             fine_infer_config_paths = [config_root / fold / "07_fine_infer.yaml"]
             fine_infer_config_paths.extend(
                 sorted((config_root / fold).glob("07_fine_infer_*.yaml"))

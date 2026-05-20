@@ -96,6 +96,28 @@ ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS = (
     'physical_runtime_reuse_valid_count',
     'physical_runtime_refit_mask',
     'physical_runtime_fit_source',
+    'physical_fit_model_type',
+    'physical_fit_selected_model',
+    'physical_fit_relative_improvement',
+    'physical_fit_single_line_cost',
+    'physical_fit_two_piece_cost',
+    'physical_fit_single_line_slope',
+    'physical_fit_single_line_t0_sec',
+    'physical_fit_two_piece_slope_near',
+    'physical_fit_two_piece_slope_far',
+    'physical_fit_two_piece_break_offset_m',
+    'fine_center_valid_mask',
+    'fine_window_valid_mask',
+    'fine_window_physical_lo_i',
+    'fine_window_physical_hi_i',
+    'fine_window_reject_reason',
+    'physical_center_source',
+    'physical_fallback_source',
+    'physical_neighbor_source_index',
+    'physical_neighbor_source_distance',
+    'coarse_in_band_fallback_mask',
+    'reject_physics_mask',
+    'reject_physics_reason',
 )
 
 ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS = (
@@ -172,6 +194,7 @@ FINE_RESULT_REQUIRED_KEYS = (
     'final_conf',
     'window_start_i',
     'window_end_i',
+    'fine_window_valid_mask',
 )
 
 FINAL_REQUIRED_KEYS = (
@@ -200,6 +223,7 @@ FINAL_REQUIRED_KEYS = (
     'final_conf',
     'high_conf_mask',
     'reject_mask',
+    'fine_window_valid_mask',
     'lineage',
 )
 
@@ -219,6 +243,32 @@ REASON_MASK_LABELS = {
     REASON_MASK_FILLED_FROM_TREND: 'filled_from_trend',
 }
 
+FINE_WINDOW_REJECT_OK = 0
+FINE_WINDOW_REJECT_BAND_INVALID = 1
+FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND = 2
+FINE_WINDOW_REJECT_WINDOW_OUTSIDE_PREFILTER_BAND = 3
+FINE_WINDOW_REJECT_FALLBACK_ROBUST_NOT_ALLOWED = 4
+FINE_WINDOW_REJECT_FALLBACK_FEASIBLE_CLIP_NOT_ALLOWED = 5
+FINE_WINDOW_REJECT_BAND_TOO_NARROW_FOR_256 = 6
+
+FINE_WINDOW_REJECT_REASON_LABELS = {
+    FINE_WINDOW_REJECT_OK: 'ok',
+    FINE_WINDOW_REJECT_BAND_INVALID: 'band_invalid',
+    FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND: (
+        'center_outside_prefilter_band'
+    ),
+    FINE_WINDOW_REJECT_WINDOW_OUTSIDE_PREFILTER_BAND: (
+        'window_outside_prefilter_band'
+    ),
+    FINE_WINDOW_REJECT_FALLBACK_ROBUST_NOT_ALLOWED: (
+        'fallback_robust_not_allowed'
+    ),
+    FINE_WINDOW_REJECT_FALLBACK_FEASIBLE_CLIP_NOT_ALLOWED: (
+        'fallback_feasible_clip_not_allowed'
+    ),
+    FINE_WINDOW_REJECT_BAND_TOO_NARROW_FOR_256: 'band_too_narrow_for_256',
+}
+
 __all__ = [
     'COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS',
     'COARSE_GEOMETRY_OPTIONAL_KEYS',
@@ -226,6 +276,14 @@ __all__ = [
     'COARSE_REQUIRED_KEYS',
     'FINAL_REQUIRED_KEYS',
     'FINE_RESULT_REQUIRED_KEYS',
+    'FINE_WINDOW_REJECT_BAND_INVALID',
+    'FINE_WINDOW_REJECT_BAND_TOO_NARROW_FOR_256',
+    'FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND',
+    'FINE_WINDOW_REJECT_FALLBACK_FEASIBLE_CLIP_NOT_ALLOWED',
+    'FINE_WINDOW_REJECT_FALLBACK_ROBUST_NOT_ALLOWED',
+    'FINE_WINDOW_REJECT_OK',
+    'FINE_WINDOW_REJECT_REASON_LABELS',
+    'FINE_WINDOW_REJECT_WINDOW_OUTSIDE_PREFILTER_BAND',
     'REASON_MASK_FILLED_FROM_TREND',
     'REASON_MASK_INFEASIBLE',
     'REASON_MASK_LABELS',

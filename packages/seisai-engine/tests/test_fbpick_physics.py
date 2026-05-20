@@ -12,6 +12,9 @@ import pytest
 from seisai_engine.pipelines.fbpick.common import (
     COARSE_GEOMETRY_EXTRA_OPTIONAL_KEYS,
     COARSE_GEOMETRY_OPTIONAL_KEYS,
+    FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND,
+    FINE_WINDOW_REJECT_OK,
+    FINE_WINDOW_REJECT_WINDOW_OUTSIDE_PREFILTER_BAND,
     REASON_MASK_FILLED_FROM_TREND,
     REASON_MASK_INFEASIBLE,
     REASON_MASK_LOW_SCORE,
@@ -30,6 +33,9 @@ from seisai_engine.pipelines.fbpick.common import (
     save_coarse_npz,
     save_robust_npz,
 )
+from seisai_engine.pipelines.fbpick.physics import (
+    physical_center_fallback as physical_center_fallback_mod,
+)
 from seisai_engine.pipelines.fbpick.physics.confidence import compute_confidence_terms
 from seisai_engine.pipelines.fbpick.physics.config import (
     load_physics_lite_config,
@@ -42,13 +48,23 @@ from seisai_engine.pipelines.fbpick.physics.feasible import (
 from seisai_engine.pipelines.fbpick.physics.merge import apply_keep_reject_fill
 from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID,
+    PHYSICAL_MODEL_FAILURE_NONE,
     PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED,
+    PHYSICAL_MODEL_STATUS_COARSE_IN_BAND_FALLBACK,
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND,
     PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
+    PHYSICAL_MODEL_STATUS_NEIGHBOR_PHYSICAL_FIT_REUSE,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
+    PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_COARSE_OUTSIDE_BAND,
+    PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_VALID_WINDOW,
+    PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
     PHYSICAL_OFFSET_SOURCE_HEADER,
     PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST,
+    PhysicalCenterResult,
+)
+from seisai_engine.pipelines.fbpick.physics.physical_center_fallback_policy import (
+    apply_physics_fallback_policy,
 )
 from seisai_engine.pipelines.fbpick.physics.pick_table import (
     normalize_coarse_pick_table,
@@ -69,6 +85,9 @@ from seisai_engine.pipelines.fbpick.physics.trend import (
     PartialTrendFallbackResult,
     TrendResult,
     build_trend_result,
+)
+from seisai_engine.pipelines.fbpick.physics.window_constraint import (
+    evaluate_fine_window_constraint,
 )
 from seisai_pick.trend.trend_fit_strategy import TwoPieceRansacAutoBreakStrategy
 
@@ -250,6 +269,76 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
         'physical_runtime_reuse_valid_count': np.array([3, 0, 4], dtype=np.int32),
         'physical_runtime_refit_mask': np.array([False, True, False], dtype=np.bool_),
         'physical_runtime_fit_source': np.array([1, 2, 3], dtype=np.uint8),
+        'physical_fit_model_type': np.array(
+            ['two_piece', '', 'single_line'],
+            dtype='<U16',
+        ),
+        'physical_fit_selected_model': np.array(
+            ['two_piece', '', 'single_line'],
+            dtype='<U16',
+        ),
+        'physical_fit_relative_improvement': np.array(
+            [0.12, np.nan, 0.01],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_cost': np.array(
+            [0.02, np.nan, 0.01],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_cost': np.array(
+            [0.01, np.nan, 0.02],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_slope': np.array(
+            [0.0005, np.nan, 0.0004],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_t0_sec': np.array(
+            [0.1, np.nan, 0.2],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_near': np.array(
+            [0.001, np.nan, 0.0005],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_far': np.array(
+            [0.0003, np.nan, 0.0004],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_break_offset_m': np.array(
+            [1000.0, np.nan, 1200.0],
+            dtype=np.float32,
+        ),
+        'fine_center_valid_mask': np.array([True, True, False], dtype=np.bool_),
+        'fine_window_valid_mask': np.array([True, False, False], dtype=np.bool_),
+        'fine_window_physical_lo_i': np.array([0, 10, 20], dtype=np.int32),
+        'fine_window_physical_hi_i': np.array([255, 265, 275], dtype=np.int32),
+        'fine_window_reject_reason': np.array(
+            [FINE_WINDOW_REJECT_OK, 3, 2],
+            dtype=np.uint8,
+        ),
+        'physical_center_source': np.array(
+            ['self_physical_fit', 'neighbor_physical_fit_reuse', 'reject'],
+            dtype='<U32',
+        ),
+        'physical_fallback_source': np.array(
+            ['', 'neighbor_physical_fit_reuse', 'reject'],
+            dtype='<U32',
+        ),
+        'physical_neighbor_source_index': np.array([-1, 0, -1], dtype=np.int32),
+        'physical_neighbor_source_distance': np.array(
+            [np.nan, 10.0, np.nan],
+            dtype=np.float32,
+        ),
+        'coarse_in_band_fallback_mask': np.array(
+            [False, False, True],
+            dtype=np.bool_,
+        ),
+        'reject_physics_mask': np.array([False, False, True], dtype=np.bool_),
+        'reject_physics_reason': np.array(
+            ['', '', 'reject_physics_no_valid_window'],
+            dtype='<U40',
+        ),
         'physics_total_sec': np.asarray(1.0, dtype=np.float64),
         'physical_center_total_sec': np.asarray(0.7, dtype=np.float64),
         'ransac_fit_total_sec': np.asarray(0.3, dtype=np.float64),
@@ -443,6 +532,12 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
 
     assert cfg.physical_trend.enabled is False
     assert cfg.physical_trend.fit_kind == 'two_piece_ransac_autobreak'
+    assert cfg.physical_trend.candidate_models is None
+    model_selection = cfg.physical_trend.model_selection
+    assert model_selection.prefer_two_piece_min_relative_improvement == (
+        pytest.approx(0.05)
+    )
+    assert cfg.physical_trend.model_selection.fallback_to_single_line is True
     assert cfg.physical_trend.min_offset_spread_m == 1.0
     assert cfg.physical_trend.min_gap_m is None
     assert cfg.neighbor_context.mode == 'nearest_source_xy'
@@ -608,6 +703,29 @@ def test_load_physics_lite_config_accepts_two_piece_irls_fit_kind() -> None:
     assert cfg.two_piece_irls.q_hi == pytest.approx(0.7)
     assert cfg.two_piece_irls.slope_eps == pytest.approx(1.0e-4)
     assert cfg.two_piece_irls.sort_offsets is False
+
+
+def test_load_physics_lite_config_accepts_auto_irls_model_selection() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_trend': {
+                'fit_kind': 'auto_irls',
+                'candidate_models': ['two_piece', 'single_line'],
+                'model_selection': {
+                    'prefer_two_piece_min_relative_improvement': 0.1,
+                    'fallback_to_single_line': False,
+                },
+            },
+        }
+    )
+
+    assert cfg.physical_trend.fit_kind == 'auto_irls'
+    assert cfg.physical_trend.candidate_models == ('two_piece', 'single_line')
+    model_selection = cfg.physical_trend.model_selection
+    assert model_selection.prefer_two_piece_min_relative_improvement == (
+        pytest.approx(0.1)
+    )
+    assert cfg.physical_trend.model_selection.fallback_to_single_line is False
 
 
 def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> None:
@@ -1819,6 +1937,76 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
         'physical_runtime_reuse_valid_count': np.array([3, 0, 4], dtype=np.int32),
         'physical_runtime_refit_mask': np.array([False, True, False], dtype=np.bool_),
         'physical_runtime_fit_source': np.array([1, 2, 3], dtype=np.uint8),
+        'physical_fit_model_type': np.array(
+            ['two_piece', '', 'single_line'],
+            dtype='<U16',
+        ),
+        'physical_fit_selected_model': np.array(
+            ['two_piece', '', 'single_line'],
+            dtype='<U16',
+        ),
+        'physical_fit_relative_improvement': np.array(
+            [0.12, np.nan, 0.01],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_cost': np.array(
+            [0.02, np.nan, 0.01],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_cost': np.array(
+            [0.01, np.nan, 0.02],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_slope': np.array(
+            [0.0005, np.nan, 0.0004],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_t0_sec': np.array(
+            [0.1, np.nan, 0.2],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_near': np.array(
+            [0.001, np.nan, 0.0005],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_far': np.array(
+            [0.0003, np.nan, 0.0004],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_break_offset_m': np.array(
+            [1000.0, np.nan, 1200.0],
+            dtype=np.float32,
+        ),
+        'fine_center_valid_mask': np.array([True, True, False], dtype=np.bool_),
+        'fine_window_valid_mask': np.array([True, False, False], dtype=np.bool_),
+        'fine_window_physical_lo_i': np.array([0, 10, 20], dtype=np.int32),
+        'fine_window_physical_hi_i': np.array([255, 265, 275], dtype=np.int32),
+        'fine_window_reject_reason': np.array(
+            [FINE_WINDOW_REJECT_OK, 3, 2],
+            dtype=np.uint8,
+        ),
+        'physical_center_source': np.array(
+            ['self_physical_fit', 'neighbor_physical_fit_reuse', 'reject'],
+            dtype='<U32',
+        ),
+        'physical_fallback_source': np.array(
+            ['', 'neighbor_physical_fit_reuse', 'reject'],
+            dtype='<U32',
+        ),
+        'physical_neighbor_source_index': np.array([-1, 0, -1], dtype=np.int32),
+        'physical_neighbor_source_distance': np.array(
+            [np.nan, 10.0, np.nan],
+            dtype=np.float32,
+        ),
+        'coarse_in_band_fallback_mask': np.array(
+            [False, False, True],
+            dtype=np.bool_,
+        ),
+        'reject_physics_mask': np.array([False, False, True], dtype=np.bool_),
+        'reject_physics_reason': np.array(
+            ['', '', 'reject_physics_no_valid_window'],
+            dtype='<U40',
+        ),
     }
 
     out_path = save_robust_npz(tmp_path / 'physical.robust.npz', **payload)
@@ -2500,6 +2688,68 @@ def test_run_physics_lite_lazy_geometry_invalid_robust_skips_trend_result(
     )
 
 
+def test_run_physics_lite_geometry_invalid_neighbor_or_coarse_uses_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    n_traces = 6
+    coarse_pick_i = np.full((n_traces,), 170, dtype=np.int32)
+    coarse_path = save_coarse_npz(
+        tmp_path / 'geometry_invalid_policy.coarse.npz',
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full((n_traces,), 0.95, dtype=np.float32),
+            offsets_m=np.linspace(600.0, 900.0, n_traces, dtype=np.float32),
+        ),
+    )
+
+    def fail_build_trend(*_args, **_kwargs):
+        raise AssertionError('trend_result should not be materialized')
+
+    monkeypatch.setattr(
+        'seisai_engine.pipelines.fbpick.physics.run.build_trend_result',
+        fail_build_trend,
+    )
+
+    out_path = run_physics_lite(
+        coarse_path,
+        cfg={
+            'physical_trend': {
+                'enabled': True,
+                'fit_kind': 'auto_irls',
+                'use_geometry_offset': True,
+            },
+            'physical_runtime': {
+                'trend_result_mode': 'lazy',
+                'geometry_invalid_fallback': 'neighbor_or_coarse_in_band',
+                'neighbor_physical_fit_reuse': {'enabled': True},
+                'fallback_policy': {'enabled': True},
+            },
+        },
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+    robust = load_robust_npz(out_path)
+
+    np.testing.assert_array_equal(robust['physical_center_i'], coarse_pick_i)
+    np.testing.assert_array_equal(robust['fine_center_i'], coarse_pick_i)
+    assert np.all(
+        robust['physical_model_status']
+        == np.uint8(PHYSICAL_MODEL_STATUS_COARSE_IN_BAND_FALLBACK)
+    )
+    assert np.all(
+        robust['physical_model_failure_reason']
+        == np.uint8(PHYSICAL_MODEL_FAILURE_NONE)
+    )
+    assert np.all(robust['physical_center_source'] == 'coarse_in_band_fallback')
+    assert np.all(robust['fine_window_valid_mask'])
+    assert (
+        int(np.asarray(robust['physical_runtime_trend_result_materialized']).item())
+        == 0
+    )
+
+
 def test_run_physics_lite_lazy_group_invalid_robust_skips_trend_result(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2725,6 +2975,245 @@ def test_build_robust_payload_from_coarse_uses_physical_center_with_geometry(
     np.testing.assert_array_equal(
         payload['fine_center_t_sec'],
         payload['physical_center_t_sec'],
+    )
+
+
+def test_apply_physics_fallback_policy_runs_ordered_sequence() -> None:
+    coarse_npz = _make_coarse_payload(
+        coarse_pick_i=np.asarray([136, 10, 136, 10], dtype=np.int32),
+        coarse_pmax=np.full((4,), 0.95, dtype=np.float32),
+        offsets_m=np.full((4,), 300.0, dtype=np.float32),
+    )
+    table = normalize_coarse_pick_table(coarse_npz)
+    cfg = load_physics_lite_config(
+        {
+            'physical_prefilter': {
+                'enabled': True,
+                'vmin_m_s': 300.0,
+                'vmax_m_s': 6000.0,
+                't0_lo_ms': -20.0,
+                't0_hi_ms': 200.0,
+            },
+            'physical_runtime': {
+                'fallback_policy': {'enabled': True},
+                'neighbor_physical_fit_reuse': {
+                    'enabled': True,
+                    'max_trace_distance': 1,
+                },
+            },
+        }
+    )
+    arrays = physical_center_fallback_mod._allocate_result_arrays(table)  # noqa: SLF001
+    arrays['physical_center_i'][:] = np.asarray([136, 10, 10, 10], dtype=np.int32)
+    arrays['fine_center_i'][:] = np.asarray([136, 10, 10, 10], dtype=np.int32)
+    arrays['physical_center_t_sec'][:] = (
+        arrays['physical_center_i'].astype(np.float32) * np.float32(0.004)
+    )
+    arrays['fine_center_t_sec'][:] = arrays['fine_center_i'].astype(
+        np.float32
+    ) * np.float32(0.004)
+    arrays['physical_model_status'][:] = np.uint8(
+        PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED
+    )
+    arrays['physical_model_failure_reason'][:] = np.uint8(
+        PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED
+    )
+    arrays['physical_model_status'][0] = np.uint8(PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK)
+    arrays['physical_model_failure_reason'][0] = np.uint8(PHYSICAL_MODEL_FAILURE_NONE)
+    arrays['physical_fit_single_line_slope'][0] = np.float32(0.0)
+    arrays['physical_fit_single_line_t0_sec'][0] = np.float32(136 * 0.004)
+    physical = PhysicalCenterResult(**arrays)
+    initial_window = evaluate_fine_window_constraint(
+        offsets_m=table.offset_m,
+        dt_sec=float(table.dt_scalar_sec),
+        n_samples_orig=int(table.n_samples_orig),
+        fine_center_i=np.asarray(physical.fine_center_i, dtype=np.int32),
+        physical_prefilter=cfg.physical_prefilter,
+        constraint=cfg.physical_runtime.fine_window_constraint,
+        physical_model_status=np.asarray(
+            physical.physical_model_status,
+            dtype=np.uint8,
+        ),
+        physical_runtime_fit_source=np.asarray(
+            physical.physical_runtime_fit_source,
+            dtype=np.uint8,
+        ),
+    )
+
+    final_physical, final_window, diagnostics = apply_physics_fallback_policy(
+        physical=physical,
+        initial_window_constraint=initial_window,
+        coarse_npz=coarse_npz,
+        table=table,
+        cfg=cfg,
+    )
+
+    np.testing.assert_array_equal(final_physical.fine_center_i, [136, 136, 136, 10])
+    np.testing.assert_array_equal(
+        final_physical.physical_model_status,
+        [
+            PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK,
+            PHYSICAL_MODEL_STATUS_NEIGHBOR_PHYSICAL_FIT_REUSE,
+            PHYSICAL_MODEL_STATUS_COARSE_IN_BAND_FALLBACK,
+            PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_VALID_WINDOW,
+        ],
+    )
+    np.testing.assert_array_equal(
+        final_window.fine_window_valid_mask,
+        [True, True, True, False],
+    )
+    np.testing.assert_array_equal(
+        diagnostics['physical_center_source'],
+        [
+            'self_physical_fit',
+            'neighbor_physical_fit_reuse',
+            'coarse_in_band_fallback',
+            'reject',
+        ],
+    )
+    np.testing.assert_array_equal(
+        diagnostics['coarse_in_band_fallback_mask'],
+        [False, False, True, False],
+    )
+    np.testing.assert_array_equal(
+        diagnostics['reject_physics_mask'],
+        [False, False, False, True],
+    )
+
+
+def test_apply_physics_fallback_policy_preserves_coarse_reject_reason() -> None:
+    coarse_npz = _make_coarse_payload(
+        coarse_pick_i=np.asarray([0, 10], dtype=np.int32),
+        coarse_pmax=np.full((2,), 0.95, dtype=np.float32),
+        offsets_m=np.full((2,), 300.0, dtype=np.float32),
+    )
+    table = normalize_coarse_pick_table(coarse_npz)
+    cfg = load_physics_lite_config(
+        {
+            'physical_prefilter': {
+                'enabled': True,
+                'vmin_m_s': 300.0,
+                'vmax_m_s': 6000.0,
+                't0_lo_ms': -20.0,
+                't0_hi_ms': 200.0,
+            },
+            'physical_runtime': {
+                'fallback_policy': {'enabled': True},
+                'neighbor_physical_fit_reuse': {'enabled': True},
+            },
+        }
+    )
+    arrays = physical_center_fallback_mod._allocate_result_arrays(table)  # noqa: SLF001
+    arrays['physical_center_i'][:] = np.asarray([136, 136], dtype=np.int32)
+    arrays['fine_center_i'][:] = np.asarray([136, 136], dtype=np.int32)
+    arrays['physical_model_status'][:] = np.uint8(
+        PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED
+    )
+    arrays['physical_model_failure_reason'][:] = np.uint8(
+        PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED
+    )
+    physical = PhysicalCenterResult(**arrays)
+    initial_window = evaluate_fine_window_constraint(
+        offsets_m=table.offset_m,
+        dt_sec=float(table.dt_scalar_sec),
+        n_samples_orig=int(table.n_samples_orig),
+        fine_center_i=np.asarray(physical.fine_center_i, dtype=np.int32),
+        physical_prefilter=cfg.physical_prefilter,
+        constraint=cfg.physical_runtime.fine_window_constraint,
+        physical_model_status=np.asarray(
+            physical.physical_model_status,
+            dtype=np.uint8,
+        ),
+        physical_runtime_fit_source=np.asarray(
+            physical.physical_runtime_fit_source,
+            dtype=np.uint8,
+        ),
+    )
+
+    final_physical, final_window, diagnostics = apply_physics_fallback_policy(
+        physical=physical,
+        initial_window_constraint=initial_window,
+        coarse_npz=coarse_npz,
+        table=table,
+        cfg=cfg,
+    )
+
+    np.testing.assert_array_equal(
+        final_physical.physical_model_status,
+        [
+            PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_COARSE_OUTSIDE_BAND,
+            PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_VALID_WINDOW,
+        ],
+    )
+    np.testing.assert_array_equal(final_window.fine_window_valid_mask, [False, False])
+    np.testing.assert_array_equal(
+        final_window.fine_window_reject_reason,
+        [
+            FINE_WINDOW_REJECT_CENTER_OUTSIDE_PREFILTER_BAND,
+            FINE_WINDOW_REJECT_WINDOW_OUTSIDE_PREFILTER_BAND,
+        ],
+    )
+    np.testing.assert_array_equal(
+        diagnostics['reject_physics_reason'],
+        ['reject_physics_coarse_outside_band', 'reject_physics_no_valid_window'],
+    )
+
+
+def test_build_robust_payload_uses_geometry_offsets_for_window_policy(
+    tmp_path: Path,
+) -> None:
+    n_traces = 4
+    coarse_pick_i = np.full((n_traces,), 136, dtype=np.int32)
+    coarse_npz = {
+        **_make_coarse_payload(
+            coarse_pick_i=coarse_pick_i,
+            coarse_pmax=np.full((n_traces,), 0.95, dtype=np.float32),
+            offsets_m=np.full((n_traces,), 100.0, dtype=np.float32),
+        ),
+        **_make_physical_geometry(np.full((n_traces,), 300.0, dtype=np.float32)),
+    }
+
+    payload = build_robust_payload_from_coarse(
+        coarse_npz,
+        cfg={
+            'physical_trend': {'enabled': False, 'use_geometry_offset': True},
+            'physical_prefilter': {
+                'enabled': True,
+                'vmin_m_s': 300.0,
+                'vmax_m_s': 6000.0,
+                't0_lo_ms': -20.0,
+                't0_hi_ms': 200.0,
+            },
+            'physical_runtime': {
+                'fallback_policy': {'enabled': True},
+                'fine_window_constraint': {
+                    'enabled': True,
+                    'time_len': 256,
+                    'center_index': 128,
+                    'require_center_inside_band': True,
+                    'require_window_inside_band': True,
+                },
+            },
+        },
+        source_model_id='coarse-model',
+        iter_id='',
+        repo_root=tmp_path,
+    )
+
+    np.testing.assert_array_equal(payload['fine_window_physical_lo_i'], [8] * 4)
+    np.testing.assert_array_equal(payload['fine_window_physical_hi_i'], [299] * 4)
+    np.testing.assert_array_equal(payload['fine_window_valid_mask'], [True] * 4)
+    np.testing.assert_array_equal(
+        payload['physical_model_status'],
+        np.full(
+            (n_traces,),
+            PHYSICAL_MODEL_STATUS_COARSE_IN_BAND_FALLBACK,
+            dtype=np.uint8,
+        ),
+    )
+    np.testing.assert_array_equal(
+        payload['coarse_in_band_fallback_mask'],
+        [True] * 4,
     )
 
 

@@ -34,6 +34,7 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         'PHYSICAL_MODEL_FAILURE_NONE',
         'PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED',
         'PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID',
+        'PHYSICAL_MODEL_STATUS_COARSE_IN_BAND_FALLBACK',
         'PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND',
         'PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP',
         'PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT',
@@ -42,7 +43,12 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         'PHYSICAL_MODEL_STATUS_GEOMETRY_INVALID',
         'PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS',
         'PHYSICAL_MODEL_STATUS_LABELS',
+        'PHYSICAL_MODEL_STATUS_NEIGHBOR_PHYSICAL_FIT_REUSE',
         'PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED',
+        'PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_COARSE_OUTSIDE_BAND',
+        'PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_NEIGHBOR_FIT',
+        'PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_VALID_WINDOW',
+        'PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK',
         'PHYSICAL_MODEL_STATUS_TWO_PIECE_OK',
         'PHYSICAL_OFFSET_SOURCE_GEOMETRY',
         'PHYSICAL_OFFSET_SOURCE_HEADER',
@@ -50,12 +56,14 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         'PHYSICAL_OFFSET_SOURCE_NONE',
         'PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT',
         'PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT',
+        'PHYSICAL_RUNTIME_FIT_SOURCE_COARSE_IN_BAND_FALLBACK',
         'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND',
         'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_FULL_FIT_NO_COMPATIBLE_ANCHOR',
         'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST',
         'PHYSICAL_RUNTIME_FIT_SOURCE_FULL_FIT',
         'PHYSICAL_RUNTIME_FIT_SOURCE_LABELS',
         'PHYSICAL_RUNTIME_FIT_SOURCE_NEAREST_ANCHOR_REUSE',
+        'PHYSICAL_RUNTIME_FIT_SOURCE_NEIGHBOR_PHYSICAL_FIT_REUSE',
         'PhysicalCenterFallbackPreflight',
         'PhysicalCenterResult',
         'build_geometry_two_piece_physical_center',
@@ -71,6 +79,12 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         'PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS': 6,
         'PHYSICAL_MODEL_STATUS_FIT_FAILED': 7,
         'PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED': 8,
+        'PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK': 9,
+        'PHYSICAL_MODEL_STATUS_NEIGHBOR_PHYSICAL_FIT_REUSE': 10,
+        'PHYSICAL_MODEL_STATUS_COARSE_IN_BAND_FALLBACK': 11,
+        'PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_VALID_WINDOW': 12,
+        'PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_COARSE_OUTSIDE_BAND': 13,
+        'PHYSICAL_MODEL_STATUS_REJECT_PHYSICS_NO_NEIGHBOR_FIT': 14,
         'PHYSICAL_MODEL_FAILURE_NONE': 0,
         'PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED': 1,
         'PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID': 2,
@@ -87,6 +101,8 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_EXISTING_TREND': 4,
         'PHYSICAL_RUNTIME_FIT_SOURCE_FALLBACK_ROBUST': 5,
         'PHYSICAL_RUNTIME_FIT_SOURCE_ADAPTIVE_REFIT': 6,
+        'PHYSICAL_RUNTIME_FIT_SOURCE_NEIGHBOR_PHYSICAL_FIT_REUSE': 7,
+        'PHYSICAL_RUNTIME_FIT_SOURCE_COARSE_IN_BAND_FALLBACK': 8,
     }
 
     assert tuple(physical_center_mod.__all__) == expected_exports
@@ -96,6 +112,7 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         assert getattr(physical_center_mod, name) == value
     assert physical_center_mod.PHYSICAL_MODEL_STATUS_LABELS == {
         0: 'two_piece_ok',
+        9: 'single_line_ok',
         1: 'relaxed_segment_ok',
         2: 'fallback_existing_trend',
         3: 'fallback_feasible_clip',
@@ -104,6 +121,11 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         6: 'insufficient_observations',
         7: 'fit_failed',
         8: 'physical_disabled',
+        10: 'neighbor_physical_fit_reuse',
+        11: 'coarse_in_band_fallback',
+        12: 'reject_physics_no_valid_window',
+        13: 'reject_physics_coarse_outside_band',
+        14: 'reject_physics_no_neighbor_fit',
     }
     assert physical_center_mod.PHYSICAL_MODEL_FAILURE_LABELS == {
         0: 'none',
@@ -126,6 +148,8 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         4: 'fallback_existing_trend',
         5: 'fallback_robust',
         6: 'adaptive_refit',
+        7: 'neighbor_physical_fit_reuse',
+        8: 'coarse_in_band_fallback',
     }
 
 def test_physical_center_diagnostic_arrays_are_save_friendly() -> None:

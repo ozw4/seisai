@@ -64,6 +64,20 @@ def _pad_int_vector(values: np.ndarray, *, H: int, fill_value: int) -> np.ndarra
     return np.concatenate([arr, pad], axis=0)
 
 
+def _pad_bool_vector(values: np.ndarray, *, H: int, fill_value: bool) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.bool_)
+    if arr.ndim != 1:
+        msg = 'values must be 1D'
+        raise ValueError(msg)
+    if int(arr.shape[0]) > int(H):
+        msg = f'values length {int(arr.shape[0])} > H {int(H)}'
+        raise ValueError(msg)
+    if int(arr.shape[0]) == int(H):
+        return arr
+    pad = np.full((int(H) - int(arr.shape[0]),), bool(fill_value), dtype=np.bool_)
+    return np.concatenate([arr, pad], axis=0)
+
+
 def _build_local_time_view(*, time_len: int, dt_sec: float) -> np.ndarray:
     return np.arange(int(time_len), dtype=np.float32) * np.float32(dt_sec)
 
@@ -117,7 +131,8 @@ def _load_robust_centers_for_info(
     *,
     npz_key: str = 'robust_pick_i',
     fallback_npz_key: str | None = None,
-) -> np.ndarray:
+    valid_mask_npz_key: str | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
     robust = load_robust_npz(robust_npz_path)
     n_traces = int(np.asarray(robust['n_traces']).item())
     n_samples_orig = int(np.asarray(robust['n_samples_orig']).item())
@@ -154,11 +169,30 @@ def _load_robust_centers_for_info(
         msg = f'{selected_key} must be an integer center vector'
         raise ValueError(msg)
 
+    valid_mask: np.ndarray | None = None
+    if valid_mask_npz_key is not None:
+        mask_key = str(valid_mask_npz_key)
+        if mask_key not in robust:
+            msg = f'robust npz missing requested fine window valid mask key: {mask_key}'
+            raise KeyError(msg)
+        mask_arr = np.asarray(robust[mask_key])
+        if mask_arr.ndim != 1 or int(mask_arr.shape[0]) != n_traces:
+            msg = f'{mask_key} must be 1D with length n_traces'
+            raise ValueError(msg)
+        if mask_arr.dtype != np.dtype(np.bool_):
+            msg = f'{mask_key} must be a bool valid mask'
+            raise ValueError(msg)
+        valid_mask = mask_arr.astype(np.bool_, copy=False)
+
     centers = selected.astype(np.int64, copy=False)
-    if np.any(centers < 0) or np.any(centers >= n_samples_orig):
+    center_validate_mask = (
+        np.ones((n_traces,), dtype=np.bool_) if valid_mask is None else valid_mask
+    )
+    centers_to_validate = centers[center_validate_mask]
+    if np.any(centers_to_validate < 0) or np.any(centers_to_validate >= n_samples_orig):
         msg = f'{selected_key} must lie in [0, n_samples_orig)'
         raise ValueError(msg)
-    return centers
+    return centers, valid_mask
 
 
 def sample_center_jitter(
@@ -336,6 +370,7 @@ class FineLocalWindowSampleTransformer(SampleTransformer):
         indices: np.ndarray,
         fb_subset: np.ndarray,
         center_subset: np.ndarray,
+        center_valid_subset: np.ndarray | None,
         rng: np.random.Generator,
     ) -> tuple[np.ndarray, dict, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
         x = self.subsetloader.load(info.mmap, indices)
@@ -356,6 +391,12 @@ class FineLocalWindowSampleTransformer(SampleTransformer):
             raise RuntimeError(msg)
 
         center_pad = _pad_int_vector(center_subset, H=H, fill_value=-1)
+        if center_valid_subset is not None:
+            trace_valid = trace_valid & _pad_bool_vector(
+                center_valid_subset,
+                H=H,
+                fill_value=False,
+            )
         local = extract_local_windowed_view(
             x,
             center_raw_i=center_pad,
@@ -412,26 +453,32 @@ class _FineLocalWindowTrainDataset(SegyGatherPipelineDataset):
         robust_npz_files: list[str],
         window_center_npz_key: str = 'robust_pick_i',
         window_center_fallback_npz_key: str | None = None,
+        window_center_valid_mask_npz_key: str | None = None,
         center_augment: FineCenterAugmentCfg | None = None,
         **kwargs,
     ) -> None:
         self._robust_npz_files = list(robust_npz_files)
         self._window_center_npz_key = str(window_center_npz_key)
         self._window_center_fallback_npz_key = window_center_fallback_npz_key
+        self._window_center_valid_mask_npz_key = window_center_valid_mask_npz_key
         self._center_augment = center_augment
         super().__init__(**kwargs)
         if len(self._robust_npz_files) != len(self.file_infos):
             msg = 'robust_npz_files length must match indexed training files'
             raise ValueError(msg)
         self._center_pick_by_path: dict[str, np.ndarray] = {}
+        self._center_valid_by_path: dict[str, np.ndarray] = {}
         for info, robust_npz_path in zip(self.file_infos, self._robust_npz_files, strict=True):
-            centers = _load_robust_centers_for_info(
+            centers, valid_mask = _load_robust_centers_for_info(
                 robust_npz_path,
                 info,
                 npz_key=self._window_center_npz_key,
                 fallback_npz_key=self._window_center_fallback_npz_key,
+                valid_mask_npz_key=self._window_center_valid_mask_npz_key,
             )
             self._center_pick_by_path[str(info.path)] = centers
+            if valid_mask is not None:
+                self._center_valid_by_path[str(info.path)] = valid_mask
 
     def _init_rejection_counters(self) -> dict[str, int]:
         counters = super()._init_rejection_counters()
@@ -464,6 +511,10 @@ class _FineLocalWindowTrainDataset(SegyGatherPipelineDataset):
         fb_subset = np.asarray(info.fb[indices], dtype=np.int64)
         centers = self._center_pick_by_path[str(info.path)]
         center_subset = np.asarray(centers[indices], dtype=np.int64)
+        center_valid = self._center_valid_by_path.get(str(info.path))
+        center_valid_subset = (
+            None if center_valid is None else np.asarray(center_valid[indices], dtype=np.bool_)
+        )
         center_jitter_nonzero = False
         if self._center_augment is not None and bool(self._center_augment.enabled):
             jitter = sample_center_jitter(
@@ -482,6 +533,7 @@ class _FineLocalWindowTrainDataset(SegyGatherPipelineDataset):
         return fb_subset, {
             'apply_fb_gates': False,
             'center_subset': center_subset,
+            'center_valid_subset': center_valid_subset,
             'center_jitter_nonzero': center_jitter_nonzero,
         }
 
@@ -504,6 +556,7 @@ class _FineLocalWindowTrainDataset(SegyGatherPipelineDataset):
             indices,
             fb_subset,
             center_subset,
+            label_state.get('center_valid_subset'),
             self._rng,
         )
         if transformed is None:
@@ -576,25 +629,34 @@ class FineInferenceGatherWindowsDataset(InferenceGatherWindowsDataset):
         center_index: int,
         window_center_npz_key: str = 'robust_pick_i',
         window_center_fallback_npz_key: str | None = None,
+        window_center_valid_mask_npz_key: str | None = None,
         **kwargs,
     ) -> None:
         self._robust_npz_files = list(robust_npz_files)
         self._center_index = int(center_index)
         self._window_center_npz_key = str(window_center_npz_key)
         self._window_center_fallback_npz_key = window_center_fallback_npz_key
+        self._window_center_valid_mask_npz_key = window_center_valid_mask_npz_key
         super().__init__(**kwargs)
         if len(self._robust_npz_files) != len(self.file_infos):
             msg = 'robust_npz_files length must match indexed inference files'
             raise ValueError(msg)
         self._center_pick_by_path: dict[str, np.ndarray] = {}
+        self._center_valid_by_path: dict[str, np.ndarray] = {}
         for info, robust_npz_path in zip(self.file_infos, self._robust_npz_files, strict=True):
-            centers = _load_robust_centers_for_info(
+            centers, valid_mask = _load_robust_centers_for_info(
                 robust_npz_path,
                 info,
                 npz_key=self._window_center_npz_key,
                 fallback_npz_key=self._window_center_fallback_npz_key,
+                valid_mask_npz_key=self._window_center_valid_mask_npz_key,
             )
             self._center_pick_by_path[str(info['path'])] = centers
+            if valid_mask is not None:
+                self._center_valid_by_path[str(info['path'])] = valid_mask
+
+    def fine_window_valid_mask_for_info(self, info) -> np.ndarray | None:
+        return self._center_valid_by_path.get(str(info['path']))
 
     def __getitem__(self, i: int) -> dict:
         gidx, s, e = self.items[i]
@@ -629,6 +691,14 @@ class FineInferenceGatherWindowsDataset(InferenceGatherWindowsDataset):
         centers = self._center_pick_by_path[str(info['path'])]
         center_subset = np.asarray(centers[idx_win], dtype=np.int64)
         center_pad = _pad_int_vector(center_subset, H=H, fill_value=-1)
+        center_valid = self._center_valid_by_path.get(str(info['path']))
+        if center_valid is not None:
+            center_valid_subset = np.asarray(center_valid[idx_win], dtype=np.bool_)
+            trace_valid = trace_valid & _pad_bool_vector(
+                center_valid_subset,
+                H=H,
+                fill_value=False,
+            )
 
         local = extract_local_windowed_view(
             x,
@@ -747,6 +817,7 @@ def _build_labeled_dataset(
     segy_endian: str,
     window_center_npz_key: str = 'robust_pick_i',
     window_center_fallback_npz_key: str | None = None,
+    window_center_valid_mask_npz_key: str | None = None,
     center_augment: FineCenterAugmentCfg | None = None,
 ) -> SegyGatherPipelineDataset:
     if sampling_overrides is not None and len(sampling_overrides) != len(segy_files):
@@ -774,6 +845,7 @@ def _build_labeled_dataset(
         robust_npz_files=list(robust_npz_files),
         window_center_npz_key=str(window_center_npz_key),
         window_center_fallback_npz_key=window_center_fallback_npz_key,
+        window_center_valid_mask_npz_key=window_center_valid_mask_npz_key,
         center_augment=center_augment,
         sampling_overrides=sampling_overrides,
         transform=transform,
@@ -818,6 +890,7 @@ def build_train_dataset(
     segy_endian: str,
     window_center_npz_key: str = 'robust_pick_i',
     window_center_fallback_npz_key: str | None = None,
+    window_center_valid_mask_npz_key: str | None = None,
     center_augment: FineCenterAugmentCfg | None = None,
 ) -> SegyGatherPipelineDataset:
     return _build_labeled_dataset(
@@ -832,6 +905,7 @@ def build_train_dataset(
         center_index=center_index,
         window_center_npz_key=window_center_npz_key,
         window_center_fallback_npz_key=window_center_fallback_npz_key,
+        window_center_valid_mask_npz_key=window_center_valid_mask_npz_key,
         center_augment=center_augment,
         standardize_eps=standardize_eps,
         trace_decimate_prob=trace_decimate_prob,
@@ -869,6 +943,7 @@ def build_labeled_infer_dataset(
     segy_endian: str,
     window_center_npz_key: str = 'robust_pick_i',
     window_center_fallback_npz_key: str | None = None,
+    window_center_valid_mask_npz_key: str | None = None,
 ) -> SegyGatherPipelineDataset:
     return _build_labeled_dataset(
         segy_files=segy_files,
@@ -882,6 +957,7 @@ def build_labeled_infer_dataset(
         center_index=center_index,
         window_center_npz_key=window_center_npz_key,
         window_center_fallback_npz_key=window_center_fallback_npz_key,
+        window_center_valid_mask_npz_key=window_center_valid_mask_npz_key,
         standardize_eps=standardize_eps,
         trace_decimate_prob=0.0,
         trace_decimate_stride_range=(1, 1),
@@ -911,6 +987,7 @@ def build_raw_infer_dataset(
     use_header_cache: bool,
     window_center_npz_key: str = 'robust_pick_i',
     window_center_fallback_npz_key: str | None = None,
+    window_center_valid_mask_npz_key: str | None = None,
 ) -> FineInferenceGatherWindowsDataset:
     stride_traces = int(trace_len) - int(overlap_h)
     if stride_traces <= 0:
@@ -936,6 +1013,7 @@ def build_raw_infer_dataset(
         center_index=int(center_index),
         window_center_npz_key=str(window_center_npz_key),
         window_center_fallback_npz_key=window_center_fallback_npz_key,
+        window_center_valid_mask_npz_key=window_center_valid_mask_npz_key,
         plan=plan,
         cfg=cfg,
         transform=build_infer_transform(standardize_eps=float(standardize_eps)),

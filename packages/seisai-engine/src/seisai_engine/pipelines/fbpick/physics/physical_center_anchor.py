@@ -29,7 +29,7 @@ from .runtime_policy import (
     select_source_xy_stride_anchors,
 )
 
-_FitDiagnostics = tuple[float, float, float, float, float, float, float]
+_FitDiagnostics = tuple[float, ...]
 
 
 @dataclass(frozen=True)

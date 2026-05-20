@@ -44,9 +44,15 @@ The site54 OOF coarse config generator defaults both train and inner-valid fbgat
 
 Do not use `min_pick_ratio=0.3` as the site54 OOF runtime default. That threshold is too strong for this split: a low-pick survey that fails inner validation in one fold can be training data in another fold, so applying a strong phase-dependent threshold makes data usage uneven across folds. Keep `0.3` for explicit audit or diagnostic runs, and evaluate quality through heldout OOF eval rather than hiding low-pick data at runtime.
 
-## Physics Partial Fallback
+## Physics Policy
 
-The site54 OOF physics default is `physical_runtime.fallback_existing_trend_mode=partial` with `partial_trend_fallback.max_fraction=0.05`, `max_traces=50000`, and `fallback_if_too_many=robust`. Regenerate configs with `make_physics_fold_configs.py` or `run_site54_oof_cv.py --stage prepare_configs`; do not hand-edit generated `runs/<run_id>/configs/foldXX/03_physics.yaml` or `04_physics_qc.yaml`.
+The site54 OOF physics default allows both two-piece and straight-line travel-time fits. `single_line_ok` is a valid physical fit result. `two_piece_ok` is selected only when the two-piece model improves over the single-line model by the configured relative-improvement threshold.
+
+The fine center policy is: self physical fit, then neighbor physical fit reuse, then coarse-in-band fallback, then reject. Neighbor reuse may use nearby successful `two_piece_ok` or `single_line_ok` fits. Coarse fallback is allowed only when the coarse pick sits inside the `physical_prefilter` band. If coarse is outside the band, or a 256-sample fine window cannot fit inside the `physical_prefilter` band, the trace is rejected by physics.
+
+The site54 default does not use robust, feasible-clip, or unconditional coarse fallback as a fine center. Fine train and infer consume `fine_center_i` only where `fine_window_valid_mask` is true; invalid traces are excluded from fine train/infer windows. In final evaluation, invalid or rejected traces with a teacher pick count as misses rather than being removed from the denominator.
+
+Regenerate configs with `make_physics_fold_configs.py` or `run_site54_oof_cv.py --stage prepare_configs`; do not hand-edit generated `runs/<run_id>/configs/foldXX/03_physics.yaml` or `04_physics_qc.yaml`.
 
 To rerun physics and later stages, keep the coarse outputs, remove only physics-and-later run outputs for the selected run, then run `prepare_configs` followed by `--from-stage physics`. This keeps the fallback policy reproducible in generated configs and the run manifest.
 

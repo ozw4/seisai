@@ -16,8 +16,9 @@ transform:
   standardize_eps: 1.0e-8
 
 window_center:
-  npz_key: physical_center_i
+  npz_key: fine_center_i
   fallback_npz_key: null
+  valid_mask_npz_key: fine_window_valid_mask
 
 center_augment:
   enabled: true

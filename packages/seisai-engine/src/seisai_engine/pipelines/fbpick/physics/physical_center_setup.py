@@ -23,7 +23,7 @@ from .physical_center_fallback import (
     _emit_fallback_all_and_done,
     _PendingTrendFallback,
 )
-from .physical_center_fit import _fit_min_pts, _fit_strategy
+from .physical_center_fit import _fit_min_obs_required, _fit_strategy
 from .physical_center_geometry import (
     PhysicalCenterGeometryContext,
     build_physical_center_geometry_context,
@@ -471,7 +471,7 @@ def build_physical_center_policy_setup(  # noqa: PLR0915
         contexts=len(group_context_by_id),
     )
 
-    min_fit_obs = 2 * _fit_min_pts(cfg)
+    min_fit_obs = _fit_min_obs_required(cfg)
     build_context = PhysicalCenterBuildContext(
         geometry_context=geometry_context,
         pick_t_sec=pick_t_sec,

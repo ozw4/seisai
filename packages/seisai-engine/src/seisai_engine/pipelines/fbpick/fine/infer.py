@@ -79,6 +79,7 @@ _SAFE_OVERRIDE_PATHS = frozenset(
         'infer.allow_unsafe_override',
         'window_center.npz_key',
         'window_center.fallback_npz_key',
+        'window_center.valid_mask_npz_key',
         'viewer.enabled',
         'viewer.save_overview_png',
         'viewer.save_gather_png',
@@ -129,6 +130,7 @@ def _default_cfg() -> dict[str, Any]:
         'window_center': {
             'npz_key': 'robust_pick_i',
             'fallback_npz_key': None,
+            'valid_mask_npz_key': None,
         },
         'infer': {
             'ckpt_path': '',
@@ -269,6 +271,7 @@ def _run_fine_local_infer_impl(
         use_header_cache=typed.dataset.use_header_cache,
         window_center_npz_key=typed.window_center.npz_key,
         window_center_fallback_npz_key=typed.window_center.fallback_npz_key,
+        window_center_valid_mask_npz_key=typed.window_center.valid_mask_npz_key,
     )
 
     loader = DataLoader(
@@ -299,6 +302,14 @@ def _run_fine_local_infer_impl(
         window_start_full = np.full((n_traces,), np.iinfo(np.int32).min, dtype=np.int32)
         window_end_full = np.full((n_traces,), np.iinfo(np.int32).min, dtype=np.int32)
         center_raw_full = np.full((n_traces,), np.iinfo(np.int32).min, dtype=np.int32)
+        fine_window_valid_mask = dataset.fine_window_valid_mask_for_info(info)
+        if fine_window_valid_mask is None:
+            fine_window_valid_mask = np.ones((n_traces,), dtype=np.bool_)
+        else:
+            fine_window_valid_mask = np.asarray(fine_window_valid_mask, dtype=np.bool_)
+            if fine_window_valid_mask.shape != (n_traces,):
+                msg = 'fine_window_valid_mask must be 1D with length n_traces'
+                raise ValueError(msg)
 
         non_blocking = bool(device.type == 'cuda')
         amp_enabled = bool(typed.infer.amp and device.type == 'cuda')
@@ -385,22 +396,50 @@ def _run_fine_local_infer_impl(
                             missing_value=np.iinfo(np.int32).min,
                         )
 
-        if np.any(counts <= 0):
+        if np.any(counts[fine_window_valid_mask] <= 0):
             msg = 'some raw traces were not covered by fine inference windows'
             raise RuntimeError(msg)
 
-        avg_logits = logits_sum / counts[:, None].astype(np.float32)
-        prob = _softmax_last_axis(avg_logits)
-        fine_pick_local_i = prob.argmax(axis=-1).astype(np.int32)
+        avg_logits = np.zeros((n_traces, time_len), dtype=np.float32)
+        avg_logits[fine_window_valid_mask] = (
+            logits_sum[fine_window_valid_mask]
+            / counts[fine_window_valid_mask, None].astype(np.float32)
+        )
+        prob = np.zeros((n_traces, time_len), dtype=np.float32)
+        if np.any(fine_window_valid_mask):
+            prob[fine_window_valid_mask] = _softmax_last_axis(
+                avg_logits[fine_window_valid_mask]
+            )
+        fine_pick_local_i = np.full((n_traces,), -1, dtype=np.int32)
+        if np.any(fine_window_valid_mask):
+            fine_pick_local_i[fine_window_valid_mask] = prob[
+                fine_window_valid_mask
+            ].argmax(axis=-1).astype(np.int32)
         fine_pick_local_f = fine_pick_local_i.astype(np.float32)
-        fine_pmax = prob.max(axis=-1).astype(np.float32)
+        fine_pmax = np.zeros((n_traces,), dtype=np.float32)
+        if np.any(fine_window_valid_mask):
+            fine_pmax[fine_window_valid_mask] = prob[fine_window_valid_mask].max(
+                axis=-1
+            ).astype(np.float32)
 
-        final_pick_f = window_start_full.astype(np.float32) + fine_pick_local_f
-        final_pick_i = (
-            window_start_full.astype(np.int64) + fine_pick_local_i.astype(np.int64)
-        ).astype(np.int32)
-        final_pick_t_sec = final_pick_f.astype(np.float32) * np.float32(dt_sec)
+        final_pick_f = np.full((n_traces,), -1.0, dtype=np.float32)
+        final_pick_i = np.full((n_traces,), -1, dtype=np.int32)
+        final_pick_t_sec = np.full((n_traces,), -1.0, dtype=np.float32)
         final_conf = fine_pmax.copy()
+        final_pick_f[fine_window_valid_mask] = (
+            window_start_full[fine_window_valid_mask].astype(np.float32)
+            + fine_pick_local_f[fine_window_valid_mask]
+        )
+        final_pick_i[fine_window_valid_mask] = (
+            window_start_full[fine_window_valid_mask].astype(np.int64)
+            + fine_pick_local_i[fine_window_valid_mask].astype(np.int64)
+        ).astype(np.int32)
+        final_pick_t_sec[fine_window_valid_mask] = (
+            final_pick_f[fine_window_valid_mask].astype(np.float32) * np.float32(dt_sec)
+        )
+        window_start_full[~fine_window_valid_mask] = np.int32(-1)
+        window_end_full[~fine_window_valid_mask] = np.int32(-1)
+        center_raw_full[~fine_window_valid_mask] = np.int32(-1)
 
         result = {
             'dt_sec': np.asarray(dt_sec, dtype=np.float32),
@@ -417,6 +456,7 @@ def _run_fine_local_infer_impl(
             'final_conf': final_conf,
             'window_start_i': window_start_full.astype(np.int32, copy=False),
             'window_end_i': window_end_full.astype(np.int32, copy=False),
+            'fine_window_valid_mask': fine_window_valid_mask.astype(np.bool_, copy=False),
         }
         validate_fine_result_payload(result)
         return result

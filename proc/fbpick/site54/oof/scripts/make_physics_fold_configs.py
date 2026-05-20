@@ -84,7 +84,7 @@ def physics_runtime_cfg(args: argparse.Namespace) -> dict:
             'non_anchor_mode': 'nearest_anchor_plus_t0_shift',
             'max_anchor_distance_m': None,
             'reuse_segment_policy': 'same_side_and_gap',
-            'fallback_if_no_compatible_segment': 'robust',
+            'fallback_if_no_compatible_segment': 'full_fit',
         },
         't0_shift': {
             'enabled': True,
@@ -100,6 +100,35 @@ def physics_runtime_cfg(args: argparse.Namespace) -> dict:
             'median_abs_shift_ms_gt': 40.0,
             'min_valid_for_resid_check': 8,
             'fallback_if_refit_fails': 'nearest_anchor_plus_t0_shift',
+        },
+        'fine_window_constraint': {
+            'enabled': True,
+            'band_source': 'physical_prefilter',
+            'time_len': 256,
+            'center_index': 128,
+            'require_center_inside_band': True,
+            'require_window_inside_band': True,
+            'invalid_policy': 'defer_to_fallback_policy',
+            'allow_robust_fallback_as_fine_center': False,
+            'allow_feasible_clip_as_fine_center': False,
+        },
+        'neighbor_physical_fit_reuse': {
+            'enabled': True,
+            'candidate_statuses': ['two_piece_ok', 'single_line_ok'],
+            'max_source_xy_distance_m': None,
+            'max_trace_distance': None,
+            'invalid_policy': 'try_coarse_in_band',
+        },
+        'fallback_policy': {
+            'enabled': True,
+            'order': [
+                'self_physical_fit',
+                'neighbor_physical_fit_reuse',
+                'coarse_in_band',
+                'reject',
+            ],
+            'allow_robust_fallback_as_fine_center': False,
+            'allow_feasible_clip_as_fine_center': False,
         },
         'progress': {
             'enabled': True,
@@ -117,7 +146,12 @@ def physical_center_cfg(args: argparse.Namespace, *, qc: bool = False) -> dict:
     cfg = {
         'physical_trend': {
             'enabled': True,
-            'fit_kind': 'two_piece_irls_autobreak',
+            'fit_kind': 'auto_irls',
+            'candidate_models': ['two_piece', 'single_line'],
+            'model_selection': {
+                'prefer_two_piece_min_relative_improvement': 0.05,
+                'fallback_to_single_line': True,
+            },
             'use_geometry_offset': True,
             'min_offset_spread_m': 1.0,
             'coord_group_tol_m': 1.0,
@@ -171,8 +205,8 @@ def physical_center_cfg(args: argparse.Namespace, *, qc: bool = False) -> dict:
             {
                 'fit_policy': 'full',
                 'trend_result_mode': 'lazy',
-                'geometry_invalid_fallback': 'robust',
-                'group_invalid_fallback': 'robust',
+                'geometry_invalid_fallback': 'neighbor_or_coarse_in_band',
+                'group_invalid_fallback': 'neighbor_or_coarse_in_band',
             }
         )
         runtime['diagnostics']['detailed_timing'] = True
@@ -193,8 +227,8 @@ def physical_center_cfg(args: argparse.Namespace, *, qc: bool = False) -> dict:
         runtime.update(
             {
                 'trend_result_mode': 'lazy',
-                'geometry_invalid_fallback': 'robust',
-                'group_invalid_fallback': 'robust',
+                'geometry_invalid_fallback': 'neighbor_or_coarse_in_band',
+                'group_invalid_fallback': 'neighbor_or_coarse_in_band',
                 'legacy_trend_output': 'auto',
             }
         )
@@ -326,7 +360,7 @@ def main() -> None:
     parser.add_argument(
         '--partial-trend-fallback-if-too-many',
         choices=('robust', 'full', 'error'),
-        default='robust',
+        default='full',
     )
     args = parser.parse_args()
 

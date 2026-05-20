@@ -973,6 +973,13 @@ def render_fbpick_overview(
 	window_end_i = _require_overview_vector(
 		final_payload, 'window_end_i', length=n_traces
 	)
+	fine_window_valid_mask = np.asarray(
+		final_payload.get('fine_window_valid_mask', np.ones((n_traces,), dtype=np.bool_)),
+		dtype=np.bool_,
+	)
+	if fine_window_valid_mask.shape != (n_traces,):
+		msg = 'fine_window_valid_mask must be 1D with length n_traces'
+		raise ValueError(msg)
 	final_pick_i = _require_overview_vector(
 		final_payload, 'final_pick_i', length=n_traces
 	)
@@ -1012,7 +1019,11 @@ def render_fbpick_overview(
 	)
 	ax.plot(
 		x,
-		window_start_i.astype(np.float32),
+		np.where(
+			fine_window_valid_mask,
+			window_start_i.astype(np.float32),
+			np.nan,
+		),
 		color='yellow',
 		lw=0.9,
 		ls='--',
@@ -1021,7 +1032,11 @@ def render_fbpick_overview(
 	)
 	ax.plot(
 		x,
-		window_end_i.astype(np.float32),
+		np.where(
+			fine_window_valid_mask,
+			window_end_i.astype(np.float32),
+			np.nan,
+		),
 		color='yellow',
 		lw=0.9,
 		ls='--',
@@ -1642,6 +1657,12 @@ def save_fbpick_fine_qc_gather_png(
 	window_end_i = _require_overview_vector(
 		final_payload, 'window_end_i', length=n_total
 	)[trace_idx].astype(np.int64, copy=False)
+	fine_window_valid_mask = np.asarray(
+		final_payload.get('fine_window_valid_mask', np.ones((n_total,), dtype=np.bool_))[
+			trace_idx
+		],
+		dtype=np.bool_,
+	)
 	final_pick_i = _require_overview_vector(
 		final_payload, 'final_pick_i', length=n_total
 	)[trace_idx].astype(np.int64, copy=False)
@@ -1693,6 +1714,7 @@ def save_fbpick_fine_qc_gather_png(
 		)
 		window_start_i = window_start_i[::display_stride]
 		window_end_i = window_end_i[::display_stride]
+		fine_window_valid_mask = fine_window_valid_mask[::display_stride]
 		final_pick_i = final_pick_i[::display_stride]
 		high_conf_mask = high_conf_mask[::display_stride]
 		reject_mask = reject_mask[::display_stride]
@@ -1797,9 +1819,19 @@ def save_fbpick_fine_qc_gather_png(
 			label='fine_center_i',
 		)
 	if bool(overlay_values['window']):
+		window_start_plot = np.where(
+			fine_window_valid_mask,
+			np.clip(window_start_i, 0, n_samples - 1).astype(np.float32),
+			np.nan,
+		)
+		window_end_plot = np.where(
+			fine_window_valid_mask,
+			np.clip(window_end_i, 0, n_samples - 1).astype(np.float32),
+			np.nan,
+		)
 		axes[0].plot(
 			x,
-			np.clip(window_start_i, 0, n_samples - 1).astype(np.float32),
+			window_start_plot,
 			color='yellow',
 			lw=0.8,
 			ls='--',
@@ -1808,7 +1840,7 @@ def save_fbpick_fine_qc_gather_png(
 		)
 		axes[0].plot(
 			x,
-			np.clip(window_end_i, 0, n_samples - 1).astype(np.float32),
+			window_end_plot,
 			color='yellow',
 			lw=0.8,
 			ls=':',

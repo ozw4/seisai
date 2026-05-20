@@ -96,7 +96,7 @@ def physics_manifest_settings() -> dict:
         "partial_trend_fallback": {
             "max_fraction": 0.05,
             "max_traces": 50000,
-            "fallback_if_too_many": "robust",
+            "fallback_if_too_many": "full",
         },
     }
 

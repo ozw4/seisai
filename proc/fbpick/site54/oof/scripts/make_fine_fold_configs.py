@@ -198,8 +198,9 @@ def fine_train_config(
 
     cfg["paths"]["out_dir"] = str(out_dir)
     cfg["window_center"] = {
-        "npz_key": "physical_center_i",
+        "npz_key": "fine_center_i",
         "fallback_npz_key": None,
+        "valid_mask_npz_key": "fine_window_valid_mask",
     }
     cfg.setdefault("ckpt", {})
     if policy == "fixed_last":
@@ -232,6 +233,11 @@ def fine_infer_config(
     cfg["paths"]["robust_npz_files"] = [robust_npz_file]
     cfg["paths"]["coarse_npz_files"] = [coarse_npz_file]
     cfg["paths"]["out_dir"] = str(out_dir)
+    cfg["window_center"] = {
+        "npz_key": "fine_center_i",
+        "fallback_npz_key": None,
+        "valid_mask_npz_key": "fine_window_valid_mask",
+    }
     cfg.setdefault("infer", {})
     cfg["infer"]["ckpt_path"] = str(ckpt_path)
     return cfg

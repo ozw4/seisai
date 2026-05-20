@@ -19,6 +19,7 @@ from .physical_center_fallback import _assign_fallback
 from .physical_center_fit import (
     _confidence_weights_for_obs,
     _fit_key_for_obs,
+    _fit_min_obs_required,
     _fit_min_pts,
     _fit_model_for_plan,
     _fit_progress_fields,
@@ -67,7 +68,7 @@ if TYPE_CHECKING:
     from .runtime_diagnostics import PhysicalRuntimeDiagnostics
     from .trend import TrendResult
 
-_FitDiagnostics = tuple[float, float, float, float, float, float, float]
+_FitDiagnostics = tuple[float, ...]
 _FitModelForPlan = Callable[
     ...,
     tuple[object | None, _FitDiagnostics | None, int | None],
@@ -116,14 +117,14 @@ def _build_observation_plan(  # noqa: PLR0913
         offset_signed_m=offset_signed_m,
         cfg=cfg,
         min_fit_obs=(
-            2 * _fit_min_pts(cfg) if min_fit_obs is None else int(min_fit_obs)
+            _fit_min_obs_required(cfg) if min_fit_obs is None else int(min_fit_obs)
         ),
         runtime_diagnostics=runtime_diagnostics,
         plan_cache=plan_cache,
     )
 
 
-def _prepare_trace_plan_assignment(  # noqa: PLR0913
+def _prepare_trace_plan_assignment(
     *,
     inputs: PhysicalCenterInputs,
     build_context: PhysicalCenterBuildContext,
@@ -450,7 +451,7 @@ def _assign_fit_context_work_item_outcome(  # noqa: PLR0913
     )
 
 
-def _prepare_fit_context_assignments_for_trace_indices(  # noqa: PLR0913
+def _prepare_fit_context_assignments_for_trace_indices(
     trace_indices: np.ndarray,
     *,
     inputs: PhysicalCenterInputs,

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 from seisai_pick.trend.trend_fit_strategy import (
+    PiecewiseLinearTrend,
     TwoPieceIRLSAutoBreakStrategy,
     TwoPieceRansacAutoBreakStrategy,
 )
@@ -28,13 +29,69 @@ if TYPE_CHECKING:
     from .physical_center_observation import _ObservationPlan
     from .runtime_diagnostics import PhysicalRuntimeDiagnostics
 
-_PhysicalFitStrategy = TwoPieceRansacAutoBreakStrategy | TwoPieceIRLSAutoBreakStrategy
+MODEL_TYPE_TWO_PIECE = 'two_piece'
+MODEL_TYPE_SINGLE_LINE = 'single_line'
+
+_MODEL_CODE_BY_TYPE = {
+    MODEL_TYPE_TWO_PIECE: 1,
+    MODEL_TYPE_SINGLE_LINE: 2,
+}
+_MODEL_TYPE_BY_CODE = {value: key for key, value in _MODEL_CODE_BY_TYPE.items()}
+
+
+@dataclass(frozen=True)
+class _SelectedPhysicalTrend:
+    base_model: object
+    model_type: str
+    selected_model: str
+    relative_improvement: float
+    single_line_cost: float
+    two_piece_cost: float
+    single_line_slope: float
+    single_line_t0_sec: float
+    two_piece_slope_near: float
+    two_piece_slope_far: float
+    two_piece_break_offset_m: float
+
+    @property
+    def edges(self) -> object:
+        return self.base_model.edges
+
+    @property
+    def coef(self) -> object:
+        return self.base_model.coef
+
+    def predict(self, x_abs: torch.Tensor) -> torch.Tensor:
+        return self.base_model.predict(x_abs)
+
+
+@dataclass(frozen=True)
+class _ModelSelectionFitStrategy:
+    two_piece_strategy: TwoPieceRansacAutoBreakStrategy | TwoPieceIRLSAutoBreakStrategy
+    fit_kind: str
+    candidate_models: tuple[str, ...]
+    prefer_two_piece_min_relative_improvement: float
+    fallback_to_single_line: bool
+    vmin_m_s: float
+    vmax_m_s: float
+    t0_lo_ms: float
+    t0_hi_ms: float
+    irls_huber_c: float
+    irls_iters: int
+    min_pts: int
+
+
+_PhysicalFitStrategy = (
+    TwoPieceRansacAutoBreakStrategy
+    | TwoPieceIRLSAutoBreakStrategy
+    | _ModelSelectionFitStrategy
+)
 
 
 @dataclass(frozen=True)
 class _FitCacheEntry:
     model: object | None
-    diagnostics: tuple[float, float, float, float, float, float, float] | None
+    diagnostics: tuple[float, ...] | None
     fit_failed: bool
     diagnostics_computed: bool = False
     failure_reason: int | None = None
@@ -54,6 +111,13 @@ class _FitTaskCfgValues:
     seed: int
     slope_eps: float
     sort_offsets: bool
+    candidate_models: tuple[str, ...]
+    prefer_two_piece_min_relative_improvement: float
+    fallback_to_single_line: bool
+    vmin_m_s: float
+    vmax_m_s: float
+    t0_lo_ms: float
+    t0_hi_ms: float
     min_offset_spread_m: float
     torch_num_threads_per_worker: int
 
@@ -72,7 +136,7 @@ class _FitTask:
 class _FitTaskResult:
     fit_key: tuple[int, ...]
     trend_model: object | None
-    diagnostics: tuple[float, float, float, float, float, float, float] | None
+    diagnostics: tuple[float, ...] | None
     fit_failed: bool
     failure_reason: int | None
     elapsed_sec: float
@@ -87,15 +151,42 @@ def _tensor_to_numpy(value: object) -> np.ndarray:
     return np.asarray(value)
 
 
+def _is_irls_fit_kind(fit_kind: str) -> bool:
+    return fit_kind in {'auto_irls', 'two_piece_irls_autobreak'}
+
+
+def _candidate_models_for_fit_kind(
+    fit_kind: str,
+    candidate_models: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    if candidate_models is not None:
+        return tuple(candidate_models)
+    if fit_kind == 'auto_irls':
+        return (MODEL_TYPE_TWO_PIECE, MODEL_TYPE_SINGLE_LINE)
+    return (MODEL_TYPE_TWO_PIECE,)
+
+
+def _fit_min_obs_required(cfg: PhysicsLiteConfig) -> int:
+    candidates = _candidate_models_for_fit_kind(
+        str(cfg.physical_trend.fit_kind),
+        cfg.physical_trend.candidate_models,
+    )
+    min_pts = _fit_min_pts(cfg)
+    if MODEL_TYPE_TWO_PIECE in candidates:
+        return 2 * min_pts
+    return min_pts
+
+
 def _fit_min_pts(cfg: PhysicsLiteConfig) -> int:
-    if cfg.physical_trend.fit_kind == 'two_piece_irls_autobreak':
+    if _is_irls_fit_kind(str(cfg.physical_trend.fit_kind)):
         return int(cfg.two_piece_irls.min_pts)
     return int(cfg.two_piece_ransac.min_pts)
 
 
 def _fit_strategy(cfg: PhysicsLiteConfig) -> _PhysicalFitStrategy:
-    if cfg.physical_trend.fit_kind == 'two_piece_irls_autobreak':
-        return TwoPieceIRLSAutoBreakStrategy(
+    fit_kind = str(cfg.physical_trend.fit_kind)
+    if _is_irls_fit_kind(fit_kind):
+        two_piece_strategy = TwoPieceIRLSAutoBreakStrategy(
             huber_c=float(cfg.two_piece_irls.huber_c),
             iters=int(cfg.two_piece_irls.iters),
             min_pts=int(cfg.two_piece_irls.min_pts),
@@ -105,16 +196,40 @@ def _fit_strategy(cfg: PhysicsLiteConfig) -> _PhysicalFitStrategy:
             slope_eps=float(cfg.two_piece_irls.slope_eps),
             sort_offsets=bool(cfg.two_piece_irls.sort_offsets),
         )
-    return TwoPieceRansacAutoBreakStrategy(
-        n_iter=int(cfg.two_piece_ransac.n_iter),
-        inlier_th_ms=float(cfg.two_piece_ransac.inlier_th_ms),
-        min_pts=int(cfg.two_piece_ransac.min_pts),
-        n_break_cand=int(cfg.two_piece_ransac.n_break_cand),
-        q_lo=float(cfg.two_piece_ransac.q_lo),
-        q_hi=float(cfg.two_piece_ransac.q_hi),
-        seed=int(cfg.two_piece_ransac.seed),
-        slope_eps=float(cfg.two_piece_ransac.slope_eps),
-        sort_offsets=bool(cfg.two_piece_ransac.sort_offsets),
+    else:
+        two_piece_strategy = TwoPieceRansacAutoBreakStrategy(
+            n_iter=int(cfg.two_piece_ransac.n_iter),
+            inlier_th_ms=float(cfg.two_piece_ransac.inlier_th_ms),
+            min_pts=int(cfg.two_piece_ransac.min_pts),
+            n_break_cand=int(cfg.two_piece_ransac.n_break_cand),
+            q_lo=float(cfg.two_piece_ransac.q_lo),
+            q_hi=float(cfg.two_piece_ransac.q_hi),
+            seed=int(cfg.two_piece_ransac.seed),
+            slope_eps=float(cfg.two_piece_ransac.slope_eps),
+            sort_offsets=bool(cfg.two_piece_ransac.sort_offsets),
+        )
+    candidate_models = _candidate_models_for_fit_kind(
+        fit_kind,
+        cfg.physical_trend.candidate_models,
+    )
+    if candidate_models == (MODEL_TYPE_TWO_PIECE,):
+        return two_piece_strategy
+    model_selection = cfg.physical_trend.model_selection
+    return _ModelSelectionFitStrategy(
+        two_piece_strategy=two_piece_strategy,
+        fit_kind=fit_kind,
+        candidate_models=candidate_models,
+        prefer_two_piece_min_relative_improvement=float(
+            model_selection.prefer_two_piece_min_relative_improvement
+        ),
+        fallback_to_single_line=bool(model_selection.fallback_to_single_line),
+        vmin_m_s=float(cfg.physical_prefilter.vmin_m_s),
+        vmax_m_s=float(cfg.physical_prefilter.vmax_m_s),
+        t0_lo_ms=float(cfg.physical_prefilter.t0_lo_ms),
+        t0_hi_ms=float(cfg.physical_prefilter.t0_hi_ms),
+        irls_huber_c=float(cfg.two_piece_irls.huber_c),
+        irls_iters=int(cfg.two_piece_irls.iters),
+        min_pts=_fit_min_pts(cfg),
     )
 
 
@@ -130,12 +245,259 @@ def _confidence_weights_for_obs(coarse_pmax_obs: np.ndarray) -> np.ndarray:
     return np.clip(out, np.float32(1.0e-6), None)
 
 
+def _fit_line_irls_huber_np(
+    x: np.ndarray,
+    y: np.ndarray,
+    w_base: np.ndarray,
+    *,
+    huber_c: float,
+    iters: int,
+) -> tuple[float, float] | None:
+    xx = np.asarray(x, dtype=np.float64)
+    yy = np.asarray(y, dtype=np.float64)
+    ww0 = np.asarray(w_base, dtype=np.float64)
+    valid = np.isfinite(xx) & np.isfinite(yy) & np.isfinite(ww0) & (ww0 > 0.0)
+    xx = xx[valid]
+    yy = yy[valid]
+    ww0 = ww0[valid]
+    if int(xx.size) < 2:
+        return None
+    w = ww0.copy()
+    slope = 0.0
+    intercept = float(np.mean(yy))
+    eps = 1.0e-12
+    for _ in range(int(iters)):
+        sw = float(np.sum(w))
+        if sw <= eps:
+            return None
+        sx = float(np.sum(w * xx))
+        sy = float(np.sum(w * yy))
+        sxx = float(np.sum(w * xx * xx))
+        sxy = float(np.sum(w * xx * yy))
+        denom = sw * sxx - sx * sx
+        if denom <= eps:
+            slope = 0.0
+            intercept = sy / sw
+            break
+        slope = (sw * sxy - sx * sy) / denom
+        intercept = (sy - slope * sx) / sw
+        residual = yy - (slope * xx + intercept)
+        scale = max(float(1.4826 * np.median(np.abs(residual))), 1.0e-6)
+        r = residual / (float(huber_c) * scale)
+        abs_r = np.abs(r)
+        huber_w = np.where(abs_r <= 1.0, 1.0, 1.0 / np.maximum(abs_r, eps))
+        w = ww0 * np.minimum(huber_w, 10.0)
+    return float(slope), float(intercept)
+
+
+def _model_cost(
+    trend_model: object | None,
+    *,
+    x_obs: np.ndarray,
+    y_obs: np.ndarray,
+) -> float:
+    if trend_model is None:
+        return float('inf')
+    try:
+        pred = _tensor_to_numpy(
+            trend_model.predict(torch.as_tensor(x_obs, dtype=torch.float32))
+        ).astype(np.float64, copy=False)
+    except (TypeError, ValueError, RuntimeError):
+        return float('inf')
+    residual = np.asarray(y_obs, dtype=np.float64) - pred
+    residual = residual[np.isfinite(residual)]
+    if int(residual.size) == 0:
+        return float('inf')
+    return float(np.mean(np.abs(residual)))
+
+
+def _build_single_line_model(
+    *,
+    x_obs: np.ndarray,
+    y_obs: np.ndarray,
+    w_obs: np.ndarray,
+    strategy: _ModelSelectionFitStrategy,
+) -> PiecewiseLinearTrend | None:
+    x = np.asarray(x_obs, dtype=np.float32)
+    y = np.asarray(y_obs, dtype=np.float32)
+    w = np.asarray(w_obs, dtype=np.float32)
+    valid = np.isfinite(x) & np.isfinite(y) & np.isfinite(w) & (w > 0.0)
+    if int(np.count_nonzero(valid)) < int(strategy.min_pts):
+        return None
+    fit = _fit_line_irls_huber_np(
+        x[valid],
+        y[valid],
+        w[valid],
+        huber_c=float(strategy.irls_huber_c),
+        iters=int(strategy.irls_iters),
+    )
+    if fit is None:
+        return None
+    slope, intercept = fit
+    if not (np.isfinite(slope) and np.isfinite(intercept)):
+        return None
+    slope_lo = 1.0 / float(strategy.vmax_m_s)
+    slope_hi = 1.0 / float(strategy.vmin_m_s)
+    if not (slope_lo <= float(slope) <= slope_hi):
+        return None
+    t0_ms = float(intercept) * 1000.0
+    if not float(strategy.t0_lo_ms) <= t0_ms <= float(strategy.t0_hi_ms):
+        return None
+    finite_x = x[valid]
+    xmin = float(np.min(finite_x))
+    xmax = float(np.max(finite_x))
+    edges = torch.tensor([xmin, xmax, xmax], dtype=torch.float32)
+    coef = torch.tensor(
+        [[float(slope), float(intercept)], [float(slope), float(intercept)]],
+        dtype=torch.float32,
+    )
+    return PiecewiseLinearTrend(edges=edges, coef=coef)
+
+
+def _wrap_selected_model(
+    model: object,
+    *,
+    selected_model: str,
+    relative_improvement: float = np.nan,
+    single_line_cost: float = np.nan,
+    two_piece_cost: float = np.nan,
+    single_line_model: object | None = None,
+    two_piece_model: object | None = None,
+) -> _SelectedPhysicalTrend:
+    single_coef = (
+        _tensor_to_numpy(single_line_model.coef).astype(np.float32, copy=False)
+        if single_line_model is not None
+        else None
+    )
+    two_piece_coef = (
+        _tensor_to_numpy(two_piece_model.coef).astype(np.float32, copy=False)
+        if two_piece_model is not None
+        else None
+    )
+    two_piece_edges = (
+        _tensor_to_numpy(two_piece_model.edges).astype(np.float32, copy=False)
+        if two_piece_model is not None
+        else None
+    )
+    return _SelectedPhysicalTrend(
+        base_model=model,
+        model_type=selected_model,
+        selected_model=selected_model,
+        relative_improvement=float(relative_improvement),
+        single_line_cost=float(single_line_cost),
+        two_piece_cost=float(two_piece_cost),
+        single_line_slope=(
+            float(single_coef[0, 0]) if single_coef is not None else np.nan
+        ),
+        single_line_t0_sec=(
+            float(single_coef[0, 1]) if single_coef is not None else np.nan
+        ),
+        two_piece_slope_near=(
+            float(two_piece_coef[0, 0]) if two_piece_coef is not None else np.nan
+        ),
+        two_piece_slope_far=(
+            float(two_piece_coef[1, 0]) if two_piece_coef is not None else np.nan
+        ),
+        two_piece_break_offset_m=(
+            float(two_piece_edges[1]) if two_piece_edges is not None else np.nan
+        ),
+    )
+
+
+def _fit_model_selection_strategy(
+    strategy: _ModelSelectionFitStrategy,
+    x_tensor: torch.Tensor,
+    y_tensor: torch.Tensor,
+    w_tensor: torch.Tensor,
+) -> object | None:
+    x_obs = _tensor_to_numpy(x_tensor).astype(np.float32, copy=False)
+    y_obs = _tensor_to_numpy(y_tensor).astype(np.float32, copy=False)
+    w_obs = _tensor_to_numpy(w_tensor).astype(np.float32, copy=False)
+    two_piece_model = None
+    single_line_model = None
+    if MODEL_TYPE_TWO_PIECE in strategy.candidate_models:
+        two_piece_model = _fit_strategy_model(
+            strategy.two_piece_strategy,
+            x_tensor,
+            y_tensor,
+            w_tensor,
+        )
+    if (
+        MODEL_TYPE_SINGLE_LINE in strategy.candidate_models
+        and bool(strategy.fallback_to_single_line)
+    ):
+        single_line_model = _build_single_line_model(
+            x_obs=x_obs,
+            y_obs=y_obs,
+            w_obs=w_obs,
+            strategy=strategy,
+        )
+    two_piece_cost = _model_cost(two_piece_model, x_obs=x_obs, y_obs=y_obs)
+    single_line_cost = _model_cost(single_line_model, x_obs=x_obs, y_obs=y_obs)
+    relative_improvement = (
+        1.0 - two_piece_cost / single_line_cost
+        if (
+            two_piece_model is not None
+            and single_line_model is not None
+            and np.isfinite(two_piece_cost)
+            and np.isfinite(single_line_cost)
+            and single_line_cost > 0.0
+        )
+        else np.nan
+    )
+    if two_piece_model is not None and single_line_model is not None:
+        if (
+            np.isfinite(relative_improvement)
+            and relative_improvement
+            >= float(strategy.prefer_two_piece_min_relative_improvement)
+        ):
+            return _wrap_selected_model(
+                two_piece_model,
+                selected_model=MODEL_TYPE_TWO_PIECE,
+                relative_improvement=relative_improvement,
+                single_line_cost=single_line_cost,
+                two_piece_cost=two_piece_cost,
+                single_line_model=single_line_model,
+                two_piece_model=two_piece_model,
+            )
+        return _wrap_selected_model(
+            single_line_model,
+            selected_model=MODEL_TYPE_SINGLE_LINE,
+            relative_improvement=relative_improvement,
+            single_line_cost=single_line_cost,
+            two_piece_cost=two_piece_cost,
+            single_line_model=single_line_model,
+            two_piece_model=two_piece_model,
+        )
+    if two_piece_model is not None:
+        return _wrap_selected_model(
+            two_piece_model,
+            selected_model=MODEL_TYPE_TWO_PIECE,
+            single_line_cost=single_line_cost,
+            two_piece_cost=two_piece_cost,
+            single_line_model=single_line_model,
+            two_piece_model=two_piece_model,
+        )
+    if single_line_model is not None:
+        return _wrap_selected_model(
+            single_line_model,
+            selected_model=MODEL_TYPE_SINGLE_LINE,
+            single_line_cost=single_line_cost,
+            two_piece_cost=two_piece_cost,
+            single_line_model=single_line_model,
+            two_piece_model=two_piece_model,
+        )
+    return None
+
+
 def _fit_strategy_model(
     strategy: _PhysicalFitStrategy,
     x_tensor: torch.Tensor,
     y_tensor: torch.Tensor,
     w_tensor: torch.Tensor,
 ) -> object | None:
+    if isinstance(strategy, _ModelSelectionFitStrategy):
+        return _fit_model_selection_strategy(strategy, x_tensor, y_tensor, w_tensor)
     if isinstance(strategy, TwoPieceIRLSAutoBreakStrategy):
         return strategy.fit(x_tensor, y_tensor, w_tensor)
     return strategy.fit(x_tensor, y_tensor)
@@ -330,7 +692,25 @@ def _model_diagnostics(
     *,
     obs_offsets_m: np.ndarray,
     obs_times_sec: np.ndarray,
-) -> tuple[float, float, float, float, float, float, float]:
+) -> tuple[
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+]:
     edges = _tensor_to_numpy(trend_model.edges).astype(np.float32, copy=False)
     coef = _tensor_to_numpy(trend_model.coef).astype(np.float32, copy=False)
     if edges.shape != (3,) or coef.shape != (2, 2):
@@ -352,15 +732,34 @@ def _model_diagnostics(
 
     x_obs = torch.as_tensor(obs_offsets_m, dtype=torch.float32)
     pred = _tensor_to_numpy(trend_model.predict(x_obs)).astype(np.float64, copy=False)
-    residual_ms = np.abs(np.asarray(obs_times_sec, dtype=np.float64) - pred) * 1000.0
-    residual_ms = residual_ms[np.isfinite(residual_ms)]
-    if residual_ms.size == 0:
+    residual_sec = np.abs(np.asarray(obs_times_sec, dtype=np.float64) - pred)
+    residual_sec = residual_sec[np.isfinite(residual_sec)]
+    if residual_sec.size == 0:
         resid_p50 = np.nan
         resid_p90 = np.nan
+        selected_cost = float('inf')
     else:
+        residual_ms = residual_sec * 1000.0
         resid_p50 = float(np.percentile(residual_ms, 50.0))
         resid_p90 = float(np.percentile(residual_ms, 90.0))
+        selected_cost = float(np.mean(residual_sec))
 
+    model_type = str(getattr(trend_model, 'model_type', MODEL_TYPE_TWO_PIECE))
+    selected_model = str(getattr(trend_model, 'selected_model', model_type))
+    single_line_cost = float(
+        getattr(
+            trend_model,
+            'single_line_cost',
+            selected_cost if model_type == MODEL_TYPE_SINGLE_LINE else np.nan,
+        )
+    )
+    two_piece_cost = float(
+        getattr(
+            trend_model,
+            'two_piece_cost',
+            selected_cost if model_type == MODEL_TYPE_TWO_PIECE else np.nan,
+        )
+    )
     return (
         float(edges[1]),
         slope_near,
@@ -369,6 +768,28 @@ def _model_diagnostics(
         velocity_far,
         resid_p50,
         resid_p90,
+        float(_MODEL_CODE_BY_TYPE.get(model_type, 0)),
+        float(_MODEL_CODE_BY_TYPE.get(selected_model, 0)),
+        float(getattr(trend_model, 'relative_improvement', np.nan)),
+        single_line_cost,
+        two_piece_cost,
+        float(
+            getattr(
+                trend_model,
+                'single_line_slope',
+                slope_near if model_type == MODEL_TYPE_SINGLE_LINE else np.nan,
+            )
+        ),
+        float(
+            getattr(
+                trend_model,
+                'single_line_t0_sec',
+                float(coef[0, 1]) if model_type == MODEL_TYPE_SINGLE_LINE else np.nan,
+            )
+        ),
+        float(getattr(trend_model, 'two_piece_slope_near', slope_near)),
+        float(getattr(trend_model, 'two_piece_slope_far', slope_far)),
+        float(getattr(trend_model, 'two_piece_break_offset_m', float(edges[1]))),
     )
 
 
@@ -415,9 +836,11 @@ def _offset_spread_failure_reason(
 
 def _fit_task_cfg_values(cfg: PhysicsLiteConfig) -> _FitTaskCfgValues:
     executor = cfg.physical_runtime.fit_executor
-    is_irls = cfg.physical_trend.fit_kind == 'two_piece_irls_autobreak'
+    fit_kind = str(cfg.physical_trend.fit_kind)
+    is_irls = _is_irls_fit_kind(fit_kind)
+    model_selection = cfg.physical_trend.model_selection
     return _FitTaskCfgValues(
-        fit_kind=str(cfg.physical_trend.fit_kind),
+        fit_kind=fit_kind,
         n_iter=int(cfg.two_piece_ransac.n_iter),
         inlier_th_ms=float(cfg.two_piece_ransac.inlier_th_ms),
         irls_huber_c=float(cfg.two_piece_irls.huber_c),
@@ -449,6 +872,18 @@ def _fit_task_cfg_values(cfg: PhysicsLiteConfig) -> _FitTaskCfgValues:
             if is_irls
             else bool(cfg.two_piece_ransac.sort_offsets)
         ),
+        candidate_models=_candidate_models_for_fit_kind(
+            fit_kind,
+            cfg.physical_trend.candidate_models,
+        ),
+        prefer_two_piece_min_relative_improvement=float(
+            model_selection.prefer_two_piece_min_relative_improvement
+        ),
+        fallback_to_single_line=bool(model_selection.fallback_to_single_line),
+        vmin_m_s=float(cfg.physical_prefilter.vmin_m_s),
+        vmax_m_s=float(cfg.physical_prefilter.vmax_m_s),
+        t0_lo_ms=float(cfg.physical_prefilter.t0_lo_ms),
+        t0_hi_ms=float(cfg.physical_prefilter.t0_hi_ms),
         min_offset_spread_m=float(cfg.physical_trend.min_offset_spread_m),
         torch_num_threads_per_worker=int(executor.torch_num_threads_per_worker),
     )
@@ -472,8 +907,8 @@ def _fit_task_from_work_item(
 def _strategy_from_fit_task_cfg(
     cfg_values: _FitTaskCfgValues,
 ) -> _PhysicalFitStrategy:
-    if cfg_values.fit_kind == 'two_piece_irls_autobreak':
-        return TwoPieceIRLSAutoBreakStrategy(
+    if _is_irls_fit_kind(str(cfg_values.fit_kind)):
+        two_piece_strategy = TwoPieceIRLSAutoBreakStrategy(
             huber_c=float(cfg_values.irls_huber_c),
             iters=int(cfg_values.irls_iters),
             min_pts=int(cfg_values.min_pts),
@@ -483,16 +918,35 @@ def _strategy_from_fit_task_cfg(
             slope_eps=float(cfg_values.slope_eps),
             sort_offsets=bool(cfg_values.sort_offsets),
         )
-    return TwoPieceRansacAutoBreakStrategy(
-        n_iter=int(cfg_values.n_iter),
-        inlier_th_ms=float(cfg_values.inlier_th_ms),
+    else:
+        two_piece_strategy = TwoPieceRansacAutoBreakStrategy(
+            n_iter=int(cfg_values.n_iter),
+            inlier_th_ms=float(cfg_values.inlier_th_ms),
+            min_pts=int(cfg_values.min_pts),
+            n_break_cand=int(cfg_values.n_break_cand),
+            q_lo=float(cfg_values.q_lo),
+            q_hi=float(cfg_values.q_hi),
+            seed=int(cfg_values.seed),
+            slope_eps=float(cfg_values.slope_eps),
+            sort_offsets=bool(cfg_values.sort_offsets),
+        )
+    if tuple(cfg_values.candidate_models) == (MODEL_TYPE_TWO_PIECE,):
+        return two_piece_strategy
+    return _ModelSelectionFitStrategy(
+        two_piece_strategy=two_piece_strategy,
+        fit_kind=str(cfg_values.fit_kind),
+        candidate_models=tuple(cfg_values.candidate_models),
+        prefer_two_piece_min_relative_improvement=float(
+            cfg_values.prefer_two_piece_min_relative_improvement
+        ),
+        fallback_to_single_line=bool(cfg_values.fallback_to_single_line),
+        vmin_m_s=float(cfg_values.vmin_m_s),
+        vmax_m_s=float(cfg_values.vmax_m_s),
+        t0_lo_ms=float(cfg_values.t0_lo_ms),
+        t0_hi_ms=float(cfg_values.t0_hi_ms),
+        irls_huber_c=float(cfg_values.irls_huber_c),
+        irls_iters=int(cfg_values.irls_iters),
         min_pts=int(cfg_values.min_pts),
-        n_break_cand=int(cfg_values.n_break_cand),
-        q_lo=float(cfg_values.q_lo),
-        q_hi=float(cfg_values.q_hi),
-        seed=int(cfg_values.seed),
-        slope_eps=float(cfg_values.slope_eps),
-        sort_offsets=bool(cfg_values.sort_offsets),
     )
 
 
@@ -706,7 +1160,7 @@ def _fit_model_for_plan(  # noqa: PLR0913
     obs_count_before_sampling: int | None = None,
 ) -> tuple[
     object | None,
-    tuple[float, float, float, float, float, float, float] | None,
+    tuple[float, ...] | None,
     int | None,
 ]:
     spread_failure_reason = _offset_spread_failure_reason(

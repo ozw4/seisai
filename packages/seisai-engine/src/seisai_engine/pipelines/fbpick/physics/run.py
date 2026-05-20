@@ -22,6 +22,7 @@ from .physical_center import (
     build_geometry_two_piece_physical_center,
     preflight_geometry_two_piece_fallback,
 )
+from .physical_center_fallback_policy import apply_physics_fallback_policy
 from .pick_table import normalize_coarse_pick_table
 from .progress import build_progress_reporter
 from .runtime_diagnostics import (
@@ -35,6 +36,10 @@ from .trend import (
     TrendResult,
     build_partial_trend_fallback,
     build_trend_result,
+)
+from .window_constraint import (
+    evaluate_fine_window_constraint,
+    resolve_physical_prefilter_offsets_m,
 )
 
 __all__ = [
@@ -821,6 +826,36 @@ def build_robust_payload_from_coarse(
 
     legacy_trend_output = str(typed_cfg.physical_runtime.legacy_trend_output)
     include_trend_output = legacy_trend_output != 'omit' or bool(trend_materialized)
+    window_offsets_m = resolve_physical_prefilter_offsets_m(
+        coarse_npz=coarse_npz,
+        table=table,
+        cfg=typed_cfg,
+    )
+    window_constraint = evaluate_fine_window_constraint(
+        offsets_m=window_offsets_m,
+        dt_sec=float(table.dt_scalar_sec),
+        n_samples_orig=int(table.n_samples_orig),
+        fine_center_i=np.asarray(physical.fine_center_i, dtype=np.int32),
+        physical_prefilter=typed_cfg.physical_prefilter,
+        constraint=typed_cfg.physical_runtime.fine_window_constraint,
+        physical_model_status=np.asarray(
+            physical.physical_model_status,
+            dtype=np.uint8,
+        ),
+        physical_runtime_fit_source=np.asarray(
+            physical.physical_runtime_fit_source,
+            dtype=np.uint8,
+        ),
+    )
+    physical, window_constraint, fallback_policy_diagnostics = (
+        apply_physics_fallback_policy(
+            physical=physical,
+            initial_window_constraint=window_constraint,
+            coarse_npz=coarse_npz,
+            table=table,
+            cfg=typed_cfg,
+        )
+    )
     payload = {
         'dt_sec': np.asarray(table.dt_scalar_sec, dtype=np.float32),
         'n_samples_orig': np.asarray(table.n_samples_orig, dtype=np.int32),
@@ -924,6 +959,87 @@ def build_robust_payload_from_coarse(
         'physical_runtime_fit_source': np.asarray(
             physical.physical_runtime_fit_source,
             dtype=np.uint8,
+        ),
+        'physical_fit_model_type': np.asarray(physical.physical_fit_model_type),
+        'physical_fit_selected_model': np.asarray(
+            physical.physical_fit_selected_model
+        ),
+        'physical_fit_relative_improvement': np.asarray(
+            physical.physical_fit_relative_improvement,
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_cost': np.asarray(
+            physical.physical_fit_single_line_cost,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_cost': np.asarray(
+            physical.physical_fit_two_piece_cost,
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_slope': np.asarray(
+            physical.physical_fit_single_line_slope,
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_t0_sec': np.asarray(
+            physical.physical_fit_single_line_t0_sec,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_near': np.asarray(
+            physical.physical_fit_two_piece_slope_near,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_far': np.asarray(
+            physical.physical_fit_two_piece_slope_far,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_break_offset_m': np.asarray(
+            physical.physical_fit_two_piece_break_offset_m,
+            dtype=np.float32,
+        ),
+        'fine_center_valid_mask': np.asarray(
+            window_constraint.fine_center_valid_mask,
+            dtype=np.bool_,
+        ),
+        'fine_window_valid_mask': np.asarray(
+            window_constraint.fine_window_valid_mask,
+            dtype=np.bool_,
+        ),
+        'fine_window_physical_lo_i': np.asarray(
+            window_constraint.fine_window_physical_lo_i,
+            dtype=np.int32,
+        ),
+        'fine_window_physical_hi_i': np.asarray(
+            window_constraint.fine_window_physical_hi_i,
+            dtype=np.int32,
+        ),
+        'fine_window_reject_reason': np.asarray(
+            window_constraint.fine_window_reject_reason,
+            dtype=np.uint8,
+        ),
+        'physical_center_source': np.asarray(
+            fallback_policy_diagnostics['physical_center_source']
+        ),
+        'physical_fallback_source': np.asarray(
+            fallback_policy_diagnostics['physical_fallback_source']
+        ),
+        'physical_neighbor_source_index': np.asarray(
+            fallback_policy_diagnostics['physical_neighbor_source_index'],
+            dtype=np.int32,
+        ),
+        'physical_neighbor_source_distance': np.asarray(
+            fallback_policy_diagnostics['physical_neighbor_source_distance'],
+            dtype=np.float32,
+        ),
+        'coarse_in_band_fallback_mask': np.asarray(
+            fallback_policy_diagnostics['coarse_in_band_fallback_mask'],
+            dtype=np.bool_,
+        ),
+        'reject_physics_mask': np.asarray(
+            fallback_policy_diagnostics['reject_physics_mask'],
+            dtype=np.bool_,
+        ),
+        'reject_physics_reason': np.asarray(
+            fallback_policy_diagnostics['reject_physics_reason']
         ),
         'physical_runtime_trend_result_materialized': np.asarray(
             int(bool(trend_materialized)),
