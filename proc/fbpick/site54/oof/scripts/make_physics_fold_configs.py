@@ -146,7 +146,12 @@ def physical_center_cfg(args: argparse.Namespace, *, qc: bool = False) -> dict:
     cfg = {
         'physical_trend': {
             'enabled': True,
-            'fit_kind': 'two_piece_irls_autobreak',
+            'fit_kind': 'auto_irls',
+            'candidate_models': ['two_piece', 'single_line'],
+            'model_selection': {
+                'prefer_two_piece_min_relative_improvement': 0.05,
+                'fallback_to_single_line': True,
+            },
             'use_geometry_offset': True,
             'min_offset_spread_m': 1.0,
             'coord_group_tol_m': 1.0,

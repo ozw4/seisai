@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import numpy as np
 import yaml
 
 
@@ -36,6 +37,13 @@ def _load_run_site54_oof_cv() -> ModuleType:
     )
 
 
+def _load_check_cv_outputs() -> ModuleType:
+    return _load_oof_script(
+        'check_cv_outputs.py',
+        'site54_check_cv_outputs',
+    )
+
+
 def _load_oof_script(script_name: str, module_name: str) -> ModuleType:
     script = (
         Path(__file__).resolve().parents[1]
@@ -58,6 +66,13 @@ def _load_oof_script(script_name: str, module_name: str) -> ModuleType:
 
 
 def _assert_partial_physics_fallback(cfg: dict) -> None:
+    trend = cfg['physical_trend']
+    assert trend['fit_kind'] == 'auto_irls'
+    assert trend['candidate_models'] == ['two_piece', 'single_line']
+    assert trend['model_selection'][
+        'prefer_two_piece_min_relative_improvement'
+    ] == 0.05
+    assert trend['model_selection']['fallback_to_single_line'] is True
     runtime = cfg['physical_runtime']
     assert runtime['trend_result_mode'] == 'lazy'
     assert runtime['fallback_existing_trend_mode'] == 'partial'
@@ -85,6 +100,14 @@ def _assert_partial_physics_fallback(cfg: dict) -> None:
         'neighbor_physical_fit_reuse',
         'coarse_in_band',
         'reject',
+    ]
+    assert runtime['fine_window_constraint']['enabled'] is True
+    assert runtime['fine_window_constraint']['band_source'] == 'physical_prefilter'
+    assert runtime['fine_window_constraint']['time_len'] == 256
+    assert runtime['fine_window_constraint']['center_index'] == 128
+    assert runtime['neighbor_physical_fit_reuse']['candidate_statuses'] == [
+        'two_piece_ok',
+        'single_line_ok',
     ]
 
 
@@ -359,6 +382,7 @@ def test_make_physics_defaults_write_configs_under_run_root(
             encoding='utf-8',
         ),
     )
+    physics_text = yaml.safe_dump(physics_cfg, sort_keys=False)
     physics_qc_cfg = yaml.safe_load(
         (run_root / 'configs' / 'fold00' / '04_physics_qc.yaml').read_text(
             encoding='utf-8',
@@ -366,6 +390,10 @@ def test_make_physics_defaults_write_configs_under_run_root(
     )
     _assert_partial_physics_fallback(physics_cfg)
     _assert_partial_physics_fallback(physics_qc_cfg)
+    assert 'fallback_if_no_compatible_segment: robust' not in physics_text
+    assert 'geometry_invalid_fallback: robust' not in physics_text
+    assert 'group_invalid_fallback: robust' not in physics_text
+    assert 'fallback_npz_key: robust_pick_i' not in physics_text
     assert physics_qc_cfg['vis']['first_panel_only'] is True
     assert physics_qc_cfg['vis']['auto_figsize'] is True
     assert physics_qc_cfg['vis']['max_display_traces'] == 1200
@@ -493,7 +521,7 @@ def test_run_site54_oof_cv_prepare_configs_writes_manifest_and_configs(
         'partial_trend_fallback': {
             'max_fraction': 0.05,
             'max_traces': 50000,
-            'fallback_if_too_many': 'robust',
+            'fallback_if_too_many': 'full',
         },
     }
     physics_cfg = yaml.safe_load(
@@ -508,3 +536,98 @@ def test_run_site54_oof_cv_prepare_configs_writes_manifest_and_configs(
     )
     _assert_partial_physics_fallback(physics_cfg)
     _assert_partial_physics_fallback(physics_qc_cfg)
+
+
+def test_check_cv_outputs_strict_npz_policy_accepts_new_keys(tmp_path: Path) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'survey.robust.npz'
+    final_path = tmp_path / 'survey.fbpick_final.npz'
+    n_traces = 3
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(n_traces, dtype=np.int32),
+        fine_center_i=np.asarray([128, 300, 500], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([True, False, True], dtype=np.bool_),
+        fine_window_physical_lo_i=np.asarray([0, 250, 372], dtype=np.int32),
+        fine_window_physical_hi_i=np.asarray([255, 550, 627], dtype=np.int32),
+        physical_model_status=np.asarray([0, 11, 13], dtype=np.uint8),
+    )
+    np.savez(
+        final_path,
+        n_traces=np.asarray(n_traces, dtype=np.int32),
+        n_samples_orig=np.asarray(900, dtype=np.int32),
+        dt_sec=np.asarray(0.004, dtype=np.float32),
+        final_pick_f=np.asarray([128.0, np.nan, 500.0], dtype=np.float32),
+        reject_mask=np.asarray([False, True, False], dtype=np.bool_),
+        reason_mask=np.asarray([0, 1, 0], dtype=np.uint8),
+        window_start_i=np.asarray([0, -1, 372], dtype=np.int32),
+        window_end_i=np.asarray([255, -1, 627], dtype=np.int32),
+    )
+
+    assert module.strict_check_physics_npz(physics_path) is None
+    assert module.strict_check_final_npz(final_path) is None
+    assert (
+        module.strict_check_physics_final_pair(
+            physics_path=physics_path,
+            final_path=final_path,
+        )
+        is None
+    )
+
+
+def test_check_cv_outputs_strict_npz_policy_rejects_legacy_fallback_statuses(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+
+    for status_code, status_label in (
+        (3, 'fallback_feasible_clip'),
+        (4, 'fallback_robust'),
+    ):
+        physics_path = tmp_path / f'{status_label}.robust.npz'
+        np.savez(
+            physics_path,
+            n_traces=np.asarray(1, dtype=np.int32),
+            fine_center_i=np.asarray([128], dtype=np.int32),
+            fine_window_valid_mask=np.asarray([True], dtype=np.bool_),
+            fine_window_physical_lo_i=np.asarray([0], dtype=np.int32),
+            fine_window_physical_hi_i=np.asarray([255], dtype=np.int32),
+            physical_model_status=np.asarray([status_code], dtype=np.uint8),
+        )
+
+        assert module.strict_check_physics_npz(physics_path) == (
+            f'{physics_path.name}:forbidden_physical_model_status={status_label}'
+        )
+
+
+def test_check_cv_outputs_strict_npz_policy_rejects_invalid_window_without_final_reject(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'survey.robust.npz'
+    final_path = tmp_path / 'survey.fbpick_final.npz'
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        fine_center_i=np.asarray([300], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([False], dtype=np.bool_),
+        fine_window_physical_lo_i=np.asarray([250], dtype=np.int32),
+        fine_window_physical_hi_i=np.asarray([350], dtype=np.int32),
+        physical_model_status=np.asarray([12], dtype=np.uint8),
+    )
+    np.savez(
+        final_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        n_samples_orig=np.asarray(900, dtype=np.int32),
+        dt_sec=np.asarray(0.004, dtype=np.float32),
+        final_pick_f=np.asarray([300.0], dtype=np.float32),
+        reject_mask=np.asarray([False], dtype=np.bool_),
+        reason_mask=np.asarray([0], dtype=np.uint8),
+    )
+
+    assert module.strict_check_physics_final_pair(
+        physics_path=physics_path,
+        final_path=final_path,
+    ) == 'survey.fbpick_final.npz:invalid_window_not_rejected=0'
