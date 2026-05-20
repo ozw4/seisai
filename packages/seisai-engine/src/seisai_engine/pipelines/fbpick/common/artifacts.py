@@ -96,6 +96,16 @@ ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS = (
     'physical_runtime_reuse_valid_count',
     'physical_runtime_refit_mask',
     'physical_runtime_fit_source',
+    'physical_fit_model_type',
+    'physical_fit_selected_model',
+    'physical_fit_relative_improvement',
+    'physical_fit_single_line_cost',
+    'physical_fit_two_piece_cost',
+    'physical_fit_single_line_slope',
+    'physical_fit_single_line_t0_sec',
+    'physical_fit_two_piece_slope_near',
+    'physical_fit_two_piece_slope_far',
+    'physical_fit_two_piece_break_offset_m',
 )
 
 ROBUST_RUNTIME_DIAGNOSTIC_OPTIONAL_KEYS = (

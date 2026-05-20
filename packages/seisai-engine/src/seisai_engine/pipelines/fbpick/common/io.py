@@ -372,6 +372,16 @@ _ROBUST_PHYSICAL_DIAGNOSTIC_DTYPES = {
     'physical_runtime_reuse_valid_count': np.int32,
     'physical_runtime_refit_mask': np.bool_,
     'physical_runtime_fit_source': np.uint8,
+    'physical_fit_model_type': '<U16',
+    'physical_fit_selected_model': '<U16',
+    'physical_fit_relative_improvement': np.float32,
+    'physical_fit_single_line_cost': np.float32,
+    'physical_fit_two_piece_cost': np.float32,
+    'physical_fit_single_line_slope': np.float32,
+    'physical_fit_single_line_t0_sec': np.float32,
+    'physical_fit_two_piece_slope_near': np.float32,
+    'physical_fit_two_piece_slope_far': np.float32,
+    'physical_fit_two_piece_break_offset_m': np.float32,
 }
 
 _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS = tuple(
@@ -677,6 +687,16 @@ def save_robust_npz(
     physical_runtime_reuse_valid_count=None,
     physical_runtime_refit_mask=None,
     physical_runtime_fit_source=None,
+    physical_fit_model_type=None,
+    physical_fit_selected_model=None,
+    physical_fit_relative_improvement=None,
+    physical_fit_single_line_cost=None,
+    physical_fit_two_piece_cost=None,
+    physical_fit_single_line_slope=None,
+    physical_fit_single_line_t0_sec=None,
+    physical_fit_two_piece_slope_near=None,
+    physical_fit_two_piece_slope_far=None,
+    physical_fit_two_piece_break_offset_m=None,
     physics_total_sec=None,
     physical_center_total_sec=None,
     ransac_fit_total_sec=None,
@@ -892,6 +912,18 @@ def save_robust_npz(
         'physical_runtime_reuse_valid_count': physical_runtime_reuse_valid_count,
         'physical_runtime_refit_mask': physical_runtime_refit_mask,
         'physical_runtime_fit_source': physical_runtime_fit_source,
+        'physical_fit_model_type': physical_fit_model_type,
+        'physical_fit_selected_model': physical_fit_selected_model,
+        'physical_fit_relative_improvement': physical_fit_relative_improvement,
+        'physical_fit_single_line_cost': physical_fit_single_line_cost,
+        'physical_fit_two_piece_cost': physical_fit_two_piece_cost,
+        'physical_fit_single_line_slope': physical_fit_single_line_slope,
+        'physical_fit_single_line_t0_sec': physical_fit_single_line_t0_sec,
+        'physical_fit_two_piece_slope_near': physical_fit_two_piece_slope_near,
+        'physical_fit_two_piece_slope_far': physical_fit_two_piece_slope_far,
+        'physical_fit_two_piece_break_offset_m': (
+            physical_fit_two_piece_break_offset_m
+        ),
     }
     for key, dtype in _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS:
         value = physical_diagnostic_values[key]

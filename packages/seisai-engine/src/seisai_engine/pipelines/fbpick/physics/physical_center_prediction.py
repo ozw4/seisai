@@ -11,6 +11,8 @@ import torch
 
 from .physical_center_fallback import _assign_fallback
 from .physical_center_fit import (
+    _MODEL_TYPE_BY_CODE,
+    MODEL_TYPE_SINGLE_LINE,
     _fit_cache_key,
     _FitCacheEntry,
     _model_diagnostics,
@@ -21,6 +23,7 @@ from .physical_center_types import (
     PHYSICAL_MODEL_FAILURE_NONE,
     PHYSICAL_MODEL_FAILURE_PREDICTION_INVALID,
     PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT,
+    PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
 )
 
@@ -39,7 +42,7 @@ if TYPE_CHECKING:
 class _TraceFitResult:
     plan: _ObservationPlan | None
     trend_model: object | None
-    diagnostics: tuple[float, float, float, float, float, float, float] | None
+    diagnostics: tuple[float, ...] | None
     x_obs: np.ndarray | None = None
     y_obs: np.ndarray | None = None
 
@@ -85,7 +88,7 @@ def _diagnostics_for_plan(
     x_obs: np.ndarray,
     y_obs: np.ndarray,
     cache: dict[tuple[int, ...], _FitCacheEntry],
-) -> tuple[float, float, float, float, float, float, float] | None:
+) -> tuple[float, ...] | None:
     cache_key = _fit_cache_key(plan)
     entry = cache[cache_key]
     if bool(entry.fit_failed) or entry.model is None:
@@ -114,7 +117,7 @@ def _diagnostics_for_plan(
 def _assign_model_diagnostics(
     arrays: dict[str, np.ndarray],
     trace_idx: int,
-    diagnostics: tuple[float, float, float, float, float, float, float] | None,
+    diagnostics: tuple[float, ...] | None,
 ) -> None:
     _assign_model_diagnostics_batch(
         arrays,
@@ -126,7 +129,7 @@ def _assign_model_diagnostics(
 def _assign_model_diagnostics_batch(
     arrays: dict[str, np.ndarray],
     trace_indices: np.ndarray,
-    diagnostics: tuple[float, float, float, float, float, float, float] | None,
+    diagnostics: tuple[float, ...] | None,
 ) -> None:
     if diagnostics is None:
         return
@@ -141,7 +144,7 @@ def _assign_model_diagnostics_batch(
         velocity_far,
         resid_p50,
         resid_p90,
-    ) = diagnostics
+    ) = diagnostics[:7]
     arrays['physical_model_break_offset_m'][indices] = np.float32(break_offset)
     arrays['physical_model_slope_near_s_per_m'][indices] = np.float32(slope_near)
     arrays['physical_model_slope_far_s_per_m'][indices] = np.float32(slope_far)
@@ -149,6 +152,28 @@ def _assign_model_diagnostics_batch(
     arrays['physical_model_velocity_far_m_s'][indices] = np.float32(velocity_far)
     arrays['physical_model_resid_p50_ms'][indices] = np.float32(resid_p50)
     arrays['physical_model_resid_p90_ms'][indices] = np.float32(resid_p90)
+    if len(diagnostics) < 17:
+        return
+    model_type_code = int(diagnostics[7])
+    selected_model_code = int(diagnostics[8])
+    arrays['physical_fit_model_type'][indices] = _MODEL_TYPE_BY_CODE.get(
+        model_type_code,
+        '',
+    )
+    arrays['physical_fit_selected_model'][indices] = _MODEL_TYPE_BY_CODE.get(
+        selected_model_code,
+        '',
+    )
+    arrays['physical_fit_relative_improvement'][indices] = np.float32(diagnostics[9])
+    arrays['physical_fit_single_line_cost'][indices] = np.float32(diagnostics[10])
+    arrays['physical_fit_two_piece_cost'][indices] = np.float32(diagnostics[11])
+    arrays['physical_fit_single_line_slope'][indices] = np.float32(diagnostics[12])
+    arrays['physical_fit_single_line_t0_sec'][indices] = np.float32(diagnostics[13])
+    arrays['physical_fit_two_piece_slope_near'][indices] = np.float32(diagnostics[14])
+    arrays['physical_fit_two_piece_slope_far'][indices] = np.float32(diagnostics[15])
+    arrays['physical_fit_two_piece_break_offset_m'][indices] = np.float32(
+        diagnostics[16]
+    )
 
 
 def _shift_for_trace_indices(
@@ -178,8 +203,16 @@ def _shift_for_trace_indices(
 def _status_for_plan_batch(
     trace_indices: np.ndarray,
     plan_by_trace: Mapping[int, _ObservationPlan] | _ObservationPlan,
+    *,
+    trend_model: object | None = None,
 ) -> np.ndarray:
     indices = np.asarray(trace_indices, dtype=np.int64)
+    if str(getattr(trend_model, 'model_type', '')) == MODEL_TYPE_SINGLE_LINE:
+        return np.full(
+            (indices.size,),
+            np.uint8(PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK),
+            dtype=np.uint8,
+        )
     if isinstance(plan_by_trace, _ObservationPlan):
         status = (
             PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT
@@ -204,7 +237,7 @@ def _assign_model_prediction_batch(  # noqa: PLR0913
     trace_indices: np.ndarray,
     *,
     trend_model: object,
-    diagnostics: tuple[float, float, float, float, float, float, float] | None,
+    diagnostics: tuple[float, ...] | None,
     plan_by_trace: Mapping[int, _ObservationPlan] | _ObservationPlan,
     offset_abs_m: np.ndarray,
     dt: float,
@@ -263,6 +296,7 @@ def _assign_model_prediction_batch(  # noqa: PLR0913
         arrays['physical_model_status'][valid_indices] = _status_for_plan_batch(
             valid_indices,
             plan_by_trace,
+            trend_model=trend_model,
         )
         arrays['physical_model_failure_reason'][valid_indices] = np.uint8(
             PHYSICAL_MODEL_FAILURE_NONE
@@ -279,7 +313,7 @@ def _assign_model_prediction(  # noqa: PLR0913
     trace_idx: int,
     *,
     trend_model: object,
-    diagnostics: tuple[float, float, float, float, float, float, float] | None,
+    diagnostics: tuple[float, ...] | None,
     plan: _ObservationPlan,
     offset_abs_m: np.ndarray,
     dt: float,
@@ -321,7 +355,7 @@ def _assign_prepared_model_prediction_batch(  # noqa: PLR0913
     t0_shift_sec: float | np.ndarray = 0.0,
     runtime_diagnostics: PhysicalRuntimeDiagnostics | None = None,
     pending_trend_fallback: _PendingTrendFallback | None = None,
-) -> tuple[np.ndarray, tuple[float, float, float, float, float, float, float] | None]:
+) -> tuple[np.ndarray, tuple[float, ...] | None]:
     if not items:
         return np.zeros((0,), dtype=np.bool_), None
 

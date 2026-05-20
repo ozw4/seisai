@@ -18,6 +18,7 @@ __all__ = [
     'PhysicalAnchorReuseCfg',
     'PhysicalAnchorSelectionCfg',
     'PhysicalFitExecutorCfg',
+    'PhysicalModelSelectionCfg',
     'PhysicalObservationSamplingCfg',
     'PhysicalPartialTrendFallbackCfg',
     'PhysicalPrefilterCfg',
@@ -97,9 +98,17 @@ class PhysicsRobustCenterCfg:
 
 
 @dataclass(frozen=True)
+class PhysicalModelSelectionCfg:
+    prefer_two_piece_min_relative_improvement: float = 0.05
+    fallback_to_single_line: bool = True
+
+
+@dataclass(frozen=True)
 class PhysicalTrendCfg:
     enabled: bool = False
     fit_kind: str = 'two_piece_ransac_autobreak'
+    candidate_models: tuple[str, ...] | None = None
+    model_selection: PhysicalModelSelectionCfg = PhysicalModelSelectionCfg()
     use_geometry_offset: bool = True
     min_offset_spread_m: float = 1.0
     coord_group_tol_m: float = 1.0
@@ -367,6 +376,25 @@ def _optional_float_or_none(
     return float(value)
 
 
+def _optional_str_tuple_or_none(
+    cfg: dict[str, Any],
+    key: str,
+) -> tuple[str, ...] | None:
+    if key not in cfg:
+        return None
+    value = cfg[key]
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        msg = f'config.{key} must be list or null'
+        raise TypeError(msg)
+    out = tuple(str(item) for item in value)
+    if len(out) == 0:
+        msg = f'config.{key} must not be empty'
+        raise ValueError(msg)
+    return out
+
+
 def _load_feasible_band_cfg(cfg: dict[str, Any]) -> PhysicsFeasibleBandCfg:
     return PhysicsFeasibleBandCfg(
         vmin_mask=float(optional_float(cfg, 'vmin_mask', 100.0)),
@@ -452,9 +480,30 @@ def _load_physical_trend_cfg(cfg: dict[str, Any]) -> PhysicalTrendCfg:
     if fit_kind is None:
         msg = 'physical_trend.fit_kind must not be null'
         raise TypeError(msg)
+    model_selection_raw = _require_dict(
+        cfg.get('model_selection'),
+        key='physical_trend.model_selection',
+    )
     return PhysicalTrendCfg(
         enabled=bool(optional_bool(cfg, 'enabled', default=False)),
         fit_kind=str(fit_kind),
+        candidate_models=_optional_str_tuple_or_none(cfg, 'candidate_models'),
+        model_selection=PhysicalModelSelectionCfg(
+            prefer_two_piece_min_relative_improvement=float(
+                optional_float(
+                    model_selection_raw,
+                    'prefer_two_piece_min_relative_improvement',
+                    0.05,
+                )
+            ),
+            fallback_to_single_line=bool(
+                optional_bool(
+                    model_selection_raw,
+                    'fallback_to_single_line',
+                    default=True,
+                )
+            ),
+        ),
         use_geometry_offset=bool(
             optional_bool(cfg, 'use_geometry_offset', default=True)
         ),
@@ -816,15 +865,31 @@ def _load_physical_runtime_cfg(cfg: dict[str, Any]) -> PhysicalRuntimeCfg:
 
 def _validate_physical_trend_cfg(cfg: PhysicalTrendCfg) -> None:
     if cfg.fit_kind not in {
+        'auto_irls',
         'two_piece_ransac_autobreak',
         'two_piece_irls_autobreak',
     }:
         msg = (
-            "physical_trend.fit_kind must be 'two_piece_ransac_autobreak' or "
-            "'two_piece_irls_autobreak', "
+            "physical_trend.fit_kind must be 'auto_irls', "
+            "'two_piece_ransac_autobreak', or 'two_piece_irls_autobreak', "
             f'got {cfg.fit_kind!r}'
         )
         raise ValueError(msg)
+    if cfg.candidate_models is not None:
+        allowed = {'two_piece', 'single_line'}
+        for model in cfg.candidate_models:
+            if model not in allowed:
+                msg = (
+                    'physical_trend.candidate_models entries must be '
+                    f"'two_piece' or 'single_line', got {model!r}"
+                )
+                raise ValueError(msg)
+    model_selection = cfg.model_selection
+    _validate_nonnegative_float(
+        'physical_trend.model_selection.'
+        'prefer_two_piece_min_relative_improvement',
+        model_selection.prefer_two_piece_min_relative_improvement,
+    )
     _validate_positive_float(
         'physical_trend.coord_group_tol_m',
         cfg.coord_group_tol_m,

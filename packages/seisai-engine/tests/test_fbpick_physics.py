@@ -250,6 +250,46 @@ def _make_robust_optional_payload() -> dict[str, np.ndarray]:
         'physical_runtime_reuse_valid_count': np.array([3, 0, 4], dtype=np.int32),
         'physical_runtime_refit_mask': np.array([False, True, False], dtype=np.bool_),
         'physical_runtime_fit_source': np.array([1, 2, 3], dtype=np.uint8),
+        'physical_fit_model_type': np.array(
+            ['two_piece', '', 'single_line'],
+            dtype='<U16',
+        ),
+        'physical_fit_selected_model': np.array(
+            ['two_piece', '', 'single_line'],
+            dtype='<U16',
+        ),
+        'physical_fit_relative_improvement': np.array(
+            [0.12, np.nan, 0.01],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_cost': np.array(
+            [0.02, np.nan, 0.01],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_cost': np.array(
+            [0.01, np.nan, 0.02],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_slope': np.array(
+            [0.0005, np.nan, 0.0004],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_t0_sec': np.array(
+            [0.1, np.nan, 0.2],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_near': np.array(
+            [0.001, np.nan, 0.0005],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_far': np.array(
+            [0.0003, np.nan, 0.0004],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_break_offset_m': np.array(
+            [1000.0, np.nan, 1200.0],
+            dtype=np.float32,
+        ),
         'physics_total_sec': np.asarray(1.0, dtype=np.float64),
         'physical_center_total_sec': np.asarray(0.7, dtype=np.float64),
         'ransac_fit_total_sec': np.asarray(0.3, dtype=np.float64),
@@ -443,6 +483,12 @@ def test_load_physics_lite_config_defaults_include_physical_trend_blocks() -> No
 
     assert cfg.physical_trend.enabled is False
     assert cfg.physical_trend.fit_kind == 'two_piece_ransac_autobreak'
+    assert cfg.physical_trend.candidate_models is None
+    model_selection = cfg.physical_trend.model_selection
+    assert model_selection.prefer_two_piece_min_relative_improvement == (
+        pytest.approx(0.05)
+    )
+    assert cfg.physical_trend.model_selection.fallback_to_single_line is True
     assert cfg.physical_trend.min_offset_spread_m == 1.0
     assert cfg.physical_trend.min_gap_m is None
     assert cfg.neighbor_context.mode == 'nearest_source_xy'
@@ -608,6 +654,29 @@ def test_load_physics_lite_config_accepts_two_piece_irls_fit_kind() -> None:
     assert cfg.two_piece_irls.q_hi == pytest.approx(0.7)
     assert cfg.two_piece_irls.slope_eps == pytest.approx(1.0e-4)
     assert cfg.two_piece_irls.sort_offsets is False
+
+
+def test_load_physics_lite_config_accepts_auto_irls_model_selection() -> None:
+    cfg = load_physics_lite_config(
+        {
+            'physical_trend': {
+                'fit_kind': 'auto_irls',
+                'candidate_models': ['two_piece', 'single_line'],
+                'model_selection': {
+                    'prefer_two_piece_min_relative_improvement': 0.1,
+                    'fallback_to_single_line': False,
+                },
+            },
+        }
+    )
+
+    assert cfg.physical_trend.fit_kind == 'auto_irls'
+    assert cfg.physical_trend.candidate_models == ('two_piece', 'single_line')
+    model_selection = cfg.physical_trend.model_selection
+    assert model_selection.prefer_two_piece_min_relative_improvement == (
+        pytest.approx(0.1)
+    )
+    assert cfg.physical_trend.model_selection.fallback_to_single_line is False
 
 
 def test_load_physics_lite_config_accepts_anchor_selection_runtime_block() -> None:
@@ -1819,6 +1888,46 @@ def test_save_and_load_robust_npz_preserve_optional_physical_diagnostics(
         'physical_runtime_reuse_valid_count': np.array([3, 0, 4], dtype=np.int32),
         'physical_runtime_refit_mask': np.array([False, True, False], dtype=np.bool_),
         'physical_runtime_fit_source': np.array([1, 2, 3], dtype=np.uint8),
+        'physical_fit_model_type': np.array(
+            ['two_piece', '', 'single_line'],
+            dtype='<U16',
+        ),
+        'physical_fit_selected_model': np.array(
+            ['two_piece', '', 'single_line'],
+            dtype='<U16',
+        ),
+        'physical_fit_relative_improvement': np.array(
+            [0.12, np.nan, 0.01],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_cost': np.array(
+            [0.02, np.nan, 0.01],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_cost': np.array(
+            [0.01, np.nan, 0.02],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_slope': np.array(
+            [0.0005, np.nan, 0.0004],
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_t0_sec': np.array(
+            [0.1, np.nan, 0.2],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_near': np.array(
+            [0.001, np.nan, 0.0005],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_far': np.array(
+            [0.0003, np.nan, 0.0004],
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_break_offset_m': np.array(
+            [1000.0, np.nan, 1200.0],
+            dtype=np.float32,
+        ),
     }
 
     out_path = save_robust_npz(tmp_path / 'physical.robust.npz', **payload)

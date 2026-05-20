@@ -109,6 +109,32 @@ def _allocate_result_arrays(table: CoarsePickTable) -> dict[str, np.ndarray]:
         'physical_runtime_reuse_valid_count': np.zeros((n,), dtype=np.int32),
         'physical_runtime_refit_mask': np.zeros((n,), dtype=np.bool_),
         'physical_runtime_fit_source': np.zeros((n,), dtype=np.uint8),
+        'physical_fit_model_type': np.full((n,), '', dtype='<U16'),
+        'physical_fit_selected_model': np.full((n,), '', dtype='<U16'),
+        'physical_fit_relative_improvement': np.full(
+            (n,),
+            np.nan,
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_cost': np.full((n,), np.nan, dtype=np.float32),
+        'physical_fit_two_piece_cost': np.full((n,), np.nan, dtype=np.float32),
+        'physical_fit_single_line_slope': np.full((n,), np.nan, dtype=np.float32),
+        'physical_fit_single_line_t0_sec': np.full((n,), np.nan, dtype=np.float32),
+        'physical_fit_two_piece_slope_near': np.full(
+            (n,),
+            np.nan,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_far': np.full(
+            (n,),
+            np.nan,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_break_offset_m': np.full(
+            (n,),
+            np.nan,
+            dtype=np.float32,
+        ),
     }
 
 

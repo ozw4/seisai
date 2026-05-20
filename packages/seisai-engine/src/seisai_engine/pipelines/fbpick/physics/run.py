@@ -925,6 +925,42 @@ def build_robust_payload_from_coarse(
             physical.physical_runtime_fit_source,
             dtype=np.uint8,
         ),
+        'physical_fit_model_type': np.asarray(physical.physical_fit_model_type),
+        'physical_fit_selected_model': np.asarray(
+            physical.physical_fit_selected_model
+        ),
+        'physical_fit_relative_improvement': np.asarray(
+            physical.physical_fit_relative_improvement,
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_cost': np.asarray(
+            physical.physical_fit_single_line_cost,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_cost': np.asarray(
+            physical.physical_fit_two_piece_cost,
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_slope': np.asarray(
+            physical.physical_fit_single_line_slope,
+            dtype=np.float32,
+        ),
+        'physical_fit_single_line_t0_sec': np.asarray(
+            physical.physical_fit_single_line_t0_sec,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_near': np.asarray(
+            physical.physical_fit_two_piece_slope_near,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_slope_far': np.asarray(
+            physical.physical_fit_two_piece_slope_far,
+            dtype=np.float32,
+        ),
+        'physical_fit_two_piece_break_offset_m': np.asarray(
+            physical.physical_fit_two_piece_break_offset_m,
+            dtype=np.float32,
+        ),
         'physical_runtime_trend_result_materialized': np.asarray(
             int(bool(trend_materialized)),
             dtype=np.int64,

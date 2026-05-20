@@ -46,6 +46,7 @@ from seisai_engine.pipelines.fbpick.physics.physical_center import (
     PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT,
     PHYSICAL_MODEL_STATUS_FALLBACK_ROBUST,
     PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED,
+    PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK,
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK,
     PHYSICAL_OFFSET_SOURCE_HEADER,
     PHYSICAL_RUNTIME_FIT_SOURCE_ANCHOR_FIT,
@@ -176,6 +177,143 @@ def test_physical_center_can_use_two_piece_irls_with_pmax_weights(monkeypatch) -
     assert len(calls) == 1
     np.testing.assert_allclose(calls[0][2], pmax)
     assert np.any(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+
+
+def test_physical_center_auto_irls_selects_single_line_for_linear_data() -> None:
+    offsets = np.linspace(0.0, 4000.0, 40, dtype=np.float32)
+    dt_sec = 0.001
+    pick_t_sec = np.float32(0.1) + offsets / np.float32(2000.0)
+    pick_i = np.rint(pick_t_sec / np.float32(dt_sec)).astype(np.int32)
+    coarse_npz, table, feasible, trend, merged = make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        dt_sec=dt_sec,
+        n_samples_orig=5000,
+    )
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=physical_cfg(
+            {
+                'physical_trend': {
+                    'fit_kind': 'auto_irls',
+                    'segment_by_offset_sign': False,
+                    'split_by_offset_gap': False,
+                },
+                'two_piece_irls': {'min_pts': 6, 'n_break_cand': 16},
+            }
+        ),
+    )
+
+    assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK)
+    assert np.all(result.physical_fit_selected_model == 'single_line')
+    assert np.all(np.isfinite(result.physical_fit_single_line_cost))
+    assert np.all(np.isnan(result.physical_fit_relative_improvement))
+
+
+def test_physical_center_auto_irls_selects_two_piece_when_improved() -> None:
+    offsets = np.linspace(0.0, 4000.0, 48, dtype=np.float32)
+    coarse_npz, table, feasible, trend, merged = make_inputs(offsets_m=offsets)
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=physical_cfg(
+            {
+                'physical_trend': {
+                    'fit_kind': 'auto_irls',
+                    'segment_by_offset_sign': False,
+                    'split_by_offset_gap': False,
+                    'model_selection': {
+                        'prefer_two_piece_min_relative_improvement': 0.05
+                    },
+                },
+                'physical_prefilter': {'t0_hi_ms': 1000.0},
+                'two_piece_irls': {'min_pts': 6, 'n_break_cand': 24},
+            }
+        ),
+    )
+
+    assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_TWO_PIECE_OK)
+    assert np.all(result.physical_fit_selected_model == 'two_piece')
+    assert np.all(result.physical_fit_relative_improvement >= np.float32(0.05))
+    assert np.all(np.isfinite(result.physical_fit_two_piece_cost))
+
+
+def test_physical_center_auto_irls_uses_single_line_for_small_improvement() -> None:
+    offsets = np.linspace(0.0, 4000.0, 48, dtype=np.float32)
+    coarse_npz, table, feasible, trend, merged = make_inputs(offsets_m=offsets)
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=physical_cfg(
+            {
+                'physical_trend': {
+                    'fit_kind': 'auto_irls',
+                    'segment_by_offset_sign': False,
+                    'split_by_offset_gap': False,
+                    'model_selection': {
+                        'prefer_two_piece_min_relative_improvement': 0.99
+                    },
+                },
+                'physical_prefilter': {'t0_hi_ms': 1000.0},
+                'two_piece_irls': {'min_pts': 6, 'n_break_cand': 24},
+            }
+        ),
+    )
+
+    assert np.all(result.physical_model_status == PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK)
+    assert np.all(result.physical_fit_selected_model == 'single_line')
+    assert np.all(result.physical_fit_relative_improvement < np.float32(0.99))
+
+
+def test_physical_center_auto_irls_rejects_single_line_outside_slope_bounds() -> None:
+    offsets = np.linspace(0.0, 4000.0, 40, dtype=np.float32)
+    dt_sec = 0.001
+    pick_t_sec = np.float32(0.1) + offsets / np.float32(10000.0)
+    pick_i = np.rint(pick_t_sec / np.float32(dt_sec)).astype(np.int32)
+    coarse_npz, table, feasible, trend, merged = make_inputs(
+        offsets_m=offsets,
+        pick_i=pick_i,
+        dt_sec=dt_sec,
+        n_samples_orig=1000,
+    )
+
+    result = build_geometry_two_piece_physical_center(
+        coarse_npz=coarse_npz,
+        table=table,
+        feasible=feasible,
+        trend=trend,
+        merged=merged,
+        cfg=physical_cfg(
+            {
+                'physical_trend': {
+                    'fit_kind': 'auto_irls',
+                    'candidate_models': ['single_line'],
+                    'segment_by_offset_sign': False,
+                    'split_by_offset_gap': False,
+                },
+                'physical_prefilter': {'enabled': False},
+                'two_piece_irls': {'min_pts': 6},
+            }
+        ),
+    )
+
+    assert not np.any(
+        result.physical_model_status == PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK
+    )
+    assert np.all(result.physical_fit_selected_model == '')
 
 
 def test_parallel_cached_context_hit_accounting_excludes_owner_trace() -> None:

@@ -43,6 +43,7 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         'PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS',
         'PHYSICAL_MODEL_STATUS_LABELS',
         'PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED',
+        'PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK',
         'PHYSICAL_MODEL_STATUS_TWO_PIECE_OK',
         'PHYSICAL_OFFSET_SOURCE_GEOMETRY',
         'PHYSICAL_OFFSET_SOURCE_HEADER',
@@ -71,6 +72,7 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         'PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS': 6,
         'PHYSICAL_MODEL_STATUS_FIT_FAILED': 7,
         'PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED': 8,
+        'PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK': 9,
         'PHYSICAL_MODEL_FAILURE_NONE': 0,
         'PHYSICAL_MODEL_FAILURE_PHYSICAL_DISABLED': 1,
         'PHYSICAL_MODEL_FAILURE_GEOMETRY_INVALID': 2,
@@ -96,6 +98,7 @@ def test_physical_center_public_import_contract_is_stable() -> None:
         assert getattr(physical_center_mod, name) == value
     assert physical_center_mod.PHYSICAL_MODEL_STATUS_LABELS == {
         0: 'two_piece_ok',
+        9: 'single_line_ok',
         1: 'relaxed_segment_ok',
         2: 'fallback_existing_trend',
         3: 'fallback_feasible_clip',

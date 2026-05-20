@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy as np  # noqa: TC002
 
 PHYSICAL_MODEL_STATUS_TWO_PIECE_OK = 0
+PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK = 9
 PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT = 1
 PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND = 2
 PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP = 3
@@ -18,6 +19,7 @@ PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED = 8
 
 PHYSICAL_MODEL_STATUS_LABELS = {
     PHYSICAL_MODEL_STATUS_TWO_PIECE_OK: 'two_piece_ok',
+    PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK: 'single_line_ok',
     PHYSICAL_MODEL_STATUS_FALLBACK_RELAXED_SEGMENT: 'relaxed_segment_ok',
     PHYSICAL_MODEL_STATUS_FALLBACK_EXISTING_TREND: 'fallback_existing_trend',
     PHYSICAL_MODEL_STATUS_FALLBACK_FEASIBLE_CLIP: 'fallback_feasible_clip',
@@ -91,6 +93,7 @@ __all__ = [
     'PHYSICAL_MODEL_STATUS_INSUFFICIENT_OBSERVATIONS',
     'PHYSICAL_MODEL_STATUS_LABELS',
     'PHYSICAL_MODEL_STATUS_PHYSICAL_DISABLED',
+    'PHYSICAL_MODEL_STATUS_SINGLE_LINE_OK',
     'PHYSICAL_MODEL_STATUS_TWO_PIECE_OK',
     'PHYSICAL_OFFSET_SOURCE_GEOMETRY',
     'PHYSICAL_OFFSET_SOURCE_HEADER',
@@ -152,3 +155,13 @@ class PhysicalCenterResult:
     physical_runtime_reuse_valid_count: np.ndarray
     physical_runtime_refit_mask: np.ndarray
     physical_runtime_fit_source: np.ndarray
+    physical_fit_model_type: np.ndarray
+    physical_fit_selected_model: np.ndarray
+    physical_fit_relative_improvement: np.ndarray
+    physical_fit_single_line_cost: np.ndarray
+    physical_fit_two_piece_cost: np.ndarray
+    physical_fit_single_line_slope: np.ndarray
+    physical_fit_single_line_t0_sec: np.ndarray
+    physical_fit_two_piece_slope_near: np.ndarray
+    physical_fit_two_piece_slope_far: np.ndarray
+    physical_fit_two_piece_break_offset_m: np.ndarray

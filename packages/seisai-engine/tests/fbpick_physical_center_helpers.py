@@ -40,6 +40,16 @@ PHYSICAL_CENTER_RESULT_DTYPE_CONTRACT = {
     'physical_runtime_reuse_valid_count': np.int32,
     'physical_runtime_refit_mask': np.bool_,
     'physical_runtime_fit_source': np.uint8,
+    'physical_fit_model_type': '<U16',
+    'physical_fit_selected_model': '<U16',
+    'physical_fit_relative_improvement': np.float32,
+    'physical_fit_single_line_cost': np.float32,
+    'physical_fit_two_piece_cost': np.float32,
+    'physical_fit_single_line_slope': np.float32,
+    'physical_fit_single_line_t0_sec': np.float32,
+    'physical_fit_two_piece_slope_near': np.float32,
+    'physical_fit_two_piece_slope_far': np.float32,
+    'physical_fit_two_piece_break_offset_m': np.float32,
 }
 
 class RecordingProgressReporter:
