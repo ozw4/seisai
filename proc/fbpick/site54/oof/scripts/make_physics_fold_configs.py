@@ -61,7 +61,7 @@ def physics_runtime_cfg(args: argparse.Namespace) -> dict:
             'max_obs_per_fit': 64,
             'n_offset_bins': 64,
             'bin_pick': 'pmax_max',
-            'min_obs_per_fit_after_sampling': 16,
+            'min_obs_per_fit_after_sampling': 8,
             'preserve_edge_bins': True,
         },
         'fit_executor': {

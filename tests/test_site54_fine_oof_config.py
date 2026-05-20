@@ -396,6 +396,18 @@ def test_make_physics_defaults_write_configs_under_run_root(
     )
     _assert_partial_physics_fallback(physics_cfg)
     _assert_partial_physics_fallback(physics_qc_cfg)
+    assert (
+        physics_cfg['physical_runtime']['observation_sampling'][
+            'min_obs_per_fit_after_sampling'
+        ]
+        == 8
+    )
+    assert (
+        physics_qc_cfg['physical_runtime']['observation_sampling'][
+            'min_obs_per_fit_after_sampling'
+        ]
+        == 8
+    )
     assert 'fallback_if_no_compatible_segment: robust' not in physics_text
     assert 'geometry_invalid_fallback: robust' not in physics_text
     assert 'group_invalid_fallback: robust' not in physics_text
