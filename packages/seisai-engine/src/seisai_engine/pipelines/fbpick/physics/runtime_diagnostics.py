@@ -29,7 +29,7 @@ PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS = (
     'physics_total_sec',
     'load_coarse_npz_sec',
     'normalize_table_sec',
-    'feasible_band_sec',
+    'physical_band_sec',
     'trend_result_sec',
     'confidence_sec',
     'merge_sec',
@@ -561,7 +561,12 @@ class PhysicalRuntimeDiagnostics:
             'physics_total_sec': float(self.physics_total_sec),
             'load_coarse_npz_sec': float(timing.get('load_coarse_npz_sec', 0.0)),
             'normalize_table_sec': float(timing.get('normalize_table_sec', 0.0)),
-            'feasible_band_sec': float(timing.get('feasible_band_sec', 0.0)),
+            'physical_band_sec': float(
+                timing.get(
+                    'physical_band_sec',
+                    timing.get('feasible_band_sec', 0.0),
+                )
+            ),
             'trend_result_sec': float(timing.get('trend_result_sec', 0.0)),
             'confidence_sec': float(timing.get('confidence_sec', 0.0)),
             'merge_sec': float(timing.get('merge_sec', 0.0)),
@@ -919,6 +924,12 @@ def runtime_summary_from_npz_fields(
     }
     for key in PHYSICS_RUNTIME_BASE_DIAGNOSTIC_KEYS:
         payload_key = key if key in payload else f'physical_runtime_{key}'
+        if key == 'physical_band_sec' and payload_key not in payload:
+            payload_key = (
+                'feasible_band_sec'
+                if 'feasible_band_sec' in payload
+                else 'physical_runtime_feasible_band_sec'
+            )
         if payload_key not in payload:
             continue
         value = np.asarray(payload[payload_key]).item()
