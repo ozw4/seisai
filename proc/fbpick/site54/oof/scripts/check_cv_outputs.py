@@ -856,8 +856,7 @@ def check_eval(results: list[dict[str, Any]], *, run_root: Path) -> None:
     out_dir = run_root / "aggregate" / "08_eval"
     required = [
         out_dir / "per_data.csv",
-        out_dir / "per_fold.csv",
-        out_dir / "summary.csv",
+        out_dir / "summary_by_stage.csv",
         out_dir / "eval_meta.json",
     ]
     missing = [p for p in required if not p.is_file()]

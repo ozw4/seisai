@@ -33,6 +33,7 @@ def _write_case(
     coarse_pick: list[float],
     reject_mask: list[bool],
     final_pick_f: list[float] | None = None,
+    n_samples_orig: int = 1200,
 ) -> None:
     fold_dir = fold_list_root / fold
     fold_dir.mkdir(parents=True, exist_ok=True)
@@ -62,7 +63,7 @@ def _write_case(
     np.savez(
         final_npz,
         dt_sec=np.asarray(0.004, dtype=np.float32),
-        n_samples_orig=np.asarray(1200, dtype=np.int32),
+        n_samples_orig=np.asarray(n_samples_orig, dtype=np.int32),
         n_traces=np.asarray(n_traces, dtype=np.int32),
         final_pick_i=final_pick_i,
         final_pick_f=final_pick_f_arr,
@@ -85,7 +86,7 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
-def test_fine_oof_eval_uses_teacher_denominator_and_weighted_summary(
+def test_fine_oof_eval_uses_teacher_only_mask_and_clips_out_of_record_picks(
     tmp_path: Path,
 ) -> None:
     cv_root = tmp_path / "oof"
@@ -101,23 +102,23 @@ def test_fine_oof_eval_uses_teacher_denominator_and_weighted_summary(
         fold_list_root=fold_list_root,
         fold="fold00",
         data_name="a",
-        teacher=[10, 20, 30, 40],
-        final_pick=[10, 21, np.nan, 100],
-        robust_pick=[10, np.nan, 31, 100],
-        coarse_pick=[10, 21, np.nan, 100],
-        reject_mask=[False, False, False, True],
+        teacher=[0, 10, 20, 1199, 1200, np.nan],
+        final_pick=[500, -5, 25, 1300, 100, 100],
+        robust_pick=[500, -5, 25, 1300, 100, 100],
+        coarse_pick=[500, -5, 25, 1300, 100, 100],
+        reject_mask=[False, False, True, False, False, False],
+        n_samples_orig=1200,
     )
-    _write_case(
-        run_root=run_root,
-        fold_list_root=fold_list_root,
-        fold="fold00",
-        data_name="b",
-        teacher=[50],
-        final_pick=[50],
-        robust_pick=[50],
-        coarse_pick=[50],
-        reject_mask=[False],
-    )
+
+    for stale_name in (
+        "per_fold.csv",
+        "summary.csv",
+        "top_errors_final.csv",
+        "top_errors_robust.csv",
+        "top_errors_coarse.csv",
+    ):
+        (out_dir / stale_name).parent.mkdir(parents=True, exist_ok=True)
+        (out_dir / stale_name).write_text("stale\n", encoding="utf-8")
 
     result = subprocess.run(
         [
@@ -146,39 +147,59 @@ def test_fine_oof_eval_uses_teacher_denominator_and_weighted_summary(
     final_a = next(
         row
         for row in per_data
-        if row["stage"] == "final" and row["data_name"] == "fold00__a"
+        if row["stage"] == "final" and row["data_key"] == "fold00__a"
     )
-    assert final_a["n_teacher"] == "4"
-    assert final_a["n_pred_valid"] == "3"
-    assert final_a["n_pred_accepted"] == "2"
-    assert float(final_a["coverage"]) == 0.5
-    assert float(final_a["within_1_samples"]) == 0.5
-    assert float(final_a["accepted_mae_samples"]) == 0.5
-    assert math.isclose(float(final_a["accepted_rmse_samples"]), math.sqrt(0.5))
+    assert final_a["n_teacher"] == "3"
+    assert final_a["n_pred_finite"] == "3"
+    assert final_a["n_pick_clipped_low"] == "1"
+    assert final_a["n_pick_clipped_high"] == "1"
+    assert final_a["n_pick_clipped"] == "2"
+    assert float(final_a["coverage"]) == 1.0
+    assert float(final_a["mae_samples"]) == 5.0
+    assert math.isclose(float(final_a["rmse_samples"]), math.sqrt(125.0 / 3.0))
+    assert float(final_a["max_abs_samples"]) == 10.0
+    assert math.isclose(float(final_a["mae_ms"]), 20.0, abs_tol=1e-5)
 
     n_teacher_by_stage = {
         row["stage"]: row["n_teacher"]
         for row in per_data
-        if row["data_name"] == "fold00__a"
+        if row["data_key"] == "fold00__a"
     }
-    assert n_teacher_by_stage == {"coarse": "4", "final": "4", "robust": "4"}
+    assert n_teacher_by_stage == {"coarse": "3", "final": "3", "robust": "3"}
 
-    summary = _read_csv(out_dir / "summary.csv")
+    summary = _read_csv(out_dir / "summary_by_stage.csv")
     final_summary = next(row for row in summary if row["stage"] == "final")
-    assert final_summary["n_teacher"] == "5"
-    assert final_summary["n_pred_accepted"] == "3"
-    assert float(final_summary["within_1_samples"]) == 0.6
+    assert final_summary["n_files"] == "1"
+    assert final_summary["n_teacher"] == "3"
+    assert final_summary["n_pred_finite"] == "3"
+    assert final_summary["n_pick_clipped"] == "2"
+    assert float(final_summary["mae_samples"]) == 5.0
 
-    per_fold = _read_csv(out_dir / "per_fold.csv")
-    final_fold = next(row for row in per_fold if row["stage"] == "final")
-    assert final_fold["n_teacher"] == "5"
-    assert float(final_fold["coverage"]) == 0.6
+    for name in (
+        "per_fold.csv",
+        "summary.csv",
+        "top_errors_final.csv",
+        "top_errors_robust.csv",
+        "top_errors_coarse.csv",
+    ):
+        assert not (out_dir / name).exists()
 
-    for name in ("per_data.csv", "per_fold.csv", "summary.csv"):
-        rows = _read_csv(out_dir / name)
-        assert rows
-        assert not any("_ms" in column for column in rows[0])
-        assert "n_eval" not in rows[0]
+    assert not any(column.startswith("accepted_") for column in per_data[0])
+    assert "n_pred_accepted" not in per_data[0]
+    assert "high_conf_used" not in per_data[0]
+
+    meta = json.loads((out_dir / "eval_meta.json").read_text(encoding="utf-8"))
+    assert meta["teacher_mask"] == "finite & fb_i > 0 & fb_i < n_samples_orig"
+    assert meta["pick_mask"] == "finite only"
+    assert meta["out_of_record_pick_policy"] == "clip_to_record_edge_before_error"
+    assert meta["stage_pick_keys"] == {
+        "final": "final_pick_i",
+        "robust": "robust_pick_i",
+        "coarse": "coarse_pick_i",
+    }
+    assert meta["reject_mask_used"] is False
+    assert meta["high_conf_used"] is False
+    assert meta["top_errors_written"] is False
 
 
 def test_fine_oof_eval_final_stage_uses_final_pick_i(tmp_path: Path) -> None:
@@ -226,22 +247,17 @@ def test_fine_oof_eval_final_stage_uses_final_pick_i(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
 
-    summary = _read_csv(out_dir / "summary.csv")
+    summary = _read_csv(out_dir / "summary_by_stage.csv")
     final_summary = next(row for row in summary if row["stage"] == "final")
-    assert float(final_summary["accepted_mae_samples"]) == 10.0
-
-    top_errors = _read_csv(out_dir / "top_errors_final.csv")
-    assert top_errors
-    assert "final_pick_i" in top_errors[0]
-    assert "final_pick_f" not in top_errors[0]
-    assert {float(row["abs_error_samples"]) for row in top_errors} == {10.0}
+    assert float(final_summary["mae_samples"]) == 10.0
 
     per_data = _read_csv(out_dir / "per_data.csv")
     assert not any(row["stage"] == "final_high_conf" for row in per_data)
+    assert not (out_dir / "top_errors_final.csv").exists()
 
     meta = json.loads((out_dir / "eval_meta.json").read_text(encoding="utf-8"))
-    assert meta["final_pick_key"] == "final_pick_i"
-    assert meta["include_high_conf_final"] is False
+    assert meta["stage_pick_keys"]["final"] == "final_pick_i"
+    assert meta["high_conf_used"] is False
 
 
 def test_fine_oof_eval_final_stage_requires_final_pick_i(tmp_path: Path) -> None:
