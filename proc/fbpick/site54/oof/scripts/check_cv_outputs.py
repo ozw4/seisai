@@ -22,6 +22,7 @@ FINE_TRAIN_HELDOUT_FORBIDDEN_KEYS = (
 )
 FINE_INFER_REQUIRED_SINGLE_ENTRY_KEYS = (
     "segy_files",
+    "viewer_fb_files",
     "robust_npz_files",
     "coarse_npz_files",
 )
@@ -424,6 +425,8 @@ def strict_check_fine_infer_config(*, config_path: Path) -> str | None:
             return f"{key}_not_single_entry={value}"
 
     for key, raw in paths.items():
+        if key == "viewer_fb_files":
+            continue
         values = raw if isinstance(raw, list) else [raw]
         for value in values:
             if isinstance(value, str) and Path(value).name == "heldout_fb.txt":

@@ -248,6 +248,17 @@ def physics_qc_config(args: argparse.Namespace, fold: str) -> dict:
             'waveform_norm': 'per_trace',
             'clip_percentile': 99.0,
             'first_panel_only': True,
+            'overlays': {
+                'gt_pick': True,
+                'coarse_pick': True,
+                'robust_pick': False,
+                'trend_center': True,
+                'physical_center': True,
+                'fine_center': True,
+                'window': True,
+                'final_pick': True,
+                'physical_model_status': True,
+            },
         },
         **physical_center_cfg(args, qc=True),
     }

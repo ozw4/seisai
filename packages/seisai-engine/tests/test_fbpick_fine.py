@@ -780,10 +780,13 @@ def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
         'dpi': 120,
         'clip_percentile': 98.5,
         'first_panel_only': True,
+        'overlays': {'robust_pick': False, 'gt_pick': True},
     }
+    cfg['paths']['viewer_fb_files'] = ['viewer.fb.npy']
 
     typed = load_fine_infer_config(cfg)
 
+    assert typed.paths.viewer_fb_files == ('viewer.fb.npy',)
     assert typed.viewer.enabled is True
     assert typed.viewer.save_overview_png is False
     assert typed.viewer.save_gather_png is True
@@ -797,6 +800,9 @@ def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
     assert typed.viewer.dpi == 120
     assert typed.viewer.clip_percentile == pytest.approx(98.5)
     assert typed.viewer.first_panel_only is True
+    assert typed.viewer.overlays['gt_pick'] is True
+    assert typed.viewer.overlays['robust_pick'] is False
+    assert typed.viewer.overlays['coarse_pick'] is True
 
 
 def test_load_fine_infer_config_rejects_non_bool_first_panel_only(

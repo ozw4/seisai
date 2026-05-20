@@ -120,6 +120,7 @@ def test_fine_infer_config_omits_fb_files_for_raw_only_runtime(
 
     assert 'fb_files' not in cfg['paths']
     assert cfg['paths']['segy_files'] == ['/data/heldout.sgy']
+    assert 'viewer_fb_files' not in cfg['paths']
     assert cfg['paths']['robust_npz_files'] == ['/data/heldout.robust.npz']
     assert cfg['paths']['coarse_npz_files'] == ['/data/heldout.coarse.npz']
     assert cfg['viewer']['first_panel_only'] is True
@@ -217,6 +218,7 @@ def test_make_fine_defaults_write_under_run_root(
     for key, value in train_cfg['paths'].items():
         assert 'heldout_' not in str(value), (key, value)
     assert infer_cfg['paths']['segy_files'] == [sgys[0]]
+    assert infer_cfg['paths']['viewer_fb_files'] == [fbs[0]]
     assert infer_cfg['paths']['robust_npz_files'] == [robust[0]]
     assert infer_cfg['paths']['coarse_npz_files'] == [coarse[0]]
     assert (
@@ -325,6 +327,8 @@ def test_make_physics_defaults_write_configs_under_run_root(
     _assert_partial_physics_fallback(physics_cfg)
     _assert_partial_physics_fallback(physics_qc_cfg)
     assert physics_qc_cfg['vis']['first_panel_only'] is True
+    assert physics_qc_cfg['vis']['overlays']['gt_pick'] is True
+    assert physics_qc_cfg['vis']['overlays']['robust_pick'] is False
 
 
 def _write_runner_fold_lists(cv_root: Path) -> None:

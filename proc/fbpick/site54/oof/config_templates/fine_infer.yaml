@@ -44,6 +44,15 @@ viewer:
   dpi: 150
   clip_percentile: 99.0
   first_panel_only: true
+  overlays:
+    gt_pick: true
+    coarse_pick: true
+    robust_pick: false
+    physical_center: true
+    fine_center: true
+    window: true
+    final_pick: true
+    high_conf_final_pick: true
 
 model:
   backbone: resnet18

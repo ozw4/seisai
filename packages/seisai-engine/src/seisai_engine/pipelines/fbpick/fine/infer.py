@@ -56,6 +56,7 @@ DEFAULT_CONFIG_PATH = Path('examples/config_infer_fbpick_fine.yaml')
 _SAFE_OVERRIDE_PATHS = frozenset(
     {
         'paths.segy_files',
+        'paths.viewer_fb_files',
         'paths.robust_npz_files',
         'paths.coarse_npz_files',
         'paths.out_dir',
@@ -87,6 +88,15 @@ _SAFE_OVERRIDE_PATHS = frozenset(
         'viewer.waveform_norm',
         'viewer.dpi',
         'viewer.clip_percentile',
+        'viewer.first_panel_only',
+        'viewer.overlays.gt_pick',
+        'viewer.overlays.coarse_pick',
+        'viewer.overlays.robust_pick',
+        'viewer.overlays.physical_center',
+        'viewer.overlays.fine_center',
+        'viewer.overlays.window',
+        'viewer.overlays.final_pick',
+        'viewer.overlays.high_conf_final_pick',
     }
 )
 
@@ -95,6 +105,7 @@ def _default_cfg() -> dict[str, Any]:
     return {
         'paths': {
             'segy_files': [],
+            'viewer_fb_files': None,
             'robust_npz_files': [],
             'coarse_npz_files': None,
             'out_dir': './_fbpick_fine_infer_out',
@@ -141,6 +152,17 @@ def _default_cfg() -> dict[str, Any]:
             'waveform_norm': 'global',
             'dpi': 150,
             'clip_percentile': 99.0,
+            'first_panel_only': False,
+            'overlays': {
+                'gt_pick': True,
+                'coarse_pick': True,
+                'robust_pick': True,
+                'physical_center': True,
+                'fine_center': True,
+                'window': True,
+                'final_pick': True,
+                'high_conf_final_pick': True,
+            },
         },
         'model': {
             'backbone': 'resnet18',
@@ -181,6 +203,11 @@ def _set_or_validate_int(
 def _validate_fine_infer_inputs(typed: FineInferConfig) -> None:
     if typed.paths.fb_files is not None:
         msg = 'fine infer expects raw-only input; omit paths.fb_files'
+        raise ValueError(msg)
+    if typed.paths.viewer_fb_files is not None and (
+        len(typed.paths.viewer_fb_files) != len(typed.paths.segy_files)
+    ):
+        msg = 'paths.segy_files and paths.viewer_fb_files must have the same length'
         raise ValueError(msg)
     if typed.paths.robust_npz_files is None:
         msg = 'fine infer requires paths.robust_npz_files'
@@ -521,6 +548,7 @@ def _save_fine_gather_qc_pngs(
     final_payload: dict[str, np.ndarray],
     viewer: FineViewerCfg,
     primary_keys: tuple[str, ...],
+    gt_pick_i: np.ndarray | None = None,
     save_png_func=None,
 ) -> list[Path]:
     max_gathers = int(viewer.max_gathers_per_file)
@@ -560,6 +588,10 @@ def _save_fine_gather_qc_pngs(
                 raw_wave_hw=x_hw,
                 final_payload=final_payload,
                 trace_indices=trace_indices,
+                gt_pick_i=(
+                    None if gt_pick_i is None else np.asarray(gt_pick_i)[trace_indices]
+                ),
+                overlays=viewer.overlays,
                 title=title,
                 dpi=viewer.dpi,
                 clip_percentile=viewer.clip_percentile,
@@ -599,6 +631,8 @@ def _prepare_fine_infer_cfg(cfg: dict[str, Any], *, base_dir: Path) -> dict[str,
     list_path_keys: list[str] = ['paths.segy_files', 'paths.robust_npz_files']
     if paths.get('fb_files') is not None:
         list_path_keys.append('paths.fb_files')
+    if paths.get('viewer_fb_files') is not None:
+        list_path_keys.append('paths.viewer_fb_files')
     if paths.get('coarse_npz_files') is not None:
         list_path_keys.append('paths.coarse_npz_files')
     resolve_cfg_paths(prepared, base_dir, keys=list_path_keys)
@@ -606,6 +640,33 @@ def _prepare_fine_infer_cfg(cfg: dict[str, Any], *, base_dir: Path) -> dict[str,
     if paths.get('out_dir') is not None:
         resolve_cfg_paths(prepared, base_dir, keys=['paths.out_dir'])
     return prepared
+
+
+def _load_viewer_gt_pick_i(typed: FineInferConfig, *, n_traces: int) -> np.ndarray | None:
+    if typed.paths.viewer_fb_files is None:
+        return None
+    if len(typed.paths.viewer_fb_files) != 1:
+        msg = 'fine infer expects exactly one paths.viewer_fb_files entry'
+        raise ValueError(msg)
+
+    from seisai_engine.pipelines.fbpick.coarse.eval import load_fb_labels
+
+    fb_path = typed.paths.viewer_fb_files[0]
+    try:
+        gt_pick_i = np.asarray(load_fb_labels(fb_path), dtype=np.int64)
+    except Exception as exc:
+        msg = f'failed to load viewer FB labels from {fb_path}: {exc}'
+        raise RuntimeError(msg) from exc
+    if gt_pick_i.ndim != 1:
+        msg = f'viewer FB labels must be 1D: {fb_path}'
+        raise ValueError(msg)
+    if int(gt_pick_i.shape[0]) != int(n_traces):
+        msg = (
+            f'viewer FB label length {int(gt_pick_i.shape[0])} != '
+            f'n_traces {int(n_traces)} for {fb_path}'
+        )
+        raise ValueError(msg)
+    return gt_pick_i
 
 
 def _get_infer_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -793,6 +854,20 @@ def run_fine_infer(
             iter_id=iter_id,
         ),
     )
+    viewer_payload = final_payload
+    if save_gather_png:
+        viewer_payload = dict(final_payload)
+        for key in ('physical_center_i', 'fine_center_i'):
+            if key in robust_payload:
+                viewer_payload[key] = np.asarray(robust_payload[key])
+        if 'fine_center_i' not in viewer_payload and 'center_raw_i' in fine_payload:
+            viewer_payload['fine_center_i'] = np.asarray(fine_payload['center_raw_i'])
+        gt_pick_i = _load_viewer_gt_pick_i(
+            typed,
+            n_traces=int(np.asarray(final_payload['n_traces']).item()),
+        )
+    else:
+        gt_pick_i = None
 
     if save_output and typed.paths.out_dir is not None:
         save_fbpick_final_npz(
@@ -815,7 +890,7 @@ def run_fine_infer(
                 out_dir=typed.paths.out_dir,
             ),
             raw_wave_hw=raw_wave_hw_out['raw_wave_hw'],
-            final_payload=final_payload,
+            final_payload=viewer_payload,
             title=Path(typed.paths.segy_files[0]).stem,
             dpi=typed.viewer.dpi,
             clip_percentile=typed.viewer.clip_percentile,
@@ -830,9 +905,10 @@ def run_fine_infer(
                 info=info,
                 segy_path=typed.paths.segy_files[0],
                 out_dir=typed.paths.out_dir,
-                final_payload=final_payload,
+                final_payload=viewer_payload,
                 viewer=typed.viewer,
                 primary_keys=typed.dataset.primary_keys,
+                gt_pick_i=gt_pick_i,
             )
         finally:
             _close_info(info)
