@@ -106,6 +106,7 @@ class FineTransformCfg:
 class FineWindowCenterCfg:
     npz_key: str
     fallback_npz_key: str | None
+    valid_mask_npz_key: str | None
 
 
 @dataclass(frozen=True)
@@ -408,9 +409,22 @@ def _load_window_center_cfg(cfg: dict) -> FineWindowCenterCfg:
             msg = 'window_center.fallback_npz_key must be non-empty when provided'
             raise ValueError(msg)
 
+    valid_mask_raw = window_cfg.get('valid_mask_npz_key')
+    if valid_mask_raw is None:
+        valid_mask_npz_key = None
+    else:
+        if not isinstance(valid_mask_raw, str):
+            msg = 'window_center.valid_mask_npz_key must be str or null'
+            raise TypeError(msg)
+        valid_mask_npz_key = valid_mask_raw.strip()
+        if not valid_mask_npz_key:
+            msg = 'window_center.valid_mask_npz_key must be non-empty when provided'
+            raise ValueError(msg)
+
     return FineWindowCenterCfg(
         npz_key=npz_key,
         fallback_npz_key=fallback_npz_key,
+        valid_mask_npz_key=valid_mask_npz_key,
     )
 
 

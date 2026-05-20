@@ -17,7 +17,8 @@ transform:
 
 window_center:
   npz_key: fine_center_i
-  fallback_npz_key: robust_pick_i
+  fallback_npz_key: null
+  valid_mask_npz_key: fine_window_valid_mask
 
 infer:
   ckpt_path: null

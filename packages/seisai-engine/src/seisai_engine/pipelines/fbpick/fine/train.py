@@ -211,6 +211,7 @@ def build_train_bundle(
         segy_endian=typed.dataset.train_endian,
         window_center_npz_key=typed.window_center.npz_key,
         window_center_fallback_npz_key=typed.window_center.fallback_npz_key,
+        window_center_valid_mask_npz_key=typed.window_center.valid_mask_npz_key,
         center_augment=typed.center_augment,
     )
     ds_infer_full = build_labeled_infer_dataset(
@@ -234,6 +235,7 @@ def build_train_bundle(
         segy_endian=typed.dataset.train_endian,
         window_center_npz_key=typed.window_center.npz_key,
         window_center_fallback_npz_key=typed.window_center.fallback_npz_key,
+        window_center_valid_mask_npz_key=typed.window_center.valid_mask_npz_key,
     )
 
     model_sig = dict(typed.model_sig)

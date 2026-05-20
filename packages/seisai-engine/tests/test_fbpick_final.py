@@ -100,6 +100,7 @@ def _make_fine_payload() -> dict[str, np.ndarray]:
         'final_conf': fine_pmax.copy(),
         'window_start_i': window_start_i,
         'window_end_i': (window_start_i + 256).astype(np.int32),
+        'fine_window_valid_mask': np.ones(4, dtype=np.bool_),
     }
     validate_fine_result_payload(payload)
     return payload

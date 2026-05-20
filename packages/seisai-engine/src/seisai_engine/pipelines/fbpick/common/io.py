@@ -11,6 +11,7 @@ from .artifacts import (
     COARSE_REQUIRED_KEYS,
     FINAL_REQUIRED_KEYS,
     FINE_RESULT_REQUIRED_KEYS,
+    REASON_MASK_INFEASIBLE,
     ROBUST_CENTER_OPTIONAL_KEYS,
     ROBUST_OPTIONAL_KEYS,
     ROBUST_PHYSICAL_DIAGNOSTIC_OPTIONAL_KEYS,
@@ -286,11 +287,19 @@ def _validate_pick_time_pair(
     pick_t_sec: np.ndarray,
     dt_sec: float,
     n_samples_orig: int,
+    valid_mask_override: np.ndarray | None = None,
 ) -> None:
-    valid_mask = np.ones(pick_i.shape, dtype=np.bool_)
+    valid_mask = (
+        np.ones(pick_i.shape, dtype=np.bool_)
+        if valid_mask_override is None
+        else np.asarray(valid_mask_override, dtype=np.bool_)
+    )
+    if valid_mask.shape != pick_i.shape:
+        msg = f'{pick_key} valid mask must have the same shape'
+        raise ValueError(msg)
     if pick_key == 'trend_center_i':
         sentinel_mask = (pick_i == np.int32(-1)) & np.isnan(pick_t_sec)
-        valid_mask = ~sentinel_mask
+        valid_mask = valid_mask & ~sentinel_mask
         if not bool(np.any(valid_mask)):
             return
     pick_valid = pick_i[valid_mask]
@@ -907,6 +916,11 @@ def save_robust_npz(
             pick_t_sec=arrays[time_key],
             dt_sec=float(arrays['dt_sec'].item()),
             n_samples_orig=n_samples_orig_int,
+            valid_mask_override=(
+                fine_window_valid_mask
+                if pick_key == 'fine_center_i' and fine_window_valid_mask is not None
+                else None
+            ),
         )
 
     physical_diagnostic_values = {
@@ -1178,6 +1192,11 @@ def load_robust_npz(path: str | Path) -> dict[str, np.ndarray]:
             pick_t_sec=pick_t_sec,
             dt_sec=float(np.asarray(out['dt_sec']).item()),
             n_samples_orig=n_samples_orig,
+            valid_mask_override=(
+                np.asarray(out['fine_window_valid_mask'], dtype=np.bool_)
+                if pick_key == 'fine_center_i' and 'fine_window_valid_mask' in out
+                else None
+            ),
         )
 
     for key, dtype in _ROBUST_PHYSICAL_DIAGNOSTIC_SPECS:
@@ -1260,6 +1279,7 @@ def validate_fine_result_payload(payload: dict[str, np.ndarray]) -> dict[str, np
         ('final_conf', np.float32),
         ('window_start_i', np.int32),
         ('window_end_i', np.int32),
+        ('fine_window_valid_mask', np.bool_),
     )
     arrays = {
         key: _require_payload_vector(payload, key, dtype=dtype, length=n_traces)
@@ -1271,9 +1291,16 @@ def validate_fine_result_payload(payload: dict[str, np.ndarray]) -> dict[str, np
         msg = 'trace_indices must equal np.arange(n_traces)'
         raise ValueError(msg)
 
+    valid_mask = arrays['fine_window_valid_mask']
+
     fine_pick_local_i = arrays['fine_pick_local_i']
-    if np.any(fine_pick_local_i < 0) or np.any(fine_pick_local_i >= 256):
+    if np.any(fine_pick_local_i[valid_mask] < 0) or np.any(
+        fine_pick_local_i[valid_mask] >= 256
+    ):
         msg = 'fine_pick_local_i must lie in [0, 256)'
+        raise ValueError(msg)
+    if np.any(fine_pick_local_i[~valid_mask] != -1):
+        msg = 'fine_pick_local_i must be -1 where fine_window_valid_mask is false'
         raise ValueError(msg)
 
     fine_pick_local_f = arrays['fine_pick_local_f']
@@ -1284,35 +1311,49 @@ def validate_fine_result_payload(payload: dict[str, np.ndarray]) -> dict[str, np
 
     window_start_i = arrays['window_start_i']
     window_end_i = arrays['window_end_i']
-    if np.any((window_end_i - window_start_i) != 256):
+    if np.any((window_end_i[valid_mask] - window_start_i[valid_mask]) != 256):
         msg = 'window_end_i - window_start_i must equal 256 for every trace'
+        raise ValueError(msg)
+    if np.any(window_start_i[~valid_mask] != -1) or np.any(
+        window_end_i[~valid_mask] != -1
+    ):
+        msg = 'window_start_i and window_end_i must be -1 where fine_window_valid_mask is false'
         raise ValueError(msg)
 
     expected_final_pick_f = window_start_i.astype(np.float32) + fine_pick_local_f
     if not np.allclose(
-        arrays['final_pick_f'],
-        expected_final_pick_f,
+        arrays['final_pick_f'][valid_mask],
+        expected_final_pick_f[valid_mask],
         atol=1.0e-6,
         rtol=0.0,
     ):
         msg = 'final_pick_f must equal window_start_i + fine_pick_local_f'
         raise ValueError(msg)
+    if np.any(arrays['final_pick_f'][~valid_mask] != np.float32(-1.0)):
+        msg = 'final_pick_f must be -1 where fine_window_valid_mask is false'
+        raise ValueError(msg)
 
     expected_final_pick_i = (
         window_start_i.astype(np.int64) + fine_pick_local_i.astype(np.int64)
     ).astype(np.int32)
-    if not np.array_equal(arrays['final_pick_i'], expected_final_pick_i):
+    if not np.array_equal(arrays['final_pick_i'][valid_mask], expected_final_pick_i[valid_mask]):
         msg = 'final_pick_i must equal window_start_i + fine_pick_local_i'
+        raise ValueError(msg)
+    if np.any(arrays['final_pick_i'][~valid_mask] != -1):
+        msg = 'final_pick_i must be -1 where fine_window_valid_mask is false'
         raise ValueError(msg)
 
     expected_final_pick_t_sec = expected_final_pick_f * dt_sec
     if not np.allclose(
-        arrays['final_pick_t_sec'],
-        expected_final_pick_t_sec,
+        arrays['final_pick_t_sec'][valid_mask],
+        expected_final_pick_t_sec[valid_mask],
         atol=1.0e-6,
         rtol=0.0,
     ):
         msg = 'final_pick_t_sec must equal final_pick_f * dt_sec'
+        raise ValueError(msg)
+    if np.any(arrays['final_pick_t_sec'][~valid_mask] != np.float32(-1.0)):
+        msg = 'final_pick_t_sec must be -1 where fine_window_valid_mask is false'
         raise ValueError(msg)
 
     _validate_unit_interval('fine_pmax', arrays['fine_pmax'])
@@ -1324,6 +1365,9 @@ def validate_fine_result_payload(payload: dict[str, np.ndarray]) -> dict[str, np
         rtol=0.0,
     ):
         msg = 'final_conf must equal fine_pmax for fine local infer payload'
+        raise ValueError(msg)
+    if np.any(arrays['fine_pmax'][~valid_mask] != np.float32(0.0)):
+        msg = 'fine_pmax must be 0 where fine_window_valid_mask is false'
         raise ValueError(msg)
 
     return payload
@@ -1378,6 +1422,7 @@ def validate_fbpick_final_payload(
         ('final_conf', np.float32),
         ('high_conf_mask', np.bool_),
         ('reject_mask', np.bool_),
+        ('fine_window_valid_mask', np.bool_),
     )
     arrays = {
         key: _require_payload_vector(payload, key, dtype=dtype, length=n_traces)
@@ -1425,9 +1470,16 @@ def validate_fbpick_final_payload(
         msg = 'used_theoretical_mask requires robust_source == 1'
         raise ValueError(msg)
 
+    fine_window_valid_mask = arrays['fine_window_valid_mask']
+
     fine_pick_local_i = arrays['fine_pick_local_i']
-    if np.any(fine_pick_local_i < 0) or np.any(fine_pick_local_i >= 256):
+    if np.any(fine_pick_local_i[fine_window_valid_mask] < 0) or np.any(
+        fine_pick_local_i[fine_window_valid_mask] >= 256
+    ):
         msg = 'fine_pick_local_i must lie in [0, 256)'
+        raise ValueError(msg)
+    if np.any(fine_pick_local_i[~fine_window_valid_mask] != -1):
+        msg = 'fine_pick_local_i must be -1 where fine_window_valid_mask is false'
         raise ValueError(msg)
 
     fine_pick_local_f = arrays['fine_pick_local_f']
@@ -1438,35 +1490,55 @@ def validate_fbpick_final_payload(
 
     window_start_i = arrays['window_start_i']
     window_end_i = arrays['window_end_i']
-    if np.any((window_end_i - window_start_i) != 255):
+    if np.any(
+        (window_end_i[fine_window_valid_mask] - window_start_i[fine_window_valid_mask])
+        != 255
+    ):
         msg = 'window_end_i must equal window_start_i + 255 for every trace'
+        raise ValueError(msg)
+    if np.any(window_start_i[~fine_window_valid_mask] != -1) or np.any(
+        window_end_i[~fine_window_valid_mask] != -1
+    ):
+        msg = 'window_start_i and window_end_i must be -1 where fine_window_valid_mask is false'
         raise ValueError(msg)
 
     expected_final_pick_f = window_start_i.astype(np.float32) + fine_pick_local_f
     if not np.allclose(
-        arrays['final_pick_f'],
-        expected_final_pick_f,
+        arrays['final_pick_f'][fine_window_valid_mask],
+        expected_final_pick_f[fine_window_valid_mask],
         atol=1.0e-6,
         rtol=0.0,
     ):
         msg = 'final_pick_f must equal window_start_i + fine_pick_local_f'
         raise ValueError(msg)
+    if np.any(arrays['final_pick_f'][~fine_window_valid_mask] != np.float32(-1.0)):
+        msg = 'final_pick_f must be -1 where fine_window_valid_mask is false'
+        raise ValueError(msg)
 
     expected_final_pick_i = (
         window_start_i.astype(np.int64) + fine_pick_local_i.astype(np.int64)
     ).astype(np.int32)
-    if not np.array_equal(arrays['final_pick_i'], expected_final_pick_i):
+    if not np.array_equal(
+        arrays['final_pick_i'][fine_window_valid_mask],
+        expected_final_pick_i[fine_window_valid_mask],
+    ):
         msg = 'final_pick_i must equal window_start_i + fine_pick_local_i'
+        raise ValueError(msg)
+    if np.any(arrays['final_pick_i'][~fine_window_valid_mask] != -1):
+        msg = 'final_pick_i must be -1 where fine_window_valid_mask is false'
         raise ValueError(msg)
 
     expected_final_pick_t_sec = expected_final_pick_f * dt_sec
     if not np.allclose(
-        arrays['final_pick_t_sec'],
-        expected_final_pick_t_sec,
+        arrays['final_pick_t_sec'][fine_window_valid_mask],
+        expected_final_pick_t_sec[fine_window_valid_mask],
         atol=1.0e-6,
         rtol=0.0,
     ):
         msg = 'final_pick_t_sec must equal final_pick_f * dt_sec'
+        raise ValueError(msg)
+    if np.any(arrays['final_pick_t_sec'][~fine_window_valid_mask] != np.float32(-1.0)):
+        msg = 'final_pick_t_sec must be -1 where fine_window_valid_mask is false'
         raise ValueError(msg)
 
     expected_final_conf = np.clip(
@@ -1474,6 +1546,7 @@ def validate_fbpick_final_payload(
         0.0,
         1.0,
     ).astype(np.float32)
+    expected_final_conf[~fine_window_valid_mask] = np.float32(0.0)
     if not np.allclose(
         arrays['final_conf'],
         expected_final_conf,
@@ -1486,6 +1559,7 @@ def validate_fbpick_final_payload(
     expected_reject_mask = (
         (robust_source != np.uint8(ROBUST_SOURCE_COARSE_OBSERVED))
         | (arrays['reason_mask'] != 0)
+        | (~fine_window_valid_mask)
     )
     if not np.array_equal(arrays['reject_mask'], expected_reject_mask):
         msg = 'reject_mask must equal (robust_source != 0) OR (reason_mask != 0)'
@@ -1534,6 +1608,7 @@ def save_fbpick_final_npz(
     final_conf,
     high_conf_mask,
     reject_mask,
+    fine_window_valid_mask,
     lineage,
 ) -> Path:
     out_path = Path(path).expanduser().resolve()
@@ -1683,6 +1758,11 @@ def save_fbpick_final_npz(
         'reject_mask': _coerce_bool_vector(
             'reject_mask',
             reject_mask,
+            length=n_traces_int,
+        ),
+        'fine_window_valid_mask': _coerce_bool_vector(
+            'fine_window_valid_mask',
+            fine_window_valid_mask,
             length=n_traces_int,
         ),
         'lineage': _coerce_lineage(lineage),
@@ -2018,14 +2098,30 @@ def build_fbpick_final_payload(
             raise ValueError(msg)
 
     window_start_i = np.asarray(fine_payload['window_start_i'], dtype=np.int32)
-    window_end_i = (window_start_i.astype(np.int64) + 255).astype(np.int32)
+    fine_window_valid_mask = np.asarray(
+        fine_payload['fine_window_valid_mask'],
+        dtype=np.bool_,
+    )
+    window_end_i = np.full((fine_n_traces,), -1, dtype=np.int32)
+    window_end_i[fine_window_valid_mask] = (
+        window_start_i[fine_window_valid_mask].astype(np.int64) + 255
+    ).astype(np.int32)
     fine_pick_local_i = np.asarray(fine_payload['fine_pick_local_i'], dtype=np.int32)
     fine_pick_local_f = np.asarray(fine_payload['fine_pick_local_f'], dtype=np.float32)
-    final_pick_f = window_start_i.astype(np.float32) + fine_pick_local_f
-    final_pick_i = (
-        window_start_i.astype(np.int64) + fine_pick_local_i.astype(np.int64)
+    final_pick_f = np.full((fine_n_traces,), -1.0, dtype=np.float32)
+    final_pick_i = np.full((fine_n_traces,), -1, dtype=np.int32)
+    final_pick_t_sec = np.full((fine_n_traces,), -1.0, dtype=np.float32)
+    final_pick_f[fine_window_valid_mask] = (
+        window_start_i[fine_window_valid_mask].astype(np.float32)
+        + fine_pick_local_f[fine_window_valid_mask]
+    )
+    final_pick_i[fine_window_valid_mask] = (
+        window_start_i[fine_window_valid_mask].astype(np.int64)
+        + fine_pick_local_i[fine_window_valid_mask].astype(np.int64)
     ).astype(np.int32)
-    final_pick_t_sec = final_pick_f * coarse_dt_sec
+    final_pick_t_sec[fine_window_valid_mask] = (
+        final_pick_f[fine_window_valid_mask] * coarse_dt_sec
+    )
 
     robust_conf = np.asarray(robust_payload['robust_conf'], dtype=np.float32)
     fine_pmax = np.asarray(fine_payload['fine_pmax'], dtype=np.float32)
@@ -2034,12 +2130,15 @@ def build_fbpick_final_payload(
         0.0,
         1.0,
     ).astype(np.float32)
+    final_conf[~fine_window_valid_mask] = np.float32(0.0)
 
     robust_source = np.asarray(robust_payload['robust_source'], dtype=np.uint8)
-    reason_mask = np.asarray(robust_payload['reason_mask'], dtype=np.uint8)
+    reason_mask = np.asarray(robust_payload['reason_mask'], dtype=np.uint8).copy()
+    reason_mask[~fine_window_valid_mask] |= np.uint8(REASON_MASK_INFEASIBLE)
     reject_mask = (
         (robust_source != np.uint8(ROBUST_SOURCE_COARSE_OBSERVED))
         | (reason_mask != 0)
+        | (~fine_window_valid_mask)
     ).astype(np.bool_)
     high_conf_mask = ((~reject_mask) & (final_conf >= threshold)).astype(np.bool_)
 
@@ -2072,6 +2171,7 @@ def build_fbpick_final_payload(
         'final_conf': final_conf,
         'high_conf_mask': high_conf_mask,
         'reject_mask': reject_mask,
+        'fine_window_valid_mask': fine_window_valid_mask.astype(np.bool_, copy=False),
         'lineage': _coerce_lineage(lineage),
     }
     validate_fbpick_final_payload(out, high_conf_threshold=float(threshold))

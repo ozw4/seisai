@@ -119,6 +119,11 @@ def test_fine_train_config_fixed_last_uses_last_checkpoint_policy(
         'metric': 'last',
         'mode': 'max',
     }
+    assert cfg['window_center'] == {
+        'npz_key': 'fine_center_i',
+        'fallback_npz_key': None,
+        'valid_mask_npz_key': 'fine_window_valid_mask',
+    }
 
 
 def test_fine_infer_config_omits_fb_files_for_raw_only_runtime(
@@ -140,6 +145,11 @@ def test_fine_infer_config_omits_fb_files_for_raw_only_runtime(
     assert cfg['paths']['robust_npz_files'] == ['/data/heldout.robust.npz']
     assert cfg['paths']['coarse_npz_files'] == ['/data/heldout.coarse.npz']
     assert cfg['viewer']['first_panel_only'] is True
+    assert cfg['window_center'] == {
+        'npz_key': 'fine_center_i',
+        'fallback_npz_key': None,
+        'valid_mask_npz_key': 'fine_window_valid_mask',
+    }
 
 
 def test_make_fine_defaults_write_under_run_root(
@@ -241,6 +251,16 @@ def test_make_fine_defaults_write_under_run_root(
     assert infer_cfg['paths']['robust_npz_files'] == [robust[0]]
     assert infer_cfg['paths']['coarse_npz_files'] == [coarse[0]]
     assert infer_cfg['viewer']['gather_selection'] == 'even'
+    assert train_cfg['window_center'] == {
+        'npz_key': 'fine_center_i',
+        'fallback_npz_key': None,
+        'valid_mask_npz_key': 'fine_window_valid_mask',
+    }
+    assert infer_cfg['window_center'] == {
+        'npz_key': 'fine_center_i',
+        'fallback_npz_key': None,
+        'valid_mask_npz_key': 'fine_window_valid_mask',
+    }
     assert (
         run_root
         / 'aggregate'

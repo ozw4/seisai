@@ -244,6 +244,7 @@ def _write_robust_with_n_samples(
     n_samples_orig: int,
     dt_sec: float,
     fine_center_i: np.ndarray | None = None,
+    fine_window_valid_mask: np.ndarray | None = None,
 ) -> str:
     robust_pick_i_arr = np.asarray(robust_pick_i, dtype=np.int32)
     n_traces = int(robust_pick_i_arr.shape[0])
@@ -275,6 +276,11 @@ def _write_robust_with_n_samples(
         payload['fine_center_i'] = fine_center_i_arr
         payload['fine_center_t_sec'] = (
             fine_center_i_arr.astype(np.float32) * np.float32(dt_sec)
+        )
+    if fine_window_valid_mask is not None:
+        payload['fine_window_valid_mask'] = np.asarray(
+            fine_window_valid_mask,
+            dtype=np.bool_,
         )
     save_robust_npz(path, **payload)
     return str(path.resolve())
@@ -427,6 +433,7 @@ def _build_test_fine_train_dataset(
     robust_path: str,
     window_center_npz_key: str = 'robust_pick_i',
     window_center_fallback_npz_key: str | None = None,
+    window_center_valid_mask_npz_key: str | None = None,
     center_augment: FineCenterAugmentCfg | None = None,
     max_trials: int = 8,
 ):
@@ -453,6 +460,7 @@ def _build_test_fine_train_dataset(
         segy_endian='big',
         window_center_npz_key=window_center_npz_key,
         window_center_fallback_npz_key=window_center_fallback_npz_key,
+        window_center_valid_mask_npz_key=window_center_valid_mask_npz_key,
         center_augment=center_augment,
     )
 
@@ -464,6 +472,7 @@ def _build_test_fine_labeled_infer_dataset(
     robust_path: str,
     window_center_npz_key: str = 'robust_pick_i',
     window_center_fallback_npz_key: str | None = None,
+    window_center_valid_mask_npz_key: str | None = None,
     max_trials: int = 8,
 ):
     return build_labeled_infer_dataset(
@@ -487,6 +496,7 @@ def _build_test_fine_labeled_infer_dataset(
         segy_endian='big',
         window_center_npz_key=window_center_npz_key,
         window_center_fallback_npz_key=window_center_fallback_npz_key,
+        window_center_valid_mask_npz_key=window_center_valid_mask_npz_key,
     )
 
 
@@ -585,6 +595,7 @@ def test_load_fine_train_config_returns_fixed_contract_values(tmp_path: Path) ->
     assert typed.model_sig['out_chans'] == 1
     assert typed.window_center.npz_key == 'robust_pick_i'
     assert typed.window_center.fallback_npz_key is None
+    assert typed.window_center.valid_mask_npz_key is None
     assert typed.center_augment.enabled is False
     assert typed.center_augment.train_only is True
     assert typed.center_augment.p_no_jitter == pytest.approx(1.0)
@@ -607,12 +618,14 @@ def test_load_fine_train_config_parses_window_center(tmp_path: Path) -> None:
     cfg['window_center'] = {
         'npz_key': 'fine_center_i',
         'fallback_npz_key': 'robust_pick_i',
+        'valid_mask_npz_key': 'fine_window_valid_mask',
     }
 
     typed = load_fine_train_config(cfg, base_dir=tmp_path)
 
     assert typed.window_center.npz_key == 'fine_center_i'
     assert typed.window_center.fallback_npz_key == 'robust_pick_i'
+    assert typed.window_center.valid_mask_npz_key == 'fine_window_valid_mask'
 
 
 def test_load_fine_train_config_parses_center_augment(tmp_path: Path) -> None:
@@ -762,6 +775,7 @@ def test_load_fine_infer_config_returns_default_high_conf_threshold(
     assert typed.infer.high_conf_threshold == pytest.approx(0.5)
     assert typed.window_center.npz_key == 'robust_pick_i'
     assert typed.window_center.fallback_npz_key is None
+    assert typed.window_center.valid_mask_npz_key is None
     assert typed.viewer.enabled is False
     assert typed.viewer.save_overview_png is False
     assert typed.viewer.save_gather_png is False
@@ -908,12 +922,14 @@ def test_load_fine_infer_config_parses_window_center(tmp_path: Path) -> None:
     cfg['window_center'] = {
         'npz_key': 'fine_center_i',
         'fallback_npz_key': 'robust_pick_i',
+        'valid_mask_npz_key': 'fine_window_valid_mask',
     }
 
     typed = load_fine_infer_config(cfg)
 
     assert typed.window_center.npz_key == 'fine_center_i'
     assert typed.window_center.fallback_npz_key == 'robust_pick_i'
+    assert typed.window_center.valid_mask_npz_key == 'fine_window_valid_mask'
 
 
 def test_load_fine_infer_config_parses_explicit_coarse_npz_files(
@@ -1345,6 +1361,62 @@ def test_fine_train_dataset_uses_configured_fine_center(
     )
 
 
+def test_fine_train_dataset_skips_invalid_fine_window_mask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 128
+    n_samples = 512
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 180, dtype=np.int32)
+    fine_center = np.full((n_traces,), 220, dtype=np.int32)
+    valid_mask = np.ones((n_traces,), dtype=np.bool_)
+    valid_mask[7] = False
+    fine_center[7] = -1
+    fb = fine_center.astype(np.int64)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'train_valid_mask.sgy', traces)
+    fb_path = _write_fb(tmp_path / 'train_valid_mask_fb.npy', fb)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'train_valid_mask.robust.npz',
+        robust_pick_i=robust,
+        fine_center_i=fine_center,
+        fine_window_valid_mask=valid_mask,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+    ds = _build_test_fine_train_dataset(
+        segy_path=segy_path,
+        fb_path=fb_path,
+        robust_path=robust_path,
+        window_center_npz_key='fine_center_i',
+        window_center_valid_mask_npz_key='fine_window_valid_mask',
+    )
+
+    try:
+        ds._rng = np.random.default_rng(0)
+        sample = ds[0]
+    finally:
+        ds.close()
+
+    meta = sample['meta']
+    assert bool(sample['trace_valid'][7]) is False
+    assert bool(meta['trace_valid'][7]) is False
+    assert int(meta['window_start_i'][7]) == -1
+    assert int(meta['window_end_i'][7]) == -1
+    assert int(meta['center_raw_i'][7]) == -1
+    np.testing.assert_array_equal(
+        meta['window_start_i'][valid_mask],
+        fine_center[valid_mask] - 128,
+    )
+
+
 def test_fine_train_dataset_falls_back_to_robust_pick_when_fine_center_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1623,6 +1695,63 @@ def test_fine_infer_dataset_uses_configured_fine_center(
     meta = sample['meta']
     np.testing.assert_array_equal(meta['center_raw_i'][:5], fine_center[:5])
     np.testing.assert_array_equal(meta['window_start_i'][:5], fine_center[:5] - 128)
+
+
+def test_fine_infer_dataset_skips_invalid_fine_window_mask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 160
+    n_samples = 512
+    dt_sec = 0.002
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    robust = np.full((n_traces,), 80, dtype=np.int32)
+    fine_center = np.full((n_traces,), 220, dtype=np.int32)
+    valid_mask = np.ones((n_traces,), dtype=np.bool_)
+    valid_mask[5] = False
+    fine_center[5] = -1
+
+    segy_path = _register_synthetic_segy(tmp_path, 'infer_valid_mask.sgy', traces)
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'infer_valid_mask.robust.npz',
+        robust_pick_i=robust,
+        fine_center_i=fine_center,
+        fine_window_valid_mask=valid_mask,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+
+    ds = build_raw_infer_dataset(
+        segy_files=[segy_path],
+        robust_npz_files=[robust_path],
+        plan=build_plan(sigma_ms=3.0, sigma_samples_min=1.5, sigma_samples_max=12.0),
+        trace_len=128,
+        overlap_h=96,
+        time_len=256,
+        center_index=128,
+        standardize_eps=1.0e-8,
+        waveform_mode='eager',
+        segy_endian='big',
+        use_header_cache=False,
+        window_center_npz_key='fine_center_i',
+        window_center_valid_mask_npz_key='fine_window_valid_mask',
+    )
+
+    try:
+        sample = ds[0]
+    finally:
+        ds.close()
+
+    meta = sample['meta']
+    assert bool(meta['trace_valid'][5]) is False
+    assert int(meta['window_start_i'][5]) == -1
+    assert int(meta['window_end_i'][5]) == -1
+    assert int(meta['center_raw_i'][5]) == -1
 
 
 def test_build_fine_init_state_dict_slices_first_conv_waveform_channel() -> None:
@@ -2013,6 +2142,70 @@ def test_run_fine_infer_builds_and_saves_final_payload(
         tmp_path / 'fine_infer_out' / build_final_npz_name(segy_path)
     )
     np.testing.assert_array_equal(saved['final_pick_i'], final_pick.astype(np.int32))
+
+
+def test_run_fine_infer_rejects_invalid_fine_window_mask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_traces = 160
+    n_samples = 512
+    dt_sec = 0.002
+    trace_axis = np.arange(n_traces, dtype=np.int32)
+    robust = np.full((n_traces,), 220, dtype=np.int32)
+    fine_center = robust.copy()
+    valid_mask = np.ones((n_traces,), dtype=np.bool_)
+    valid_mask[3] = False
+    final_pick = fine_center + ((trace_axis % 5) - 2) * 7
+
+    traces = np.zeros((n_traces, n_samples), dtype=np.float32)
+    for trace_idx, pick_idx in enumerate(final_pick.tolist()):
+        traces[trace_idx, int(pick_idx)] = 10.0 + 0.01 * float(trace_idx)
+
+    segy_path = _register_synthetic_segy(tmp_path, 'fine_invalid_mask.sgy', traces)
+    _write_coarse_with_n_samples(
+        tmp_path / 'fine_invalid_mask.coarse.npz',
+        coarse_pick_i=robust.astype(np.int32),
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    robust_path = _write_robust_with_n_samples(
+        tmp_path / 'fine_invalid_mask.robust.npz',
+        robust_pick_i=robust,
+        fine_center_i=fine_center,
+        fine_window_valid_mask=valid_mask,
+        n_samples_orig=n_samples,
+        dt_sec=dt_sec,
+    )
+    _patch_synthetic_file_infos(
+        monkeypatch,
+        traces_by_path={segy_path: traces},
+        dt_sec=dt_sec,
+    )
+
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path=segy_path,
+        robust_path=robust_path,
+    )
+    cfg['window_center'] = {
+        'npz_key': 'fine_center_i',
+        'fallback_npz_key': None,
+        'valid_mask_npz_key': 'fine_window_valid_mask',
+    }
+    result = run_fine_infer(
+        model=_IdentityFineModel(),
+        cfg=cfg,
+        device=torch.device('cpu'),
+    )
+
+    assert bool(result['fine_window_valid_mask'][3]) is False
+    assert int(result['final_pick_i'][3]) == -1
+    assert float(result['final_conf'][3]) == pytest.approx(0.0)
+    assert bool(result['reject_mask'][3]) is True
+    assert int(result['window_start_i'][3]) == -1
+    assert int(result['window_end_i'][3]) == -1
+    np.testing.assert_array_equal(result['final_pick_i'][valid_mask], final_pick[valid_mask])
 
 
 def test_run_fine_infer_uses_explicit_coarse_npz_path(

@@ -194,6 +194,7 @@ FINE_RESULT_REQUIRED_KEYS = (
     'final_conf',
     'window_start_i',
     'window_end_i',
+    'fine_window_valid_mask',
 )
 
 FINAL_REQUIRED_KEYS = (
@@ -222,6 +223,7 @@ FINAL_REQUIRED_KEYS = (
     'final_conf',
     'high_conf_mask',
     'reject_mask',
+    'fine_window_valid_mask',
     'lineage',
 )
 
