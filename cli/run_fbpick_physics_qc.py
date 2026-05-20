@@ -397,6 +397,9 @@ def _load_vis_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 		raise TypeError(msg)
 
 	default_overlays = {
+		'gt_pick': True,
+		'coarse_pick': True,
+		'robust_pick': True,
 		'coarse_pmax': True,
 		'trend_center': True,
 		'physical_center': True,
@@ -670,7 +673,11 @@ def _save_vis_pngs(
 				raw_wave_hw=x_hw,
 				gt_pick_i=gt_pick_i[trace_indices],
 				coarse_pick_i=coarse_pick_i[trace_indices],
-				robust_pick_i=robust_pick_i[trace_indices],
+				robust_pick_i=(
+					robust_pick_i[trace_indices]
+					if bool(overlays.get('robust_pick', True))
+					else None
+				),
 				coarse_pmax=(
 					_slice_optional_trace_array(
 						coarse_pmax,
@@ -762,6 +769,8 @@ def _save_vis_pngs(
 				waveform_norm=str(vis_cfg['waveform_norm']),
 				clip_percentile=float(vis_cfg['clip_percentile']),
 				show_window=bool(overlays.get('window', True)),
+				show_gt=bool(overlays.get('gt_pick', True)),
+				show_coarse=bool(overlays.get('coarse_pick', True)),
 				first_panel_only=bool(vis_cfg.get('first_panel_only', False)),
 			)
 		)

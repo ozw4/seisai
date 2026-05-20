@@ -22,6 +22,7 @@ FINE_TRAIN_HELDOUT_FORBIDDEN_KEYS = (
 )
 FINE_INFER_REQUIRED_SINGLE_ENTRY_KEYS = (
     "segy_files",
+    "viewer_fb_files",
     "robust_npz_files",
     "coarse_npz_files",
 )
@@ -424,6 +425,8 @@ def strict_check_fine_infer_config(*, config_path: Path) -> str | None:
             return f"{key}_not_single_entry={value}"
 
     for key, raw in paths.items():
+        if key == "viewer_fb_files":
+            continue
         values = raw if isinstance(raw, list) else [raw]
         for value in values:
             if isinstance(value, str) and Path(value).name == "heldout_fb.txt":
@@ -435,8 +438,9 @@ def strict_check_fine_infer_config(*, config_path: Path) -> str | None:
 def check_eval(results: list[dict[str, Any]], *, run_root: Path) -> None:
     out_dir = run_root / "aggregate" / "08_eval"
     required = [
-        out_dir / "summary_by_stage.csv",
         out_dir / "per_data.csv",
+        out_dir / "per_fold.csv",
+        out_dir / "summary.csv",
         out_dir / "eval_meta.json",
     ]
     missing = [p for p in required if not p.is_file()]

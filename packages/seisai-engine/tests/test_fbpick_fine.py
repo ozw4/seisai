@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import cli.run_fbpick_fine_infer as fine_infer_cli
@@ -760,6 +761,7 @@ def test_load_fine_infer_config_returns_default_high_conf_threshold(
     assert typed.viewer.enabled is False
     assert typed.viewer.save_overview_png is False
     assert typed.viewer.save_gather_png is False
+    assert typed.viewer.gather_selection == 'first'
     assert typed.viewer.first_panel_only is False
 
 
@@ -774,20 +776,25 @@ def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
         'save_overview_png': False,
         'save_gather_png': True,
         'max_gathers_per_file': 3,
+        'gather_selection': 'even',
         'skip_gather_keys': {'ffid': [0], 'cmp': [-1]},
         'max_traces_per_gather': 10000,
         'waveform_norm': 'per_trace',
         'dpi': 120,
         'clip_percentile': 98.5,
         'first_panel_only': True,
+        'overlays': {'robust_pick': False, 'gt_pick': True},
     }
+    cfg['paths']['viewer_fb_files'] = ['viewer.fb.npy']
 
     typed = load_fine_infer_config(cfg)
 
+    assert typed.paths.viewer_fb_files == ('viewer.fb.npy',)
     assert typed.viewer.enabled is True
     assert typed.viewer.save_overview_png is False
     assert typed.viewer.save_gather_png is True
     assert typed.viewer.max_gathers_per_file == 3
+    assert typed.viewer.gather_selection == 'even'
     assert typed.viewer.skip_gather_keys == {
         'ffid': frozenset({0}),
         'cmp': frozenset({-1}),
@@ -797,6 +804,25 @@ def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
     assert typed.viewer.dpi == 120
     assert typed.viewer.clip_percentile == pytest.approx(98.5)
     assert typed.viewer.first_panel_only is True
+    assert typed.viewer.overlays['gt_pick'] is True
+    assert typed.viewer.overlays['robust_pick'] is False
+    assert typed.viewer.overlays['coarse_pick'] is True
+
+
+def test_load_fine_infer_config_rejects_invalid_gather_selection(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['viewer'] = {'gather_selection': 'evenly_spaced'}
+
+    with pytest.raises(ValueError) as exc:
+        load_fine_infer_config(cfg)
+
+    assert 'viewer.gather_selection must be one of: first, even' in str(exc.value)
 
 
 def test_load_fine_infer_config_rejects_non_bool_first_panel_only(
@@ -2025,6 +2051,72 @@ def test_save_fine_gather_qc_pngs_skips_configured_key_and_counts_accepted(
 
     assert len(out_paths) == 2
     assert [int(indices[0]) for indices in captured] == [1, 2]
+
+
+def test_save_fine_gather_qc_pngs_passes_viewer_gather_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    traces = np.arange(8, dtype=np.float32).reshape(1, 8)
+    info = _make_qc_info(
+        traces=traces,
+        key_to_indices={10: [0]},
+        n_traces=1,
+        n_samples=8,
+    )
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['viewer'] = {
+        'enabled': True,
+        'save_gather_png': True,
+        'max_gathers_per_file': 1,
+        'gather_selection': 'even',
+    }
+    viewer = load_fine_infer_config(cfg).viewer
+    captured: dict[str, object] = {}
+
+    def _iter_qc_gathers(
+        info_arg: object,
+        *,
+        primary_keys: object,
+        max_gathers: object,
+        skip_gather_keys: object,
+        max_traces_per_gather: object,
+        segy_path: object,
+        gather_selection: object,
+    ) -> Iterator[tuple[str, int, np.ndarray]]:
+        _ = (
+            info_arg,
+            primary_keys,
+            max_gathers,
+            skip_gather_keys,
+            max_traces_per_gather,
+            segy_path,
+        )
+        captured['gather_selection'] = gather_selection
+        yield 'ffid', 10, np.asarray([0], dtype=np.int64)
+
+    def _save(out_png: Path, **kwargs: object) -> Path:
+        _ = kwargs
+        return Path(out_png)
+
+    monkeypatch.setattr(fine_infer_module, 'iter_qc_gathers', _iter_qc_gathers)
+
+    out_paths = _save_fine_gather_qc_pngs(
+        info=info,
+        segy_path=tmp_path / 'line' / 'small.sgy',
+        out_dir=tmp_path / 'out',
+        final_payload=_make_final_payload_for_qc(n_traces=1, n_samples=8),
+        viewer=viewer,
+        primary_keys=('ffid',),
+        save_png_func=_save,
+    )
+
+    assert len(out_paths) == 1
+    assert captured == {'gather_selection': 'even'}
 
 
 def test_save_fine_gather_qc_pngs_skips_oversized_before_mmap_access(

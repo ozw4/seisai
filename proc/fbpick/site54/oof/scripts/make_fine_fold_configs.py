@@ -29,6 +29,7 @@ INFER_REQUIRED_SINGLE_ENTRY_KEYS = (
     "segy_files",
     "robust_npz_files",
     "coarse_npz_files",
+    "viewer_fb_files",
 )
 INFER_ALLOWED_PATH_KEYS = set(INFER_REQUIRED_SINGLE_ENTRY_KEYS) | {"fb_files", "out_dir"}
 
@@ -148,7 +149,9 @@ def ensure_fine_infer_heldout_policy(*, cfg: dict, config_name: str) -> None:
                 f"{config_name}: paths.{key} must be a single-entry list, "
                 f"got {value}"
             )
-    for raw in paths.values():
+    for key, raw in paths.items():
+        if key == "viewer_fb_files":
+            continue
         values = raw if isinstance(raw, list) else [raw]
         for value in values:
             if isinstance(value, str) and Path(value).name == "heldout_fb.txt":
@@ -218,11 +221,14 @@ def fine_infer_config(
     coarse_npz_file: str,
     out_dir: Path,
     ckpt_path: Path,
+    viewer_fb_file: str | None = None,
 ) -> dict:
     cfg = copy.deepcopy(base_cfg)
     cfg.setdefault("paths", {})
     cfg["paths"]["segy_files"] = [segy_file]
     cfg["paths"].pop("fb_files", None)
+    if viewer_fb_file is not None:
+        cfg["paths"]["viewer_fb_files"] = [viewer_fb_file]
     cfg["paths"]["robust_npz_files"] = [robust_npz_file]
     cfg["paths"]["coarse_npz_files"] = [coarse_npz_file]
     cfg["paths"]["out_dir"] = str(out_dir)
@@ -454,6 +460,7 @@ def main() -> int:
             infer_cfg = fine_infer_config(
                 base_cfg=base_infer_cfg,
                 segy_file=all_sgy[all_idx],
+                viewer_fb_file=all_fb[all_idx],
                 robust_npz_file=all_robust[all_idx],
                 coarse_npz_file=all_coarse[all_idx],
                 out_dir=run_root / fold / "07_fine_infer",

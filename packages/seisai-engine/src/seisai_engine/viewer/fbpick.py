@@ -966,7 +966,7 @@ def save_fbpick_physics_qc_gather_png(
 	raw_wave_hw: np.ndarray,
 	gt_pick_i: np.ndarray,
 	coarse_pick_i: np.ndarray,
-	robust_pick_i: np.ndarray,
+	robust_pick_i: np.ndarray | None = None,
 	coarse_pmax: np.ndarray | None = None,
 	trend_center_i: np.ndarray | None = None,
 	physical_center_i: np.ndarray | None = None,
@@ -983,6 +983,8 @@ def save_fbpick_physics_qc_gather_png(
 	clip_percentile: float = 99.0,
 	waveform_norm: str = 'global',
 	show_window: bool = True,
+	show_gt: bool = True,
+	show_coarse: bool = True,
 	first_panel_only: bool = False,
 ) -> Path:
 	import matplotlib.pyplot as plt
@@ -999,15 +1001,19 @@ def save_fbpick_physics_qc_gather_png(
 
 	gt = np.asarray(gt_pick_i, dtype=np.int64)
 	coarse = np.asarray(coarse_pick_i, dtype=np.int64)
-	robust = np.asarray(robust_pick_i, dtype=np.int64)
 	for name, arr in (
 		('gt_pick_i', gt),
 		('coarse_pick_i', coarse),
-		('robust_pick_i', robust),
 	):
 		if arr.ndim != 1 or int(arr.shape[0]) != n_traces:
 			msg = f'{name} must be 1D with length {n_traces}'
 			raise ValueError(msg)
+	robust = _optional_qc_vector(
+		'robust_pick_i',
+		robust_pick_i,
+		length=n_traces,
+		dtype=np.int64,
+	)
 	coarse_pmax_arr = _optional_qc_vector(
 		'coarse_pmax',
 		coarse_pmax,
@@ -1085,15 +1091,19 @@ def save_fbpick_physics_qc_gather_png(
 		raise ValueError(msg)
 
 	valid_gt = (gt > 0) & (gt < int(n_samples))
-	robust_window_start = robust.astype(np.int64) - 128
-	robust_window_end = robust.astype(np.int64) + 127
-	in_robust_window = (
-		valid_gt & (gt >= robust_window_start) & (gt <= robust_window_end)
-	)
 	coarse_err = coarse.astype(np.float32) - gt.astype(np.float32)
-	robust_err = robust.astype(np.float32) - gt.astype(np.float32)
 	coarse_err[~valid_gt] = np.nan
-	robust_err[~valid_gt] = np.nan
+	if robust is None:
+		robust_err = None
+		in_robust_window = None
+	else:
+		robust_window_start = robust.astype(np.int64) - 128
+		robust_window_end = robust.astype(np.int64) + 127
+		in_robust_window = (
+			valid_gt & (gt >= robust_window_start) & (gt <= robust_window_end)
+		)
+		robust_err = robust.astype(np.float32) - gt.astype(np.float32)
+		robust_err[~valid_gt] = np.nan
 
 	x = np.arange(n_traces, dtype=np.float32)
 	norm_mode = str(waveform_norm)
@@ -1189,32 +1199,35 @@ def save_fbpick_physics_qc_gather_png(
 			vmax=display_vmax,
 		)
 
-	gt_y = _first_panel_y(gt)
-	valid_gt_for_plot = valid_gt & np.isfinite(gt_y)
-	axes[0].plot(
-		x[valid_gt_for_plot],
-		gt_y[valid_gt_for_plot],
-		color='lime',
-		lw=1.2,
-		alpha=0.95,
-		label='GT pick',
-	)
-	axes[0].plot(
-		x,
-		_first_panel_y(coarse),
-		color='#00a6ff',
-		lw=1.0,
-		alpha=0.9,
-		label='coarse',
-	)
-	axes[0].plot(
-		x,
-		_first_panel_y(robust),
-		color='yellow',
-		lw=1.0,
-		alpha=0.95,
-		label='robust',
-	)
+	if bool(show_gt):
+		gt_y = _first_panel_y(gt)
+		valid_gt_for_plot = valid_gt & np.isfinite(gt_y)
+		axes[0].plot(
+			x[valid_gt_for_plot],
+			gt_y[valid_gt_for_plot],
+			color='lime',
+			lw=1.2,
+			alpha=0.95,
+			label='GT pick',
+		)
+	if bool(show_coarse):
+		axes[0].plot(
+			x,
+			_first_panel_y(coarse),
+			color='#00a6ff',
+			lw=1.0,
+			alpha=0.9,
+			label='coarse',
+		)
+	if robust is not None:
+		axes[0].plot(
+			x,
+			_first_panel_y(robust),
+			color='yellow',
+			lw=1.0,
+			alpha=0.95,
+			label='robust',
+		)
 	if trend is not None:
 		axes[0].plot(
 			x,
@@ -1245,34 +1258,26 @@ def save_fbpick_physics_qc_gather_png(
 			label='fine center',
 		)
 	if bool(show_window):
-		plot_window_start = window_start
-		plot_window_end = window_end
-		window_start_label = 'window start'
-		window_end_label = 'window end'
-		if plot_window_start is None:
-			plot_window_start = robust_window_start
-			window_start_label = 'robust window start'
-		if plot_window_end is None:
-			plot_window_end = robust_window_end
-			window_end_label = 'robust window end'
-		axes[0].plot(
-			x,
-			_first_panel_window_y(plot_window_start),
-			color='yellow',
-			lw=0.8,
-			ls='--',
-			alpha=0.75,
-			label=window_start_label,
-		)
-		axes[0].plot(
-			x,
-			_first_panel_window_y(plot_window_end),
-			color='yellow',
-			lw=0.8,
-			ls=':',
-			alpha=0.75,
-			label=window_end_label,
-		)
+		if window_start is not None:
+			axes[0].plot(
+				x,
+				_first_panel_window_y(window_start),
+				color='yellow',
+				lw=0.8,
+				ls='--',
+				alpha=0.75,
+				label='window start',
+			)
+		if window_end is not None:
+			axes[0].plot(
+				x,
+				_first_panel_window_y(window_end),
+				color='yellow',
+				lw=0.8,
+				ls=':',
+				alpha=0.75,
+				label='window end',
+			)
 	if final is not None:
 		axes[0].plot(
 			x,
@@ -1298,7 +1303,8 @@ def save_fbpick_physics_qc_gather_png(
 
 	if not first_panel_only:
 		axes[1].plot(x, coarse_err, color='#00a6ff', lw=1.0, label='coarse - GT')
-		axes[1].plot(x, robust_err, color='yellow', lw=1.0, label='robust - GT')
+		if robust_err is not None:
+			axes[1].plot(x, robust_err, color='yellow', lw=1.0, label='robust - GT')
 		for y in (0, 32, -32, 64, -64, 127, -127):
 			if y == 0:
 				axes[1].axhline(y, color='black', lw=0.9, alpha=0.8)
@@ -1313,21 +1319,25 @@ def save_fbpick_physics_qc_gather_png(
 		axes[1].set_ylabel('Sample Error')
 		axes[1].legend(loc='upper right', fontsize=8)
 
-		mask_rows = [in_robust_window.astype(np.float32)]
-		mask_labels = ['GT in robust']
+		mask_rows = []
+		mask_labels = []
+		if in_robust_window is not None:
+			mask_rows.append(in_robust_window.astype(np.float32))
+			mask_labels.append('GT in robust')
 		if coarse_pmax_arr is not None:
 			mask_rows.append(np.clip(coarse_pmax_arr, 0.0, 1.0).astype(np.float32))
 			mask_labels.append('coarse pmax')
-		mask_values = np.stack(mask_rows, axis=0)
-		axes[2].imshow(
-			mask_values,
-			cmap='gray_r',
-			aspect='auto',
-			interpolation='nearest',
-			origin='upper',
-			vmin=0.0,
-			vmax=1.0,
-		)
+		if mask_rows:
+			mask_values = np.stack(mask_rows, axis=0)
+			axes[2].imshow(
+				mask_values,
+				cmap='gray_r',
+				aspect='auto',
+				interpolation='nearest',
+				origin='upper',
+				vmin=0.0,
+				vmax=1.0,
+			)
 		axes[2].set_title('QC masks')
 		axes[2].set_xlabel('Trace Index')
 		axes[2].set_yticks(np.arange(len(mask_labels)))
@@ -1357,6 +1367,8 @@ def save_fbpick_fine_qc_gather_png(
 	raw_wave_hw: np.ndarray,
 	final_payload: Mapping[str, np.ndarray],
 	trace_indices: np.ndarray,
+	gt_pick_i: np.ndarray | None = None,
+	overlays: Mapping[str, bool] | None = None,
 	title: str | None = None,
 	dpi: int = 150,
 	clip_percentile: float = 99.0,
@@ -1380,6 +1392,37 @@ def save_fbpick_fine_qc_gather_png(
 		msg = f'trace_indices must be 1D with length {n_traces}'
 		raise ValueError(msg)
 
+	default_overlays = {
+		'gt_pick': gt_pick_i is not None,
+		'coarse_pick': True,
+		'robust_pick': True,
+		'physical_center': True,
+		'fine_center': True,
+		'window': True,
+		'final_pick': True,
+		'high_conf_final_pick': True,
+	}
+	if overlays is None:
+		overlay_values = dict(default_overlays)
+	else:
+		if not isinstance(overlays, Mapping) or not all(
+			isinstance(key, str) for key in overlays
+		):
+			msg = 'overlays must be Mapping[str, bool]'
+			raise TypeError(msg)
+		unknown_overlay_keys = sorted(set(overlays) - set(default_overlays))
+		if unknown_overlay_keys:
+			msg = 'overlays contains unsupported keys: ' + ', '.join(
+				unknown_overlay_keys
+			)
+			raise ValueError(msg)
+		overlay_values = dict(default_overlays)
+		for key, value in overlays.items():
+			if not isinstance(value, bool):
+				msg = 'overlays must be Mapping[str, bool]'
+				raise TypeError(msg)
+			overlay_values[key] = bool(value)
+
 	dpi_int = int(dpi)
 	if dpi_int <= 0:
 		msg = 'dpi must be > 0'
@@ -1402,6 +1445,27 @@ def save_fbpick_fine_qc_gather_png(
 	robust_pick_i = _require_overview_vector(
 		final_payload, 'robust_pick_i', length=n_total
 	)[trace_idx].astype(np.int64, copy=False)
+	physical_center_i = (
+		_require_overview_vector(final_payload, 'physical_center_i', length=n_total)[
+			trace_idx
+		].astype(np.int64, copy=False)
+		if 'physical_center_i' in final_payload
+		else None
+	)
+	fine_center_key = (
+		'fine_center_i'
+		if 'fine_center_i' in final_payload
+		else 'center_raw_i'
+		if 'center_raw_i' in final_payload
+		else None
+	)
+	fine_center_i = (
+		_require_overview_vector(final_payload, fine_center_key, length=n_total)[
+			trace_idx
+		].astype(np.int64, copy=False)
+		if fine_center_key is not None
+		else None
+	)
 	window_start_i = _require_overview_vector(
 		final_payload, 'window_start_i', length=n_total
 	)[trace_idx].astype(np.int64, copy=False)
@@ -1426,6 +1490,23 @@ def save_fbpick_fine_qc_gather_png(
 	final_conf = _require_overview_vector(
 		final_payload, 'final_conf', length=n_total
 	)[trace_idx].astype(np.float32, copy=False)
+	if gt_pick_i is None:
+		gt = None
+	else:
+		gt_raw = np.asarray(gt_pick_i, dtype=np.int64)
+		if gt_raw.ndim != 1:
+			msg = 'gt_pick_i must be 1D'
+			raise ValueError(msg)
+		if int(gt_raw.shape[0]) == n_total:
+			gt = gt_raw[trace_idx]
+		elif int(gt_raw.shape[0]) == n_traces:
+			gt = gt_raw
+		else:
+			msg = (
+				f'gt_pick_i must have length {n_traces} or {n_total}, '
+				f'got {int(gt_raw.shape[0])}'
+			)
+			raise ValueError(msg)
 
 	x = np.arange(n_traces, dtype=np.float32)
 	norm_mode = str(waveform_norm)
@@ -1462,57 +1543,91 @@ def save_fbpick_fine_qc_gather_png(
 		vmin=display_vmin,
 		vmax=display_vmax,
 	)
-	axes[0].plot(
-		x,
-		coarse_pick_i.astype(np.float32),
-		color='#7fd3ff',
-		lw=1.0,
-		alpha=0.9,
-		label='coarse_pick_i',
-	)
-	axes[0].plot(
-		x,
-		robust_pick_i.astype(np.float32),
-		color='yellow',
-		lw=1.0,
-		alpha=0.9,
-		label='robust_pick_i',
-	)
-	axes[0].plot(
-		x,
-		np.clip(window_start_i, 0, n_samples - 1).astype(np.float32),
-		color='yellow',
-		lw=0.8,
-		ls='--',
-		alpha=0.75,
-		label='window_start_i',
-	)
-	axes[0].plot(
-		x,
-		np.clip(window_end_i, 0, n_samples - 1).astype(np.float32),
-		color='yellow',
-		lw=0.8,
-		ls=':',
-		alpha=0.75,
-		label='window_end_i',
-	)
-	axes[0].plot(
-		x,
-		final_pick_i.astype(np.float32),
-		color='red',
-		lw=1.2,
-		alpha=0.95,
-		label='final_pick_i',
-	)
-	axes[0].scatter(
-		x[high_conf_mask],
-		final_pick_i.astype(np.float32)[high_conf_mask],
-		color='lime',
-		s=14.0,
-		alpha=0.95,
-		label='high_conf_final_pick',
-		zorder=5,
-	)
+	if gt is not None and bool(overlay_values['gt_pick']):
+		valid_gt = (gt > 0) & (gt < int(n_samples))
+		axes[0].plot(
+			x[valid_gt],
+			gt.astype(np.float32)[valid_gt],
+			color='lime',
+			lw=1.2,
+			alpha=0.95,
+			label='GT pick',
+		)
+	if bool(overlay_values['coarse_pick']):
+		axes[0].plot(
+			x,
+			coarse_pick_i.astype(np.float32),
+			color='#7fd3ff',
+			lw=1.0,
+			alpha=0.9,
+			label='coarse_pick_i',
+		)
+	if bool(overlay_values['robust_pick']):
+		axes[0].plot(
+			x,
+			robust_pick_i.astype(np.float32),
+			color='yellow',
+			lw=1.0,
+			alpha=0.9,
+			label='robust_pick_i',
+		)
+	if physical_center_i is not None and bool(overlay_values['physical_center']):
+		axes[0].plot(
+			x,
+			physical_center_i.astype(np.float32),
+			color='#d65db1',
+			lw=1.0,
+			alpha=0.95,
+			label='physical_center_i',
+		)
+	if fine_center_i is not None and bool(overlay_values['fine_center']):
+		axes[0].plot(
+			x,
+			fine_center_i.astype(np.float32),
+			color='#00f5d4',
+			lw=1.0,
+			ls='-.',
+			alpha=0.95,
+			label='fine_center_i',
+		)
+	if bool(overlay_values['window']):
+		axes[0].plot(
+			x,
+			np.clip(window_start_i, 0, n_samples - 1).astype(np.float32),
+			color='yellow',
+			lw=0.8,
+			ls='--',
+			alpha=0.75,
+			label='window_start_i',
+		)
+		axes[0].plot(
+			x,
+			np.clip(window_end_i, 0, n_samples - 1).astype(np.float32),
+			color='yellow',
+			lw=0.8,
+			ls=':',
+			alpha=0.75,
+			label='window_end_i',
+		)
+	if bool(overlay_values['final_pick']):
+		axes[0].plot(
+			x,
+			final_pick_i.astype(np.float32),
+			color='red',
+			lw=1.2,
+			alpha=0.95,
+			label='final_pick_i',
+		)
+	if bool(overlay_values['high_conf_final_pick']):
+		axes[0].scatter(
+			x[high_conf_mask],
+			final_pick_i.astype(np.float32)[high_conf_mask],
+			color='lime',
+			s=14.0,
+			alpha=0.95,
+			label='high_conf_final_pick',
+			zorder=5,
+		)
 	axes[0].set_title(
 		f'waveform and picks (norm={norm_mode}, p{float(clip_percentile):g})'
 	)
@@ -1521,16 +1636,25 @@ def save_fbpick_fine_qc_gather_png(
 	axes[0].legend(loc='upper right', fontsize=8)
 
 	if not first_panel_only:
-		final_minus_robust = final_pick_i.astype(np.float32) - robust_pick_i.astype(
-			np.float32
-		)
-		axes[1].plot(
-			x,
-			final_minus_robust,
-			color='red',
-			lw=1.0,
-			label='final - robust',
-		)
+		if bool(overlay_values['robust_pick']):
+			offset = final_pick_i.astype(np.float32) - robust_pick_i.astype(np.float32)
+			offset_label = 'final - robust'
+		elif gt is not None and bool(overlay_values['gt_pick']):
+			valid_gt = (gt > 0) & (gt < int(n_samples))
+			offset = final_pick_i.astype(np.float32) - gt.astype(np.float32)
+			offset[~valid_gt] = np.nan
+			offset_label = 'final - GT'
+		else:
+			offset = None
+			offset_label = ''
+		if offset is not None:
+			axes[1].plot(
+				x,
+				offset,
+				color='red',
+				lw=1.0,
+				label=offset_label,
+			)
 		for y in (0, 32, -32, 64, -64, 127, -127):
 			if y == 0:
 				axes[1].axhline(y, color='black', lw=0.9, alpha=0.8)

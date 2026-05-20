@@ -71,6 +71,7 @@ FINE_CKPT_SOFTMAX_AXIS = 'time'
 class FinePaths:
     segy_files: tuple[str, ...]
     fb_files: tuple[str, ...] | None
+    viewer_fb_files: tuple[str, ...] | None
     robust_npz_files: tuple[str, ...] | None
     coarse_npz_files: tuple[str, ...] | None
     infer_segy_files: tuple[str, ...] | None
@@ -148,12 +149,14 @@ class FineViewerCfg:
     save_overview_png: bool
     save_gather_png: bool
     max_gathers_per_file: int
+    gather_selection: str
     skip_gather_keys: dict[str, frozenset[int]]
     max_traces_per_gather: int | None
     waveform_norm: str
     dpi: int
     clip_percentile: float
     first_panel_only: bool
+    overlays: dict[str, bool]
 
 
 @dataclass(frozen=True)
@@ -222,6 +225,7 @@ def _load_paths_cfg(
     paths = require_dict(cfg, 'paths')
     segy_files = tuple(require_list_str(paths, 'segy_files'))
     fb_files = _load_optional_str_list(paths, 'fb_files')
+    viewer_fb_files = _load_optional_str_list(paths, 'viewer_fb_files')
     robust_npz_files = _load_optional_str_list(paths, 'robust_npz_files')
     coarse_npz_files = _load_optional_str_list(paths, 'coarse_npz_files')
 
@@ -234,6 +238,9 @@ def _load_paths_cfg(
 
     if fb_files is not None and len(fb_files) != len(segy_files):
         msg = 'paths.segy_files and paths.fb_files must have the same length'
+        raise ValueError(msg)
+    if viewer_fb_files is not None and len(viewer_fb_files) != len(segy_files):
+        msg = 'paths.segy_files and paths.viewer_fb_files must have the same length'
         raise ValueError(msg)
     if robust_npz_files is not None and coarse_npz_files is not None:
         if (
@@ -299,6 +306,7 @@ def _load_paths_cfg(
     return FinePaths(
         segy_files=segy_files,
         fb_files=fb_files,
+        viewer_fb_files=viewer_fb_files,
         robust_npz_files=robust_npz_files,
         coarse_npz_files=coarse_npz_files,
         infer_segy_files=infer_segy_files,
@@ -552,6 +560,42 @@ def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
         msg = 'viewer.waveform_norm must be one of: global, per_trace'
         raise ValueError(msg)
 
+    gather_selection = optional_str(viewer_cfg, 'gather_selection', 'first').strip()
+    if gather_selection not in ('first', 'even'):
+        msg = 'viewer.gather_selection must be one of: first, even'
+        raise ValueError(msg)
+
+    default_overlays = {
+        'gt_pick': True,
+        'coarse_pick': True,
+        'robust_pick': True,
+        'physical_center': True,
+        'fine_center': True,
+        'window': True,
+        'final_pick': True,
+        'high_conf_final_pick': True,
+    }
+    overlays_raw = viewer_cfg.get('overlays', {})
+    if overlays_raw is None:
+        overlays_raw = {}
+    if not isinstance(overlays_raw, dict) or not all(
+        isinstance(key, str) for key in overlays_raw
+    ):
+        msg = 'viewer.overlays must be dict[str, bool]'
+        raise TypeError(msg)
+    unknown_overlay_keys = sorted(set(overlays_raw) - set(default_overlays))
+    if unknown_overlay_keys:
+        msg = 'viewer.overlays contains unsupported keys: ' + ', '.join(
+            unknown_overlay_keys
+        )
+        raise ValueError(msg)
+    overlays = dict(default_overlays)
+    for key, value in overlays_raw.items():
+        if not isinstance(value, bool):
+            msg = 'viewer.overlays must be dict[str, bool]'
+            raise TypeError(msg)
+        overlays[key] = bool(value)
+
     return FineViewerCfg(
         enabled=bool(optional_bool(viewer_cfg, 'enabled', default=False)),
         save_overview_png=bool(
@@ -561,6 +605,7 @@ def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
             optional_bool(viewer_cfg, 'save_gather_png', default=False)
         ),
         max_gathers_per_file=max_gathers_per_file,
+        gather_selection=gather_selection,
         skip_gather_keys=skip_gather_keys,
         max_traces_per_gather=max_traces_per_gather,
         waveform_norm=waveform_norm,
@@ -569,6 +614,7 @@ def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
         first_panel_only=bool(
             optional_bool(viewer_cfg, 'first_panel_only', default=False)
         ),
+        overlays=overlays,
     )
 
 

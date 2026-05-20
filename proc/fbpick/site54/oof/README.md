@@ -54,6 +54,8 @@ To rerun physics and later stages, keep the coarse outputs, remove only physics-
 
 The site54 OOF default QC gather PNGs for `physics_qc` and `fine_infer` save only the first panel. That panel contains the waveform with the main pick and window overlays, including coarse, robust, window start/end, final, and high-confidence final picks where available.
 
+The default gather selection is `even`, so QC PNGs are sampled at even intervals across all eligible FFIDs instead of taking only the first consecutive FFIDs. Set `viewer.gather_selection=first` for fine infer or `vis.gather_selection=first` for physics QC to restore first-gather selection. `skip_gather_keys` is applied before gather selection, and `max_gathers_per_file` limits the number of rendered gathers.
+
 The offset panel and confidence mask panel are diagnostic views. Set `viewer.first_panel_only=false` for fine infer, or `vis.first_panel_only=false` for physics QC, when those extra panels are needed. When a window has jumped to an edge of the gather, the first-panel-only view is usually easier to inspect because the right-side offset and mask panels no longer compress the waveform view.
 
 ## Clean Rerun Procedure
@@ -397,6 +399,15 @@ python proc/fbpick/site54/oof/scripts/evaluate_fine_oof.py \
   --out-dir /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/aggregate/08_eval \
   --run-id baseline_physical_center
 ```
+
+`08_eval` writes `per_data.csv`, `per_fold.csv`, `summary.csv`, and
+`top_errors_final.csv`. site54 OOF evaluation fixes the denominator to every
+trace with a teacher FB pick. Missing predictions, NaN predictions, out-of-range
+picks, and rejected final/robust picks count as misses rather than being removed
+from the denominator. `within_k_samples` uses `n_teacher` as its denominator.
+Continuous error statistics such as `accepted_mae_samples` are computed only on
+accepted predictions, so interpret them together with `coverage`. Millisecond
+metric columns are not emitted.
 
 Check the run-scoped CV outputs:
 
