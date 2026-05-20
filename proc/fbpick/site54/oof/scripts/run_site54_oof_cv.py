@@ -90,6 +90,17 @@ def now_utc() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
 
+def physics_manifest_settings() -> dict:
+    return {
+        "fallback_existing_trend_mode": "partial",
+        "partial_trend_fallback": {
+            "max_fraction": 0.05,
+            "max_traces": 50000,
+            "fallback_if_too_many": "robust",
+        },
+    }
+
+
 def selected_stages(args: argparse.Namespace) -> list[str]:
     stages = list(HIGH_LEVEL_STAGES) if args.stage == "all" else [args.stage]
 
@@ -150,6 +161,7 @@ def initial_manifest(paths: RunPaths, folds: list[str]) -> dict:
         "fine_list_root": str(paths.fine_list_root),
         "eval_dir": str(paths.eval_dir),
         "log_root": str(paths.log_root),
+        "physics": physics_manifest_settings(),
         "folds": folds,
         "stages": dict.fromkeys(MANIFEST_STAGES, "pending"),
         "stage_timestamps": {},
@@ -539,6 +551,7 @@ def main() -> int:
     for stage in stages:
         if stage == "prepare_configs" and not args.dry_run:
             manifest["config_prepare_started_at"] = now_utc()
+            manifest["physics"] = physics_manifest_settings()
             write_manifest(paths, manifest)
         commands = commands_for_stage(
             stage=stage,

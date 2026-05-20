@@ -153,6 +153,7 @@ class FineViewerCfg:
     waveform_norm: str
     dpi: int
     clip_percentile: float
+    first_panel_only: bool
 
 
 @dataclass(frozen=True)
@@ -565,6 +566,9 @@ def _load_viewer_cfg(cfg: dict) -> FineViewerCfg:
         waveform_norm=waveform_norm,
         dpi=dpi,
         clip_percentile=clip_percentile,
+        first_panel_only=bool(
+            optional_bool(viewer_cfg, 'first_panel_only', default=False)
+        ),
     )
 
 

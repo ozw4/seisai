@@ -760,6 +760,7 @@ def test_load_fine_infer_config_returns_default_high_conf_threshold(
     assert typed.viewer.enabled is False
     assert typed.viewer.save_overview_png is False
     assert typed.viewer.save_gather_png is False
+    assert typed.viewer.first_panel_only is False
 
 
 def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
@@ -778,6 +779,7 @@ def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
         'waveform_norm': 'per_trace',
         'dpi': 120,
         'clip_percentile': 98.5,
+        'first_panel_only': True,
     }
 
     typed = load_fine_infer_config(cfg)
@@ -794,6 +796,23 @@ def test_load_fine_infer_config_parses_gather_viewer(tmp_path: Path) -> None:
     assert typed.viewer.waveform_norm == 'per_trace'
     assert typed.viewer.dpi == 120
     assert typed.viewer.clip_percentile == pytest.approx(98.5)
+    assert typed.viewer.first_panel_only is True
+
+
+def test_load_fine_infer_config_rejects_non_bool_first_panel_only(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_fine_infer_config(
+        tmp_path,
+        segy_path='dummy.sgy',
+        robust_path='dummy.robust.npz',
+    )
+    cfg['viewer'] = {'first_panel_only': 1}
+
+    with pytest.raises(TypeError) as exc:
+        load_fine_infer_config(cfg)
+
+    assert 'first_panel_only' in str(exc.value)
 
 
 def test_load_fine_infer_config_parses_window_center(tmp_path: Path) -> None:
@@ -1983,6 +2002,7 @@ def test_save_fine_gather_qc_pngs_skips_configured_key_and_counts_accepted(
         'skip_gather_keys': {'ffid': [0]},
         'max_traces_per_gather': None,
         'waveform_norm': 'per_trace',
+        'first_panel_only': True,
     }
     viewer = load_fine_infer_config(cfg).viewer
     captured: list[np.ndarray] = []
@@ -1990,6 +2010,7 @@ def test_save_fine_gather_qc_pngs_skips_configured_key_and_counts_accepted(
     def _save(out_png: Path, **kwargs: object) -> Path:
         captured.append(np.asarray(kwargs['trace_indices'], dtype=np.int64))
         assert kwargs['waveform_norm'] == 'per_trace'
+        assert kwargs['first_panel_only'] is True
         return Path(out_png)
 
     out_paths = _save_fine_gather_qc_pngs(

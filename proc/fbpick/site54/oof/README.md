@@ -44,6 +44,18 @@ The site54 OOF coarse config generator defaults both train and inner-valid fbgat
 
 Do not use `min_pick_ratio=0.3` as the site54 OOF runtime default. That threshold is too strong for this split: a low-pick survey that fails inner validation in one fold can be training data in another fold, so applying a strong phase-dependent threshold makes data usage uneven across folds. Keep `0.3` for explicit audit or diagnostic runs, and evaluate quality through heldout OOF eval rather than hiding low-pick data at runtime.
 
+## Physics Partial Fallback
+
+The site54 OOF physics default is `physical_runtime.fallback_existing_trend_mode=partial` with `partial_trend_fallback.max_fraction=0.05`, `max_traces=50000`, and `fallback_if_too_many=robust`. Regenerate configs with `make_physics_fold_configs.py` or `run_site54_oof_cv.py --stage prepare_configs`; do not hand-edit generated `runs/<run_id>/configs/foldXX/03_physics.yaml` or `04_physics_qc.yaml`.
+
+To rerun physics and later stages, keep the coarse outputs, remove only physics-and-later run outputs for the selected run, then run `prepare_configs` followed by `--from-stage physics`. This keeps the fallback policy reproducible in generated configs and the run manifest.
+
+## QC PNG Defaults
+
+The site54 OOF default QC gather PNGs for `physics_qc` and `fine_infer` save only the first panel. That panel contains the waveform with the main pick and window overlays, including coarse, robust, window start/end, final, and high-confidence final picks where available.
+
+The offset panel and confidence mask panel are diagnostic views. Set `viewer.first_panel_only=false` for fine infer, or `vis.first_panel_only=false` for physics QC, when those extra panels are needed. When a window has jumped to an edge of the gather, the first-panel-only view is usually easier to inspect because the right-side offset and mask panels no longer compress the waveform view.
+
 ## Clean Rerun Procedure
 
 Use this sequence as the canonical clean-state rerun procedure. It validates the tracked fold lists, inspects artifacts selected for cleanup, prepares run-scoped configs, and then runs each CV stage through the unified entry point.

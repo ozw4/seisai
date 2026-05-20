@@ -564,6 +564,7 @@ def _save_fine_gather_qc_pngs(
                 dpi=viewer.dpi,
                 clip_percentile=viewer.clip_percentile,
                 waveform_norm=viewer.waveform_norm,
+                first_panel_only=viewer.first_panel_only,
             )
         )
     if not out_paths:

@@ -7,6 +7,12 @@ collect_dir: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/agg
 fine_list_root: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/aggregate/05_collect_oof_lists/fine_fold_lists
 eval_dir: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/aggregate/08_eval
 log_root: /workspace/proc/fbpick/site54/oof/runs/baseline_physical_center/logs
+physics:
+  fallback_existing_trend_mode: partial
+  partial_trend_fallback:
+    max_fraction: 0.05
+    max_traces: 50000
+    fallback_if_too_many: robust
 folds:
 - fold00
 - fold01
@@ -15,17 +21,31 @@ folds:
 - fold04
 - fold05
 stages:
-  01_coarse_train: failed
-  02_coarse_infer: pending
-  03_physics: pending
-  04_physics_qc: pending
-  05_collect_oof_lists: pending
-  06_fine_train: pending
-  07_fine_infer: pending
-  08_eval: pending
+  01_coarse_train: completed
+  02_coarse_infer: completed
+  03_physics: completed
+  04_physics_qc: completed
+  05_collect_oof_lists: completed
+  06_fine_train: completed
+  07_fine_infer: completed
+  08_eval: completed
 stage_timestamps:
   01_coarse_train:
-    failed_at: '2026-05-18T23:30:01+00:00'
-created_at: '2026-05-18T23:24:29+00:00'
-config_prepare_started_at: '2026-05-18T23:24:29+00:00'
-config_prepared_at: '2026-05-18T23:24:29+00:00'
+    completed_at: '2026-05-19T03:03:58+00:00'
+  02_coarse_infer:
+    completed_at: '2026-05-19T03:21:38+00:00'
+  03_physics:
+    completed_at: '2026-05-19T14:39:55+00:00'
+  04_physics_qc:
+    completed_at: '2026-05-19T14:39:55+00:00'
+  05_collect_oof_lists:
+    completed_at: '2026-05-19T14:39:55+00:00'
+  06_fine_train:
+    completed_at: '2026-05-19T15:45:15+00:00'
+  07_fine_infer:
+    completed_at: '2026-05-19T17:01:59+00:00'
+  08_eval:
+    completed_at: '2026-05-19T17:02:14+00:00'
+created_at: '2026-05-19T01:45:02+00:00'
+config_prepare_started_at: '2026-05-19T07:11:36+00:00'
+config_prepared_at: '2026-05-19T07:11:36+00:00'

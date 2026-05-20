@@ -1,0 +1,35 @@
+run_id: codex_physics_partial_probe
+cv_root: /workspace/proc/fbpick/site54/oof
+run_root: /workspace/proc/fbpick/site54/oof/runs/codex_physics_partial_probe
+fold_list_root: /workspace/proc/fbpick/site54/oof/fold_lists
+config_root: /workspace/proc/fbpick/site54/oof/runs/codex_physics_partial_probe/configs
+collect_dir: /workspace/proc/fbpick/site54/oof/runs/codex_physics_partial_probe/aggregate/05_collect_oof_lists
+fine_list_root: /workspace/proc/fbpick/site54/oof/runs/codex_physics_partial_probe/aggregate/05_collect_oof_lists/fine_fold_lists
+eval_dir: /workspace/proc/fbpick/site54/oof/runs/codex_physics_partial_probe/aggregate/08_eval
+log_root: /workspace/proc/fbpick/site54/oof/runs/codex_physics_partial_probe/logs
+physics:
+  fallback_existing_trend_mode: partial
+  partial_trend_fallback:
+    max_fraction: 0.05
+    max_traces: 50000
+    fallback_if_too_many: robust
+folds:
+- fold00
+- fold01
+- fold02
+- fold03
+- fold04
+- fold05
+stages:
+  01_coarse_train: pending
+  02_coarse_infer: pending
+  03_physics: pending
+  04_physics_qc: pending
+  05_collect_oof_lists: pending
+  06_fine_train: pending
+  07_fine_infer: pending
+  08_eval: pending
+stage_timestamps: {}
+created_at: '2026-05-19T06:55:58+00:00'
+config_prepare_started_at: '2026-05-19T06:55:58+00:00'
+config_prepared_at: '2026-05-19T06:55:58+00:00'

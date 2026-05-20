@@ -57,6 +57,21 @@ def _load_oof_script(script_name: str, module_name: str) -> ModuleType:
     return module
 
 
+def _assert_partial_physics_fallback(cfg: dict) -> None:
+    runtime = cfg['physical_runtime']
+    assert runtime['trend_result_mode'] == 'lazy'
+    assert runtime['fallback_existing_trend_mode'] == 'partial'
+    partial = runtime['partial_trend_fallback']
+    assert partial['enabled'] is True
+    assert partial['max_fraction'] == 0.05
+    assert partial['max_traces'] == 50000
+    assert partial['cluster_consecutive_indices'] is True
+    assert partial['use_global_fallback'] is True
+    assert partial['fallback_if_too_many'] == 'robust'
+    assert partial['local_window_from_trend_config'] is True
+    assert partial['emit_progress'] is True
+
+
 def test_fine_train_config_fixed_last_uses_last_checkpoint_policy(
     tmp_path: Path,
 ) -> None:
@@ -95,7 +110,7 @@ def test_fine_infer_config_omits_fb_files_for_raw_only_runtime(
 ) -> None:
     module = _load_make_fine_fold_configs()
     cfg = module.fine_infer_config(
-        base_cfg={'paths': {}, 'infer': {}},
+        base_cfg={'paths': {}, 'infer': {}, 'viewer': {'first_panel_only': True}},
         segy_file='/data/heldout.sgy',
         robust_npz_file='/data/heldout.robust.npz',
         coarse_npz_file='/data/heldout.coarse.npz',
@@ -107,6 +122,7 @@ def test_fine_infer_config_omits_fb_files_for_raw_only_runtime(
     assert cfg['paths']['segy_files'] == ['/data/heldout.sgy']
     assert cfg['paths']['robust_npz_files'] == ['/data/heldout.robust.npz']
     assert cfg['paths']['coarse_npz_files'] == ['/data/heldout.coarse.npz']
+    assert cfg['viewer']['first_panel_only'] is True
 
 
 def test_make_fine_defaults_write_under_run_root(
@@ -296,6 +312,19 @@ def test_make_physics_defaults_write_configs_under_run_root(
     assert (run_root / 'configs' / 'fold00' / '04_physics_qc.yaml').is_file()
     assert not (cv_root / 'configs').exists()
     assert not (run_root / 'configs' / run_id).exists()
+    physics_cfg = yaml.safe_load(
+        (run_root / 'configs' / 'fold00' / '03_physics.yaml').read_text(
+            encoding='utf-8',
+        ),
+    )
+    physics_qc_cfg = yaml.safe_load(
+        (run_root / 'configs' / 'fold00' / '04_physics_qc.yaml').read_text(
+            encoding='utf-8',
+        ),
+    )
+    _assert_partial_physics_fallback(physics_cfg)
+    _assert_partial_physics_fallback(physics_qc_cfg)
+    assert physics_qc_cfg['vis']['first_panel_only'] is True
 
 
 def _write_runner_fold_lists(cv_root: Path) -> None:
@@ -412,3 +441,23 @@ def test_run_site54_oof_cv_prepare_configs_writes_manifest_and_configs(
     )
     assert manifest['run_root'] == str(run_root)
     assert manifest['config_root'] == str(run_root / 'configs')
+    assert manifest['physics'] == {
+        'fallback_existing_trend_mode': 'partial',
+        'partial_trend_fallback': {
+            'max_fraction': 0.05,
+            'max_traces': 50000,
+            'fallback_if_too_many': 'robust',
+        },
+    }
+    physics_cfg = yaml.safe_load(
+        (run_root / 'configs' / 'fold00' / '03_physics.yaml').read_text(
+            encoding='utf-8',
+        ),
+    )
+    physics_qc_cfg = yaml.safe_load(
+        (run_root / 'configs' / 'fold00' / '04_physics_qc.yaml').read_text(
+            encoding='utf-8',
+        ),
+    )
+    _assert_partial_physics_fallback(physics_cfg)
+    _assert_partial_physics_fallback(physics_qc_cfg)

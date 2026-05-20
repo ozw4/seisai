@@ -26,10 +26,26 @@ def parse_bool(value: object) -> bool:
     raise argparse.ArgumentTypeError(msg)
 
 
-def physics_runtime_cfg() -> dict:
+def partial_trend_fallback_cfg(args: argparse.Namespace) -> dict:
+    """Build the partial existing-trend fallback policy."""
+    return {
+        'enabled': True,
+        'max_fraction': float(args.partial_trend_fallback_max_fraction),
+        'max_traces': int(args.partial_trend_fallback_max_traces),
+        'cluster_consecutive_indices': True,
+        'use_global_fallback': True,
+        'fallback_if_too_many': str(args.partial_trend_fallback_if_too_many),
+        'local_window_from_trend_config': True,
+        'emit_progress': True,
+    }
+
+
+def physics_runtime_cfg(args: argparse.Namespace) -> dict:
     """Build the baseline physical-center runtime config."""
     return {
         'fit_policy': 'anchor_source_xy',
+        'fallback_existing_trend_mode': str(args.fallback_existing_trend_mode),
+        'partial_trend_fallback': partial_trend_fallback_cfg(args),
         'diagnostics_enabled': True,
         'write_runtime_summary': True,
         'diagnostics': {
@@ -96,7 +112,7 @@ def physics_runtime_cfg() -> dict:
     }
 
 
-def physical_center_cfg(*, qc: bool = False) -> dict:
+def physical_center_cfg(args: argparse.Namespace, *, qc: bool = False) -> dict:
     """Build physical-center settings shared by physics and QC configs."""
     cfg = {
         'physical_trend': {
@@ -149,7 +165,7 @@ def physical_center_cfg(*, qc: bool = False) -> dict:
             'sort_offsets': True,
         },
     }
-    runtime = physics_runtime_cfg()
+    runtime = physics_runtime_cfg(args)
     if qc:
         runtime.update(
             {
@@ -203,7 +219,7 @@ def physics_config(args: argparse.Namespace, fold: str) -> dict:
         'residual_statics': {},
         'keep_reject': {},
         'robust_center': {},
-        **physical_center_cfg(qc=False),
+        **physical_center_cfg(args, qc=False),
     }
 
 
@@ -231,8 +247,9 @@ def physics_qc_config(args: argparse.Namespace, fold: str) -> dict:
             'save_summary_csv': True,
             'waveform_norm': 'per_trace',
             'clip_percentile': 99.0,
+            'first_panel_only': True,
         },
-        **physical_center_cfg(qc=True),
+        **physical_center_cfg(args, qc=True),
     }
 
 
@@ -269,6 +286,26 @@ def main() -> None:
     )
     parser.add_argument('--infer-endian', default='big')
     parser.add_argument('--overwrite', action='store_true')
+    parser.add_argument(
+        '--fallback-existing-trend-mode',
+        choices=('full', 'partial'),
+        default='partial',
+    )
+    parser.add_argument(
+        '--partial-trend-fallback-max-fraction',
+        type=float,
+        default=0.05,
+    )
+    parser.add_argument(
+        '--partial-trend-fallback-max-traces',
+        type=int,
+        default=50000,
+    )
+    parser.add_argument(
+        '--partial-trend-fallback-if-too-many',
+        choices=('robust', 'full', 'error'),
+        default='robust',
+    )
     args = parser.parse_args()
 
     args.cv_root = args.cv_root.resolve()

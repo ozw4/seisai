@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OOF_ROOT = REPO_ROOT / "proc" / "fbpick" / "site54" / "oof"
 SCRIPTS_ROOT = OOF_ROOT / "scripts"
@@ -70,6 +72,23 @@ def test_generator_defaults_write_run_scoped_configs(tmp_path: Path) -> None:
     assert (run_root / "configs" / "fold00" / "01_coarse_train.yaml").is_file()
     assert (run_root / "configs" / "fold00" / "03_physics.yaml").is_file()
     assert not (cv_root / "configs").exists()
+    physics_cfg = yaml.safe_load(
+        (run_root / "configs" / "fold00" / "03_physics.yaml").read_text(
+            encoding="utf-8",
+        ),
+    )
+    physics_qc_cfg = yaml.safe_load(
+        (run_root / "configs" / "fold00" / "04_physics_qc.yaml").read_text(
+            encoding="utf-8",
+        ),
+    )
+    for cfg in (physics_cfg, physics_qc_cfg):
+        runtime = cfg["physical_runtime"]
+        assert runtime["fallback_existing_trend_mode"] == "partial"
+        assert runtime["partial_trend_fallback"]["enabled"] is True
+        assert runtime["partial_trend_fallback"]["max_fraction"] == 0.05
+        assert runtime["partial_trend_fallback"]["max_traces"] == 50000
+    assert physics_qc_cfg["vis"]["first_panel_only"] is True
 
 
 def test_runner_dry_run_uses_run_scoped_config_paths(tmp_path: Path) -> None:
@@ -105,7 +124,10 @@ def test_runner_dry_run_uses_run_scoped_config_paths(tmp_path: Path) -> None:
 
 def test_fine_base_configs_exist() -> None:
     assert (OOF_ROOT / "config_templates" / "fine_train.yaml").is_file()
-    assert (OOF_ROOT / "config_templates" / "fine_infer.yaml").is_file()
+    fine_infer_path = OOF_ROOT / "config_templates" / "fine_infer.yaml"
+    assert fine_infer_path.is_file()
+    fine_infer_cfg = yaml.safe_load(fine_infer_path.read_text(encoding="utf-8"))
+    assert fine_infer_cfg["viewer"]["first_panel_only"] is True
 
 
 def test_clean_rerun_procedure_has_no_legacy_root_paths() -> None:

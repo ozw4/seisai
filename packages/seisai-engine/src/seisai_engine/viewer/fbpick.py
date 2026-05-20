@@ -1361,6 +1361,7 @@ def save_fbpick_fine_qc_gather_png(
 	dpi: int = 150,
 	clip_percentile: float = 99.0,
 	waveform_norm: str = 'global',
+	first_panel_only: bool = False,
 ) -> Path:
 	import matplotlib.pyplot as plt
 
@@ -1383,6 +1384,9 @@ def save_fbpick_fine_qc_gather_png(
 	if dpi_int <= 0:
 		msg = 'dpi must be > 0'
 		raise ValueError(msg)
+	if not isinstance(first_panel_only, bool):
+		msg = 'first_panel_only must be bool'
+		raise TypeError(msg)
 
 	if 'n_traces' not in final_payload:
 		msg = 'final payload missing key: n_traces'
@@ -1438,12 +1442,16 @@ def save_fbpick_fine_qc_gather_png(
 		display_vmax = 1.0
 
 	fig_width = min(max(12.0, float(n_traces) / 100.0), 24.0)
-	fig, axes = plt.subplots(
-		1,
-		3,
-		figsize=(fig_width, 6.0),
-		gridspec_kw={'width_ratios': [2.4, 1.3, 0.8]},
-	)
+	if first_panel_only:
+		fig, first_ax = plt.subplots(1, 1, figsize=(fig_width, 6.0))
+		axes = [first_ax]
+	else:
+		fig, axes = plt.subplots(
+			1,
+			3,
+			figsize=(fig_width, 6.0),
+			gridspec_kw={'width_ratios': [2.4, 1.3, 0.8]},
+		)
 
 	axes[0].imshow(
 		wave_display.T,
@@ -1512,49 +1520,50 @@ def save_fbpick_fine_qc_gather_png(
 	axes[0].set_ylabel('Sample Index')
 	axes[0].legend(loc='upper right', fontsize=8)
 
-	final_minus_robust = final_pick_i.astype(np.float32) - robust_pick_i.astype(
-		np.float32
-	)
-	axes[1].plot(
-		x,
-		final_minus_robust,
-		color='red',
-		lw=1.0,
-		label='final - robust',
-	)
-	for y in (0, 32, -32, 64, -64, 127, -127):
-		if y == 0:
-			axes[1].axhline(y, color='black', lw=0.9, alpha=0.8)
-		elif abs(y) == 127:
-			axes[1].axhline(y, color='red', lw=0.8, ls='--', alpha=0.65)
-		else:
-			axes[1].axhline(y, color='gray', lw=0.8, ls='--', alpha=0.55)
-	axes[1].set_title('final offset')
-	axes[1].set_xlabel('Trace Index')
-	axes[1].set_ylabel('Sample Offset')
-	axes[1].legend(loc='upper right', fontsize=8)
+	if not first_panel_only:
+		final_minus_robust = final_pick_i.astype(np.float32) - robust_pick_i.astype(
+			np.float32
+		)
+		axes[1].plot(
+			x,
+			final_minus_robust,
+			color='red',
+			lw=1.0,
+			label='final - robust',
+		)
+		for y in (0, 32, -32, 64, -64, 127, -127):
+			if y == 0:
+				axes[1].axhline(y, color='black', lw=0.9, alpha=0.8)
+			elif abs(y) == 127:
+				axes[1].axhline(y, color='red', lw=0.8, ls='--', alpha=0.65)
+			else:
+				axes[1].axhline(y, color='gray', lw=0.8, ls='--', alpha=0.55)
+		axes[1].set_title('final offset')
+		axes[1].set_xlabel('Trace Index')
+		axes[1].set_ylabel('Sample Offset')
+		axes[1].legend(loc='upper right', fontsize=8)
 
-	mask_values = np.stack(
-		[
-			high_conf_mask.astype(np.float32),
-			(~reject_mask).astype(np.float32),
-			np.clip(final_conf, 0.0, 1.0).astype(np.float32),
-		],
-		axis=0,
-	)
-	axes[2].imshow(
-		mask_values,
-		cmap='viridis',
-		aspect='auto',
-		interpolation='nearest',
-		origin='upper',
-		vmin=0.0,
-		vmax=1.0,
-	)
-	axes[2].set_title('confidence masks')
-	axes[2].set_xlabel('Trace Index')
-	axes[2].set_yticks([0, 1, 2])
-	axes[2].set_yticklabels(['high', 'accepted', 'conf'])
+		mask_values = np.stack(
+			[
+				high_conf_mask.astype(np.float32),
+				(~reject_mask).astype(np.float32),
+				np.clip(final_conf, 0.0, 1.0).astype(np.float32),
+			],
+			axis=0,
+		)
+		axes[2].imshow(
+			mask_values,
+			cmap='viridis',
+			aspect='auto',
+			interpolation='nearest',
+			origin='upper',
+			vmin=0.0,
+			vmax=1.0,
+		)
+		axes[2].set_title('confidence masks')
+		axes[2].set_xlabel('Trace Index')
+		axes[2].set_yticks([0, 1, 2])
+		axes[2].set_yticklabels(['high', 'accepted', 'conf'])
 
 	if title is not None:
 		fig.suptitle(str(title))

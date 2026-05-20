@@ -43,6 +43,7 @@ viewer:
   waveform_norm: per_trace
   dpi: 150
   clip_percentile: 99.0
+  first_panel_only: true
 
 model:
   backbone: resnet18
