@@ -1895,4 +1895,6 @@ def load_physics_lite_config(cfg: dict[str, Any] | None) -> PhysicsLiteConfig:
 
 
 def physics_lite_config_to_dict(cfg: PhysicsLiteConfig) -> dict[str, Any]:
-    return asdict(cfg)
+    out = asdict(cfg)
+    out.pop('feasible_band', None)
+    return out

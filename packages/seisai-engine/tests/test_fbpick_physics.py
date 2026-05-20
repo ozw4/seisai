@@ -42,7 +42,7 @@ from seisai_engine.pipelines.fbpick.physics.config import (
     physics_lite_config_to_dict,
 )
 from seisai_engine.pipelines.fbpick.physics.feasible import (
-    compute_feasible_band,
+    compute_physical_band_result,
     compute_velocity_t0_band_from_arrays,
 )
 from seisai_engine.pipelines.fbpick.physics.merge import apply_keep_reject_fill
@@ -486,6 +486,8 @@ def test_physical_runtime_diagnostics_initializes_with_zero_counts() -> None:
     assert summary['n_prediction_batches'] == 0
     assert summary['n_t0_shifted_groups'] == 0
     assert summary['n_adaptive_refit_calls'] == 0
+    assert summary['physical_band_sec'] == 0.0
+    assert 'feasible_band_sec' not in summary
 
 
 def test_physical_runtime_diagnostics_fit_timer_increments_counts() -> None:
@@ -510,6 +512,8 @@ def test_physical_runtime_diagnostics_detailed_timer_and_derived_fields() -> Non
 
     with diagnostics.time_block('neighbor_plan_sec'):
         pass
+    with diagnostics.time_block('physical_band_sec'):
+        pass
     diagnostics.inc('n_prediction_calls', 2)
     diagnostics.inc('n_prediction_batches')
     diagnostics.set_fit_executor(enabled=True, backend='thread', max_workers=2)
@@ -517,6 +521,7 @@ def test_physical_runtime_diagnostics_detailed_timer_and_derived_fields() -> Non
 
     summary = diagnostics.to_summary()
     assert summary['neighbor_plan_sec'] >= 0.0
+    assert summary['physical_band_sec'] >= 0.0
     assert summary['non_ransac_total_sec'] == pytest.approx(7.0)
     assert summary['n_prediction_calls'] == 2
     assert summary['n_prediction_batches'] == 1
@@ -1327,6 +1332,7 @@ def test_physics_lite_config_to_dict_includes_physical_trend_blocks() -> None:
     assert out['physical_runtime']['anchor_selection']['enabled'] is False
     assert out['physical_runtime']['anchor_reuse']['enabled'] is True
     assert out['physical_runtime']['fit_executor']['enabled'] is False
+    assert 'feasible_band' not in out
 
 
 def test_console_progress_reporter_throttles_fit_progress() -> None:
@@ -1741,16 +1747,16 @@ def test_velocity_t0_band_from_arrays_rejects_invalid_inputs(
         compute_velocity_t0_band_from_arrays(**params)
 
 
-def test_feasible_band_rejects_early_and_late_picks() -> None:
+def test_physical_band_rejects_early_and_late_picks() -> None:
     coarse = _make_coarse_payload(
-        coarse_pick_i=np.array([0, 125, 300], dtype=np.int32),
+        coarse_pick_i=np.array([0, 150, 500], dtype=np.int32),
         coarse_pmax=np.array([0.9, 0.9, 0.9], dtype=np.float32),
-        offsets_m=np.array([100.0, 100.0, 100.0], dtype=np.float32),
+        offsets_m=np.array([300.0, 300.0, 300.0], dtype=np.float32),
     )
     table = normalize_coarse_pick_table(coarse)
-    feasible = compute_feasible_band(
+    feasible = compute_physical_band_result(
         table,
-        load_physics_lite_config({}).feasible_band,
+        load_physics_lite_config({}).physical_band,
     )
 
     assert feasible.feasible_mask.tolist() == [False, True, False]
@@ -1758,20 +1764,20 @@ def test_feasible_band_rejects_early_and_late_picks() -> None:
     assert feasible.feasible_hi_sec.dtype == np.float32
 
 
-def test_feasible_band_preserves_table_n_traces_validation() -> None:
+def test_physical_band_preserves_table_n_traces_validation() -> None:
     coarse = _make_coarse_payload(
         coarse_pick_i=np.array([10], dtype=np.int32),
         coarse_pmax=np.array([0.9], dtype=np.float32),
         offsets_m=np.array([100.0], dtype=np.float32),
     )
     table = normalize_coarse_pick_table(coarse)
-    cfg = load_physics_lite_config({}).feasible_band
+    cfg = load_physics_lite_config({}).physical_band
 
     with pytest.raises(ValueError, match='table.n_traces must be positive'):
-        compute_feasible_band(replace(table, n_traces=0), cfg)
+        compute_physical_band_result(replace(table, n_traces=0), cfg)
 
     with pytest.raises(ValueError, match='coarse_pick_t_sec must have shape'):
-        compute_feasible_band(replace(table, n_traces=2), cfg)
+        compute_physical_band_result(replace(table, n_traces=2), cfg)
 
 
 def test_conf_trend1_drops_with_trend_deviation() -> None:
@@ -1789,7 +1795,7 @@ def test_conf_trend1_drops_with_trend_deviation() -> None:
         offsets_m=np.array([100.0, 200.0], dtype=np.float32),
     )
     table = normalize_coarse_pick_table(coarse)
-    feasible = compute_feasible_band(table, cfg.feasible_band)
+    feasible = compute_physical_band_result(table, cfg.physical_band)
     trend = TrendResult(
         seed_mask=np.array([True, True], dtype=np.bool_),
         seed_threshold=np.float32(0.0),
@@ -1815,7 +1821,7 @@ def test_keep_reject_fill_uses_trend_center_and_source_flags() -> None:
         offsets_m=np.array([100.0, 150.0, 200.0, 250.0, 300.0, 350.0], dtype=np.float32),
     )
     table = normalize_coarse_pick_table(coarse)
-    feasible = compute_feasible_band(table, cfg.feasible_band)
+    feasible = compute_physical_band_result(table, cfg.physical_band)
     trend = build_trend_result(table, feasible, cfg)
     confidence = compute_confidence_terms(table, feasible, trend, cfg)
     merged = apply_keep_reject_fill(table, feasible, trend, confidence, cfg)
@@ -2324,11 +2330,15 @@ def test_run_physics_lite_lazy_valid_geometry_skips_trend_result(
         if event == 'physics.stage_start'
     ]
 
+    assert 'physical_band' in stage_starts
+    assert 'feasible_band' not in stage_starts
     assert 'trend_result' not in stage_starts
     assert stage_starts.index('physical_center') < stage_starts.index(
         'save_robust_npz'
     )
     assert int(np.asarray(robust['n_fit_calls']).item()) > 0
+    assert 'physical_band_sec' in robust
+    assert 'feasible_band_sec' not in robust
     assert (
         int(np.asarray(robust['physical_runtime_trend_result_materialized']).item())
         == 0
@@ -3017,6 +3027,7 @@ def test_build_robust_payload_from_coarse_returns_required_keys(tmp_path: Path) 
     assert payload['fine_center_t_sec'].dtype == np.float32
     assert payload['physical_model_status'].dtype == np.uint8
     assert payload['physical_model_failure_reason'].dtype == np.uint8
+    assert not any('feasible_band' in key for key in payload)
     np.testing.assert_array_equal(
         payload['physical_center_i'],
         payload['trend_center_i'],
@@ -3040,6 +3051,7 @@ def test_build_robust_payload_from_coarse_returns_required_keys(tmp_path: Path) 
     )
     assert lineage['source_model_id'] == 'coarse-model'
     assert lineage['git_sha'] is None
+    assert 'feasible_band' not in lineage
 
 
 def test_build_robust_payload_from_coarse_uses_physical_center_with_geometry(
@@ -3281,7 +3293,7 @@ def test_build_robust_payload_uses_geometry_offsets_for_window_policy(
         **_make_coarse_payload(
             coarse_pick_i=coarse_pick_i,
             coarse_pmax=np.full((n_traces,), 0.95, dtype=np.float32),
-            offsets_m=np.full((n_traces,), 100.0, dtype=np.float32),
+            offsets_m=np.full((n_traces,), 104.0, dtype=np.float32),
         ),
         **_make_physical_geometry(np.full((n_traces,), 300.0, dtype=np.float32)),
     }

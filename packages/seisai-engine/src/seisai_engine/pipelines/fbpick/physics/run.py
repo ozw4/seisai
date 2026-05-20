@@ -16,7 +16,7 @@ from seisai_engine.pipelines.fbpick.common import (
 
 from .confidence import ConfidenceResult, compute_confidence_terms
 from .config import load_physics_lite_config, physics_lite_config_to_dict
-from .feasible import compute_feasible_band
+from .feasible import compute_physical_band_result
 from .merge import MergeResult, apply_keep_reject_fill
 from .physical_center import (
     build_geometry_two_piece_physical_center,
@@ -589,13 +589,13 @@ def build_robust_payload_from_coarse(
             elapsed=perf_counter() - stage_start,
             n_traces=int(table.n_traces),
         )
-        reporter.emit('physics.stage_start', **progress_fields, stage='feasible_band')
+        reporter.emit('physics.stage_start', **progress_fields, stage='physical_band')
         stage_start = perf_counter()
-        feasible = compute_feasible_band(table, typed_cfg.feasible_band)
+        feasible = compute_physical_band_result(table, typed_cfg.physical_band)
         reporter.emit(
             'physics.stage_done',
             **progress_fields,
-            stage='feasible_band',
+            stage='physical_band',
             elapsed=perf_counter() - stage_start,
         )
         trend_provider = LazyTrendResultProvider(
@@ -702,15 +702,15 @@ def build_robust_payload_from_coarse(
             reporter.emit(
                 'physics.stage_start',
                 **progress_fields,
-                stage='feasible_band',
+                stage='physical_band',
             )
             stage_start = perf_counter()
-            with runtime_diagnostics.time_block('feasible_band_sec'):
-                feasible = compute_feasible_band(table, typed_cfg.feasible_band)
+            with runtime_diagnostics.time_block('physical_band_sec'):
+                feasible = compute_physical_band_result(table, typed_cfg.physical_band)
             reporter.emit(
                 'physics.stage_done',
                 **progress_fields,
-                stage='feasible_band',
+                stage='physical_band',
                 elapsed=perf_counter() - stage_start,
             )
             def _build_trend_result_for_provider() -> TrendResult:

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .config import PhysicsFeasibleBandCfg
-from .pick_table import CoarsePickTable
+if TYPE_CHECKING:
+    from .config import PhysicalBandCfg, PhysicsFeasibleBandCfg
+    from .pick_table import CoarsePickTable
 
 __all__ = [
     'FeasibleBandResult',
     'compute_feasible_band',
+    'compute_physical_band_result',
     'compute_velocity_t0_band_from_arrays',
 ]
 
@@ -19,6 +22,21 @@ class FeasibleBandResult:
     feasible_mask: np.ndarray
     feasible_lo_sec: np.ndarray
     feasible_hi_sec: np.ndarray
+
+
+def _coarse_pick_times(table: CoarsePickTable) -> np.ndarray:
+    if table.n_traces <= 0:
+        msg = 'table.n_traces must be positive'
+        raise ValueError(msg)
+
+    pick_t_sec = np.asarray(table.coarse_pick_t_sec, dtype=np.float32)
+    if pick_t_sec.shape != (table.n_traces,):
+        msg = (
+            f'coarse_pick_t_sec must have shape {(table.n_traces,)}, '
+            f'got {pick_t_sec.shape}'
+        )
+        raise ValueError(msg)
+    return pick_t_sec
 
 
 def compute_velocity_t0_band_from_arrays(
@@ -90,20 +108,25 @@ def compute_feasible_band(
     table: CoarsePickTable,
     cfg: PhysicsFeasibleBandCfg,
 ) -> FeasibleBandResult:
-    if table.n_traces <= 0:
-        msg = 'table.n_traces must be positive'
-        raise ValueError(msg)
-
-    pick_t_sec = np.asarray(table.coarse_pick_t_sec, dtype=np.float32)
-    if pick_t_sec.shape != (table.n_traces,):
-        msg = f'coarse_pick_t_sec must have shape {(table.n_traces,)}, got {pick_t_sec.shape}'
-        raise ValueError(msg)
-
     return compute_velocity_t0_band_from_arrays(
         offset_m=table.offset_m,
-        pick_t_sec=pick_t_sec,
+        pick_t_sec=_coarse_pick_times(table),
         vmin_m_s=cfg.vmin_mask,
         vmax_m_s=cfg.vmax_mask,
+        t0_lo_ms=cfg.t0_lo_ms,
+        t0_hi_ms=cfg.t0_hi_ms,
+    )
+
+
+def compute_physical_band_result(
+    table: CoarsePickTable,
+    cfg: PhysicalBandCfg,
+) -> FeasibleBandResult:
+    return compute_velocity_t0_band_from_arrays(
+        offset_m=table.offset_m,
+        pick_t_sec=_coarse_pick_times(table),
+        vmin_m_s=cfg.vmin_m_s,
+        vmax_m_s=cfg.vmax_m_s,
         t0_lo_ms=cfg.t0_lo_ms,
         t0_hi_ms=cfg.t0_hi_ms,
     )
