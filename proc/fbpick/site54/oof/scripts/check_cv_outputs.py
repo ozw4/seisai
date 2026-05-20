@@ -329,8 +329,26 @@ def require_trace_vector(
     return arr
 
 
-def strict_check_physics_npz(path: Path) -> str | None:
-    """Validate required physics NPZ keys and physical status values."""
+def require_integer_trace_vector(
+    z: np.lib.npyio.NpzFile,
+    key: str,
+    *,
+    n_traces: int,
+) -> np.ndarray:
+    """Return an integer trace-aligned NPZ array normalized for arithmetic."""
+    arr = require_trace_vector(z, key, n_traces=n_traces)
+    if not np.issubdtype(arr.dtype, np.integer):
+        raise ValueError(f"{key}_dtype={arr.dtype}/integer")
+    return arr.astype(np.int64, copy=False)
+
+
+def strict_check_physics_npz(
+    path: Path,
+    *,
+    time_len: int = 256,
+    center_index: int = 128,
+) -> str | None:
+    """Validate required physics NPZ keys and physical window contract."""
     try:
         with np.load(path, allow_pickle=False) as z:
             missing = [key for key in STRICT_PHYSICS_KEYS if key not in z.files]
@@ -343,15 +361,27 @@ def strict_check_physics_npz(path: Path) -> str | None:
                 n_traces=n_traces,
                 dtype=np.uint8,
             )
-            require_trace_vector(z, "fine_center_i", n_traces=n_traces)
+            center_i = require_integer_trace_vector(
+                z,
+                "fine_center_i",
+                n_traces=n_traces,
+            )
             valid = require_trace_vector(
                 z,
                 "fine_window_valid_mask",
                 n_traces=n_traces,
                 dtype=np.bool_,
             )
-            for key in ("fine_window_physical_lo_i", "fine_window_physical_hi_i"):
-                require_trace_vector(z, key, n_traces=n_traces)
+            lo_i = require_integer_trace_vector(
+                z,
+                "fine_window_physical_lo_i",
+                n_traces=n_traces,
+            )
+            hi_i = require_integer_trace_vector(
+                z,
+                "fine_window_physical_hi_i",
+                n_traces=n_traces,
+            )
             window_reason = require_trace_vector(
                 z,
                 "fine_window_reject_reason",
@@ -401,6 +431,17 @@ def strict_check_physics_npz(path: Path) -> str | None:
         return (
             f"{path.name}:valid_window_reject_reason="
             f"{int(valid_reason_reject[0])}"
+        )
+
+    window_start_i = center_i - int(center_index)
+    window_end_i = window_start_i + int(time_len) - 1
+    bad_window = np.flatnonzero(
+        valid & ((window_start_i < lo_i) | (window_end_i > hi_i))
+    )
+    if bad_window.size:
+        return (
+            f"{path.name}:valid_window_outside_physical_band="
+            f"{int(bad_window[0])}"
         )
 
     if (
@@ -466,17 +507,15 @@ def strict_check_physics_final_pair(
                 n_traces=n_traces,
                 dtype=np.bool_,
             )
-            lo_i = require_trace_vector(
+            lo_i = require_integer_trace_vector(
                 physics,
                 "fine_window_physical_lo_i",
                 n_traces=n_traces,
-                dtype=np.int64,
             )
-            hi_i = require_trace_vector(
+            hi_i = require_integer_trace_vector(
                 physics,
                 "fine_window_physical_hi_i",
                 n_traces=n_traces,
-                dtype=np.int64,
             )
             reject = require_trace_vector(
                 final,
@@ -493,17 +532,15 @@ def strict_check_physics_final_pair(
                 )
 
             if "window_start_i" in final.files and "window_end_i" in final.files:
-                start = require_trace_vector(
+                start = require_integer_trace_vector(
                     final,
                     "window_start_i",
                     n_traces=n_traces,
-                    dtype=np.int64,
                 )
-                end = require_trace_vector(
+                end = require_integer_trace_vector(
                     final,
                     "window_end_i",
                     n_traces=n_traces,
-                    dtype=np.int64,
                 )
                 bad_window = np.flatnonzero(valid & ((start < lo_i) | (end > hi_i)))
                 if bad_window.size:
@@ -516,6 +553,50 @@ def strict_check_physics_final_pair(
                     return f"{final_path.name}:window_len={int(bad_len[0])}"
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
         return f"{physics_path.name}:{final_path.name}:read_error={exc}"
+    return None
+
+
+def strict_check_physics_config(config_path: Path) -> str | None:
+    """Validate generated site54 physics config uses the physical band policy."""
+    if not config_path.is_file():
+        return f"missing={config_path}"
+    try:
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return f"{config_path.name}:read_error={exc}"
+    if not isinstance(cfg, dict):
+        return f"{config_path.name}:config_not_dict"
+    if "physical_band" not in cfg:
+        return f"{config_path.name}:missing_physical_band"
+    if "fit_observation_filter" not in cfg:
+        return f"{config_path.name}:missing_fit_observation_filter"
+    if "feasible_band" in cfg:
+        return f"{config_path.name}:forbidden_feasible_band"
+    if "physical_prefilter" in cfg:
+        return f"{config_path.name}:forbidden_physical_prefilter"
+    runtime = cfg.get("physical_runtime")
+    if not isinstance(runtime, dict):
+        return f"{config_path.name}:missing_physical_runtime"
+    expected_sources = {
+        "fine_window_constraint": runtime.get("fine_window_constraint"),
+        "neighbor_physical_fit_reuse": runtime.get("neighbor_physical_fit_reuse"),
+        "coarse_in_band_fallback": runtime.get("coarse_in_band_fallback"),
+    }
+    for key, block in expected_sources.items():
+        if not isinstance(block, dict):
+            return f"{config_path.name}:missing_{key}"
+        if block.get("band_source") != "physical_band":
+            return f"{config_path.name}:{key}.band_source={block.get('band_source')!r}"
+    fallback = runtime.get("fallback_policy")
+    if isinstance(fallback, dict):
+        order = fallback.get("order")
+        if isinstance(order, list) and any("feasible_clip" in str(v) for v in order):
+            return f"{config_path.name}:forbidden_feasible_clip_policy"
+    text = config_path.read_text(encoding="utf-8")
+    if "fallback_feasible_clip" in text:
+        return f"{config_path.name}:forbidden_fallback_feasible_clip"
+    if "allow_feasible_clip_as_fine_center: true" in text:
+        return f"{config_path.name}:forbidden_feasible_clip_enabled"
     return None
 
 
@@ -820,6 +901,24 @@ def main() -> int:
             allow_smoke=args.smoke,
         )
         if args.strict:
+            for name in ("03_physics.yaml", "04_physics_qc.yaml"):
+                config_path = config_root / fold / name
+                if error := strict_check_physics_config(config_path):
+                    add_result(
+                        results,
+                        fold=fold,
+                        stage=name,
+                        ok=False,
+                        detail=error,
+                    )
+                else:
+                    add_result(
+                        results,
+                        fold=fold,
+                        stage=name,
+                        ok=True,
+                        detail=f"path={config_path}",
+                    )
             strict_error = strict_check_fine_train_config(
                 config_path=config_root / fold / "06_fine_train.yaml",
                 fine_fold_dir=fine_list_root / fold,

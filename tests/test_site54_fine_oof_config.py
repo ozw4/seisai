@@ -102,13 +102,19 @@ def _assert_partial_physics_fallback(cfg: dict) -> None:
         'reject',
     ]
     assert runtime['fine_window_constraint']['enabled'] is True
-    assert runtime['fine_window_constraint']['band_source'] == 'physical_prefilter'
+    assert runtime['fine_window_constraint']['band_source'] == 'physical_band'
     assert runtime['fine_window_constraint']['time_len'] == 256
     assert runtime['fine_window_constraint']['center_index'] == 128
+    assert runtime['neighbor_physical_fit_reuse']['band_source'] == 'physical_band'
+    assert runtime['coarse_in_band_fallback']['band_source'] == 'physical_band'
     assert runtime['neighbor_physical_fit_reuse']['candidate_statuses'] == [
         'two_piece_ok',
         'single_line_ok',
     ]
+    assert 'physical_band' in cfg
+    assert 'fit_observation_filter' in cfg
+    assert 'feasible_band' not in cfg
+    assert 'physical_prefilter' not in cfg
 
 
 def test_fine_train_config_fixed_last_uses_last_checkpoint_policy(
@@ -596,6 +602,49 @@ def test_check_cv_outputs_strict_final_npz_requires_fine_window_valid_mask(
 
     assert module.strict_check_final_npz(final_path) == (
         'legacy.fbpick_final.npz:missing_keys=fine_window_valid_mask'
+    )
+
+
+def test_check_cv_outputs_strict_physics_npz_requires_physical_window_keys(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'legacy.robust.npz'
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        fine_center_i=np.asarray([128], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([True], dtype=np.bool_),
+        fine_window_reject_reason=np.asarray([0], dtype=np.uint8),
+        physical_model_status=np.asarray([0], dtype=np.uint8),
+    )
+
+    assert module.strict_check_physics_npz(physics_path) == (
+        'legacy.robust.npz:missing_keys='
+        'fine_window_physical_lo_i,fine_window_physical_hi_i'
+    )
+
+
+def test_check_cv_outputs_strict_physics_npz_rejects_valid_window_outside_band(
+    tmp_path: Path,
+) -> None:
+    module = _load_check_cv_outputs()
+    physics_path = tmp_path / 'outside-band.robust.npz'
+
+    np.savez(
+        physics_path,
+        n_traces=np.asarray(1, dtype=np.int32),
+        fine_center_i=np.asarray([128], dtype=np.int32),
+        fine_window_valid_mask=np.asarray([True], dtype=np.bool_),
+        fine_window_physical_lo_i=np.asarray([1], dtype=np.int32),
+        fine_window_physical_hi_i=np.asarray([255], dtype=np.int32),
+        fine_window_reject_reason=np.asarray([0], dtype=np.uint8),
+        physical_model_status=np.asarray([0], dtype=np.uint8),
+    )
+
+    assert module.strict_check_physics_npz(physics_path) == (
+        'outside-band.robust.npz:valid_window_outside_physical_band=0'
     )
 
 

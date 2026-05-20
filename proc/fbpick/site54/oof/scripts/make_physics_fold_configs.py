@@ -103,7 +103,7 @@ def physics_runtime_cfg(args: argparse.Namespace) -> dict:
         },
         'fine_window_constraint': {
             'enabled': True,
-            'band_source': 'physical_prefilter',
+            'band_source': 'physical_band',
             'time_len': 256,
             'center_index': 128,
             'require_center_inside_band': True,
@@ -114,10 +114,16 @@ def physics_runtime_cfg(args: argparse.Namespace) -> dict:
         },
         'neighbor_physical_fit_reuse': {
             'enabled': True,
+            'band_source': 'physical_band',
             'candidate_statuses': ['two_piece_ok', 'single_line_ok'],
             'max_source_xy_distance_m': None,
             'max_trace_distance': None,
             'invalid_policy': 'try_coarse_in_band',
+        },
+        'coarse_in_band_fallback': {
+            'enabled': True,
+            'band_source': 'physical_band',
+            'require_window_inside_band': True,
         },
         'fallback_policy': {
             'enabled': True,
@@ -167,14 +173,17 @@ def physical_center_cfg(args: argparse.Namespace, *, qc: bool = False) -> dict:
             'max_source_distance_m': None,
             'include_self': True,
         },
-        'physical_prefilter': {
-            'enabled': True,
+        'physical_band': {
             'vmin_m_s': 300.0,
             'vmax_m_s': 6000.0,
             't0_lo_ms': -20.0,
             't0_hi_ms': 200.0,
+        },
+        'fit_observation_filter': {
+            'enabled': True,
+            'band_source': 'physical_band',
             'pmax_min': 0.0 if qc else 0.05,
-            'use_existing_feasible_mask': False,
+            'use_existing_mask': False,
         },
         'physical_projection': {'mode': 'model'},
         'two_piece_ransac': {
@@ -248,7 +257,6 @@ def physics_config(args: argparse.Namespace, fold: str) -> dict:
             'coarse_npz_dir': str(args.run_root / fold / '02_coarse_infer'),
             'out_dir': str(args.run_root / fold / '03_physics'),
         },
-        'feasible_band': {},
         'trend': {},
         'residual_statics': {},
         'keep_reject': {},

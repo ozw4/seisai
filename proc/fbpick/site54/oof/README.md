@@ -48,7 +48,9 @@ Do not use `min_pick_ratio=0.3` as the site54 OOF runtime default. That threshol
 
 The site54 OOF physics default allows both two-piece and straight-line travel-time fits. `single_line_ok` is a valid physical fit result. `two_piece_ok` is selected only when the two-piece model improves over the single-line model by the configured relative-improvement threshold.
 
-The fine center policy is: self physical fit, then neighbor physical fit reuse, then coarse-in-band fallback, then reject. Neighbor reuse may use nearby successful `two_piece_ok` or `single_line_ok` fits. Coarse fallback is allowed only when the coarse pick sits inside the `physical_prefilter` band. If coarse is outside the band, or a 256-sample fine window cannot fit inside the `physical_prefilter` band, the trace is rejected by physics.
+The fine center policy is: self physical fit, then neighbor physical fit reuse, then coarse-in-band fallback, then reject. Neighbor reuse may use nearby successful `two_piece_ok` or `single_line_ok` fits. Coarse fallback is allowed only when the coarse pick sits inside the canonical `physical_band`. If coarse is outside the band, or a 256-sample fine window cannot fit inside the `physical_band`, the trace is rejected by physics.
+
+The site54 default uses one velocity/t0 band, `physical_band`, for fit observation velocity/t0 filtering, fit validation, neighbor reuse, coarse fallback, fine-window validity, and viewer band display. It does not emit or depend on `feasible_band`. `physical_prefilter` is a legacy config name that the engine can still read for old configs; generated site54 configs use `fit_observation_filter` instead. `pmax_min` is a fit-observation quality threshold, not part of the velocity/t0 band, and belongs under `fit_observation_filter`.
 
 The site54 default does not use robust, feasible-clip, or unconditional coarse fallback as a fine center. Fine train and infer consume `fine_center_i` only where `fine_window_valid_mask` is true; invalid traces are excluded from fine train/infer windows. In final evaluation, invalid or rejected traces with a teacher pick count as misses rather than being removed from the denominator.
 
