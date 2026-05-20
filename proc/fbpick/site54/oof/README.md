@@ -415,6 +415,11 @@ Continuous error statistics such as `accepted_mae_samples` are computed only on
 accepted predictions, so interpret them together with `coverage`. Millisecond
 metric columns are not emitted.
 
+For `08_eval`, the `final` stage uses `final_pick_i`. This matches the red final
+pick drawn by fine inference QC PNGs. `final_pick_f` may remain in the payload as
+an internal float pick, but site54 OOF normal evaluation does not use it.
+`final_high_conf` is also outside the normal evaluation output.
+
 Check the run-scoped CV outputs:
 
 ```bash
