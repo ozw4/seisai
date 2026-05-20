@@ -25,7 +25,10 @@ from .physical_center_types import (
     PHYSICAL_RUNTIME_FIT_SOURCE_COARSE_IN_BAND_FALLBACK,
     PHYSICAL_RUNTIME_FIT_SOURCE_NEIGHBOR_PHYSICAL_FIT_REUSE,
 )
-from .window_constraint import evaluate_fine_window_constraint
+from .window_constraint import (
+    evaluate_fine_window_constraint,
+    resolve_physical_prefilter_offsets_m,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -57,14 +60,11 @@ def _offset_abs_m(
     table: CoarsePickTable,
     cfg: PhysicsLiteConfig,
 ) -> np.ndarray:
-    if (
-        bool(cfg.physical_trend.use_geometry_offset)
-        and 'offset_abs_geom_m' in coarse_npz
-    ):
-        arr = np.asarray(coarse_npz['offset_abs_geom_m'], dtype=np.float32)
-        if arr.ndim == 1 and int(arr.shape[0]) == int(table.n_traces):
-            return np.abs(arr).astype(np.float32, copy=False)
-    return np.abs(np.asarray(table.offset_m, dtype=np.float32))
+    return resolve_physical_prefilter_offsets_m(
+        coarse_npz=coarse_npz,
+        table=table,
+        cfg=cfg,
+    )
 
 
 def _source_xy_distance(
@@ -86,11 +86,12 @@ def _source_xy_distance(
 def _evaluate_centers(
     center_i: np.ndarray,
     *,
+    offsets_m: np.ndarray,
     table: CoarsePickTable,
     cfg: PhysicsLiteConfig,
 ) -> FineWindowConstraintResult:
     return evaluate_fine_window_constraint(
-        offsets_m=table.offset_m,
+        offsets_m=offsets_m,
         dt_sec=float(table.dt_scalar_sec),
         n_samples_orig=int(table.n_samples_orig),
         fine_center_i=np.asarray(center_i, dtype=np.int32),
@@ -289,7 +290,12 @@ def apply_physics_fallback_policy(  # noqa: C901, PLR0915
                     dtype=np.int32,
                 ).copy()
                 trial_centers[int(target_idx)] = np.int32(center_i)
-                trial = _evaluate_centers(trial_centers, table=table, cfg=cfg)
+                trial = _evaluate_centers(
+                    trial_centers,
+                    offsets_m=offsets_abs,
+                    table=table,
+                    cfg=cfg,
+                )
                 if not bool(trial.fine_window_valid_mask[int(target_idx)]):
                     continue
                 arrays['physical_center_i'][int(target_idx)] = np.int32(center_i)
@@ -319,7 +325,12 @@ def apply_physics_fallback_policy(  # noqa: C901, PLR0915
     remaining = np.flatnonzero(needs_policy).astype(np.int64)
     if remaining.size > 0:
         coarse_centers = np.asarray(table.coarse_pick_i, dtype=np.int32)
-        coarse_eval = _evaluate_centers(coarse_centers, table=table, cfg=cfg)
+        coarse_eval = _evaluate_centers(
+            coarse_centers,
+            offsets_m=offsets_abs,
+            table=table,
+            cfg=cfg,
+        )
         for target_idx in remaining.tolist():
             idx = int(target_idx)
             if bool(coarse_eval.fine_window_valid_mask[idx]):
@@ -367,6 +378,7 @@ def apply_physics_fallback_policy(  # noqa: C901, PLR0915
     final_physical = replace(physical, **arrays)
     final_window = _evaluate_centers(
         np.asarray(final_physical.fine_center_i, dtype=np.int32),
+        offsets_m=offsets_abs,
         table=table,
         cfg=cfg,
     )

@@ -37,7 +37,10 @@ from .trend import (
     build_partial_trend_fallback,
     build_trend_result,
 )
-from .window_constraint import evaluate_fine_window_constraint
+from .window_constraint import (
+    evaluate_fine_window_constraint,
+    resolve_physical_prefilter_offsets_m,
+)
 
 __all__ = [
     'build_robust_payload_from_coarse',
@@ -823,8 +826,13 @@ def build_robust_payload_from_coarse(
 
     legacy_trend_output = str(typed_cfg.physical_runtime.legacy_trend_output)
     include_trend_output = legacy_trend_output != 'omit' or bool(trend_materialized)
+    window_offsets_m = resolve_physical_prefilter_offsets_m(
+        coarse_npz=coarse_npz,
+        table=table,
+        cfg=typed_cfg,
+    )
     window_constraint = evaluate_fine_window_constraint(
-        offsets_m=table.offset_m,
+        offsets_m=window_offsets_m,
         dt_sec=float(table.dt_scalar_sec),
         n_samples_orig=int(table.n_samples_orig),
         fine_center_i=np.asarray(physical.fine_center_i, dtype=np.int32),

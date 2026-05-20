@@ -24,12 +24,20 @@ from .physical_center_types import (
 )
 
 if TYPE_CHECKING:
-    from .config import PhysicalFineWindowConstraintCfg, PhysicalPrefilterCfg
+    from collections.abc import Mapping
+
+    from .config import (
+        PhysicalFineWindowConstraintCfg,
+        PhysicalPrefilterCfg,
+        PhysicsLiteConfig,
+    )
+    from .pick_table import CoarsePickTable
 
 __all__ = [
     'FineWindowConstraintResult',
     'compute_physical_prefilter_sample_band',
     'evaluate_fine_window_constraint',
+    'resolve_physical_prefilter_offsets_m',
 ]
 
 
@@ -42,6 +50,23 @@ class FineWindowConstraintResult:
     fine_window_physical_lo_i: np.ndarray
     fine_window_physical_hi_i: np.ndarray
     fine_window_reject_reason: np.ndarray
+
+
+def resolve_physical_prefilter_offsets_m(
+    *,
+    coarse_npz: Mapping[str, np.ndarray],
+    table: CoarsePickTable,
+    cfg: PhysicsLiteConfig,
+) -> np.ndarray:
+    """Resolve offsets used to evaluate physical-prefilter window bands."""
+    if (
+        bool(cfg.physical_trend.use_geometry_offset)
+        and 'offset_abs_geom_m' in coarse_npz
+    ):
+        arr = np.asarray(coarse_npz['offset_abs_geom_m'], dtype=np.float32)
+        if arr.ndim == 1 and int(arr.shape[0]) == int(table.n_traces):
+            return np.abs(arr).astype(np.float32, copy=False)
+    return np.abs(np.asarray(table.offset_m, dtype=np.float32))
 
 
 def _as_vector(
