@@ -210,7 +210,7 @@ def parse_csv_numbers(raw: str, *, dtype: type = float) -> tuple:
 
 def stage_specs(stages: Iterable[str]) -> dict[str, tuple[str, str | None]]:
     mapping = {
-        "final": ("final_pick_f", "final_conf"),
+        "final": ("final_pick_i", "final_conf"),
         "robust": ("robust_pick_i", "robust_conf"),
         "coarse": ("coarse_pick_i", "coarse_pmax"),
         "center": ("center_raw_i", None),
@@ -338,6 +338,31 @@ def accumulator_row(
             "" if n_teacher == 0 else float(int(acc_hits[float(th)]) / n_teacher)
         )
     return out
+
+
+def require_payload_vector(
+    payload: dict[str, np.ndarray],
+    key: str,
+    *,
+    n_traces: int,
+    tag: str,
+) -> np.ndarray:
+    if key not in payload:
+        raise KeyError(f"{tag}: missing key {key}")
+    arr = np.asarray(payload[key])
+    if arr.shape != (n_traces,):
+        raise ValueError(f"{tag}: {key} shape {arr.shape} != ({n_traces},)")
+    return arr
+
+
+def scalar_payload_value(
+    payload: dict[str, np.ndarray],
+    key: str,
+    trace_idx: int,
+) -> object:
+    if key not in payload:
+        return ""
+    return np.asarray(payload[key])[trace_idx].item()
 
 
 def main() -> int:
@@ -468,6 +493,8 @@ def main() -> int:
 
             for stage, (pick_key, conf_key) in specs.items():
                 if pick_key not in payload:
+                    if stage == "final" and pick_key == "final_pick_i":
+                        raise KeyError("final stage evaluation requires final_pick_i")
                     raise KeyError(f"{final_path} missing key {pick_key}")
 
                 pick = np.asarray(payload[pick_key], dtype=np.float64)
@@ -544,7 +571,9 @@ def main() -> int:
             if args.include_high_conf_final and "final" in file_stage_cache:
                 if "high_conf_mask" not in payload:
                     raise KeyError(f"{final_path} missing high_conf_mask")
-                pick = np.asarray(payload["final_pick_f"], dtype=np.float64)
+                if "final_pick_i" not in payload:
+                    raise KeyError("final_high_conf evaluation requires final_pick_i")
+                pick = np.asarray(payload["final_pick_i"], dtype=np.float64)
                 conf_arr = np.asarray(
                     payload.get("final_conf", np.full(n_traces, np.nan)),
                     dtype=np.float64,
@@ -605,39 +634,80 @@ def main() -> int:
                     else:
                         sel = np.argsort(abs_err)[::-1]
 
-                    final_pick = np.asarray(
-                        payload["final_pick_f"],
-                        dtype=np.float64,
+                    final_pick_i = require_payload_vector(
+                        payload,
+                        "final_pick_i",
+                        n_traces=n_traces,
+                        tag=tag,
                     )
                     for j in sel:
                         trace_idx = int(valid_indices[j])
                         top_error_rows.append(
                             {
+                                "run_id": args.run_id,
                                 "fold": fold,
-                                "data_name": tag,
-                                "trace_idx": trace_idx,
+                                "data_key": tag,
+                                "stage": "final",
+                                "segy_file": segy,
+                                "fb_file": fb_path,
+                                "final_npz": str(final_path),
+                                "trace_index": trace_idx,
+                                "ffid": scalar_payload_value(
+                                    payload,
+                                    "ffid_values",
+                                    trace_idx,
+                                ),
+                                "chno": scalar_payload_value(
+                                    payload,
+                                    "chno_values",
+                                    trace_idx,
+                                ),
                                 "fb_i": float(fb_i[trace_idx]),
-                                "final_pick_f": float(final_pick[trace_idx]),
+                                "final_pick_i": int(final_pick_i[trace_idx]),
                                 "error_samples": float(err[j]),
                                 "abs_error_samples": float(abs_err[j]),
+                                "error_ms": float(err[j] * dt_sec * 1000.0),
+                                "abs_error_ms": float(abs_err[j] * dt_sec * 1000.0),
+                                "coarse_pick_i": scalar_payload_value(
+                                    payload,
+                                    "coarse_pick_i",
+                                    trace_idx,
+                                ),
+                                "robust_pick_i": scalar_payload_value(
+                                    payload,
+                                    "robust_pick_i",
+                                    trace_idx,
+                                ),
+                                "window_start_i": scalar_payload_value(
+                                    payload,
+                                    "window_start_i",
+                                    trace_idx,
+                                ),
+                                "window_end_i": scalar_payload_value(
+                                    payload,
+                                    "window_end_i",
+                                    trace_idx,
+                                ),
+                                "fine_pick_local_i": scalar_payload_value(
+                                    payload,
+                                    "fine_pick_local_i",
+                                    trace_idx,
+                                ),
                                 "final_conf": (
                                     float(payload["final_conf"][trace_idx])
                                     if "final_conf" in payload
                                     else ""
                                 ),
-                                "ffid": (
-                                    int(payload["ffid_values"][trace_idx])
-                                    if "ffid_values" in payload
+                                "reject_mask": (
+                                    bool(payload["reject_mask"][trace_idx])
+                                    if "reject_mask" in payload
                                     else ""
                                 ),
-                                "chno": (
-                                    int(payload["chno_values"][trace_idx])
-                                    if "chno_values" in payload
+                                "reason_mask": (
+                                    int(payload["reason_mask"][trace_idx])
+                                    if "reason_mask" in payload
                                     else ""
                                 ),
-                                "segy": segy,
-                                "fb": fb_path,
-                                "final_npz": str(final_path),
                             }
                         )
 
@@ -681,6 +751,7 @@ def main() -> int:
         "n_files": n_files,
         "stages": acc_stages,
         "thresholds_samples": list(thresholds_samples),
+        "final_pick_key": "final_pick_i",
         "include_high_conf_final": bool(args.include_high_conf_final),
         "outputs": {
             "per_data_csv": str(out_dir / "per_data.csv"),
